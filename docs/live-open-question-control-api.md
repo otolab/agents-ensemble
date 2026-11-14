@@ -191,6 +191,28 @@ Response:
 
 dispatch hold 中も operator message は hold buffer を通りません。hold が有効な間は hold 自体も `idle` の待機理由ではないため、worker と通常 queue の送信可能イベントがなければ、held buffer に自律イベントが残っていても `idle` message を dispatch します。hold 解放後に送信可能な held event が残っている場合は、先に flush / dispatch し、その処理後に `idle` message を送ります。したがって `idle` は hold の解除を待つ指定ではありませんが、解除時点ですでに送信可能な held work があれば、それを追い越す指定でもありません。
 
+### `operator.session.shutdown`
+
+稼働中 Issue session に `close` または `exit` を要求します。TTY の `/close` / `/exit` と同じ内部 shutdown 経路を通る専用 method です。`close` は worktree を残して再開可能に終了し、`exit` は通常の exit teardown と isolated worktree cleanup を要求します。受付応答は shutdown を受理したことを示し、teardown の完了までは待ちません。
+
+Request:
+
+```json
+{"jsonrpc":"2.0","id":6,"method":"operator.session.shutdown","params":{"mode":"close"}}
+```
+
+Response:
+
+```json
+{"jsonrpc":"2.0","id":6,"result":{"accepted":true,"mode":"close"}}
+```
+
+`params` には `mode` だけを指定します。`mode` は必須で `close | exit` のいずれかです。未知 field を含む request や不正な mode は `-32602` になります。live server が request を処理できる状態で teardown が始まっている、または終了要求がすでに受理されている場合は `-32000` です。shutdown callback が使えない server は `-32601` を返します。終了要求を受理すると UDS server は quiesce するため、その後の接続は JSON-RPC error ではなく transport error になる場合があります。
+
+operator-agent の `shutdown_issue_session` tool は `conductorAgentId` と `mode` を受け、SessionResumeStore に記録された socket だけを使います。停止中・接続不能の session には transport error を返し、保存 YAML への fallback はしません。request を送信した後に接続が切れた場合は受付結果が不明です。自動再送せず、session 状態を確認してください。
+
+`operator.message.send` は終了要求として解釈されません。たとえば `text: "/close"` は従来どおり通常の operator message queue に送られます。session を終了するには専用 method / tool を使ってください。
+
 ### `session.last_conductor_message.get`
 
 稼働中 harness が保持する最後の成功応答を取得します。読み取り専用で、`session.observe` や Open Questions YAML / SessionResumeStore には含めません。セッション内に成功応答がまだない場合は `message: null` です。成功応答の後に失敗または本文なしの send があっても、直前の成功応答を返します。
@@ -316,9 +338,9 @@ JSON-RPC error は次の envelope です。`data` は該当する場合だけ付
 | `-32700` | JSON parse error |
 | `-32600` | 不正 request。過大 request や1 connectionに複数 request を含めた場合を含む |
 | `-32601` | 未対応 method |
-| `-32602` | answer の `questionId` / `answer`、または operator message の `text` / `delivery` が不正・不足 |
+| `-32602` | answer の `questionId` / `answer`、operator message の `text` / `delivery`、または shutdown の `mode` / params が不正・不足 |
 | `-32603` | 汎用 operation error。YAML save に失敗した場合はこの error となり、live Registry と event queue は更新されません |
-| `-32000` | session が shutdown 処理中 |
+| `-32000` | live server が request を処理できる状態で session shutdown が進行中、または終了要求がすでに受理されています（`operator.message.send` / `operator.session.shutdown`） |
 | `-32004` | question が存在しない、またはすでに回答済み |
 | `-32005` | 保存済み回答の conductor dispatch 完了を確認できない（send failure / shutdown を含む） |
 
@@ -335,6 +357,7 @@ YAML save 前に失敗した場合、generic `-32603` に `outcome` data はな�
 ## Retry、fallback と運用
 
 - UDS client は request を自動再送しません。client が `connect` event を受け取る前の transport failure だけが `outcome: not_sent` です。`connect` 時点で client は `requestSent` を true にし、その後に `socket.write` が失敗した場合も、response を受け取れない transport failure は `outcome: unknown` です。これらは JSON-RPC response ではなく client 側の transport error で、`unknown` は request 全体が server に届いたことを保証するものではありません。operator message の場合も、server が受理済みか分からないため、同じ指示をそのまま再送しないでください。
+- `operator.session.shutdown` の受理後、server が新しい接続を閉じ始めます。その後の接続失敗も成功 response ではなく transport error です。受付 outcome が不明な場合は自動再送せず、live session の状態を確認してください。
 - client の30秒 timeout や切断後も、server が request newline を受信して handler を開始済みなら、YAML commit や conductor dispatch が続く場合があります。特に `outcome: unknown` のときは、その時点で YAML に回答が見えないことだけを根拠に再送しないでください。保存・dispatch の結果が不確定なままなので、session の状態とログを確認して運用者が次の操作を判断してください。
 - shutdown intent 後は bounded drain 中も conductor reconnect / 同一 message retry を抑止します。回答 dispatch の完了を確認できない場合は `outcome: unknown` となり、回答は保存済みの可能性があります。
 - live Open Question list / answer / operator message / last conductor response tool は listener がない場合に YAML fallback をしません。watch pool の `session.observe` poll だけが停止中・未対応 session の YAML / SessionResumeStore に保存された情報を読み取ります。YAML への書き込み fallback、filesystem event watch、固定 TCP、GitHub comment 同期、自動解決はありません。

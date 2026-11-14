@@ -195,4 +195,89 @@ describe('openWorkerAcpSession resume spawn validation', () => {
 
     expect(newSession).not.toHaveBeenCalled();
   });
+
+  it('fails closed when a builtin Pi session cannot be resumed', async () => {
+    const loadSession = vi
+      .fn()
+      .mockRejectedValue(new Error('Unknown sessionId: saved-pi-session'));
+    const newSession = vi.fn().mockResolvedValue('fresh-session');
+    const bridge = {
+      loadSession,
+      newSession,
+      close: vi.fn(),
+    };
+    const connectAcp = vi.fn(async () => bridge as never);
+
+    await expect(
+      openWorkerAcpSession({
+        issueUrl: 'https://github.com/org/repo/issues/1',
+        worktree: {
+          path: '/tmp/worktree',
+          branch: 'ensemble/issue-1',
+          issue: {
+            owner: 'org',
+            repo: 'repo',
+            number: 1,
+            url: 'https://github.com/org/repo/issues/1',
+          },
+          inRepo: false,
+        },
+        workerName: 'implementer',
+        resumeAcpSessionId: 'saved-pi-session',
+        currentAcpSpawn: {
+          preset: 'pi',
+          command: 'node',
+          args: ['pi-acp-wrapper.js'],
+          piRuntime: 'builtin',
+        },
+        connectAcp,
+      }),
+    ).rejects.toThrow(
+      /could not resume builtin Pi ACP session "saved-pi-session".*Refusing to start a new session without the saved context.*Unknown sessionId/u,
+    );
+
+    expect(connectAcp).toHaveBeenCalledOnce();
+    expect(loadSession).toHaveBeenCalledOnce();
+    expect(newSession).not.toHaveBeenCalled();
+    expect(bridge.close).toHaveBeenCalledOnce();
+  });
+
+  it('keeps BYO Pi resume-load fallback behavior unchanged', async () => {
+    const loadSession = vi
+      .fn()
+      .mockRejectedValue(new Error('Unknown sessionId: byo-session'));
+    const newSession = vi.fn().mockResolvedValue('fresh-byo-session');
+    const bridge = {
+      loadSession,
+      newSession,
+      close: vi.fn(),
+    };
+
+    const opened = await openWorkerAcpSession({
+      issueUrl: 'https://github.com/org/repo/issues/1',
+      worktree: {
+        path: '/tmp/worktree',
+        branch: 'ensemble/issue-1',
+        issue: {
+          owner: 'org',
+          repo: 'repo',
+          number: 1,
+          url: 'https://github.com/org/repo/issues/1',
+        },
+        inRepo: false,
+      },
+      workerName: 'implementer',
+      resumeAcpSessionId: 'byo-session',
+      currentAcpSpawn: {
+        preset: 'pi',
+        command: 'pi-acp',
+        args: [],
+      },
+      bridge: bridge as never,
+    });
+
+    expect(loadSession).toHaveBeenCalledOnce();
+    expect(newSession).toHaveBeenCalledOnce();
+    expect(opened.sessionId).toBe('fresh-byo-session');
+  });
 });

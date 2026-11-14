@@ -1,5 +1,4 @@
 import {
-  copyFile,
   mkdtemp,
   mkdir,
   readFile,
@@ -30,6 +29,7 @@ import {
 
 const CONDUCTOR_AGENT_ID = 'worker-history-fixture';
 const WORKER_NAME = 'implementer';
+const ISSUE_NUMBER = 654;
 const ACP_SESSION_ID = 'pi-acp-worker-fixture-session';
 const ACP_CWD = '/tmp/pi-acp-worker-fixture';
 const FIXTURE_PATH = fileURLToPath(
@@ -341,9 +341,9 @@ describe('worker session history', () => {
   });
 
   it('reads user and assistant text from the active Pi branch only', async () => {
-    await writePiAcpSessionMap();
+    const transcriptPath = await writePiAcpSessionMap();
 
-    const result = await readHistory();
+    const result = await readHistory({ includeSourceFiles: true });
 
     expect(result).toMatchObject({
       conductorAgentId: CONDUCTOR_AGENT_ID,
@@ -374,10 +374,228 @@ describe('worker session history', () => {
           text: 'Pi ACP fixture assistant reply.',
         },
       ],
+      sourceFiles: [transcriptPath],
     });
     expect(JSON.stringify(result)).not.toContain('Abandoned branch');
     expect(JSON.stringify(result)).not.toContain('TOOL_SECRET');
     expect(JSON.stringify(result)).not.toContain('THINKING_SECRET');
+  });
+
+  it('reads builtin Pi transcripts from the repo and worker scoped user path', async () => {
+    const transcriptPath = await writePiAcpSessionMap({ runtime: 'builtin' });
+
+    const result = await readHistory({ includeSourceFiles: true });
+
+    expect(result).toMatchObject({
+      preset: 'pi',
+      status: 'supported',
+      reader: 'pi-acp-jsonl',
+      messages: [
+        { role: 'user', text: 'Earlier worker request remains on the active branch.' },
+        { role: 'user', text: 'Pi ACP fixture user message.' },
+        { role: 'assistant', text: 'Pi ACP fixture assistant reply.' },
+      ],
+      sourceFiles: [transcriptPath],
+    });
+    expect(transcriptPath).toBe(
+      join(
+        resolveEnsemblePaths({ repoRoot }).piWorkerSessionsDir(
+          WORKER_NAME,
+          ISSUE_NUMBER,
+        ),
+        'pi-acp-worker-session.jsonl',
+      ),
+    );
+  });
+
+  it('reads same-named builtin workers from their separate Issue maps', async () => {
+    const issueOne = 654;
+    const issueTwo = 655;
+    const sessionOne = 'pi-issue-654-session';
+    const sessionTwo = 'pi-issue-655-session';
+    const conductorOne = 'worker-history-issue-654';
+    const conductorTwo = 'worker-history-issue-655';
+    const cwdOne = join(tempRoot, 'issue-654-worktree');
+    const cwdTwo = join(tempRoot, 'issue-655-worktree');
+
+    const [transcriptOne, transcriptTwo] = await Promise.all([
+      writePiAcpSessionMap({
+        runtime: 'builtin',
+        issueNumber: issueOne,
+        conductorAgentId: conductorOne,
+        acpCwd: cwdOne,
+        sessionId: sessionOne,
+        messageText: 'Issue 654 worker conversation.',
+      }),
+      writePiAcpSessionMap({
+        runtime: 'builtin',
+        issueNumber: issueTwo,
+        conductorAgentId: conductorTwo,
+        acpCwd: cwdTwo,
+        sessionId: sessionTwo,
+        messageText: 'Issue 655 worker conversation.',
+      }),
+    ]);
+
+    const [historyOne, historyTwo] = await Promise.all([
+      readHistory({
+        conductorAgentId: conductorOne,
+        includeSourceFiles: true,
+      }),
+      readHistory({
+        conductorAgentId: conductorTwo,
+        includeSourceFiles: true,
+      }),
+    ]);
+
+    expect(historyOne).toMatchObject({
+      status: 'supported',
+      messages: [
+        { role: 'user', text: 'Earlier worker request remains on the active branch.' },
+        { role: 'user', text: 'Issue 654 worker conversation.' },
+        { role: 'assistant', text: 'Pi ACP fixture assistant reply.' },
+      ],
+      sourceFiles: [transcriptOne],
+    });
+    expect(historyTwo).toMatchObject({
+      status: 'supported',
+      messages: [
+        { role: 'user', text: 'Earlier worker request remains on the active branch.' },
+        { role: 'user', text: 'Issue 655 worker conversation.' },
+        { role: 'assistant', text: 'Pi ACP fixture assistant reply.' },
+      ],
+      sourceFiles: [transcriptTwo],
+    });
+    expect(transcriptOne).not.toBe(transcriptTwo);
+
+    const paths = resolveEnsemblePaths({ repoRoot });
+    const mapOne = JSON.parse(
+      await readFile(
+        paths.piWorkerSessionMapPath(WORKER_NAME, issueOne),
+        'utf8',
+      ),
+    ) as { sessions: Record<string, unknown> };
+    const mapTwo = JSON.parse(
+      await readFile(
+        paths.piWorkerSessionMapPath(WORKER_NAME, issueTwo),
+        'utf8',
+      ),
+    ) as { sessions: Record<string, unknown> };
+    expect(Object.keys(mapOne.sessions)).toEqual([sessionOne]);
+    expect(Object.keys(mapTwo.sessions)).toEqual([sessionTwo]);
+  });
+
+  it('does not guess a builtin Pi transcript when its map is missing', async () => {
+    const transcriptPath = await writePiAcpSessionMap({ runtime: 'builtin' });
+    const paths = resolveEnsemblePaths({ repoRoot });
+    await rm(
+      paths.piWorkerSessionMapPath(WORKER_NAME, ISSUE_NUMBER),
+      { force: true },
+    );
+
+    const result = await readHistory();
+
+    expect(result).toMatchObject({
+      preset: 'pi',
+      status: 'unavailable',
+      reason: expect.stringContaining('session map が見つかりません'),
+      messages: [],
+    });
+    await expect(readFile(transcriptPath, 'utf8')).resolves.toContain(
+      'Pi ACP fixture user message.',
+    );
+  });
+
+  it('reads a legacy builtin session map before the wrapper migrates it', async () => {
+    const transcriptPath = await writePiAcpSessionMap({
+      runtime: 'builtin',
+      legacyMap: true,
+    });
+
+    const result = await readHistory({ includeSourceFiles: true });
+
+    expect(result).toMatchObject({
+      preset: 'pi',
+      status: 'supported',
+      reader: 'pi-acp-jsonl',
+      messages: [
+        { role: 'user', text: 'Earlier worker request remains on the active branch.' },
+        { role: 'user', text: 'Pi ACP fixture user message.' },
+        { role: 'assistant', text: 'Pi ACP fixture assistant reply.' },
+      ],
+      sourceFiles: [transcriptPath],
+    });
+    expect(transcriptPath).toBe(
+      join(
+        resolveEnsemblePaths({ repoRoot }).piWorkerSessionsDir(
+          WORKER_NAME,
+          ISSUE_NUMBER,
+        ),
+        'pi-acp-worker-session.jsonl',
+      ),
+    );
+  });
+
+  it('reads a pre-Issue builtin map and transcript before wrapper migration', async () => {
+    const sessionId = 'pre-issue-builtin-session';
+    const conductorAgentId = 'worker-history-pre-issue';
+    const legacyHome = resolveEnsemblePaths({
+      repoRoot,
+    }).legacyPiWorkerDir(WORKER_NAME);
+    const transcriptPath = join(
+      legacyHome,
+      'sessions',
+      `${sessionId}.jsonl`,
+    );
+    const mapPath = join(
+      legacyHome,
+      '.pi',
+      'pi-acp',
+      'session-map.json',
+    );
+    await writeResumeStore('pi', {
+      piRuntime: 'builtin',
+      issueNumber: ISSUE_NUMBER,
+      conductorAgentId,
+      acpSessionId: sessionId,
+      acpCwd: ACP_CWD,
+    });
+    await mkdir(dirname(transcriptPath), { recursive: true });
+    const fixture = await readFile(FIXTURE_PATH, 'utf8');
+    await writeFile(
+      transcriptPath,
+      fixture.replaceAll(ACP_SESSION_ID, sessionId),
+      'utf8',
+    );
+    await mkdir(dirname(mapPath), { recursive: true });
+    await writeFile(
+      mapPath,
+      JSON.stringify({
+        version: 1,
+        sessions: {
+          [sessionId]: {
+            sessionId,
+            cwd: ACP_CWD,
+            sessionFile: transcriptPath,
+          },
+        },
+      }),
+    );
+
+    const result = await readHistory({
+      conductorAgentId,
+      includeSourceFiles: true,
+    });
+
+    expect(result).toMatchObject({
+      status: 'supported',
+      messages: [
+        { role: 'user', text: 'Earlier worker request remains on the active branch.' },
+        { role: 'user', text: 'Pi ACP fixture user message.' },
+        { role: 'assistant', text: 'Pi ACP fixture assistant reply.' },
+      ],
+      sourceFiles: [transcriptPath],
+    });
   });
 
   it('does not change an empty Pi transcript while reading it', async () => {
@@ -538,30 +756,48 @@ describe('worker session history', () => {
     });
   });
 
-  async function readHistory() {
+  async function readHistory(
+    options: {
+      conductorAgentId?: string;
+      includeSourceFiles?: boolean;
+      workerName?: string;
+    } = {},
+  ) {
     return readWorkerSessionHistory({
       repoRoot,
-      conductorAgentId: CONDUCTOR_AGENT_ID,
-      workerName: WORKER_NAME,
+      conductorAgentId: options.conductorAgentId ?? CONDUCTOR_AGENT_ID,
+      workerName: options.workerName ?? WORKER_NAME,
+      ...options,
     });
   }
 
   async function writeResumeStore(
     preset: 'pi' | 'codex' | 'custom' | undefined,
-    workerSession: { acpSessionId?: string; acpCwd?: string } = {},
+    workerSession: {
+      acpSessionId?: string;
+      acpCwd?: string;
+      conductorAgentId?: string;
+      issueNumber?: number;
+      piRuntime?: 'builtin';
+      workerName?: string;
+    } = {},
   ): Promise<void> {
+    const conductorAgentId =
+      workerSession.conductorAgentId ?? CONDUCTOR_AGENT_ID;
+    const issueNumber = workerSession.issueNumber ?? ISSUE_NUMBER;
+    const workerName = workerSession.workerName ?? WORKER_NAME;
     const resumeStore: SessionResumeStore = {
       version: 1,
-      conductorAgentId: CONDUCTOR_AGENT_ID,
-      issueUrl: 'https://github.com/otolab/agents-ensemble/issues/654',
+      conductorAgentId,
+      issueUrl: `https://github.com/otolab/agents-ensemble/issues/${issueNumber}`,
       repoRoot,
       profile: {
-        workers: [{ name: WORKER_NAME, kind: 'implementer' }],
+        workers: [{ name: workerName, kind: 'implementer' }],
       },
       openQuestions: [],
       sequence: 0,
       workers: {
-        [WORKER_NAME]: {
+        [workerName]: {
           acpSessionId: workerSession.acpSessionId ?? ACP_SESSION_ID,
           acpCwd: workerSession.acpCwd ?? ACP_CWD,
           ...(preset
@@ -575,6 +811,9 @@ describe('worker session history', () => {
                         ? 'codex-acp'
                         : 'fixture-acp',
                   args: [],
+                  ...(workerSession.piRuntime
+                    ? { piRuntime: workerSession.piRuntime }
+                    : {}),
                 },
               }
             : {}),
@@ -583,7 +822,7 @@ describe('worker session history', () => {
       updatedAt: 1_800_000_000_000,
     };
     const path = resolveEnsemblePaths({ repoRoot }).sessionResumeStorePath(
-      CONDUCTOR_AGENT_ID,
+      conductorAgentId,
     );
     await mkdir(dirname(path), { recursive: true });
     await saveSessionResumeStore(path, resumeStore);
@@ -643,28 +882,77 @@ describe('worker session history', () => {
 
   async function writePiAcpSessionMap(
     options: {
+      acpCwd?: string;
+      conductorAgentId?: string;
+      issueNumber?: number;
+      messageText?: string;
       mapCwd?: string;
+      sessionId?: string;
       transcriptContent?: string;
       writeTranscript?: boolean;
+      runtime?: 'builtin';
+      legacyMap?: boolean;
     } = {},
   ): Promise<string> {
-    const transcriptPath = join(
-      homeRoot,
-      '.pi',
-      'agent',
-      'sessions',
-      'pi-acp-worker-session.jsonl',
-    );
+    const issueNumber = options.issueNumber ?? ISSUE_NUMBER;
+    const conductorAgentId =
+      options.conductorAgentId ?? CONDUCTOR_AGENT_ID;
+    const sessionId = options.sessionId ?? ACP_SESSION_ID;
+    const acpCwd = options.acpCwd ?? ACP_CWD;
+    if (options.runtime === 'builtin') {
+      await writeResumeStore('pi', {
+        conductorAgentId,
+        issueNumber,
+        acpSessionId: sessionId,
+        acpCwd,
+        piRuntime: 'builtin',
+      });
+    }
+    const paths = resolveEnsemblePaths({ repoRoot });
+    const transcriptPath =
+      options.runtime === 'builtin'
+        ? join(
+            paths.piWorkerSessionsDir(WORKER_NAME, issueNumber),
+            options.sessionId
+              ? `${sessionId}.jsonl`
+              : 'pi-acp-worker-session.jsonl',
+          )
+        : join(
+            homeRoot,
+            '.pi',
+            'agent',
+            'sessions',
+            'pi-acp-worker-session.jsonl',
+          );
     if (options.writeTranscript !== false) {
       await mkdir(dirname(transcriptPath), { recursive: true });
       if (options.transcriptContent === undefined) {
-        await copyFile(FIXTURE_PATH, transcriptPath);
+        const fixture = await readFile(FIXTURE_PATH, 'utf8');
+        await writeFile(
+          transcriptPath,
+          fixture
+            .replaceAll(ACP_SESSION_ID, sessionId)
+            .replaceAll(ACP_CWD, acpCwd)
+            .replace(
+              'Pi ACP fixture user message.',
+              options.messageText ?? 'Pi ACP fixture user message.',
+            ),
+          'utf8',
+        );
       } else {
         await writeFile(transcriptPath, options.transcriptContent, 'utf8');
       }
     }
 
-    const mapPath = join(homeRoot, '.pi', 'pi-acp', 'session-map.json');
+    const mapPath =
+      options.runtime === 'builtin'
+        ? options.legacyMap
+          ? join(
+              paths.piWorkerDir(WORKER_NAME, issueNumber),
+              'session-map.json',
+            )
+          : paths.piWorkerSessionMapPath(WORKER_NAME, issueNumber)
+        : join(homeRoot, '.pi', 'pi-acp', 'session-map.json');
     await mkdir(dirname(mapPath), { recursive: true });
     await writeFile(
       mapPath,
@@ -672,9 +960,9 @@ describe('worker session history', () => {
         {
           version: 1,
           sessions: {
-            [ACP_SESSION_ID]: {
-              sessionId: ACP_SESSION_ID,
-              cwd: options.mapCwd ?? ACP_CWD,
+            [sessionId]: {
+              sessionId,
+              cwd: options.mapCwd ?? acpCwd,
               sessionFile: transcriptPath,
               updatedAt: '2027-01-15T08:00:00.000Z',
             },

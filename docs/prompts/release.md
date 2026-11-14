@@ -28,7 +28,7 @@
 pnpm changeset
 ```
 
-`@agents-ensemble/core` と `@agents-ensemble/cli` は **fixed** グループのため、常に同じバージョンでリリースされる。`@agents-ensemble/operator-agent` は独立したバージョンで管理する。
+`@agents-ensemble/core` と `@agents-ensemble/cli` は **fixed** グループのため、常に同じバージョンでリリースされる。`@agents-ensemble/operator-agent` は独立したバージョンで管理する。新しい public package も `packages/*` を走査する publish step の対象になる。
 
 CI の `changeset-check` が PR に changeset の有無を検証する。ドキュメントのみの変更などでスキップする場合は、コミットメッセージに `[skip-changeset]` を含める。
 
@@ -110,7 +110,7 @@ npm view @agents-ensemble/core version
 
 ## 初回 npm 公開
 
-初回は npm 側の Trusted Publisher 設定が必要。各パッケージで次を設定する。
+初回は npm 側の Trusted Publisher 設定が必要。公開する agents-ensemble package ごとに次を設定する。
 
 1. [npmjs.com](https://www.npmjs.com/) でパッケージを作成（空で可）
 2. Settings → Publishing access → Trusted publishers

@@ -14,6 +14,10 @@ import {
   computeAcpSpawnEnvDigest,
   resolveWorkerAcpSpawn,
 } from '../acp/resolve-acp-spawn.js';
+import {
+  resolveBuiltinPiCliEnvWrapperPath,
+  resolveBundledPiCliPath,
+} from '../acp/pi-runtime.js';
 import * as acpBinModule from '../acp/resolve-bundled-acp-bin.js';
 import { resolveEnsemblePaths } from '../ensemble-paths.js';
 import type { AcpBridge } from '../acp/acp-bridge.js';
@@ -2260,6 +2264,103 @@ describe('runConductorSession resume / shutdown', () => {
           projectDir: join(repoRoot, '.custom-project-pi'),
         },
       }),
+    );
+  });
+
+  it('shares a custom Pi user root with builtin workers and isolates their logs', async () => {
+    stubUnusedControlServer();
+    mockSend.mockResolvedValue({
+      runId: 'run-builtin-pi-root',
+      status: 'finished',
+      result: 'done',
+    });
+    const ensembleConfig = {
+      ...DEFAULT_ENSEMBLE_CONFIG,
+      conductor: {
+        ...DEFAULT_ENSEMBLE_CONFIG.conductor,
+        backend: 'pi' as const,
+        pi: { agentDir: './custom-pi-user' },
+      },
+      acp: {
+        ...DEFAULT_ENSEMBLE_CONFIG.acp,
+        defaultPreset: 'pi' as const,
+        pi: { runtime: 'builtin' as const },
+      },
+    };
+    let conductorTools: ConductorAgentCreateOptions['customTools'];
+    mockCreate.mockImplementationOnce(async (agentOptions) => {
+      conductorTools = agentOptions.customTools;
+      return {
+        agentId: 'agent-builtin-pi-root',
+        send: mockSend,
+        close: mockClose,
+        getUsage: createMockConductorGetUsage(),
+      };
+    });
+    mockSend.mockImplementationOnce(async () => {
+      await conductorTools!.prompt_worker!.execute({
+        worker: 'implementer',
+        instruction: 'verify the builtin Pi worker resource roots',
+      });
+      return {
+        runId: 'run-builtin-pi-root',
+        status: 'finished',
+        result: 'done',
+      };
+    });
+    const bridge = {
+      newSession: vi.fn().mockResolvedValue('builtin-pi-worker-session'),
+      loadSession: vi.fn().mockResolvedValue(undefined),
+      promptSession: vi.fn().mockResolvedValue({
+        stopReason: 'end_turn',
+        responseText: 'ready',
+      }),
+      cancelSession: vi.fn().mockResolvedValue(undefined),
+      close: vi.fn().mockResolvedValue(undefined),
+    } as unknown as AcpBridge;
+    const connectAcp = vi.fn().mockResolvedValue(bridge);
+    const workerPath = join(repoRoot, '.ensemble', 'worktrees', 'issue-1');
+    await mkdir(workerPath, { recursive: true });
+
+    await runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: {
+        conductor: { backend: 'pi' },
+        workers: [{ name: 'implementer', kind: 'implementer' }],
+      },
+      ensembleConfig,
+      defaultAcp: { config: ensembleConfig, env: {} },
+      workerWorktree: {
+        path: workerPath,
+        branch: 'ensemble/issue-1',
+        issue: TEST_ISSUE,
+      },
+      connectAcp,
+      disableGitHubMonitor: true,
+      maxTurns: 5,
+      permissionPipeline: new PermissionPipeline({}),
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: false,
+    });
+
+    const workerSpawn = connectAcp.mock.calls[0]?.[0].spawn;
+    const paths = resolveEnsemblePaths({ repoRoot });
+    expect(workerSpawn?.env).toMatchObject({
+      HOME: paths.piWorkerDir('implementer', TEST_ISSUE.number),
+      USERPROFILE: paths.piWorkerDir('implementer', TEST_ISSUE.number),
+      ENSEMBLE_PI_LEGACY_WORKER_HOME:
+        paths.legacyPiWorkerDir('implementer'),
+      PI_CODING_AGENT_DIR: join(repoRoot, 'custom-pi-user'),
+      PI_CODING_AGENT_SESSION_DIR:
+        paths.piWorkerSessionsDir('implementer', TEST_ISSUE.number),
+    });
+    expect(workerSpawn?.env).not.toHaveProperty('PI_ACP_SESSION_MAP_PATH');
+    expect(workerSpawn?.env?.PI_ACP_PI_COMMAND).toBe(
+      resolveBuiltinPiCliEnvWrapperPath(),
+    );
+    expect(workerSpawn?.env?.ENSEMBLE_PI_CLI_EXECUTABLE).toBe(
+      resolveBundledPiCliPath(),
     );
   });
 
@@ -6408,7 +6509,7 @@ describe('runConductorSession resume / shutdown', () => {
     expect(mockSend).toHaveBeenCalledTimes(2);
   });
 
-  it('exposes a UDS message while queued and emits dispatch only when the send starts', async () => {
+  it('keeps a UDS /close message in the ordinary queue', async () => {
     const initial = createDeferred<{ runId: string; status: string; result: string }>();
     mockSend.mockReturnValueOnce(initial.promise).mockResolvedValue({
       runId: 'operator-run', status: 'finished', result: 'done',
@@ -6506,21 +6607,19 @@ describe('runConductorSession resume / shutdown', () => {
           {
             method: OPEN_QUESTION_CONTROL_METHODS.sendMessage,
             params: {
-              text: 'inspect the new operator control path',
+              text: '/close',
               delivery: 'idle',
             },
           },
         ),
       ).resolves.toEqual({ queued: true, delivery: 'idle' });
       await vi.waitFor(() => expect(mockSend).toHaveBeenCalledTimes(2));
-      expect(mockSend.mock.calls[1]?.[0]).toBe(
-        'inspect the new operator control path',
-      );
+      expect(mockSend.mock.calls[1]?.[0]).toBe('/close');
       expect(
         emitted.find(
           (event) =>
             event.type === 'operator.input' &&
-            event.text === 'inspect the new operator control path',
+            event.text === '/close',
         ),
       ).toMatchObject({ delivery: 'idle' });
       expect(operatorApi!.submit('/exit')).toBe(false);
@@ -6530,6 +6629,160 @@ describe('runConductorSession resume / shutdown', () => {
       await sessionPromise.catch(() => {});
     }
   });
+
+  it.each([
+    ['close', 'session.operator_close', 'closed', 'close'],
+    ['exit', 'session.operator_exit', 'exited', 'exit'],
+  ] as const)(
+    'uses the TTY %s lifecycle when UDS shutdown arrives during post-loop wait',
+    async (mode, eventType, lifecycle, harnessPhase) => {
+      mockSend.mockResolvedValue({
+        runId: `run-post-loop-${mode}`,
+        status: 'finished',
+        result: 'done',
+      });
+      const emitted: SessionLogEvent[] = [];
+      const sessionLogger = new SessionLogger({
+        issueUrl: TEST_ISSUE.url,
+        repoRoot,
+      });
+      sessionLogger.subscribe((event) => emitted.push(event));
+      const onPostLoopWait = vi.fn();
+      let operatorApi: OperatorInputBindingApi | undefined;
+      const sessionPromise = runConductorSession({
+        issueUrl: TEST_ISSUE.url,
+        repoRoot,
+        profile: { workers: [] },
+        maxTurns: 5,
+        permissionPipeline: new PermissionPipeline({}),
+        registerProcessSignalHandlers: false,
+        waitForOperatorExit: true,
+        onPostLoopWait,
+        sessionLogger,
+        bindOperatorInput: (api) => {
+          operatorApi = api;
+        },
+      });
+      const resumeStorePath = sessionResumeStorePath({
+        repoRoot,
+        conductorAgentId: 'agent-test',
+      });
+      let completed = false;
+
+      try {
+        await vi.waitFor(async () => {
+          expect(onPostLoopWait).toHaveBeenCalledOnce();
+          expect((await loadSessionResumeStore(resumeStorePath))?.harnessSocketPath)
+            .toBeTruthy();
+        });
+        const socketPath = (await loadSessionResumeStore(resumeStorePath))
+          ?.harnessSocketPath;
+        const response = await sendOpenQuestionControlRequest<{
+          accepted: true;
+          mode: 'close' | 'exit';
+        }>(socketPath!, {
+          method: OPEN_QUESTION_CONTROL_METHODS.shutdownSession,
+          params: { mode },
+        });
+        expect(response).toEqual({ accepted: true, mode });
+
+        const result = await sessionPromise;
+        completed = true;
+        expect(result.stopReason).toBe('completed');
+        expect(mockSend).toHaveBeenCalledOnce();
+        expect(emitted.filter((event) => event.type === eventType)).toHaveLength(1);
+        expect(
+          emitted.some(
+            (event) =>
+              event.type === 'harness.teardown' && event.force === true,
+          ),
+        ).toBe(true);
+        expect(await loadSessionResumeStore(resumeStorePath)).toMatchObject({
+          harnessPhase,
+          lifecycle,
+        });
+      } finally {
+        if (!completed) operatorApi?.submit('/exit');
+        await sessionPromise.catch(() => {});
+      }
+    },
+  );
+
+  it.each([
+    ['close', 'session.operator_close', 'closed', 'close'],
+    ['exit', 'session.operator_exit', 'exited', 'exit'],
+  ] as const)(
+    'accepts UDS %s during the autonomous loop and tears down',
+    async (mode, eventType, lifecycle, harnessPhase) => {
+      mockSend.mockResolvedValueOnce({
+        runId: 'run-autonomous',
+        status: 'running',
+        result: 'still active',
+      });
+      const emitted: SessionLogEvent[] = [];
+      const sessionLogger = new SessionLogger({
+        issueUrl: TEST_ISSUE.url,
+        repoRoot,
+      });
+      sessionLogger.subscribe((event) => emitted.push(event));
+      let operatorApi: OperatorInputBindingApi | undefined;
+      const sessionPromise = runConductorSession({
+        issueUrl: TEST_ISSUE.url,
+        repoRoot,
+        profile: { workers: [] },
+        maxTurns: 5,
+        permissionPipeline: new PermissionPipeline({}),
+        registerProcessSignalHandlers: false,
+        sessionLogger,
+        bindOperatorInput: (api) => {
+          operatorApi = api;
+        },
+      });
+      const resumeStorePath = sessionResumeStorePath({
+        repoRoot,
+        conductorAgentId: 'agent-test',
+      });
+      let completed = false;
+
+      try {
+        await vi.waitFor(async () => {
+          expect(mockSend).toHaveBeenCalledOnce();
+          expect((await loadSessionResumeStore(resumeStorePath))?.harnessPhase)
+            .toBe('running');
+          expect((await loadSessionResumeStore(resumeStorePath))?.harnessSocketPath)
+            .toBeTruthy();
+        });
+        const socketPath = (await loadSessionResumeStore(resumeStorePath))
+          ?.harnessSocketPath;
+        await expect(
+          sendOpenQuestionControlRequest(socketPath!, {
+            method: OPEN_QUESTION_CONTROL_METHODS.shutdownSession,
+            params: { mode },
+          }),
+        ).resolves.toEqual({ accepted: true, mode });
+
+        const result = await sessionPromise;
+        completed = true;
+        expect(result.stopReason).toBe('completed');
+        expect(mockClose).toHaveBeenCalled();
+        expect(emitted.filter((event) => event.type === eventType))
+          .toHaveLength(1);
+        expect(
+          emitted.some(
+            (event) =>
+              event.type === 'harness.teardown' && event.force === true,
+          ),
+        ).toBe(true);
+        expect(await loadSessionResumeStore(resumeStorePath)).toMatchObject({
+          harnessPhase,
+          lifecycle,
+        });
+      } finally {
+        if (!completed) operatorApi?.submit('/exit');
+        await sessionPromise.catch(() => {});
+      }
+    },
+  );
 
   it('keeps generic UDS messages separate from a single Open Question answer path', async () => {
     let conductorTools: Parameters<typeof mockCreate>[0]['customTools'];

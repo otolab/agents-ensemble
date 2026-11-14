@@ -113,7 +113,7 @@
 
 `configuredReasoning` は Issue 起動と直接 API では明示した `--reasoning` / `RunConductorSessionOptions.reasoning` > `CONDUCTOR_REASONING` > merged config、operator-agent では `CONDUCTOR_REASONING` > merged config で解決した指定値です。未指定なら省略します。これは SDK / provider が最終的に適用した値の報告ではありません。Pi は選択 model が対応する値か確認し、Cursor は利用者の model catalog から parameter を解決してから conductor を起動します。
 
-resume では `modelId` と `reasoning` を invocation ごとに再解決します。新しい `resume-feasibility` digest は `session.worktree` / `acp.defaultPreset` だけを比較し、`conductor.model` / `conductor.reasoning` は対象外です。旧 sidecar の scheme 省略 / `full` digest は従来どおり config 全体を比較するため、model / reasoning / env の変更で拒否されることがあります。worker の model / reasoning / Cursor fast / env 情報は診断用 digest / fingerprint に記録しますが、新しい resume 判定では比較しません。
+resume では `modelId` と `reasoning` を invocation ごとに再解決します。新しい `resume-feasibility` digest は `session.worktree` / `acp.defaultPreset` / `acp.pi.runtime` を比較し、`conductor.model` / `conductor.reasoning` は対象外です。Pi runtime marker は BYO / builtin の切り替えを検出し、marker のない既存 session は BYO として扱います。旧 sidecar の scheme 省略 / `full` digest は従来どおり config 全体を比較するため、model / reasoning / env の変更で拒否されることがあります。worker の model / reasoning / Cursor fast / env 情報は診断用 digest / fingerprint に記録しますが、新しい resume 判定では比較しません。
 
 `lastUsedModelId` は、今回の `runConductorSession` 呼び出し内で最後の conductor send が model ID を報告した場合だけ含む。最後の send が報告しなければ、それ以前の値は使わず省略し、TTY には「報告なし」と表示する。resume 前の run の報告は引き継がないため、再開後に send せず終了した場合も省略する。Pi は失敗時にも選択済みの model ID を報告することがあるため、報告値だけではモデルが実際に使用されたとは判断できない。
 

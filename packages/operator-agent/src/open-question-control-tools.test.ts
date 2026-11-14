@@ -13,6 +13,7 @@ vi.mock('@agents-ensemble/core/operator-runtime', async (importOriginal) => ({
 import { OpenQuestionRegistry } from '../../core/src/escalation/open-question.js';
 import { recordOpenQuestionAnswer } from '../../core/src/escalation/record-open-question-answer.js';
 import {
+  OpenQuestionControlTransportError,
   startOpenQuestionControlServer,
   type OpenQuestionControlServer,
 } from '../../core/src/session/open-question-control.js';
@@ -27,6 +28,7 @@ import {
   createListConductorMessagesTool,
   createListLiveOpenQuestionsTool,
   createSendOperatorMessageTool,
+  createShutdownIssueSessionTool,
 } from './open-question-control-tools.js';
 
 describe('operator-agent live Open Question tools', () => {
@@ -256,6 +258,12 @@ describe('operator-agent live Open Question tools', () => {
       }),
     ).rejects.toThrow('has no recorded live control socket');
     await expect(
+      createShutdownIssueSessionTool(repoRoot).execute({
+        conductorAgentId: 'agent-offline',
+        mode: 'close',
+      }),
+    ).rejects.toThrow('has no recorded live control socket');
+    await expect(
       createListConductorMessagesTool(repoRoot).execute({
         conductorAgentId: 'not-in-this-repository',
       }),
@@ -405,5 +413,65 @@ describe('operator-agent live Open Question tools', () => {
         { text: `message ${expectedDelivery}`, delivery: expectedDelivery },
       ]),
     );
+  });
+
+  it('requests close or exit through live UDS and reports an unavailable socket', async () => {
+    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-shutdown-'));
+    const requestOperatorShutdown = vi.fn().mockReturnValue(true);
+    server = await startOpenQuestionControlServer({
+      listOpenQuestions: () => [],
+      answerOpenQuestion: async () => {
+        throw new Error('unexpected answer');
+      },
+      requestOperatorShutdown,
+    });
+    await saveSessionResumeStore(
+      sessionResumeStorePath({ repoRoot, conductorAgentId: 'agent-shutdown' }),
+      {
+        version: SESSION_RESUME_STORE_VERSION,
+        conductorAgentId: 'agent-shutdown',
+        issueUrl: 'https://github.com/org/repo/issues/704',
+        repoRoot,
+        profile: { workers: [] },
+        openQuestions: [],
+        sequence: 0,
+        workers: {},
+        harnessSocketPath: server.socketPath,
+        updatedAt: Date.now(),
+      },
+    );
+
+    const tool = createShutdownIssueSessionTool(repoRoot);
+    expect(tool.name).toBe('shutdown_issue_session');
+    expect(tool.inputSchema).toMatchObject({
+      properties: {
+        mode: { enum: ['close', 'exit'] },
+      },
+      required: ['conductorAgentId', 'mode'],
+      additionalProperties: false,
+    });
+    for (const mode of ['close', 'exit'] as const) {
+      const result = await tool.execute({
+        conductorAgentId: 'agent-shutdown',
+        mode,
+      });
+      expect(result.structuredContent).toEqual({ accepted: true, mode });
+    }
+    expect(requestOperatorShutdown.mock.calls).toEqual([
+      [{ mode: 'close' }],
+      [{ mode: 'exit' }],
+    ]);
+    await expect(
+      tool.execute({ conductorAgentId: 'agent-shutdown', mode: 'restart' }),
+    ).rejects.toThrow('mode must be close or exit.');
+
+    await server.close();
+    server = undefined;
+    await expect(
+      tool.execute({ conductorAgentId: 'agent-shutdown', mode: 'exit' }),
+    ).rejects.toMatchObject<Partial<OpenQuestionControlTransportError>>({
+      name: 'OpenQuestionControlTransportError',
+      outcome: 'not_sent',
+    });
   });
 });

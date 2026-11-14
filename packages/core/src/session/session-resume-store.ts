@@ -960,6 +960,17 @@ function parseAcpSpawnFingerprint(
   if (!Array.isArray(record.args) || record.args.some((arg) => typeof arg !== 'string')) {
     throw new Error(`Invalid session resume store worker acpSpawn args: ${workerName}`);
   }
+  let piRuntime: AcpSpawnFingerprint['piRuntime'] = undefined;
+  if (record.piRuntime === 'builtin') {
+    piRuntime = 'builtin';
+  } else if (
+    record.piRuntime !== undefined &&
+    record.piRuntime !== 'byo'
+  ) {
+    throw new Error(
+      `Invalid session resume store worker acpSpawn piRuntime: ${workerName}`,
+    );
+  }
   let modelTag: AcpModelTag | undefined;
   if (record.modelTag !== undefined) {
     if (typeof record.modelTag !== 'string') {
@@ -1045,6 +1056,7 @@ function parseAcpSpawnFingerprint(
     preset: record.preset as AcpSpawnFingerprint['preset'],
     command: record.command,
     args: record.args,
+    ...(piRuntime !== undefined ? { piRuntime } : {}),
     ...(modelTag !== undefined ? { modelTag } : {}),
     ...(model !== undefined ? { model } : {}),
     ...(reasoning !== undefined ? { reasoning } : {}),
