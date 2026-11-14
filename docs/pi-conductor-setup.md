@@ -35,7 +35,7 @@ user Pi の `~/.ensemble/pi/settings.json`:
 }
 ```
 
-Pi の認証には `OPENAI_API_KEY` など provider 固有の環境変数、または user Pi `auth.json` の認証情報を使えます。保存先は既定で `~/.ensemble/pi/auth.json` ですが、`conductor.pi.agentDir` で変更できます。手動で credential を置く場合も、secret manager から注入するなどしてファイルを公開・commit しないでください。Cursor は `CURSOR_API_KEY` を設定できます。Pi の API key / OAuth login と Cursor SDK の対話 login には TTY が必要です。OAuth を使う場合は、対話端末で先に login してください。詳細は[認証の解決順](#認証の解決順)を参照してください。
+Pi の認証には `OPENAI_API_KEY` など provider 固有の環境変数、または user Pi `auth.json` の認証情報を使えます。保存先は既定で `~/.ensemble/pi/auth.json` ですが、`conductor.pi.agentDir` で変更できます。手動で credential を置く場合も、secret manager から注入するなどしてファイルを公開・commit しないでください。Cursor は `CURSOR_API_KEY` を設定できます。Pi の OAuth と TTY の API-key prompt、および Cursor SDK の対話 login には TTY が必要です。API key は `ensemble auth login --api-key-stdin` から非対話で user `auth.json` に保存できます。OAuth を使う場合は、対話端末で先に login してください。詳細は[認証の解決順](#認証の解決順)を参照してください。
 
 ### 1. Pi backend を設定する
 
@@ -98,17 +98,33 @@ ensemble auth login --provider <provider-id>
 
 Pi のログインは Cursor のような全体ログインではなく **provider 単位**です。
 
-OpenAI provider (`openai`) は OAuth と API key の両方に対応します。`ensemble setup` では方式を選び、API key を選んだ場合は TTY の非表示 prompt から user `auth.json` に保存します。既存の `ensemble auth login --provider openai` は引き続き OAuth を選びます。
+OpenAI provider (`openai`) は OAuth と API key の両方に対応します。`ensemble setup` では方式を選び、API key を選んだ場合は TTY の非表示 prompt から user `auth.json` に保存します。`ensemble auth login --provider openai` は従来どおり OAuth を開始します。OpenAI API key を `auth login` で保存する場合は、TTY なら `--api-key-prompt`、非 TTY なら `--api-key-stdin` を明示してください。
 
 #### API key provider
 
 ```bash
+# API-key-only provider
 ensemble auth login --provider <provider-id>
+
+# OAuth も使える provider（例: OpenAI）で API key を選ぶ
+ensemble auth login --provider openai --api-key-prompt
 ```
 
 TTY の secret prompt に API key を入力します。prompt と入力待ちは stderr に出力され、入力値は表示されません。成功した credential は user resource root の `auth.json`（既定では `~/.ensemble/pi/auth.json`）へ保存されます。`conductor.pi.agentDir` を指定している場合はその配下です。project の `auth.json` はこのコマンドでは書き換えません。
 
-API-key login は対話的な TTY が必要です。CI や非 TTY では login prompt を使わず、下記の provider 環境変数または Pi resource の fallback を設定してください。
+OAuth と API key の両方に対応する provider で API key を選ぶには、TTY から次を実行します。
+
+```bash
+ensemble auth login --provider openai --api-key-prompt
+```
+
+非 TTY では、秘密値を argv に含めず標準入力から渡せます。
+
+```bash
+secret-manager read <secret-name> | ensemble auth login --provider openai --api-key-stdin
+```
+
+`--api-key-stdin` は非 TTY 専用です。値は表示・記録されず、成功後も user resource root の `auth.json` だけが更新されます。project `auth.json` や project Pi settings は変更しません。provider 固有の環境変数を設定した場合は request 時に利用できますが、`auth.json` には保存されません。API key を保存せず環境変数で使う場合や Pi resource から解決する場合は、下記の認証解決順を確認してください。
 
 #### 保存先の保護
 
@@ -138,7 +154,7 @@ ChatGPT OAuth を使わない場合は、次の方法があります。
 
 | 方法 | 手順 |
 |------|------|
-| OpenAI API key | `ensemble setup` で API key を選ぶと user `auth.json` に保存します。`OPENAI_API_KEY` を設定した場合は、Pi runtime が request 時に API key として使います。`ensemble auth login --provider openai` は OAuth login を選びます。OpenAI 公式の model ID を選びます。 |
+| OpenAI API key | `ensemble setup` で API key を選ぶと user `auth.json` に保存します。`ensemble auth login --provider openai` は既定で OAuth login を選びます。API key を保存する場合は TTY で `--api-key-prompt`、非 TTY で `--api-key-stdin` を指定します。`OPENAI_API_KEY` は request 時に利用できますが、保存はしません。OpenAI 公式の model ID を選びます。 |
 | Pi CLI で先に OAuth login | Pi CLI の agent directory を ensemble と同じ `conductor.pi.agentDir` に合わせ、Pi CLI の `/login` から `openai` provider に login します。credential は共有の `auth.json` に保存されるため、ensemble はその credential で request を送れます。 |
 | LiteLLM | 既存の `models.json` にある LiteLLM provider を引き続き使います。ChatGPT OAuth の device ID は不要です。 |
 
@@ -160,16 +176,16 @@ ensemble models list
 ensemble models list --provider <provider-id>
 ```
 
-`auth status` は Pi の auth file の場所、provider ごとの configured 状態、credential の source を表示します。API key、token、環境変数の値は表示しません。`source` は出所を示す粗い分類で、OAuth login の browser/manual 経路や、一部の `!command` を正確に示すものではありません。
+`auth status` は Pi の auth file の場所、provider ごとの configured 状態、credential の source を表示します。auth entry の型が分かる場合は `mode` も表示し、user `auth.json` の保存 API key は `mode=api_key; source=stored` となります。`api_key_stored` は認証 taxonomy の識別子で、status の `mode` には使いません。既存 `source` は出所を示す値として維持します。API key、token、環境変数の値は表示しません。`source` は粗い分類で、OAuth login の browser/manual 経路や、一部の `!command` を正確に示すものではありません。
 
 Pi 1.2.0 の `AuthStatus.source?` は `stored` / `runtime` / `environment` / `fallback` / `models_json_key` / `models_json_command` の union です（[型定義](https://github.com/earendil-works/pi/blob/v1.2.0/packages/coding-agent/src/core/provider-composer.ts#L103-L107)）。一方、Ensemble の公開 `PiProviderAuthStatus.source?` は `string` のままで、Pi SDK にない `project_oauth_unsupported` / `project_stored` / `settings_json` などの値も返します（[Ensemble の型定義](../packages/core/src/conductor/conductor-pi-auth.ts#L39-L44)）。次の表は両方の source をまとめたものです。
 
 | `source` | 出力元 | 現行表示が示すもの |
 |----------|--------|-------------------|
 | `runtime` | Pi 1.2.0 | Pi runtime override の登録を示します。headless path では通常、user → project に merge した `settings.json.apiKeys[provider]` の値です。値が非空なら user `auth.json` より先に使われます。空文字の例外は下記を参照してください |
-| `stored` | Pi 1.2.0 | runtime override が登録されていない場合に使われる user `auth.json` の API key または OAuth credential。credential の種類は status から分かりません |
+| `stored` | Pi 1.2.0 | runtime override が登録されていない場合に使われる user `auth.json` の credential。既知の API-key / OAuth entry は `mode` でも区別します |
 | `project_oauth_unsupported` | Ensemble | project OAuth entry。`configured=false` となり、実行時に拒否される |
-| `project_stored` | Ensemble | project `auth.json` の API key / `!command` entry。request では user 層より先ですが、status は entry の種類を区別しません |
+| `project_stored` | Ensemble | project `auth.json` の API key / `!command` entry。request では user 層より先です。既知の API-key / command entry は `mode` でも区別します |
 | `fallback` | Pi 1.2.0 | Pi status が、現行 headless path で `ModelRuntime.registerProvider` に渡した `models.json` provider の通常の `apiKey` を報告した値。環境変数参照は登録前に展開されます。この SDK source 名は scalar settings fallback を指しません |
 | `models_json_command` | Pi 1.2.0 | Pi status が provider 設定の `apiKey: "!command"` を `ModelRuntime.registerProvider` に渡したことを示す値。現行 headless path では通常 `models.json` の command です |
 | `environment` | Pi 1.2.0 / Ensemble | Pi の provider auth check、または Ensemble の provider-env fallback。Pi の `label` は AWS profile / ADC など ambient auth を示す場合もあり、環境変数名とは限りません |
@@ -408,7 +424,7 @@ node scripts/pi/bench-cached-auth.mjs
 |---|---|---|
 | backend の選択 | `conductor.backend: cursor` | `conductor.backend` を省略 |
 | login | `ensemble auth login` → Cursor SDK | `ensemble auth login --provider <id>` → provider 単位の Pi runtime |
-| API key | `CURSOR_API_KEY` または Cursor SDK の stored login | TTY secret prompt は user `auth.json` に保存します。request 時は project auth、`settings.json.apiKeys`、Pi provider 設定や環境・ambient auth が優先される場合があります（上記の解決順を参照） |
+| API key | `CURSOR_API_KEY` または Cursor SDK の stored login | Pi の TTY secret prompt / `--api-key-stdin` は user `auth.json` に保存します。request 時は project auth、`settings.json.apiKeys`、Pi provider 設定や環境・ambient auth が優先される場合があります（上記の解決順を参照） |
 | OAuth / 出力 | Cursor SDK の login | TTY の Pi OAuth flow。URL / device code は stderr |
 | model list | Cursor SDK の catalog | 認証済み Pi model のみ。`--provider` で絞り込み |
 | worker の認証 | Cursor worker は `agent login`。Pi BYO は Pi CLI が使う provider credential を用意 | Cursor worker は `agent login`。Pi BYO は Pi CLI が使う provider credential を用意。Pi builtin worker は Pi conductor と同じ user root の `auth.json` または provider 環境変数を使う |
@@ -437,7 +453,7 @@ Cursor backend の既存 `ensemble auth login`、`CURSOR_API_KEY`、model catalo
    - `models_json_key`: Ensemble が直接 fallback した `models.json` 候補。通常 key と `!command` を区別しません。request 時の settings command は status に登録されないため、これらの source が表示されても request では settings command が選ばれる場合があります。
    - `environment`: Pi の provider auth check または Ensemble の provider-env fallback です。`label` があれば確認し、Pi の ambient auth（AWS profile / ADC など）の可能性も考慮します。source 名だけで process 環境変数だとは判断できません。
 4. 設定値が `$NAME` / `${NAME}` なら参照先を確認し、更新する場合は値を画面や log に表示しないでください。`settings_json` / `models_json_key` / `models_json_command` / `project_stored` の entry に command が含まれていても、`auth status` は実行しません。status は command の実効性も確認しないため、user / project の両 resource root と request の優先順を確認します。
-5. source に対応する設定層を直した後に provider の login を使う場合は、その provider の現行 login flow を確認します。user `auth.json` を更新しても、有効な非空の `settings.json.apiKeys[provider]` runtime override や project `auth.json` entry は置き換わりません。`apiKeys[provider]` が空文字なら、status は `runtime` と表示する一方で request は user credential などへ進みます。OpenAI の現行 `ensemble auth login --provider openai` は OAuth に進み、OpenAI API key を user `auth.json` に保存しません。OpenAI API key は `OPENAI_API_KEY` または Pi resource から利用できます。
+5. source に対応する設定層を直した後に provider の login を使う場合は、その provider の現行 login flow を確認します。user `auth.json` を更新しても、有効な非空の `settings.json.apiKeys[provider]` runtime override や project `auth.json` entry は置き換わりません。`apiKeys[provider]` が空文字なら、status は `runtime` と表示する一方で request は user credential などへ進みます。OpenAI の `ensemble auth login --provider openai` は既定で OAuth に進みます。API key を user `auth.json` に保存するには `--api-key-prompt` または `--api-key-stdin` を指定してください。`OPENAI_API_KEY` は保存せず request 時に利用できます。
 6. `ensemble models list --provider <provider-id>` で対象 provider の model が見えることを確認する。
 
 ### 実行中の 401 / auth error

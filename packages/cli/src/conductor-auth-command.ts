@@ -32,6 +32,10 @@ export interface ConductorCommandOptions {
   piAgentDir?: string;
   /** Explicit Pi login choice used by setup; ordinary auth login keeps its current default. */
   authMethod?: 'api_key' | 'oauth';
+  /** Select API-key login and use the hidden TTY prompt for mixed-mode providers. */
+  apiKeyPrompt?: boolean;
+  /** Read a Pi API key from non-TTY stdin instead of prompting. */
+  apiKeyStdin?: boolean;
 }
 
 export interface ResolvedConductorCommandContext {
@@ -91,6 +95,31 @@ export async function runConductorLogin(
   options: ConductorCommandOptions = {},
 ): Promise<ConductorLoginResult> {
   const context = await resolveConductorCommandContext(options);
+  if (options.apiKeyStdin && context.auth.backend !== 'pi') {
+    throw new Error('--api-key-stdin is available only with the Pi backend.');
+  }
+  if (options.apiKeyPrompt && context.auth.backend !== 'pi') {
+    throw new Error('--api-key-prompt is available only with the Pi backend.');
+  }
+  if (options.apiKeyPrompt && options.apiKeyStdin) {
+    throw new Error('Choose either --api-key-prompt or --api-key-stdin.');
+  }
+  if (options.apiKeyStdin && options.authMethod === 'oauth') {
+    throw new Error('--api-key-stdin cannot be combined with OAuth login.');
+  }
+  if (options.apiKeyPrompt && options.authMethod === 'oauth') {
+    throw new Error('--api-key-prompt cannot be combined with OAuth login.');
+  }
+  if (options.apiKeyPrompt && !process.stdin.isTTY) {
+    throw new Error(
+      '--api-key-prompt requires a TTY. Use --api-key-stdin with piped input for non-interactive login.',
+    );
+  }
+  if (options.apiKeyStdin && process.stdin.isTTY) {
+    throw new Error(
+      '--api-key-stdin requires piped standard input. Run without this option to use the hidden TTY prompt.',
+    );
+  }
   if (context.auth.backend !== 'pi') {
     return loginConductor(context.auth);
   }
@@ -108,8 +137,15 @@ export async function runConductorLogin(
       `Pi provider does not support OAuth. Choose API key or another provider.`,
     );
   }
-  if (oauth && options.authMethod !== 'api_key') {
-    requireInteractiveTty('Pi OAuth login');
+  const useApiKey =
+    options.apiKeyPrompt ||
+    options.apiKeyStdin ||
+    options.authMethod === 'api_key';
+  if (oauth && !useApiKey) {
+    requireInteractiveTty(
+      'Pi OAuth login',
+      'Run from a TTY to complete OAuth, or use --api-key-stdin to store an API key instead.',
+    );
     return loginConductor({
       ...context.auth,
       oauthCallbacks: createOAuthLoginCallbacks(),
@@ -117,7 +153,9 @@ export async function runConductorLogin(
   }
 
   const provider = options.provider ?? (await resolvePiConductorProvider(providerOptions));
-  const apiKey = await promptSecret(`Pi API key for ${provider}: `);
+  const apiKey = options.apiKeyStdin
+    ? await readApiKeyFromStdin()
+    : await promptSecret(`Pi API key for ${provider}: `);
   try {
     return await loginConductor({
       ...context.auth,
@@ -143,16 +181,19 @@ export async function runConductorAuthStatus(
   return getConductorAuthStatus(context.auth);
 }
 
-function requireInteractiveTty(operation: string): void {
+function requireInteractiveTty(operation: string, nonTtyGuidance?: string): void {
   if (!process.stdin.isTTY) {
     throw new Error(
-      `${operation} requires a TTY. Run it from an interactive terminal (SSH is supported), or configure Pi auth.json/environment credentials manually.`,
+      `${operation} requires a TTY. ${nonTtyGuidance ?? 'Run it from an interactive terminal (SSH is supported), or configure Pi auth.json/environment credentials manually.'}`,
     );
   }
 }
 
 async function promptSecret(prompt: string): Promise<string> {
-  requireInteractiveTty('Pi API-key login');
+  requireInteractiveTty(
+    'Pi API-key login',
+    'For non-interactive login, pass the key through stdin with --api-key-stdin. A provider-specific environment variable can supply request-time credentials without saving them to auth.json.',
+  );
   const input = process.stdin;
   const output = process.stderr;
   return new Promise<string>((resolveAnswer, reject) => {
@@ -193,6 +234,24 @@ async function promptSecret(prompt: string): Promise<string> {
   });
 }
 
+async function readApiKeyFromStdin(): Promise<string> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+
+  const apiKey = Buffer.concat(chunks).toString('utf8').trim();
+  if (!apiKey) {
+    throw new Error(
+      'No API key was received on stdin. Pipe a provider API key to `ensemble auth login --api-key-stdin`.',
+    );
+  }
+  if (/[\r\n]/.test(apiKey)) {
+    throw new Error('Standard input must contain a single API key.');
+  }
+  return apiKey;
+}
+
 function createOAuthLoginCallbacks(): OAuthLoginCallbacks {
   const write = (message: string) => {
     process.stderr.write(`${message}\n`);
@@ -223,7 +282,10 @@ function createOAuthLoginCallbacks(): OAuthLoginCallbacks {
 }
 
 async function promptLine(prompt: string): Promise<string> {
-  requireInteractiveTty('Pi OAuth login');
+  requireInteractiveTty(
+    'Pi OAuth login',
+    'Run from a TTY to complete OAuth, or use --api-key-stdin to store an API key instead.',
+  );
   const readline = createInterface({
     input: process.stdin,
     output: process.stderr,
