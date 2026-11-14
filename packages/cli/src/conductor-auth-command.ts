@@ -18,6 +18,10 @@ import {
   type EnsembleConfig,
   type ResolvedProfile,
 } from '@agents-ensemble/core';
+import {
+  formatOsc8Hyperlink,
+  resolveTuiIssueLinkMode,
+} from './tui/format-operator-context.js';
 
 type OAuthLoginCallbacks = NonNullable<ConductorAuthOptions['oauthCallbacks']>;
 
@@ -112,7 +116,7 @@ export async function runConductorLogin(
     requireInteractiveTty('Pi OAuth login');
     return loginConductor({
       ...context.auth,
-      oauthCallbacks: createOAuthLoginCallbacks(),
+      oauthCallbacks: createOAuthLoginCallbacks(context.config),
     });
   }
 
@@ -146,23 +150,46 @@ export async function runConductorAuthStatus(
 function requireInteractiveTty(operation: string): void {
   if (!process.stdin.isTTY) {
     throw new Error(
-      `${operation} requires a TTY. Run it from an interactive terminal (SSH is supported), or configure Pi auth.json/environment credentials manually.`,
+      `${operation} requires an interactive TTY. Run it from an SSH or tmux terminal, or configure Pi credentials in the user auth.json or provider environment manually.`,
     );
   }
 }
 
 async function promptSecret(prompt: string): Promise<string> {
   requireInteractiveTty('Pi API-key login');
+  return promptHiddenInput(prompt, 'Pi API-key login cancelled.');
+}
+
+async function promptHiddenInput(
+  prompt: string,
+  cancelMessage: string,
+  signal?: AbortSignal,
+): Promise<string> {
+  if (signal?.aborted) {
+    throw new Error(cancelMessage);
+  }
   const input = process.stdin;
   const output = process.stderr;
+  if (!input.setRawMode) {
+    throw new Error('Pi login requires a TTY that supports hidden input.');
+  }
   return new Promise<string>((resolveAnswer, reject) => {
     let answer = '';
     let settled = false;
+    const previousRawMode = input.isRaw === true;
 
     const cleanup = () => {
       input.off('data', onData);
-      if (input.setRawMode) input.setRawMode(false);
+      input.off('end', onEnd);
+      input.off('error', onError);
+      signal?.removeEventListener('abort', onAbort);
+      try {
+        input.setRawMode(previousRawMode);
+      } catch {
+        // Preserve the prompt result while still attempting to restore the TTY.
+      }
       input.pause();
+      output.write('\n');
     };
     const finish = (error?: Error) => {
       if (settled) return;
@@ -174,64 +201,133 @@ async function promptSecret(prompt: string): Promise<string> {
     };
     const onData = (chunk: Buffer | string) => {
       for (const character of String(chunk)) {
-        if (character === '\u0003') {
-          finish(new Error('Pi API-key login cancelled.'));
+        if (settled) break;
+        if (
+          character === '\u0003' ||
+          character === '\u0004' ||
+          character === '\u001b'
+        ) {
+          finish(new Error(cancelMessage));
         } else if (character === '\r' || character === '\n') {
           finish();
         } else if (character === '\u007f' || character === '\b') {
-          answer = answer.slice(0, -1);
+          answer = Array.from(answer).slice(0, -1).join('');
         } else if (character >= ' ') {
           answer += character;
         }
       }
     };
+    const onEnd = () => finish(new Error(cancelMessage));
+    const onError = (error: Error) => finish(error);
+    const onAbort = () => finish(new Error(cancelMessage));
 
     output.write(prompt);
-    input.resume();
-    if (input.setRawMode) input.setRawMode(true);
     input.on('data', onData);
+    input.once('end', onEnd);
+    input.once('error', onError);
+    signal?.addEventListener('abort', onAbort, { once: true });
+    try {
+      input.setRawMode(true);
+      input.resume();
+    } catch (error) {
+      finish(error instanceof Error ? error : new Error(String(error)));
+    }
   });
 }
 
-function createOAuthLoginCallbacks(): OAuthLoginCallbacks {
+function createOAuthLoginCallbacks(config: EnsembleConfig): OAuthLoginCallbacks {
   const write = (message: string) => {
     process.stderr.write(`${message}\n`);
   };
+  const formatUrl = (url: string) =>
+    resolveTuiIssueLinkMode({ config }) === 'osc8'
+      ? formatOsc8Hyperlink(url, url)
+      : url;
   return {
     onAuth: (info) => {
-      write(`Open this URL to authenticate Pi: ${info.url}`);
+      write('Open this URL in a browser to authenticate Pi:');
+      write(formatUrl(info.url));
       if (info.instructions) write(info.instructions);
     },
     onDeviceCode: (info) => {
       write(`Pi device code: ${info.userCode}`);
-      write(`Verification URL: ${info.verificationUri}`);
+      write(`Verification URL: ${formatUrl(info.verificationUri)}`);
+      write('Open the verification URL on a device with a browser and enter the code above.');
       if (info.expiresInSeconds) write(`Expires in: ${info.expiresInSeconds}s`);
+      if (info.intervalSeconds) write(`Check again every: ${info.intervalSeconds}s`);
     },
     onProgress: write,
-    onPrompt: (prompt) => promptLine(prompt.message),
-    onManualCodeInput: () => promptLine('Enter the authorization code: '),
+    onPrompt: (prompt) =>
+      prompt.type === 'secret' || prompt.type === 'manual_code'
+        ? promptHiddenInput(
+            `${prompt.message} (input hidden): `,
+            'Pi OAuth login cancelled.',
+            prompt.signal,
+          )
+        : promptLine(`${prompt.message}: `, prompt.signal),
+    onManualCodeInput: (prompt) =>
+      promptHiddenInput(
+        `${prompt?.message ?? 'Enter the authorization code'} (input hidden): `,
+        'Pi OAuth login cancelled.',
+        prompt?.signal,
+      ),
     onSelect: async (prompt) => {
       write(prompt.message);
       prompt.options.forEach((option, index) => write(`${index + 1}) ${option.label}`));
-      const answer = await promptLine('Select a login method: ');
-      const index = Number.parseInt(answer, 10) - 1;
-      return Number.isInteger(index) && prompt.options[index]
-        ? prompt.options[index]!.id
-        : undefined;
+      if (prompt.options.length === 0) return undefined;
+      while (true) {
+        const answer = await promptLine(
+          'Select a login method (Enter to cancel): ',
+          prompt.signal,
+        );
+        if (!answer.trim()) return undefined;
+        const index = Number(answer.trim()) - 1;
+        if (Number.isInteger(index) && prompt.options[index]) {
+          return prompt.options[index]!.id;
+        }
+        write(`Enter a number from 1 to ${prompt.options.length}, or press Enter to cancel.`);
+      }
     },
   };
 }
 
-async function promptLine(prompt: string): Promise<string> {
+async function promptLine(
+  prompt: string,
+  signal?: AbortSignal,
+): Promise<string> {
   requireInteractiveTty('Pi OAuth login');
+  if (signal?.aborted) {
+    throw new Error('Pi OAuth login cancelled.');
+  }
   const readline = createInterface({
     input: process.stdin,
     output: process.stderr,
     terminal: true,
   });
   try {
-    return await new Promise<string>((resolveAnswer) => {
-      readline.question(prompt, resolveAnswer);
+    return await new Promise<string>((resolveAnswer, reject) => {
+      let settled = false;
+      const cleanup = () => {
+        readline.off('SIGINT', onInterrupt);
+        readline.off('close', onClose);
+        signal?.removeEventListener('abort', onAbort);
+      };
+      const finish = (error?: Error, answer?: string) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        if (error) reject(error);
+        else resolveAnswer(answer ?? '');
+      };
+      const onInterrupt = () =>
+        finish(new Error('Pi OAuth login cancelled.'));
+      const onClose = () => finish(new Error('Pi OAuth login cancelled.'));
+      const onAbort = () => finish(new Error('Pi OAuth login cancelled.'));
+
+      readline.once('SIGINT', onInterrupt);
+      readline.once('close', onClose);
+      signal?.addEventListener('abort', onAbort, { once: true });
+      readline.question(prompt, (answer) => finish(undefined, answer));
     });
   } finally {
     readline.close();

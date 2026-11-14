@@ -4,6 +4,7 @@ import {
   formatIssueLabel,
   formatIssueReference,
   formatOperatorContextHint,
+  formatOsc8Hyperlink,
   formatOsc8Link,
   resolveOperatorInputDisplayMode,
   resolveTuiIssueLinkMode,
@@ -145,6 +146,14 @@ describe('Issue reference formatting', () => {
     );
     expect(formatIssueReference(ISSUE_URL, 'label')).toBe('otolab/agents-ensemble#249');
     expect(formatIssueReference(ISSUE_URL, 'url')).toBe(ISSUE_URL);
+  });
+
+  it('wraps arbitrary URLs in an OSC 8 hyperlink without rewriting the visible URL', () => {
+    const authUrl = 'https://auth.example.test/authorize?code=copy-me';
+
+    expect(formatOsc8Hyperlink(authUrl, authUrl)).toBe(
+      `\u001b]8;;${authUrl}\u0007${authUrl}\u001b]8;;\u0007`,
+    );
   });
 
   it('normalizes OSC 8 and URL targets to the canonical GitHub Issue URL', () => {

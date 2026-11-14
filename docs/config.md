@@ -177,7 +177,7 @@ tui:
 | `session.maxTurns.tty` / `nonTty` | 自律ターン上限 | `--max-turns` / `--no-max-turns` | — |
 | `session.postLoop.wait` | post-loop 待機（TTY） | `--no-wait` | — |
 | `tui.layout` | TTY レイアウト（`pane` / `stream`） | — | `ENSEMBLE_TUI_LAYOUT` |
-| `tui.forceHyperlink` | Issue リンク OSC 8（`auto` / `on` / `off`） | — | `FORCE_HYPERLINK`（`1`/`0`） |
+| `tui.forceHyperlink` | Issue リンク・Pi OAuth URL の OSC 8（`auto` / `on` / `off`） | — | `FORCE_HYPERLINK`（`1`/`0`） |
 | `github.auth.allowGhAuthTokenFallback` | `gh auth token` フォールバック | — | — |
 | `github.monitor.enabled` | Issue / PR 監視 | `--no-github-monitor` | — |
 | `github.monitor.debounceMs` | 更新 debounce | `--github-monitor-debounce-ms` | — |

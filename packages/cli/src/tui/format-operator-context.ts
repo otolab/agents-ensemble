@@ -43,11 +43,15 @@ function escapeOsc8Url(issueUrl: string): string {
 }
 
 /** OSC 8 の hyperlink シーケンスでラベルを包む。 */
-export function formatOsc8Link(label: string, issueUrl: string): string {
+export function formatOsc8Hyperlink(label: string, targetUrl: string): string {
   const osc8 = '\u001b]8;;';
   const bell = '\u0007';
-  const target = resolveIssueLinkTarget(issueUrl);
-  return `${osc8}${escapeOsc8Url(target)}${bell}${label}${osc8}${bell}`;
+  return `${osc8}${escapeOsc8Url(targetUrl)}${bell}${label}${osc8}${bell}`;
+}
+
+/** Issue URL を正規化してから OSC 8 リンクにする。 */
+export function formatOsc8Link(label: string, issueUrl: string): string {
+  return formatOsc8Hyperlink(label, resolveIssueLinkTarget(issueUrl));
 }
 
 /** Issue の表示を端末互換性に応じて選ぶ。 */

@@ -1,7 +1,6 @@
 import { existsSync } from 'node:fs';
 import { Cursor, getDefaultSdkAuthPath } from '@cursor/sdk';
 import type { SdkAuthStatus, SdkLoginResult } from '@cursor/sdk';
-import type { OAuthLoginCallbacks } from '@earendil-works/pi-ai/compat';
 import {
   getPiConductorAuthStatus,
   hasPiConductorAuth,
@@ -12,6 +11,7 @@ import {
   type PiConductorAuthStatus,
   type PiConductorLoginResult,
   type PiConductorLogoutResult,
+  type PiConductorOAuthLoginCallbacks,
 } from './conductor-pi-auth.js';
 import { resolveConductorBackendSetting } from '../config/resolve-settings.js';
 import type { ConductorBackend, EnsembleConfig } from '../config/types.js';
@@ -34,7 +34,7 @@ export interface ConductorAuthOptions {
   provider?: string;
   modelId?: string;
   apiKey?: string;
-  oauthCallbacks?: OAuthLoginCallbacks;
+  oauthCallbacks?: PiConductorOAuthLoginCallbacks;
 }
 
 export type ConductorAuthStatus = SdkAuthStatus | PiConductorAuthStatus;
