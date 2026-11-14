@@ -2028,6 +2028,7 @@ describe('runConductorSession resume / shutdown', () => {
         conductor: {
           ...DEFAULT_ENSEMBLE_CONFIG.conductor,
           backend: 'pi',
+          connection: { headers: { originator: 'ensemble' } },
           pi: {
             agentDir: '~/.custom-pi',
             projectDir: '.custom-project-pi',
@@ -2041,6 +2042,7 @@ describe('runConductorSession resume / shutdown', () => {
 
     expect(mockCreate).toHaveBeenCalledWith(
       expect.objectContaining({
+        connection: { headers: { originator: 'ensemble' } },
         pi: {
           agentDir: join(homedir(), '.custom-pi'),
           projectDir: join(repoRoot, '.custom-project-pi'),
@@ -2144,6 +2146,24 @@ describe('runConductorSession resume / shutdown', () => {
     expect(workerSpawn?.env?.ENSEMBLE_PI_CLI_EXECUTABLE).toBe(
       resolveBundledPiCliPath(),
     );
+  });
+
+  it('ignores connection headers for the Cursor backend', async () => {
+    stubUnusedControlServer();
+    mockSend.mockResolvedValue({ runId: 'cursor-headers', status: 'finished', result: 'done' });
+    await runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { workers: [] },
+      ensembleConfig: {
+        ...DEFAULT_ENSEMBLE_CONFIG,
+        conductor: { model: 'default', backend: 'cursor', connection: { headers: { originator: 'ensemble' } } },
+      },
+      permissionPipeline: new PermissionPipeline({}),
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: false,
+    });
+    expect(mockCreate.mock.calls[0]?.[0]).not.toHaveProperty('connection');
   });
 
   it('does not fail at backend selection before the Pi agent is created', async () => {

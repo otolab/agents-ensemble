@@ -168,6 +168,9 @@ describe('runOperatorAgent', () => {
       [
         'conductor:',
         '  model: alternate-model',
+        '  connection:',
+        '    headers:',
+        '      originator: ensemble',
         'tui:',
         '  layout: pane',
         '',
@@ -216,6 +219,7 @@ describe('runOperatorAgent', () => {
     });
     expect(loadedConfig?.acp.env ?? {}).not.toHaveProperty('USER_ONLY');
     expect(agentOptions?.modelId).toBe('smoke-model');
+    expect(agentOptions?.connection).toEqual({ headers: { originator: 'ensemble' } });
     expect(agentOptions?.pi?.agentDir).toBe(join(repoRoot, '.ensemble/pi-user'));
   });
 

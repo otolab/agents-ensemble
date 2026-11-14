@@ -711,6 +711,9 @@ async function createPiConductorSession(
       createCodemodeExtension({ mode: 'on' }),
       createToolSearchExtension(),
       createPiSystemPromptExtension(systemPromptRef),
+      ...(options.connection?.headers
+        ? [createPiHeadersExtension(options.connection.headers)]
+        : []),
     ],
   });
   await resourceLoader.reload();
@@ -912,6 +915,19 @@ function uniquePiTools(...groups: ToolDefinition[][]): ToolDefinition[] {
     }
   }
   return [...tools.values()];
+}
+
+function createPiHeadersExtension(headers: Record<string, string>): ExtensionFactory {
+  return (pi) => {
+    pi.on('before_provider_headers', (event) => {
+      for (const [name, value] of Object.entries(headers)) {
+        for (const existing of Object.keys(event.headers)) {
+          if (existing.toLowerCase() === name.toLowerCase()) delete event.headers[existing];
+        }
+        event.headers[name] = value;
+      }
+    });
+  };
 }
 
 function createPiSystemPromptExtension(

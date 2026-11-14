@@ -55,6 +55,8 @@ export interface EnsembleConductorConfig {
   backend?: ConductorBackend;
   /** harness の詳細 telemetry を人間向け出力へ表示するか。 */
   verbose?: boolean;
+  /** Pi provider requests に追加する HTTP headers。Cursor では無視。 */
+  connection?: { headers?: Record<string, string> };
   /** Pi resource root のパス上書き（Pi の設定スキーマではない）。 */
   pi?: EnsembleConductorPiConfig;
 }

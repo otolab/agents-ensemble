@@ -27,6 +27,10 @@ conductor:
   # reasoning: high
   # harness の詳細 telemetry（CLI --verbose / CONDUCTOR_VERBOSE より優先度低）
   verbose: false
+  # Pi provider 共通の HTTP header（任意。Cursor では無視）
+  # connection:
+  #   headers:
+  #     originator: agents-ensemble
   # Pi backend の resource root（任意。パスだけを上書きする）
   # 相対パスは repoRoot 基準、~ はユーザ home 基準
   pi:

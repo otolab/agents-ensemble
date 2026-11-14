@@ -1326,6 +1326,9 @@ async function runConductorSessionWithStartupGuard(
       : {}),
     ...(conductorBackend === 'pi'
       ? {
+          ...(ensembleConfig.conductor.connection
+            ? { connection: ensembleConfig.conductor.connection }
+            : {}),
           pi: resolveConductorPiResourcePaths({
             repoRoot: options.repoRoot,
             config: ensembleConfig,

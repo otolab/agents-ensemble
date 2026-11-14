@@ -183,6 +183,9 @@ export async function runOperatorAgent(
     builtinTools: false,
     ...(runtime.backend === 'pi'
       ? {
+          ...(runtime.config.conductor.connection
+            ? { connection: runtime.config.conductor.connection }
+            : {}),
           pi: resolveConductorPiResourcePaths({
             repoRoot: runtime.repoRoot,
             config: runtime.config,
