@@ -56,6 +56,14 @@ export class SessionResumeStoreNotFoundError extends Error {
   }
 }
 
+class InvalidSessionResumeStoreDataError extends Error {
+  constructor(path: string, reason: string, cause: unknown) {
+    const detail = cause instanceof Error ? `: ${cause.message}` : '';
+    super(`Invalid session resume store at ${path} (${reason})${detail}`);
+    this.name = 'InvalidSessionResumeStoreDataError';
+  }
+}
+
 /** @deprecated Use SessionResumeStoreNotFoundError; supported for one release only. */
 export class SessionSidecarNotFoundError extends SessionResumeStoreNotFoundError {
   override readonly code = 'SESSION_SIDECAR_NOT_FOUND';
@@ -209,18 +217,32 @@ async function readSessionResumeStore(
     }
   | undefined
 > {
+  let raw: string;
   try {
-    const raw = await readFile(path, 'utf8');
-    const value: unknown = JSON.parse(raw);
-    return {
-      resumeStore: parseSessionResumeStore(value),
-      hasLegacyAcpSpawnEnv: containsLegacyAcpSpawnEnv(value),
-      rawValue: value,
-    };
+    raw = await readFile(path, 'utf8');
   } catch (error) {
     if (isEnoent(error)) return undefined;
     throw error;
   }
+
+  let value: unknown;
+  try {
+    value = JSON.parse(raw);
+  } catch (error) {
+    throw new InvalidSessionResumeStoreDataError(path, 'invalid JSON', error);
+  }
+
+  let resumeStore: SessionResumeStore;
+  try {
+    resumeStore = parseSessionResumeStore(value);
+  } catch (error) {
+    throw new InvalidSessionResumeStoreDataError(path, 'invalid schema', error);
+  }
+  return {
+    resumeStore,
+    hasLegacyAcpSpawnEnv: containsLegacyAcpSpawnEnv(value),
+    rawValue: value,
+  };
 }
 
 /** `resumeAgentId` 指定時に SessionResumeStore が無い場合は起動失敗とする。 */
@@ -417,7 +439,13 @@ async function listSessionResumeStoreLocations(
   const readDirectory = async (
     dir: string,
     location: SessionResumeStoreLocation,
-    slugRoot?: string,
+    {
+      slugRoot,
+      skipMalformedStoreData = false,
+    }: {
+      slugRoot?: string;
+      skipMalformedStoreData?: boolean;
+    } = {},
   ) => {
     let entries: Dirent[];
     try {
@@ -431,7 +459,18 @@ async function listSessionResumeStoreLocations(
       const path = join(dir, entry.name);
       if (visited.has(path)) continue;
       visited.add(path);
-      const resumeStore = await loadSessionResumeStore(path);
+      let resumeStore: SessionResumeStore | undefined;
+      try {
+        resumeStore = await loadSessionResumeStore(path);
+      } catch (error) {
+        if (
+          skipMalformedStoreData &&
+          error instanceof InvalidSessionResumeStoreDataError
+        ) {
+          continue;
+        }
+        throw error;
+      }
       if (!resumeStore) continue;
       if (
         slugRoot &&
@@ -442,11 +481,6 @@ async function listSessionResumeStoreLocations(
       candidates.push({ resumeStore, path, location });
     }
   };
-
-  // The current path-hash and project-local directories are bounded and remain
-  // the discovery roots for legacy data.
-  await readDirectory(paths.sessionsDir, 'user-path-hash');
-  await readDirectory(paths.legacySessionsDir, 'project-legacy');
 
   // Slug stores are keyed by GitHub repository identity. Search only the
   // host/owner/repository depth; repoRoot is execution context, not a lookup
@@ -495,10 +529,22 @@ async function listSessionResumeStoreLocations(
           owner.name,
           repository.name,
         );
-        await readDirectory(slugRoot, 'canonical-slug', slugRoot);
+        await readDirectory(slugRoot, 'canonical-slug', { slugRoot });
       }
     }
   }
+
+  // Inspect canonical data before the legacy fallbacks. Malformed legacy JSON
+  // or schema data is unavailable for resume, but must not hide a usable slug
+  // store or another candidate. Keep the source untouched; direct reads still
+  // surface InvalidSessionResumeStoreDataError. Filesystem errors are not
+  // treated as malformed data and continue to propagate.
+  await readDirectory(paths.sessionsDir, 'user-path-hash', {
+    skipMalformedStoreData: true,
+  });
+  await readDirectory(paths.legacySessionsDir, 'project-legacy', {
+    skipMalformedStoreData: true,
+  });
 
   const bySession = new Map<string, LocatedSessionResumeStore[]>();
   for (const candidate of candidates) {

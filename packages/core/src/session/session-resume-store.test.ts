@@ -783,6 +783,124 @@ describe('SessionResumeStore', () => {
     ).resolves.toBe(900);
   });
 
+  it.each([
+    { location: 'user-path-hash' as const, malformed: '{invalid json' },
+    { location: 'project-legacy' as const, malformed: '{invalid json' },
+  ])(
+    'keeps slug and other candidates discoverable when a $location store is malformed',
+    async ({ location, malformed }) => {
+      tempDir = await createHome('ensemble-session-resume-store-');
+      const agentId = `malformed-${location}`;
+      const peerAgentId = `valid-peer-${location}`;
+      const issueUrl = 'https://github.com/org/repo/issues/9';
+      const peerIssueUrl = 'https://github.com/org/other-repo/issues/10';
+      const paths = resolveEnsemblePaths({ repoRoot: tempDir });
+      const malformedPath =
+        location === 'user-path-hash'
+          ? paths.sessionResumeStorePath(agentId)
+          : paths.legacySessionResumeStorePath(agentId);
+      const peerLocation =
+        location === 'user-path-hash' ? 'project-legacy' : 'user-path-hash';
+      const peerPath =
+        peerLocation === 'user-path-hash'
+          ? paths.sessionResumeStorePath(peerAgentId)
+          : paths.legacySessionResumeStorePath(peerAgentId);
+      const slugPath = paths.canonicalSessionResumeStorePath(
+        issueUrl,
+        agentId,
+      );
+      for (const path of [malformedPath, peerPath, slugPath]) {
+        await mkdir(dirname(path), { recursive: true });
+      }
+      await writeFile(malformedPath, `${malformed}\n`, 'utf8');
+      await writeFile(
+        peerPath,
+        `${JSON.stringify(
+          baseResumeStore({
+            conductorAgentId: peerAgentId,
+            issueUrl: peerIssueUrl,
+            repoRoot: tempDir,
+          }),
+        )}\n`,
+        'utf8',
+      );
+      await writeFile(
+        slugPath,
+        `${JSON.stringify(
+          baseResumeStore({
+            conductorAgentId: agentId,
+            issueUrl,
+            repoRoot: tempDir,
+            harnessSocketPath: '/tmp/ens-oq-live/canonical.sock',
+          }),
+        )}\n`,
+        'utf8',
+      );
+
+      const listed = await listLocatedSessionResumeStores(tempDir);
+
+      expect(listed).toHaveLength(2);
+      expect(listed).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            path: slugPath,
+            location: 'canonical-slug',
+          }),
+          expect.objectContaining({ path: peerPath, location: peerLocation }),
+        ]),
+      );
+      await expect(
+        requireLocatedSessionResumeStoreForResume({
+          repoRoot: tempDir,
+          issueUrl,
+          conductorAgentId: agentId,
+        }),
+      ).resolves.toMatchObject({
+        path: slugPath,
+        location: 'canonical-slug',
+        resumeStore: {
+          harnessSocketPath: '/tmp/ens-oq-live/canonical.sock',
+        },
+      });
+      await expect(readFile(malformedPath, 'utf8')).resolves.toBe(
+        `${malformed}\n`,
+      );
+      await expect(loadSessionResumeStore(malformedPath)).rejects.toThrow(
+        /Invalid session resume store/,
+      );
+    },
+  );
+
+  it.each([
+    { reason: 'malformed JSON', contents: '{invalid json' },
+    { reason: 'invalid schema', contents: '{}' },
+  ])(
+    'treats hash-only legacy data with $reason as unavailable without changing it',
+    async ({ contents }) => {
+      tempDir = await createHome('ensemble-session-resume-store-');
+      const agentId = `corrupt-hash-only-${contents.length}`;
+      const hashPath = sessionResumeStorePath({
+        repoRoot: tempDir,
+        conductorAgentId: agentId,
+      });
+      const raw = `${contents}\n`;
+      await mkdir(dirname(hashPath), { recursive: true });
+      await writeFile(hashPath, raw, 'utf8');
+
+      await expect(listLocatedSessionResumeStores(tempDir)).resolves.toEqual([]);
+      await expect(
+        requireLocatedSessionResumeStoreForResume({
+          repoRoot: tempDir,
+          conductorAgentId: agentId,
+        }),
+      ).rejects.toThrow(SessionResumeStoreNotFoundError);
+      await expect(loadSessionResumeStore(hashPath)).rejects.toThrow(
+        /Invalid session resume store/,
+      );
+      await expect(readFile(hashPath, 'utf8')).resolves.toBe(raw);
+    },
+  );
+
   it('selects a canonical slug Store from another clone over an older hash copy without losing its live socket', async () => {
     tempDir = await createHome('ensemble-session-resume-store-');
     const currentRepoRoot = join(tempDir, 'current-clone');
