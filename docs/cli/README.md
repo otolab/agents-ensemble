@@ -29,7 +29,7 @@ Pi backend の初回セットアップ、resource root、provider 認証、`ense
 
 clone したら、推奨初回導線として TTY で `ensemble setup` を実行します。Pi（OpenAI）または Cursor を選び、Pi では OAuth / API key も選べます。Pi を選んだ場合、`conductor.model: default` は user Pi settings に保存した provider / model を使います。設定と認証は user 層に保存し、既存 project config・project Pi resource・profile の値は変更しません。user の保存先が project `.ensemble` / Pi resource と重なる場合や、project の symlink から path として辿れる保存先と重なる場合は書き込みを中止します。project/profile が backend を指定している場合は user 設定より優先されます。setup を使わず Pi settings に model がなく、明示 model もない場合は起動前に設定エラーになります。CI / headless では user config・Pi settings・認証情報を手動で用意してください。`ensemble auth login` の対話 login には TTY が必要です。手順は [Pi conductor セットアップと認証](https://github.com/otolab/agents-ensemble/blob/main/docs/pi-conductor-setup.md) を参照してください。
 
-Pi の認証 CLI は backend に分岐します。Cursor は Cursor SDK のログイン、Pi は provider 単位のログインです。TTY の動作、OAuth の stderr 出力、project OAuth の制約、認証優先順、復旧手順は [Pi conductor セットアップと認証](https://github.com/otolab/agents-ensemble/blob/main/docs/pi-conductor-setup.md) を参照してください。
+Pi の認証 CLI は backend に分岐します。Cursor は Cursor SDK のログイン、Pi は provider 単位のログインです。Pi OAuth は SSH / tmux の TTY から進められ、URL は OSC 8 非対応端末でもコピーできる形で表示します。貼り付ける authorization code は入力中に表示しません。TTY の動作、OAuth の stderr 出力、project OAuth の制約、認証優先順、復旧手順は [Pi conductor セットアップと認証](https://github.com/otolab/agents-ensemble/blob/main/docs/pi-conductor-setup.md) を参照してください。
 
 Pi は headless の `createAgentSession` を使い、Pi CLI の `<cwd>/.pi/` 設定とは独立しています。resource discovery、`settings.json` の headless 対応範囲、`models.json`、MCP の制約は [config.md](https://github.com/otolab/agents-ensemble/blob/main/docs/config.md) と [ADR 0025](https://github.com/otolab/agents-ensemble/blob/main/docs/adr/0025-conductor-agent-backend-sdk-and-pi.md) を参照してください。
 
@@ -64,7 +64,7 @@ dispatch hold が続く間、harness は既定 **30 分ごと**に、held buffer
 | conductor（Cursor SDK、明示選択） | `ensemble auth login` |
 | conductor（Pi、OpenAI API key） | `ensemble setup` で API key を選ぶ（TTY の非表示 prompt） |
 | conductor（Pi、他 provider の API key） | `ensemble auth login --provider <id>`（TTY の非表示 prompt） |
-| conductor（Pi、OAuth の再 login） | `ensemble auth login --provider <id>`（TTY。URL / device code は stderr） |
+| conductor（Pi、OAuth の再 login） | `ensemble auth login --provider <id>`（TTY。URL / device code は stderr、authorization code は非表示 prompt） |
 | GitHub API（gh CLI を使う場合） | `gh auth login` |
 
 ```bash

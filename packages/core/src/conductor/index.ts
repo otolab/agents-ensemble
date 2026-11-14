@@ -66,6 +66,7 @@ export type {
   PiConductorLoginResult,
   PiConductorLogoutResult,
   PiConductorModelListEntry,
+  PiConductorOAuthLoginCallbacks,
   PiProviderAuthStatus,
 } from './conductor-pi-auth.js';
 export {
