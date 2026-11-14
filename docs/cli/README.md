@@ -57,16 +57,14 @@ dispatch hold が続く間、harness は既定 **30 分ごと**に、held buffer
 
 | 対象 | 準備 |
 |------|------|
-| conductor の初期設定と login | `ensemble setup`（TTY で Pi/OpenAI または Cursor を選択） |
+| conductor の初期設定と login | `ensemble setup`（TTY で Pi/OpenAI または Cursor を選択。Pi では OAuth / API key も選択） |
 | worker（既定の Cursor ACP） | `agent login` |
-| conductor（Pi、OpenAI API key） | `ensemble setup` で API key を選ぶ（TTY の非表示 prompt） |
-| conductor（Pi、他 provider の API key） | `ensemble auth login --provider <id>`（TTY の非表示 prompt） |
-| conductor（Pi、OAuth の再 login） | `ensemble auth login --provider <id>`（TTY。URL / device code は stderr） |
 | worker（Pi BYO） | PATH 上の Pi CLI と、その Pi runtime の provider 認証 |
 | worker（Pi builtin） | `acp.defaultPreset: pi` と `acp.pi.runtime: builtin` を設定。Pi CLI の追加 install は不要。provider credential は Pi user config または provider 環境変数で用意。`ensemble auth login --provider <id>` を使う場合は、選択中の conductor backend / profile も Pi にする |
 | conductor（Cursor SDK、既定） | `ensemble auth login` |
-| conductor（Pi、API key） | `ensemble auth login --provider <id>`（TTY の secret prompt） |
-| conductor（Pi、OAuth） | `ensemble auth login --provider <id>`（TTY。URL / device code は stderr） |
+| conductor（Pi、OpenAI API key） | `ensemble setup` で API key を選ぶ（TTY の非表示 prompt） |
+| conductor（Pi、他 provider の API key） | `ensemble auth login --provider <id>`（TTY の非表示 prompt） |
+| conductor（Pi、OAuth の再 login） | `ensemble auth login --provider <id>`（TTY。URL / device code は stderr） |
 | GitHub API（gh CLI を使う場合） | `gh auth login` |
 
 ```bash

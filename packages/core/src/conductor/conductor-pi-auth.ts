@@ -162,48 +162,61 @@ export async function loginPiConductor(
     // a device ID. Other providers must not depend on user settings being writable.
     const requiresDeviceId = provider === 'openai';
     const settingsPath = join(roots.agentDir, 'settings.json');
-    if (requiresDeviceId) {
-      await ensurePiUserSettingsSafeForOAuth(
-        settingsPath,
-        await getProtectedProjectRoots(),
-      );
-    }
-    const securedAuthPath = await ensurePrivatePiUserAuthFile(
-      context.authPath,
-      await getProtectedProjectRoots(),
-    );
-    if (securedAuthPath !== runtimeAuthPath) {
-      throw new Error(
-        'Pi user auth.json target changed while preparing OAuth login; no credentials were written. Retry login after checking the auth.json symlink.',
-      );
-    }
     let loginOptions: { getDeviceId: () => string } | undefined;
     if (requiresDeviceId) {
-      const deviceId = await withPiUserRootLock(roots.agentDir, async () => {
-        // Re-scan the project tree immediately before the OpenAI device ID write.
-        await ensurePiUserSettingsSafeForOAuth(
-          settingsPath,
-          await getProtectedProjectRoots(),
-        );
-        const settingsManager = SettingsManager.create(options.cwd, roots.agentDir);
-        const deviceId = settingsManager.getOrCreateDeviceId();
-        await settingsManager.flush();
-        const settingsErrors = settingsManager
-          .drainErrors()
-          .filter(({ scope }) => scope === 'global');
-        if (settingsErrors.length > 0) {
-          const details = settingsErrors
-            .map(({ error }) => error.message)
-            .join('; ');
-          throw new Error(
-            `Failed to persist the Pi OAuth device ID to user settings.json; OAuth login was not started: ${details}`,
+      const deviceId = await withPiUserRootLock(
+        roots.agentDir,
+        options.cwd,
+        [roots.projectDir],
+        async () => {
+          // The hardlink split is a settings write too; keep it in the same
+          // read/create/persist transaction as the device ID.
+          await ensurePiUserSettingsSafeForOAuth(
+            settingsPath,
+            await getProtectedProjectRoots(),
           );
-        }
-        return deviceId;
-      });
+          const securedAuthPath = await ensurePrivatePiUserAuthFile(
+            context.authPath,
+            await getProtectedProjectRoots(),
+          );
+          if (securedAuthPath !== runtimeAuthPath) {
+            throw new Error(
+              'Pi user auth.json target changed while preparing OAuth login; no credentials were written. Retry login after checking the auth.json symlink.',
+            );
+          }
+          const settingsManager = SettingsManager.create(
+            options.cwd,
+            roots.agentDir,
+          );
+          const deviceId = settingsManager.getOrCreateDeviceId();
+          await settingsManager.flush();
+          const settingsErrors = settingsManager
+            .drainErrors()
+            .filter(({ scope }) => scope === 'global');
+          if (settingsErrors.length > 0) {
+            const details = settingsErrors
+              .map(({ error }) => error.message)
+              .join('; ');
+            throw new Error(
+              `Failed to persist the Pi OAuth device ID to user settings.json; OAuth login was not started: ${details}`,
+            );
+          }
+          return deviceId;
+        },
+      );
       loginOptions = {
         getDeviceId: () => deviceId,
       };
+    } else {
+      const securedAuthPath = await ensurePrivatePiUserAuthFile(
+        context.authPath,
+        await getProtectedProjectRoots(),
+      );
+      if (securedAuthPath !== runtimeAuthPath) {
+        throw new Error(
+          'Pi user auth.json target changed while preparing OAuth login; no credentials were written. Retry login after checking the auth.json symlink.',
+        );
+      }
     }
     await context.modelRuntime.login(
       provider,

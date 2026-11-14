@@ -6,6 +6,7 @@ import {
   mkdtemp,
   readlink,
   readFile,
+  rm,
   stat,
   symlink,
   writeFile,
@@ -13,8 +14,10 @@ import {
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { SettingsManager } from '@earendil-works/pi-coding-agent';
 import { writeConductorSetupFiles } from './conductor-setup.js';
 import { resolvePiModelConfig } from './pi-conductor-agent.js';
+import { withPiUserRootLock } from './pi-user-root-lock.js';
 
 const PROJECT_FILE_SYMLINK_CASES = [
   ['project .ensemble/config.yaml', ['.ensemble', 'config.yaml']],
@@ -65,6 +68,66 @@ describe('writeConductorSetupFiles', () => {
       provider: 'openai',
       modelId: 'gpt-6.1-sol',
     });
+  });
+
+  it('reads and merges Pi settings only after acquiring the user-root lock', async () => {
+    const baseDir = await mkdtemp(join(tmpdir(), 'ensemble-setup-settings-lock-'));
+    const repoRoot = join(baseDir, 'project');
+    const userRoot = join(baseDir, 'user-ensemble');
+    const agentDir = join(baseDir, 'user-pi');
+    const projectDir = join(repoRoot, '.ensemble', 'pi');
+    const userConfigPath = join(userRoot, 'config.yaml');
+    const settingsPath = join(agentDir, 'settings.json');
+    await Promise.all([
+      mkdir(repoRoot, { recursive: true }),
+      mkdir(userRoot, { recursive: true }),
+      mkdir(agentDir, { recursive: true }),
+      mkdir(projectDir, { recursive: true }),
+    ]);
+    await writeFile(
+      userConfigPath,
+      `conductor:\n  pi:\n    agentDir: ${agentDir}\n    projectDir: ${projectDir}\n`,
+    );
+    await writeFile(settingsPath, '{"custom":"keep"}\n');
+
+    let setupSettled = false;
+    let pendingSetup: Promise<unknown> | undefined;
+    let deviceId: string | undefined;
+    try {
+      await withPiUserRootLock(agentDir, repoRoot, [projectDir], async () => {
+        pendingSetup = writeConductorSetupFiles({
+          repoRoot,
+          userEnsembleRoot: userRoot,
+          backend: 'pi',
+          pi: { provider: 'openai', modelId: 'gpt-6.1-sol' },
+        }).finally(() => {
+          setupSettled = true;
+        });
+
+        await new Promise((resolveDelay) => setTimeout(resolveDelay, 150));
+        expect(setupSettled).toBe(false);
+
+        const settingsManager = SettingsManager.create(repoRoot, agentDir);
+        deviceId = settingsManager.getOrCreateDeviceId();
+        await settingsManager.flush();
+        expect(
+          settingsManager.drainErrors().filter(({ scope }) => scope === 'global'),
+        ).toHaveLength(0);
+      });
+    } finally {
+      await pendingSetup?.catch(() => undefined);
+    }
+
+    await expect(pendingSetup).resolves.toMatchObject({
+      pi: { agentDir, settingsPath },
+    });
+    expect(JSON.parse(await readFile(settingsPath, 'utf8'))).toMatchObject({
+      custom: 'keep',
+      deviceId,
+      defaultProvider: 'openai',
+      defaultModel: 'gpt-6.1-sol',
+    });
+    await rm(baseDir, { recursive: true, force: true });
   });
 
   it('merges Pi defaults into user files and leaves project resources untouched', async () => {

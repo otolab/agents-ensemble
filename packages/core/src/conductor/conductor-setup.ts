@@ -20,6 +20,7 @@ import {
   isPathWithinAnyRoot,
 } from './conductor-path-safety.js';
 import { resolvePiResourceRoots } from './pi-resource-loader.js';
+import { withPiUserRootLock } from './pi-user-root-lock.js';
 
 export interface WriteConductorSetupOptions {
   repoRoot: string;
@@ -125,14 +126,10 @@ export async function writeConductorSetupFiles(
   await assertConfigPathSafe(projectPiDirs);
 
   let piFiles: ConductorSetupFiles['pi'];
-  let settingsDocument: Record<string, unknown> | undefined;
   if (pi) {
     await assertPiAgentDirSafe(roots.agentDir, projectPiDirs);
     const settingsPath = join(roots.agentDir, 'settings.json');
     await assertPiSettingsPathSafe(settingsPath, projectPiDirs);
-    settingsDocument = await readJsonDocument(settingsPath);
-    settingsDocument.defaultProvider = pi.provider;
-    settingsDocument.defaultModel = pi.modelId;
     piFiles = {
       agentDir: roots.agentDir,
       settingsPath,
@@ -146,23 +143,35 @@ export async function writeConductorSetupFiles(
   // Prepare both serialized values before touching either destination. Each
   // file is then replaced atomically with private permissions.
   const configContents = ensureTrailingNewline(configDocument.toString());
-  const settingsContents = settingsDocument
-    ? `${JSON.stringify(settingsDocument, null, 2)}\n`
-    : undefined;
 
-  if (piFiles && settingsContents !== undefined) {
+  if (piFiles) {
     const userPiFiles = piFiles;
-    await atomicWriteFile(userPiFiles.settingsPath, settingsContents, async () => {
-      await assertPiAgentDirSafe(userPiFiles.agentDir, projectPiDirs);
-      await assertPiSettingsPathSafe(userPiFiles.settingsPath, projectPiDirs);
-    });
+    await assertPiAgentDirSafe(userPiFiles.agentDir, projectPiDirs);
+    await mkdir(userPiFiles.agentDir, { recursive: true, mode: 0o700 });
+    await withPiUserRootLock(
+      userPiFiles.agentDir,
+      repoRoot,
+      projectPiDirs,
+      async () => {
+        await assertPiAgentDirSafe(userPiFiles.agentDir, projectPiDirs);
+        await assertPiSettingsPathSafe(userPiFiles.settingsPath, projectPiDirs);
+        const settingsDocument = await readJsonDocument(userPiFiles.settingsPath);
+        settingsDocument.defaultProvider = userPiFiles.provider;
+        settingsDocument.defaultModel = userPiFiles.modelId;
+        const settingsContents = `${JSON.stringify(settingsDocument, null, 2)}\n`;
+        await atomicWriteFile(userPiFiles.settingsPath, settingsContents, async () => {
+          await assertPiAgentDirSafe(userPiFiles.agentDir, projectPiDirs);
+          await assertPiSettingsPathSafe(userPiFiles.settingsPath, projectPiDirs);
+        });
+      },
+    );
   }
   try {
     await atomicWriteFile(configPath, configContents, () =>
       assertConfigPathSafe(projectPiDirs),
     );
   } catch (error) {
-    if (piFiles && settingsContents !== undefined) {
+    if (piFiles) {
       throw new Error(
         `Pi settings は ${piFiles.settingsPath} に保存しましたが、user config ${configPath} の保存処理が完了しませんでした。config の状態を確認し、書き込み権限を直してから \`ensemble setup\` を再実行してください。`,
         { cause: error },

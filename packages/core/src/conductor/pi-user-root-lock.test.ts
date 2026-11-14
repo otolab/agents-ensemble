@@ -1,144 +1,283 @@
 import { spawn } from 'node:child_process';
-import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import {
+  access,
+  link,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readlink,
+  realpath,
+  rm,
+  stat,
+  symlink,
+  writeFile,
+} from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
-import { SettingsManager } from '@earendil-works/pi-coding-agent';
-import { describe, expect, it } from 'vitest';
-import { withPiUserRootLock } from './pi-user-root-lock.js';
+import { ModelRuntime } from '@earendil-works/pi-coding-agent';
+import { describe, expect, it, vi } from 'vitest';
+import { loginPiConductor } from './conductor-pi-auth.js';
 
-const workerRole = process.env.PI_USER_ROOT_LOCK_TEST_ROLE;
+const workerRole = process.env.PI_AUTH_PROCESS_TEST_ROLE;
 
-if (workerRole === 'first' || workerRole === 'second') {
+if (workerRole === 'first' || workerRole === 'second' || workerRole === 'third') {
   it(
-    'runs a device ID transaction under the user-root lock',
+    'runs a production OpenAI login in a separate process',
     async () => {
-      const agentDir = process.env.PI_USER_ROOT_LOCK_AGENT_DIR!;
-      const cwd = process.env.PI_USER_ROOT_LOCK_CWD!;
-      const attemptPath = process.env.PI_USER_ROOT_LOCK_ATTEMPT_PATH!;
-      const enteredPath = process.env.PI_USER_ROOT_LOCK_ENTERED_PATH!;
-      const resultPath = process.env.PI_USER_ROOT_LOCK_RESULT_PATH!;
-      const releasePath = process.env.PI_USER_ROOT_LOCK_RELEASE_PATH!;
-      await writeFile(attemptPath, 'attempting');
+      const cwd = process.env.PI_AUTH_PROCESS_TEST_CWD!;
+      const agentDir = process.env.PI_AUTH_PROCESS_TEST_AGENT_DIR!;
+      const projectDir = process.env.PI_AUTH_PROCESS_TEST_PROJECT_DIR!;
+      const readyPath = process.env.PI_AUTH_PROCESS_TEST_READY_PATH!;
+      const runtimeIdPath = process.env.PI_AUTH_PROCESS_TEST_RUNTIME_ID_PATH!;
+      const gatePath = process.env.PI_AUTH_PROCESS_TEST_GATE_PATH!;
 
-      await withPiUserRootLock(agentDir, async () => {
-        const manager = SettingsManager.create(cwd, agentDir);
-        const deviceId = manager.getOrCreateDeviceId();
-        await writeFile(enteredPath, deviceId);
-        if (workerRole === 'first') await waitForFile(releasePath);
-        await manager.flush();
-        const errors = manager
-          .drainErrors()
-          .filter(({ scope }) => scope === 'global');
-        if (errors.length > 0) throw errors[0]!.error;
-        await writeFile(resultPath, deviceId);
+      await writeFile(readyPath, 'ready');
+      if (workerRole !== 'third') await waitForFile(gatePath);
+
+      const runtimeLogin = vi
+        .spyOn(ModelRuntime.prototype, 'login')
+        .mockImplementation(async (_provider, _method, _interaction, loginOptions) => {
+          const deviceId = loginOptions?.getDeviceId?.();
+          if (!deviceId) throw new Error('Production OAuth login received no device ID');
+          await writeFile(runtimeIdPath, deviceId);
+          return mockOAuthCredential();
+        });
+
+      await loginPiConductor({
+        cwd,
+        pi: { agentDir, projectDir },
+        provider: 'openai',
+        modelId: 'gpt-6.1-sol',
+        oauthCallbacks: {
+          onAuth: async () => undefined,
+          onDeviceCode: async () => undefined,
+          onPrompt: async () => 'answer',
+          onSelect: async () => 'option',
+        },
       });
+
+      expect(runtimeLogin).toHaveBeenCalledOnce();
+      expect(await readFile(runtimeIdPath, 'utf8')).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+      );
     },
-    15_000,
+    20_000,
   );
 }
 
-describe('Pi user-root lock', () => {
+describe('Pi user-root lock through production OAuth login', () => {
   it(
-    'serializes concurrent device ID creation across processes',
+    'keeps the runtime and persisted device ID stable across concurrent processes and a later login',
     async () => {
-      const baseDir = await mkdtemp(join(tmpdir(), 'pi-user-root-lock-'));
-      const agentDir = join(baseDir, 'user-pi');
-      const cwd = join(baseDir, 'project');
-      await Promise.all([
-        mkdir(agentDir, { recursive: true }),
-        mkdir(cwd, { recursive: true }),
-      ]);
+      const fixture = await createAuthFixture();
+      const originalProjectSettings =
+        '{"defaultProvider":"openai","defaultModel":"gpt-6.1-sol","projectMarker":"owned"}\n';
+      const projectSettingsPath = join(fixture.projectDir, 'settings.json');
+      const userSettingsPath = join(fixture.agentDir, 'settings.json');
+      await writeFile(projectSettingsPath, originalProjectSettings);
+      await link(projectSettingsPath, userSettingsPath);
 
-      const releasePath = join(baseDir, 'release-first');
-      const paths = {
-        firstAttempt: join(baseDir, 'first-attempt'),
-        firstEntered: join(baseDir, 'first-entered'),
-        firstResult: join(baseDir, 'first-result'),
-        secondAttempt: join(baseDir, 'second-attempt'),
-        secondEntered: join(baseDir, 'second-entered'),
-        secondResult: join(baseDir, 'second-result'),
-      };
-      let first: ReturnType<typeof spawnLockWorker> | undefined;
-      let second: ReturnType<typeof spawnLockWorker> | undefined;
+      const gatePath = join(fixture.baseDir, 'release-logins');
+      const first = spawnLoginWorker('first', fixture, gatePath);
+      const second = spawnLoginWorker('second', fixture, gatePath);
+      let third: ReturnType<typeof spawnLoginWorker> | undefined;
 
       try {
-        first = spawnLockWorker('first', {
-          agentDir,
-          cwd,
-          attemptPath: paths.firstAttempt,
-          enteredPath: paths.firstEntered,
-          resultPath: paths.firstResult,
-          releasePath,
-        });
-        await waitForFile(paths.firstEntered);
+        await Promise.all([
+          waitForFile(first.readyPath),
+          waitForFile(second.readyPath),
+        ]);
+        await writeFile(gatePath, 'go');
 
-        second = spawnLockWorker('second', {
-          agentDir,
-          cwd,
-          attemptPath: paths.secondAttempt,
-          enteredPath: paths.secondEntered,
-          resultPath: paths.secondResult,
-          releasePath,
-        });
-        await waitForFile(paths.secondAttempt);
-        await delay(200);
-        await expect(readFile(paths.secondEntered, 'utf8')).rejects.toMatchObject({
-          code: 'ENOENT',
-        });
-
-        await writeFile(releasePath, 'continue');
         const [firstExit, secondExit] = await Promise.all([
           first.exit,
           second.exit,
         ]);
         expect(
           firstExit.code,
-          `first worker failed:\n${firstExit.stdout}\n${firstExit.stderr}`,
+          `first production login failed:\n${firstExit.stdout}\n${firstExit.stderr}`,
         ).toBe(0);
         expect(
           secondExit.code,
-          `second worker failed:\n${secondExit.stdout}\n${secondExit.stderr}`,
+          `second production login failed:\n${secondExit.stdout}\n${secondExit.stderr}`,
         ).toBe(0);
 
-        const [firstId, secondId] = await Promise.all([
-          readFile(paths.firstResult, 'utf8'),
-          readFile(paths.secondResult, 'utf8'),
+        const [firstRuntimeId, secondRuntimeId] = await Promise.all([
+          readFile(first.runtimeIdPath, 'utf8'),
+          readFile(second.runtimeIdPath, 'utf8'),
         ]);
-        const settings = JSON.parse(
-          await readFile(join(agentDir, 'settings.json'), 'utf8'),
-        ) as { deviceId?: string };
-        expect(firstId).toMatch(
-          /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+        expect(secondRuntimeId).toBe(firstRuntimeId);
+
+        const [userSettings, projectSettings] = await Promise.all([
+          stat(userSettingsPath),
+          stat(projectSettingsPath),
+        ]);
+        expect(userSettings.nlink).toBe(1);
+        expect(projectSettings.nlink).toBe(1);
+        if (userSettings.ino !== 0 && projectSettings.ino !== 0) {
+          expect(userSettings.ino).not.toBe(projectSettings.ino);
+        }
+        expect(await readFile(projectSettingsPath, 'utf8')).toBe(
+          originalProjectSettings,
         );
-        expect(secondId).toBe(firstId);
-        expect(settings.deviceId).toBe(firstId);
+        expect(JSON.parse(await readFile(userSettingsPath, 'utf8'))).toMatchObject({
+          deviceId: firstRuntimeId,
+          projectMarker: 'owned',
+        });
+
+        third = spawnLoginWorker('third', fixture, gatePath);
+        await waitForFile(third.readyPath);
+        const thirdExit = await third.exit;
+        expect(
+          thirdExit.code,
+          `later production login failed:\n${thirdExit.stdout}\n${thirdExit.stderr}`,
+        ).toBe(0);
+        await expect(readFile(third.runtimeIdPath, 'utf8')).resolves.toBe(
+          firstRuntimeId,
+        );
+        expect(JSON.parse(await readFile(userSettingsPath, 'utf8')).deviceId).toBe(
+          firstRuntimeId,
+        );
       } finally {
-        await writeFile(releasePath, 'continue').catch(() => undefined);
-        await Promise.all(
-          [first?.exit, second?.exit].filter(
-            (result): result is NonNullable<typeof result> => result !== undefined,
-          ),
-        );
-        await rm(baseDir, { recursive: true, force: true });
+        await writeFile(gatePath, 'go').catch(() => undefined);
+        const exits = [first.exit, second.exit];
+        if (third) exits.push(third.exit);
+        await Promise.all(exits);
+        await rm(fixture.baseDir, { recursive: true, force: true });
       }
     },
-    20_000,
+    45_000,
   );
+
+  it.each([
+    'project file symlink to the lock sidecar',
+    'lock sidecar file symlink to a project file',
+    'lock sidecar directory symlink to a project directory',
+  ])('rejects a project-owned lock sidecar alias: %s', async (aliasKind) => {
+    const fixture = await createAuthFixture();
+    const lockPath = `${await realpath(fixture.agentDir)}.lock`;
+    const ensembleDir = dirname(fixture.projectDir);
+    const runtimeLogin = vi
+      .spyOn(ModelRuntime.prototype, 'login')
+      .mockResolvedValue(mockOAuthCredential());
+
+    try {
+      if (aliasKind === 'project file symlink to the lock sidecar') {
+        await symlink(lockPath, join(ensembleDir, 'lock-sidecar-alias'), 'dir');
+      } else if (aliasKind === 'lock sidecar file symlink to a project file') {
+        const projectFile = join(ensembleDir, 'owned-file');
+        await writeFile(projectFile, 'project-owned');
+        await symlink(projectFile, lockPath, 'file');
+      } else {
+        await symlink(fixture.projectDir, lockPath, 'dir');
+      }
+
+      await expect(
+        loginPiConductor({
+          cwd: fixture.cwd,
+          pi: { agentDir: fixture.agentDir, projectDir: fixture.projectDir },
+          provider: 'openai',
+          modelId: 'gpt-6.1-sol',
+          oauthCallbacks: createOAuthCallbacks(),
+        }),
+      ).rejects.toThrow(/Refusing to create Pi user-root lock/);
+
+      expect(runtimeLogin).not.toHaveBeenCalled();
+      if (aliasKind !== 'project file symlink to the lock sidecar') {
+        expect((await stat(fixture.projectDir)).isDirectory()).toBe(true);
+        expect(await readlink(lockPath)).toBe(
+          aliasKind === 'lock sidecar file symlink to a project file'
+            ? join(ensembleDir, 'owned-file')
+            : fixture.projectDir,
+        );
+      }
+    } finally {
+      await rm(fixture.baseDir, { recursive: true, force: true });
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('detects a case-only project alias of the lock path on case-insensitive volumes', async () => {
+    const fixture = await createAuthFixture();
+    const lockPath = `${await realpath(fixture.agentDir)}.lock`;
+    const alternateCaseLockPath = alternateCase(lockPath);
+    const projectAlias = join(dirname(fixture.projectDir), 'case-lock-alias');
+    const caseInsensitive = await hasCaseInsensitiveDirectoryNames(fixture.baseDir);
+    const runtimeLogin = vi
+      .spyOn(ModelRuntime.prototype, 'login')
+      .mockResolvedValue(mockOAuthCredential());
+
+    try {
+      await symlink(alternateCaseLockPath, projectAlias, 'dir');
+      const login = loginPiConductor({
+        cwd: fixture.cwd,
+        pi: { agentDir: fixture.agentDir, projectDir: fixture.projectDir },
+        provider: 'openai',
+        modelId: 'gpt-6.1-sol',
+        oauthCallbacks: createOAuthCallbacks(),
+      });
+
+      if (caseInsensitive) {
+        await expect(login).rejects.toThrow(/Refusing to create Pi user-root lock/);
+        expect(runtimeLogin).not.toHaveBeenCalled();
+      } else {
+        await expect(login).resolves.toMatchObject({ method: 'oauth' });
+        expect(runtimeLogin).toHaveBeenCalledOnce();
+      }
+    } finally {
+      await rm(fixture.baseDir, { recursive: true, force: true });
+      vi.restoreAllMocks();
+    }
+  });
 });
 
-function spawnLockWorker(
-  role: 'first' | 'second',
-  paths: {
-    agentDir: string;
-    cwd: string;
-    attemptPath: string;
-    enteredPath: string;
-    resultPath: string;
-    releasePath: string;
-  },
+interface AuthFixture {
+  baseDir: string;
+  cwd: string;
+  agentDir: string;
+  projectDir: string;
+}
+
+function createOAuthCallbacks() {
+  return {
+    onAuth: vi.fn(),
+    onDeviceCode: vi.fn(),
+    onPrompt: vi.fn().mockResolvedValue('answer'),
+    onSelect: vi.fn().mockResolvedValue('option'),
+  };
+}
+
+function mockOAuthCredential() {
+  return {
+    type: 'oauth' as const,
+    refresh: 'mock-refresh',
+    access: 'mock-access',
+    expires: Date.now() + 60_000,
+  };
+}
+
+async function createAuthFixture(): Promise<AuthFixture> {
+  const baseDir = await mkdtemp(join(tmpdir(), 'pi-auth-root-lock-'));
+  const cwd = join(baseDir, 'project');
+  const agentDir = join(baseDir, 'user-pi');
+  const projectDir = join(cwd, '.ensemble', 'pi');
+  await Promise.all([
+    mkdir(cwd, { recursive: true }),
+    mkdir(agentDir, { recursive: true }),
+    mkdir(projectDir, { recursive: true }),
+  ]);
+  return { baseDir, cwd, agentDir, projectDir };
+}
+
+function spawnLoginWorker(
+  role: 'first' | 'second' | 'third',
+  fixture: AuthFixture,
+  gatePath: string,
 ) {
   const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
+  const readyPath = join(fixture.baseDir, `${role}-ready`);
+  const runtimeIdPath = join(fixture.baseDir, `${role}-runtime-id`);
   const child = spawn(
     process.execPath,
     [
@@ -146,23 +285,24 @@ function spawnLockWorker(
       'run',
       'src/conductor/pi-user-root-lock.test.ts',
       '-t',
-      'runs a device ID transaction under the user-root lock',
+      'runs a production OpenAI login in a separate process',
     ],
     {
       cwd: packageRoot,
       env: {
         ...process.env,
-        PI_USER_ROOT_LOCK_TEST_ROLE: role,
-        PI_USER_ROOT_LOCK_AGENT_DIR: paths.agentDir,
-        PI_USER_ROOT_LOCK_CWD: paths.cwd,
-        PI_USER_ROOT_LOCK_ATTEMPT_PATH: paths.attemptPath,
-        PI_USER_ROOT_LOCK_ENTERED_PATH: paths.enteredPath,
-        PI_USER_ROOT_LOCK_RESULT_PATH: paths.resultPath,
-        PI_USER_ROOT_LOCK_RELEASE_PATH: paths.releasePath,
+        PI_AUTH_PROCESS_TEST_ROLE: role,
+        PI_AUTH_PROCESS_TEST_CWD: fixture.cwd,
+        PI_AUTH_PROCESS_TEST_AGENT_DIR: fixture.agentDir,
+        PI_AUTH_PROCESS_TEST_PROJECT_DIR: fixture.projectDir,
+        PI_AUTH_PROCESS_TEST_READY_PATH: readyPath,
+        PI_AUTH_PROCESS_TEST_RUNTIME_ID_PATH: runtimeIdPath,
+        PI_AUTH_PROCESS_TEST_GATE_PATH: gatePath,
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     },
   );
+
   let stdout = '';
   let stderr = '';
   child.stdout.setEncoding('utf8').on('data', (chunk: string) => {
@@ -179,11 +319,11 @@ function spawnLockWorker(
     child.once('error', reject);
     child.once('close', (code) => resolveExit({ code, stdout, stderr }));
   });
-  return { exit };
+  return { exit, readyPath, runtimeIdPath };
 }
 
 async function waitForFile(path: string): Promise<void> {
-  const deadline = Date.now() + 10_000;
+  const deadline = Date.now() + 20_000;
   while (Date.now() < deadline) {
     try {
       await access(path);
@@ -197,4 +337,22 @@ async function waitForFile(path: string): Promise<void> {
 
 async function delay(milliseconds: number): Promise<void> {
   await new Promise((resolveDelay) => setTimeout(resolveDelay, milliseconds));
+}
+
+async function hasCaseInsensitiveDirectoryNames(directory: string): Promise<boolean> {
+  const probe = join(directory, 'caseProbe');
+  await mkdir(probe);
+  try {
+    const [original, alternate] = await Promise.all([
+      stat(probe),
+      stat(join(directory, 'CASEPROBE')),
+    ]);
+    return original.dev === alternate.dev && original.ino === alternate.ino;
+  } catch {
+    return false;
+  }
+}
+
+function alternateCase(path: string): string {
+  return path.replace(/[a-z]/, (letter) => letter.toUpperCase());
 }

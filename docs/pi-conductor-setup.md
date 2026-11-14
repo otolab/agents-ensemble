@@ -112,7 +112,7 @@ API-key login は対話的な TTY が必要です。CI や非 TTY では login p
 
 #### 保存先の保護
 
-setup と login / logout は、project の `.ensemble/` 全体と設定された project Pi root を書き込み保護します。両 root 配下の file / directory symlink も調べ、リンク先が root の外でも、その target を project 層の一部として扱います。user 側の書き込み先が project path、または project symlink から path として辿れる target と重なる場合は処理を拒否します。project 層と共有していない外部 user symlink は利用でき、リンクを保ったまま実体を更新します。project root を検査できない場合も、安全を確認できないため書き込みを拒否します。case-insensitive volume では大文字・小文字だけ異なる path も同じ project path として扱い、volume の規則を判定できない場合は書き込みを拒否します。既存の hard link は書き込み前に user 側を独立した file に置き換え、project 側の内容を保ちます。OAuth が device ID を user `settings.json` に保存する場合も、保存前にこの project 境界を確認します。
+setup と login / logout は、project の `.ensemble/` 全体と設定された project Pi root を書き込み保護します。両 root 配下の file / directory symlink も調べ、リンク先が root の外でも、その target を project 層の一部として扱います。user 側の書き込み先が project path、または project symlink から path として辿れる target と重なる場合は処理を拒否します。Pi user-root lock の sidecar path も同じ境界で検査し、project-owned path を指す symlink や、大文字・小文字だけ異なる別名があれば lock を作成しません。project 層と共有していない外部 user symlink は利用でき、リンクを保ったまま実体を更新します。project root を検査できない場合も、安全を確認できないため書き込みを拒否します。case-insensitive volume では大文字・小文字だけ異なる path も同じ project path として扱い、volume の規則を判定できない場合は書き込みを拒否します。既存の hard link は書き込み前に user 側を独立した file に置き換え、project 側の内容を保ちます。OAuth が device ID を user `settings.json` に保存する場合も、保存前にこの project 境界を確認します。
 
 この境界は path と symlink をたどって照合します。bind mount など別の path 名で同じ file system object を参照する別名や、検査の直後に別 process が symlink を差し替える競合までは保護を保証できません。通常の hard link は setup の atomic replacement、login / logout 前の user file 分離で project 側への変更を防ぎます。
 
@@ -130,7 +130,7 @@ ensemble auth login --provider <oauth-provider-id>
 
 OAuth login も TTY が必要です。Pi 1.x の `ModelRuntime.login` が認証を行い、URL、device code、進捗、追加 prompt は stderr に出します。SSH では表示された URL / device code を別のブラウザで使えます。OAuth credential は user runtime に保存され、conductor の各 request で runtime が必要に応じて refresh します。
 
-OpenAI provider（`openai`）の ChatGPT OAuth は installation ごとの UUID（device ID）を必要とします。login 時に user resource root の `settings.json` から `deviceId` を取得し、未作成なら生成して保存します。同じ `conductor.pi.agentDir` を使う ensemble の login は、複数の CLI process から同時に実行しても同じ保存済み ID を使います。login をやり直す場合も同じ ID が使われ、agentDir を変えると別の installation として ID が作られます。値を手で設定する必要はありません。Pi CLI など ensemble の同期に参加しない別アプリが、同時に同じ `settings.json` の device ID を変更する競合までは対象に含みません。
+OpenAI provider（`openai`）の ChatGPT OAuth は installation ごとの UUID（device ID）を必要とします。login 時に user resource root の `settings.json` から `deviceId` を取得し、未作成なら生成して保存します。同じ `conductor.pi.agentDir` を使う ensemble の Pi setup と OpenAI OAuth login による user `settings.json` の read-modify-write は、複数の CLI process から同時に実行しても直列化します。OAuth runtime には保存済みの ID を渡し、login をやり直す場合も同じ ID が使われます。agentDir を変えると別の installation として ID が作られます。値を手で設定する必要はありません。Pi CLI など ensemble の同期に参加しない別アプリが、同時に同じ `settings.json` の device ID を変更する競合までは対象に含みません。
 
 ChatGPT OAuth を使わない場合は、次の方法があります。
 
