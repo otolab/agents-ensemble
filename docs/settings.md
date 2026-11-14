@@ -155,7 +155,7 @@ Pi の `!command` は conductor process の shell / OS 権限で実行され、w
 | 設定 | 環境変数 | config | CLI | コード default | 解決 |
 |------|----------|--------|-----|----------------|------|
 | TTY レイアウト | `ENSEMBLE_TUI_LAYOUT` | `tui.layout` | — | `stream` | A |
-| OSC 8 ハイパーリンク | `FORCE_HYPERLINK`（`1`/`0`） | `tui.forceHyperlink`（`auto`/`on`/`off`） | — | `auto` | A |
+| TUI / Pi OAuth URL の OSC 8 ハイパーリンク | `FORCE_HYPERLINK`（`1`/`0`） | `tui.forceHyperlink`（`auto`/`on`/`off`） | — | `auto` | A |
 | オペレータ 1 回注入 | `ENSEMBLE_OPERATOR_MESSAGE` | — | `ensemble issue <ref> [message...]` | — | D |
 
 TUI 設定は `loadEnsembleConfig` 結果を `createIssueSessionTuiHost` へ渡して解決する。Issue リンク表示の詳細は [operator-input.md](https://github.com/otolab/agents-ensemble/blob/main/docs/operator-input.md)。
