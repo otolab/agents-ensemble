@@ -130,7 +130,9 @@ ensemble auth login --provider <oauth-provider-id>
 
 OAuth login も TTY が必要です。Pi 1.x の `ModelRuntime.login` が認証を行い、URL、device code、進捗、追加 prompt は stderr に出します。SSH では表示された URL / device code を別のブラウザで使えます。OAuth credential は user runtime に保存され、conductor の各 request で runtime が必要に応じて refresh します。
 
-OpenAI provider（`openai`）の ChatGPT OAuth は installation ごとの UUID（device ID）を必要とします。login 時に user resource root の `settings.json` から `deviceId` を取得し、未作成なら生成して保存します。同じ `conductor.pi.agentDir` を使う ensemble の Pi setup と OpenAI OAuth login による user `settings.json` の read-modify-write は、複数の CLI process から同時に実行しても直列化します。OAuth runtime には保存済みの ID を渡し、login をやり直す場合も同じ ID が使われます。agentDir を変えると別の installation として ID が作られます。値を手で設定する必要はありません。Pi CLI など ensemble の同期に参加しない別アプリが、同時に同じ `settings.json` の device ID を変更する競合までは対象に含みません。
+OpenAI provider（`openai`）の ChatGPT OAuth は installation ごとの UUID（device ID）を必要とします。login 時に user resource root の `settings.json` から `deviceId` を取得し、未作成なら生成して保存します。同じ `conductor.pi.agentDir` を使う ensemble の Pi setup と OpenAI OAuth login による user `settings.json` の read-modify-write は、同じ root lock に参加する通常稼働中の CLI process 間で直列化します。OAuth runtime には保存済みの ID を渡し、login をやり直す場合も同じ ID が使われます。agentDir を変えると別の installation として ID が作られます。値を手で設定する必要はありません。Pi CLI など ensemble の同期に参加しない別アプリが、同時に同じ `settings.json` の device ID を変更する競合までは対象に含みません。
+
+この lock は `proper-lockfile` の lease を使い、既定ではおよそ5秒ごとに更新し、10秒更新されない lock を stale として回収します。process の異常終了後は stale lock が回収されますが、process の停止や filesystem の遅延が stale threshold を越える状況では、稼働中の lock が回収されて処理が重なる可能性があります。通常の同時 login は child process regression で検証していますが、crash・長時間停止時の競合までは保証していません。
 
 ChatGPT OAuth を使わない場合は、次の方法があります。
 
