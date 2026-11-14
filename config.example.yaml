@@ -67,12 +67,16 @@ acp:
     high: YOUR_HIGH_MODEL_ID
     standard: YOUR_DEFAULT_MODEL_ID
     lightweight: YOUR_LOW_MODEL_ID
-    fast: YOUR_FAST_MODEL_ID
+    lite: YOUR_LITE_MODEL_ID
+    # reasoning 対応 preset（例: codex）なら、default と同じ model に reasoning: low を指定する形にもできる。
+    # lite:
+    #   model: YOUR_DEFAULT_MODEL_ID
+    #   reasoning: low
   tags:
     high: high
     default: standard
     low: lightweight
-    fast: fast
+    lite: lite
 
 session:
   # isolated: Issue 専用 worktree（既定） / in-repo: メイン worktree で直接作業

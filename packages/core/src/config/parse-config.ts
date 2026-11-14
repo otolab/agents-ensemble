@@ -43,6 +43,19 @@ function readObject(value: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
+function setRecordEntry<T>(
+  record: Record<string, T>,
+  key: string,
+  value: T,
+): void {
+  Object.defineProperty(record, key, {
+    value,
+    enumerable: true,
+    configurable: true,
+    writable: true,
+  });
+}
+
 function parseWorktreeMode(value: unknown): WorkerWorktreeMode | undefined {
   const raw = readString(value);
   if (!raw) {
@@ -150,13 +163,6 @@ function parseStringMap(
   return Object.keys(env).length > 0 ? env : undefined;
 }
 
-const ACP_MODEL_TAGS: readonly AcpModelTag[] = [
-  'high',
-  'default',
-  'low',
-  'fast',
-];
-
 function parseAcpModels(
   raw: unknown,
 ): Record<string, AcpModelCatalogLayerEntry> | undefined {
@@ -168,7 +174,7 @@ function parseAcpModels(
     if (!modelKey) continue;
     const modelId = readString(value);
     if (modelId) {
-      models[modelKey] = modelId;
+      setRecordEntry(models, modelKey, modelId);
       continue;
     }
 
@@ -187,11 +193,11 @@ function parseAcpModels(
       throw new Error(`acp.models.${modelKey}.cursorFast must be a boolean`);
     }
     if (model || reasoning || cursorFast !== undefined) {
-      models[modelKey] = {
+      setRecordEntry(models, modelKey, {
         ...(model ? { model } : {}),
         ...(reasoning ? { reasoning } : {}),
         ...(cursorFast !== undefined ? { cursorFast } : {}),
-      };
+      });
     }
   }
   return Object.keys(models).length > 0 ? models : undefined;
@@ -199,13 +205,15 @@ function parseAcpModels(
 
 function parseAcpTags(
   raw: unknown,
-): Partial<Record<AcpModelTag, string>> | undefined {
+): Record<string, string> | undefined {
   const obj = readObject(raw);
   if (!obj) return undefined;
-  const tags: Partial<Record<AcpModelTag, string>> = {};
-  for (const tag of ACP_MODEL_TAGS) {
-    const modelKey = readString(obj[tag]);
-    if (modelKey) tags[tag] = modelKey;
+  const tags: Record<string, string> = {};
+  for (const [tag, rawModelKey] of Object.entries(obj)) {
+    const modelKey = readString(rawModelKey);
+    if (modelKey) {
+      setRecordEntry(tags, tag, modelKey);
+    }
   }
   return Object.keys(tags).length > 0 ? tags : undefined;
 }

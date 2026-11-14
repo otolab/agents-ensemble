@@ -854,6 +854,8 @@ async function runConductorSessionWithStartupGuard(
     repoRoot: options.repoRoot,
     issueNumber: issue.number,
     ...(piAgentDir ? { piAgentDir } : {}),
+    onWarning: (message) =>
+      sessionLogger.emit({ type: 'harness.warning', message }),
   });
   if (workers.length > 0) {
     validateWorkerAcpPrerequisites(

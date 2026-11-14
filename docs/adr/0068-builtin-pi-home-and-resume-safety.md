@@ -1,8 +1,8 @@
-# ADR 0064: Builtin Pi の shell home と resume 失敗時の安全性
+# ADR 0068: Builtin Pi の shell home と resume 失敗時の安全性
 
 - Status: accepted
 - Date: 2026-11-12
-- Related: [ADR 0063](0063-pi-acp-upstream-package-wrapper.md), [Issue #670](https://github.com/otolab/agents-ensemble/issues/670)
+- Related: [ADR 0067](0067-pi-acp-upstream-package-wrapper.md), [Issue #670](https://github.com/otolab/agents-ensemble/issues/670)
 
 ## Context
 

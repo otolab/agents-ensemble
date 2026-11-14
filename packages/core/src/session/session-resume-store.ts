@@ -921,13 +921,9 @@ function parseAcpSpawnFingerprint(
       `Invalid session resume store worker acpSpawn piRuntime: ${workerName}`,
     );
   }
-  const validModelTags: AcpModelTag[] = ['high', 'default', 'low', 'fast'];
   let modelTag: AcpModelTag | undefined;
   if (record.modelTag !== undefined) {
-    if (
-      typeof record.modelTag !== 'string' ||
-      !validModelTags.includes(record.modelTag as AcpModelTag)
-    ) {
+    if (typeof record.modelTag !== 'string') {
       throw new Error(
         `Invalid session resume store worker acpSpawn modelTag: ${workerName}`,
       );

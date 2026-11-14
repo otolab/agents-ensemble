@@ -52,6 +52,19 @@ ensemble issue 42 --profile my-pair
 
 `materials` は `kinds` を省略すれば全 agent 共通になり、例えば `id: team-implementer`、`file: team-implementer.md`、`kinds: [implementer]` を指定すれば該当 kind の Prepared Materials にだけ同梱されます。`kinds` に指定できるのは profile の `agents` または `workers[].kind` に定義した kind で、空配列や重複指定は無効です。
 
+## worker modelTag と tier の慣習
+
+`workers[].modelTag` は省略できます。組み込み team では次の4語を tier 名として使いますが、profile の `modelTag` と config の `acp.tags` key には空文字・空白のみを含む任意の文字列を指定できます。空文字 tag は profile で `modelTag: ""`、config の `acp.tags` では `"": blank` のように YAML の引用符で表します。tag の名前自体が model の性質を変えるわけではなく、`acp.tags` から `acp.models` への mapping が実際の設定を選びます。
+
+| tag | 組み込み team での意味 |
+|-----|------------------------|
+| `high` | 考える力を優先。応答が遅くてもよい |
+| `default` | ふつうの基準。middle と呼んでもよい |
+| `low` | 軽くて安価な model を選び、速さを優先 |
+| `lite` | default 相当の model に短めの reasoning を指定するなど、throughput を優先。小さい model 専用の名前ではない |
+
+`default` 以外の選択 tag（空文字・空白のみを含む）が `acp.tags` にないと harness は warning を出し、`default` の mapping を試します。それも未登録なら model を注入せず、ACP preset の既定 model に委ねます。worker が `modelTag` を省略したときは暗黙の `default` から warning なしで preset の既定へ進みます。`modelTag: default` を明示して mapping がない場合は warning を出して preset の既定を使います。`lite` は worker の tier 名で、Cursor ACP の fast mode（`cursorFast`）を有効にする指定ではありません。Cursor の model / reasoning 設定は [config.md](config.md#acp-model-tag-と-model-catalog) を、空文字を含む tag の扱いは [ADR 0064](adr/0064-worker-model-tags-allow-empty-strings.md) を参照してください。
+
 ## 一覧
 
 ```bash

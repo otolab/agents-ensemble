@@ -137,13 +137,6 @@ export interface EnsembleSessionState {
 export const PROFILE_ACP_REMOVED_ERROR =
   '"acp" is removed from team profile; use .ensemble/config.yaml acp.defaultPreset and acp.env (worker model tiers use modelTag)';
 
-const PROFILE_MODEL_TAGS: readonly AcpModelTag[] = [
-  'high',
-  'default',
-  'low',
-  'fast',
-];
-
 export function resolvedProfileMaterials(
   materials?: ProfileMaterial[],
 ): ResolvedProfileMaterial[] | undefined {
@@ -216,12 +209,9 @@ export function normalizeProfileWorker(
     }
     const modelTag =
       worker.modelTag === undefined ? 'default' : worker.modelTag;
-    if (
-      typeof modelTag !== 'string' ||
-      !PROFILE_MODEL_TAGS.includes(modelTag as AcpModelTag)
-    ) {
+    if (typeof modelTag !== 'string') {
       throw new Error(
-        `Invalid profile worker[${index}] in ${label}: "modelTag" must be one of ${PROFILE_MODEL_TAGS.join(' | ')}`,
+        `Invalid profile worker[${index}] in ${label}: "modelTag" must be a string`,
       );
     }
     return {
@@ -270,13 +260,16 @@ export function profileWorkersToSessionSpecs(
     repoRoot?: string;
     issueNumber?: number;
     piAgentDir?: string;
+    onWarning?: (message: string) => void;
   },
 ): SessionWorkerSpec[] {
   return profile.workers.map((worker) => {
     const modelTag = worker.modelTag ?? 'default';
     const resolved = resolveWorkerAcpSpawn({
       defaultOptions: options?.defaultAcp,
-      modelTag,
+      modelTag: worker.modelTag,
+      onWarning: (message) =>
+        options?.onWarning?.('Worker "' + worker.name + '": ' + message),
     });
     let sessionSpawn = resolved;
     if (resolved.piRuntime === 'builtin') {

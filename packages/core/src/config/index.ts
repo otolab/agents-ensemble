@@ -50,6 +50,7 @@ export type {
   AcpModelCatalogLayerEntry,
   AcpModelDefinition,
   AcpModelTag,
+  BuiltinAcpModelTag,
   ConductorBackend,
   EnsembleConductorConfig,
   EnsembleConductorPiConfig,

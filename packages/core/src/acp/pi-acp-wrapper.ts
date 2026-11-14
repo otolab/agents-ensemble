@@ -24,8 +24,10 @@ async function main(): Promise<void> {
     process.env.ENSEMBLE_PI_LEGACY_WORKER_HOME || undefined;
   const sessionDir =
     process.env.PI_CODING_AGENT_SESSION_DIR ?? join(workerHome, 'sessions');
+  const workerStorageRoot = dirname(dirname(workerHome));
   preparePiAcpSessionStorage({
-    workerStorageRoot: dirname(dirname(workerHome)),
+    workerStorageParent: dirname(workerStorageRoot),
+    workerStorageRoot,
     workerHome,
     sessionsDir: sessionDir,
     ...(legacyWorkerHome ? { legacyWorkerHome } : {}),

@@ -461,6 +461,12 @@ describe.skipIf(process.platform === 'win32')(
           },
         );
         const paths = resolveEnsemblePaths({ repoRoot });
+        const workerStorageParent = join(paths.piUserDir, 'worker');
+        await mkdir(workerStorageParent, {
+          recursive: true,
+          mode: 0o755,
+        });
+        await chmod(workerStorageParent, 0o755);
         const workerHome = paths.piWorkerDir('integration', 1);
         const legacyWorkerHome = paths.legacyPiWorkerDir('integration');
         const sessionMapPaths = resolvePiAcpSessionMapPaths(
@@ -614,6 +620,7 @@ describe.skipIf(process.platform === 'win32')(
         expect(resolved.env).not.toHaveProperty('PI_ACP_SESSION_MAP_PATH');
 
         for (const [path, expectedMode] of [
+          [workerStorageParent, 0o700],
           [paths.piWorkerRoot, 0o700],
           [workerHome, 0o700],
           [dirname(workerHome), 0o700],

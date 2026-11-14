@@ -35,7 +35,7 @@ export interface ResolvedAcpSpawn {
   /** Omitted means the legacy BYO Pi runtime. */
   piRuntime?: PiAcpRuntimeMarker;
   authenticate?: AcpAuthenticateStrategy;
-  /** Effective profile tier and environment-specific model ID. */
+  /** Effective worker modelTag and environment-specific model ID. */
   modelTag?: AcpModelTag;
   model?: string;
   reasoning?: string;
@@ -62,7 +62,7 @@ export interface AcpSpawnFingerprint {
   piRuntime?: PiAcpRuntimeMarker;
   /** spawn env の canonical SHA-256。値そのものは保存しない。 */
   envDigest?: string;
-  /** Worker tier used to resolve this process. */
+  /** Worker modelTag used to resolve this process. */
   modelTag?: AcpModelTag;
   /** Resolved ACP model ID (model IDs are not credentials). */
   model?: string;
@@ -214,8 +214,13 @@ export function resolveDefaultAcpSpawn(
 export function resolveWorkerAcpSpawn(input?: {
   defaultOptions?: DefaultAcpResolutionOptions;
   modelTag?: AcpModelTag;
+  onWarning?: (message: string) => void;
 }): ResolvedAcpSpawn {
-  const modelTag = input?.modelTag ?? 'default';
+  const requestedModelTag = input?.modelTag;
+  const modelTag = requestedModelTag ?? 'default';
+  if (typeof modelTag !== 'string') {
+    throw new Error('ACP worker modelTag must be a string');
+  }
   const spawn = resolveDefaultAcpSpawn(input?.defaultOptions);
   const processEnv = input?.defaultOptions?.env ?? process.env;
   const modelProvider =
@@ -234,15 +239,38 @@ export function resolveWorkerAcpSpawn(input?: {
           modelProviderDigest: computeCodexModelProviderDigest(modelProvider),
         }
       : spawnWithRuntime;
-  const modelKey = input?.defaultOptions?.config?.acp.tags?.[modelTag];
+  const tags = input?.defaultOptions?.config?.acp.tags;
+  let mappingTag = modelTag;
+  let modelKey = getOwnRecordValue(tags, modelTag);
   if (!modelKey) {
-    return { ...spawnWithProviderFingerprint, modelTag };
+    if (modelTag === 'default') {
+      if (requestedModelTag !== undefined) {
+        input?.onWarning?.(
+          'Worker modelTag "default" is not registered in acp.tags; using the ACP preset default model.',
+        );
+      }
+      return { ...spawnWithProviderFingerprint, modelTag };
+    }
+
+    modelKey = getOwnRecordValue(tags, 'default');
+    input?.onWarning?.(
+      modelKey
+        ? `Worker modelTag "${modelTag}" is not registered in acp.tags; resolving through acp.tags.default.`
+        : `Worker modelTag "${modelTag}" is not registered in acp.tags and acp.tags.default is not configured; using the ACP preset default model.`,
+    );
+    if (!modelKey) {
+      return { ...spawnWithProviderFingerprint, modelTag };
+    }
+    mappingTag = 'default';
   }
 
-  const entry = input?.defaultOptions?.config?.acp.models?.[modelKey];
+  const entry = getOwnRecordValue(
+    input?.defaultOptions?.config?.acp.models,
+    modelKey,
+  );
   if (!entry) {
     throw new Error(
-      `ACP model tag "${modelTag}" references undefined acp.models key "${modelKey}"`,
+      `ACP model tag "${mappingTag}" references undefined acp.models key "${modelKey}"`,
     );
   }
   const definition = typeof entry === 'string' ? { model: entry } : entry;
@@ -256,6 +284,13 @@ export function resolveWorkerAcpSpawn(input?: {
     definition,
     processEnv,
   );
+}
+
+function getOwnRecordValue<T>(
+  record: Record<string, T> | undefined,
+  key: string,
+): T | undefined {
+  return record && Object.hasOwn(record, key) ? record[key] : undefined;
 }
 
 export function resolveWorkerAcpSpawns(input: {

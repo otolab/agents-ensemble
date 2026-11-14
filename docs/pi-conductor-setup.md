@@ -113,7 +113,29 @@ ensemble models list
 ensemble models list --provider <provider-id>
 ```
 
-`auth status` は Pi の auth file の場所、provider ごとの configured 状態、credential の source を秘密値なしで表示します。`models list` は Pi の `ModelRegistry` と解決済み resource を使い、認証済み provider の model だけを表示します。対象 provider を `--provider` で絞れます。認証済み model が無い場合は Pi 向けの login / auth file / 環境変数の案内を含むエラーになります。
+`auth status` は Pi の auth file の場所、provider ごとの configured 状態、credential の source を表示します。API key、token、環境変数の値は表示しません。`source` は出所を示す粗い分類で、OAuth login の browser/manual 経路や、一部の `!command` を正確に示すものではありません。
+
+Pi 1.2.0 の `AuthStatus.source?` は `stored` / `runtime` / `environment` / `fallback` / `models_json_key` / `models_json_command` の union です（[型定義](https://github.com/earendil-works/pi/blob/v1.2.0/packages/coding-agent/src/core/provider-composer.ts#L103-L107)）。一方、Ensemble の公開 `PiProviderAuthStatus.source?` は `string` のままで、Pi SDK にない `project_oauth_unsupported` / `project_stored` / `settings_json` などの値も返します（[Ensemble の型定義](../packages/core/src/conductor/conductor-pi-auth.ts#L39-L44)）。次の表は両方の source をまとめたものです。
+
+| `source` | 出力元 | 現行表示が示すもの |
+|----------|--------|-------------------|
+| `runtime` | Pi 1.2.0 | Pi runtime override の登録を示します。headless path では通常、user → project に merge した `settings.json.apiKeys[provider]` の値です。値が非空なら user `auth.json` より先に使われます。空文字の例外は下記を参照してください |
+| `stored` | Pi 1.2.0 | runtime override が登録されていない場合に使われる user `auth.json` の API key または OAuth credential。credential の種類は status から分かりません |
+| `project_oauth_unsupported` | Ensemble | project OAuth entry。`configured=false` となり、実行時に拒否される |
+| `project_stored` | Ensemble | project `auth.json` の API key / `!command` entry。request では user 層より先ですが、status は entry の種類を区別しません |
+| `fallback` | Pi 1.2.0 | Pi status が、現行 headless path で `ModelRuntime.registerProvider` に渡した `models.json` provider の通常の `apiKey` を報告した値。環境変数参照は登録前に展開されます。この SDK source 名は scalar settings fallback を指しません |
+| `models_json_command` | Pi 1.2.0 | Pi status が provider 設定の `apiKey: "!command"` を `ModelRuntime.registerProvider` に渡したことを示す値。現行 headless path では通常 `models.json` の command です |
+| `environment` | Pi 1.2.0 / Ensemble | Pi の provider auth check、または Ensemble の provider-env fallback。Pi の `label` は AWS profile / ADC など ambient auth を示す場合もあり、環境変数名とは限りません |
+| `settings_json` | Ensemble | Pi `ModelRuntime` が configured source を返さず、Ensemble が settings 候補を fallback として検出した場合。scalar `apiKey` が先、なければ `apiKeys[provider]` を選びます。この source だけでは key / command や user / project の別を区別できません |
+| `models_json_key` | Pi 1.2.0 / Ensemble | Pi SDK の union に含まれる値で、Ensemble も `models.json` 候補の直接 fallback に使います。直接 fallback では通常 key と `!command` を区別しません。通常の headless `registerProvider` 経路では、通常 key は `fallback`、command は `models_json_command` と表示されます |
+
+現行の status lookup は、project `auth.json` の確認後に Pi `ModelRuntime` の status（runtime > stored > provider 設定 > provider auth check）を見ます。Pi status が configured source を返さなければ、Ensemble が settings (`settings_json`)、models (`models_json_key`)、provider 環境変数 (`environment`) の順に確認します。Pi の `source=environment` は process 環境変数だけでなく ambient auth を表す場合があるため、taxonomy の `mode=environment` と同じ意味だとは限りません。
+
+空の `settings.json.apiKeys[provider]` は現行 status と request で扱いが異なります。Ensemble は空文字も `ModelRuntime.setRuntimeApiKey()` に登録し、Pi の status は Map に登録があることを見て `source=runtime` を返します（[登録処理](../packages/core/src/conductor/conductor-pi-auth.ts#L813-L820)、[Pi の status lookup](https://github.com/earendil-works/pi/blob/v1.2.0/packages/coding-agent/src/core/model-runtime.ts#L612-L621)）。一方、Pi の `RuntimeCredentials.read()` は override の値を truthy 判定するため、空文字は API key として使わず、保存 credential の読取りへ進みます（[`read()`](https://github.com/earendil-works/pi/blob/v1.2.0/packages/coding-agent/src/core/runtime-credentials.ts#L18-L25)）。そのため空 entry と user `auth.json` credential が共存すると、status は `runtime` でも、request resolver は保存 credential の読取りへ進みます。Pi がその credential を利用できれば request で使われます。保存 credential がなくても Pi は provider 設定や provider auth / 環境・ambient auth を確認しますが、それらから key を得られず、scalar `apiKey` もない場合は、現行 Ensemble resolver が選択された空の `apiKeys` 値を fallback として返すことがあります。この場合、後続の `models.json` / provider-env fallback まで進むとは限らず、request は失敗し得ます（[Ensemble の request resolver](../packages/core/src/conductor/conductor-pi-auth.ts#L254-L315)）。ここでの `runtime` は request で実際に使われる key の確認ではありません。
+
+request の解決順は status lookup と同じではありません。非 command の `settings.json.apiKeys[provider]` は runtime override として登録され、値が非空なら user `auth.json` より先に request で使われます。一方、scalar `settings.json.apiKey` の通常 key は runtime override ではなく、Pi が key を返さなかった場合の Ensemble fallback です。scalar `apiKey` が `!command` なら request 時に provider 設定へ登録されます。request 時に登録する settings command は status で実行も登録もしません。user `auth.json` や有効な非空 runtime override がなければ、その command が `models.json` provider 設定や provider auth より先に使われても、status はそれら下位 source を表示することがあります。merged settings の provenance も status に残りません。したがって `configured=true` や `source` は request 成功の保証でも、実効 credential の常時特定でもありません。
+
+`models list` は Pi の `ModelRegistry` と解決済み resource を使い、認証済み provider の model だけを表示します。対象 provider を `--provider` で絞れます。認証済み model が無い場合は Pi 向けの login / auth file / 環境変数の案内を含むエラーになります。
 
 ### OpenAI 互換 provider の catalog を比較・追加する
 
@@ -224,20 +246,25 @@ Pi backend の選択後も、Issue、worker、worktree、PR の主経路は Curs
 
 ## 認証の解決順
 
-選択された provider の request credential は、明示的な内部 API key override を除き、次の順で解決されます。
+request 時の解決は、project `auth.json`、Pi `ModelRuntime`、最後の Ensemble fallback に分かれます。`settings.json.apiKeys[provider]` と scalar `settings.json.apiKey` は別経路です。
 
-| 優先 | source | 説明 |
-|------|--------|------|
-| 1 | project `auth.json` | project resource root の provider entry。user runtime より先に読みます。 |
-| 2 | user Pi runtime | user root の `auth.json` を Pi 1.x `ModelRuntime` が管理します。`ensemble auth login` の書込先で、OAuth refresh もここで行います。 |
-| 3 | `settings.json` fallback / `models.json` provider key | `apiKey`、`apiKeys[provider]`、または `models.json` の provider `apiKey`。auth file に credential が無い場合に使います。 |
-| 4 | provider 環境変数 | Pi が provider ごとに認識する環境変数。provider により名前が異なります。 |
+1. 明示的な内部 API key override があればそれを使います。この引数は利用者向け設定項目ではありません。
+2. user / project resource root が別なら、project `auth.json` の provider entry を先に確認します。API key / command は user 層より先に使います。project OAuth entry は refresh できないため拒否し、user credential や環境変数へ fallback しません。
+3. project entry がなければ Pi `ModelRuntime.getAuth()` で解決します。
+   - user → project に merge した `settings.json.apiKeys[provider]` の非 command 文字列は runtime API key として登録されます。値が非空なら Pi 1.2.0 の `RuntimeCredentials.read()` が保存 credential より先に返すため、同じ provider の user `auth.json` に別の key / OAuth があっても runtime override が有効です。両 settings root に値がある場合は project 側が merge 結果に残ります。空文字も登録はされますが request 読取りでは使われず、status だけが `runtime` となり得ます（上記参照）。
+   - request に使える runtime override がなければ、Pi は user `auth.json` の保存 credential（API key または OAuth）を provider 設定より先に解決します。
+   - 保存 credential がなければ provider 設定を解決します。`settings.json` の候補は scalar `apiKey` が先で、なければ `apiKeys[provider]` です。選ばれた値が `!command` の場合は request 時に provider 設定へ登録され、`models.json` の provider key / command を上書きします。ただし、その command は runtime override と保存済み user credential より後に解決されます。settings command がない場合は、登録済み `models.json` provider の設定が使われます。Pi の provider 固有環境変数や AWS profile / ADC など ambient auth は、provider 設定に key がない場合の runtime resolver 経路です。`models.json` の `$NAME` / `${NAME}` は Ensemble が provider 登録前に展開します。
+4. `ModelRuntime.getAuth()` が API key を返さないか error になった場合、選ばれた settings / models 候補に `!command` があれば command error を返し、下位 key へ進みません。command 候補がなければ Ensemble が追加 fallback を行います。command でない settings 候補（scalar `settings.json.apiKey` が先で、なければ `apiKeys[provider]`）> `models.json` provider `apiKey` > provider 環境変数の順です。非空の非 command `apiKeys[provider]` は通常 runtime override として先に解決されるので、この fallback で選ばれるのは主に scalar key です。空の `apiKeys[provider]` は現行 fallback で定義済み候補として返され、後続候補を妨げることがあります（上記参照）。
 
-project → user の優先関係は provider 単位です。project に API-key credential があれば user credential や環境変数より優先されます。project の OAuth entry は user credential へフォールバックせず、refresh 不可として拒否されます。
+したがって scalar `settings.json.apiKey` は最優先の key ではありません。Pi が provider 設定や環境・ambient auth から key を返せば、scalar settings key は使われません。scalar と `apiKeys[provider]` の順序は settings 候補内の選択規則であり、非 command の `apiKeys[provider]` runtime override の優先順位を下げるものではありません。Ensemble は `ModelRuntime.getAuth()` の error を捕捉して追加 fallback へ進む場合もあります。status の source はこの request-time fallback の成否までは示しません。
 
-古い Pi API の説明で `AuthStorage` と呼ばれている user credential 層は、現在の Pi 1.0.x 経路では `ModelRuntime` が担います。利用者が意識する保存先と login の挙動は user `auth.json` です。
+Pi 1.2.0 の根拠は [`AuthStatus.source` の型](https://github.com/earendil-works/pi/blob/v1.2.0/packages/coding-agent/src/core/provider-composer.ts#L103-L107)、[`RuntimeCredentials.read()`](https://github.com/earendil-works/pi/blob/v1.2.0/packages/coding-agent/src/core/runtime-credentials.ts#L18-L25)、[`ModelRuntime.getProviderAuthStatus()`](https://github.com/earendil-works/pi/blob/v1.2.0/packages/coding-agent/src/core/model-runtime.ts#L612-L621)、[`resolveProviderAuth()`](https://github.com/earendil-works/pi/blob/v1.2.0/packages/ai/src/auth/resolve.ts#L28-L93)、provider 設定と source mapping の [`provider-composer.ts`](https://github.com/earendil-works/pi/blob/v1.2.0/packages/coding-agent/src/core/provider-composer.ts#L685-L699) です。Ensemble 側の status、provider 登録と fallback は [`conductor-pi-auth.ts`](../packages/core/src/conductor/conductor-pi-auth.ts) にあります。
 
-`settings.json` / `models.json` の `apiKey` は環境変数参照（`$NAME` / `${NAME}`）や `!command` を含められます。`!command` は conductor process の shell と OS 権限で実行されるため、信頼できる設定だけで使ってください。login の保存先や OAuth refresh の user runtime とは別の resource fallback です。詳細は [config.md](config.md#pi-resource-root) を参照してください。
+古い Pi API の説明で `AuthStorage` と呼ばれている user credential 層は、現在の Pi 1.x 経路では `ModelRuntime` が担います。利用者が意識する保存先と login の挙動は user `auth.json` です。`settings.json.apiKeys[provider]` の runtime override はその保存先に書き込まず、user login で置き換わりません。
+
+`settings.json` / `models.json` の `apiKey` は環境変数参照（`$NAME` / `${NAME}`）や `!command` を含められます。project `auth.json` の API key entry にも command を指定できます。`!command` は Pi runtime が credential を解決するときに conductor process の shell / OS user / 環境で実行します。これは LLM が呼ぶ tool ではなく、worker ACP の permission 処理や harness の追加 sandbox は通りません。したがって project の Pi resource を含む設定ファイル自体が実行可能な入力です。未確認の repository から読み込んだ project resource では command を有効にせず、設定と command の両方を確認してください。
+
+`auth status` は `!command` を実行しません。また、`ensemble auth login` は command を登録しません。API key credential は user `auth.json` に保存されますが、有効な非空の `settings.json.apiKeys[provider]` runtime override があれば、保存 credential より優先されます。user login だけではこの override は置き換わらないため、実効 key を更新するには該当する user / project `settings.json` の値を確認してください。空文字は status で `runtime` と表示されても request では runtime override として使われず、保存 credential など下位 source の解決へ進みます（上記参照）。project `auth.json` の API key / command も user credential より先に選ばれるため、これを有効にしたまま user login しても effective credential は変わりません。OpenAI OAuth login では user `settings.json` の device ID も管理します。command の結果を含む認証値を repository に書かず、Pi resource や project 設定を commit する場合は値・command と `.ensemble/` の ignore 状態を確認してください。詳細は [config.md](config.md#pi-resource-root) を参照してください。
 
 user `auth.json` の credential は CLI が生成・更新するものを使うのが基本です。project resource、`settings.json`、`models.json` に秘密値を置く場合もリポジトリへ commit せず、`.ensemble/` の ignore 方針とアクセス権を確認してください。
 
@@ -334,12 +361,12 @@ node scripts/pi/bench-cached-auth.mjs
 |---|---|---|
 | backend の選択 | `conductor.backend` を省略 | `conductor.backend: pi` |
 | login | `ensemble auth login` → Cursor SDK | `ensemble auth login --provider <id>` → provider 単位の Pi runtime |
-| API key | `CURSOR_API_KEY` または Cursor SDK の stored login | TTY secret prompt、user `auth.json`、Pi の provider env/fallback |
+| API key | `CURSOR_API_KEY` または Cursor SDK の stored login | TTY secret prompt は user `auth.json` に保存します。request 時は project auth、`settings.json.apiKeys`、Pi provider 設定や環境・ambient auth が優先される場合があります（上記の解決順を参照） |
 | OAuth / 出力 | Cursor SDK の login | TTY の Pi OAuth flow。URL / device code は stderr |
 | model list | Cursor SDK の catalog | 認証済み Pi model のみ。`--provider` で絞り込み |
 | worker の認証 | Cursor worker は `agent login`。Pi BYO は Pi CLI が使う provider credential を用意 | Cursor worker は `agent login`。Pi BYO は Pi CLI が使う provider credential を用意。Pi builtin worker は Pi conductor と同じ user root の `auth.json` または provider 環境変数を使う |
 
-Pi builtin worker と Pi conductor は同じ Pi user root を使います。既定は `~/.ensemble/pi/` で、`conductor.pi.agentDir` が設定されていればその directory、なければ `PI_CODING_AGENT_DIR` が使われます。builtin worker の session map と transcript はこの設定から独立し、Issue と worker ごとの `~/.ensemble/pi/worker/<repoKey>/issue-<issueNumber>/<workerKey>/` に保存します。同じ repository で別 Issue の同名 worker を同時に動かしても map は共有しません。POSIX では wrapper が directory を `0700`、map / transcript を `0600` にします。Windows では wrapper は ACL を設定・検証しないため、owner-only access は保証しません。
+Pi builtin worker と Pi conductor は同じ Pi user root を使います。既定は `~/.ensemble/pi/` で、`conductor.pi.agentDir` が設定されていればその directory、なければ `PI_CODING_AGENT_DIR` が使われます。builtin worker の session map と transcript はこの設定から独立し、Issue と worker ごとの `~/.ensemble/pi/worker/<repoKey>/issue-<issueNumber>/<workerKey>/` に保存します。同じ repository で別 Issue の同名 worker を同時に動かしても map は共有しません。POSIX では wrapper が directory を `0700`、map / transcript を `0600` にし、新規 file は `umask 077` で制限します。Windows では Windows PowerShell / .NET ACL API で専用 parent と repository storage tree を現在の account SID のみに許可し、owner と DACL を読み戻して検証します。ACL を設定・検証できない場合は builtin worker を起動しません。この制限は worker の map / transcript 用であり、共有 Pi settings / auth root には適用されません。同じ OS account の process、管理者 / SYSTEM / backup privilege、ACL を無視する storage、指定先外への書込みや upstream の権限拡大までは保護しません。詳細は [ADR 0070](adr/0070-issue-scoped-builtin-pi-storage.md) と [ADR 0071](adr/0071-builtin-pi-storage-windows-acl.md) を参照してください。
 
 Pi builtin worker を使う場合、`ensemble auth login --provider <id>` は選択中の conductor backend が Pi のとき、解決済み user root の `auth.json` に credential を保存し、worker と共有します。既定の Cursor backend では `--provider` だけで Pi login には切り替わらないため、Pi backend の config / profile を選ぶか、provider 環境変数を設定してください。Cursor backend のまま Pi CLI から login する場合は、同じ directory を `PI_CODING_AGENT_DIR` に指定してください。Pi CLI の global install は不要ですが、provider credential は必要です。
 
@@ -352,14 +379,25 @@ Cursor backend の既存 `ensemble auth login`、`CURSOR_API_KEY`、model catalo
 次を順に確認します。
 
 1. `settings.json` の `defaultProvider` / `defaultModel` または `ensemble issue --model` が意図した provider/model を選んでいるか確認する。
-2. `ensemble auth status --provider <provider-id>` で user credential の状態と保存先を確認する。
-3. `ensemble auth login --provider <provider-id>` を TTY で実行する。
-4. login を使わない場合は、表示された provider 固有の環境変数、project `auth.json`、`settings.json` / `models.json` fallback を確認する。
-5. `ensemble models list --provider <provider-id>` で認証済み model が見えることを確認する。
+2. `ensemble auth status --provider <provider-id>` で現在の `source` を確認する。`configured=true` は認証 request の成功を保証しない。
+3. `source` を設定場所の手掛かりとして使い、次の優先順と照合する。
+   - `runtime`: user → project に merge された `settings.json.apiKeys[provider]` の非 command 値。project 側が両方に設定した値を上書きします。値が非空なら user `auth.json` より先に request で使われます。ただし空文字も runtime と表示される一方、Pi request resolver はその値を使わず user `auth.json` など下位 source の読取りへ進みます。空 entry の場合は `source` だけで実効 credential を判断せず、下位の設定層も確認してください。
+   - `project_stored` / `project_oauth_unsupported`: project `auth.json` の entry。API key / command は user 層より先に使われ、project OAuth は拒否されます。後者は project OAuth entry を除去して user 層で login します。
+   - `stored`: user `auth.json` の credential。status は API key と OAuth を区別しません。
+   - `settings_json`: Pi status が configured source を返さず Ensemble が検出した settings 候補です。scalar `apiKey` が先で、なければ `apiKeys[provider]` を見ます。key / command と user / project の別は分かりません。
+   - `fallback`: Pi runtime に登録された `models.json` provider の通常 key。環境変数参照は登録前に展開されています。
+   - `models_json_command`: Pi runtime に登録された `models.json` provider の `!command`。
+   - `models_json_key`: Ensemble が直接 fallback した `models.json` 候補。通常 key と `!command` を区別しません。request 時の settings command は status に登録されないため、これらの source が表示されても request では settings command が選ばれる場合があります。
+   - `environment`: Pi の provider auth check または Ensemble の provider-env fallback です。`label` があれば確認し、Pi の ambient auth（AWS profile / ADC など）の可能性も考慮します。source 名だけで process 環境変数だとは判断できません。
+4. 設定値が `$NAME` / `${NAME}` なら参照先を確認し、更新する場合は値を画面や log に表示しないでください。`settings_json` / `models_json_key` / `models_json_command` / `project_stored` の entry に command が含まれていても、`auth status` は実行しません。status は command の実効性も確認しないため、user / project の両 resource root と request の優先順を確認します。
+5. source に対応する設定層を直した後に provider の login を使う場合は、その provider の現行 login flow を確認します。user `auth.json` を更新しても、有効な非空の `settings.json.apiKeys[provider]` runtime override や project `auth.json` entry は置き換わりません。`apiKeys[provider]` が空文字なら、status は `runtime` と表示する一方で request は user credential などへ進みます。OpenAI の現行 `ensemble auth login --provider openai` は OAuth に進み、OpenAI API key を user `auth.json` に保存しません。OpenAI API key は `OPENAI_API_KEY` または Pi resource から利用できます。
+6. `ensemble models list --provider <provider-id>` で対象 provider の model が見えることを確認する。
 
 ### 実行中の 401 / auth error
 
 Pi の send が missing key、401、unauthorized などの認証エラーを返すと、harness は同じ agent ID で接続を張り直します。同じ send 中に tool call が始まっていなければ同じ prompt を 1 回だけ自動再試行し、tool が始まっていた場合は副作用の重複を避けて再送しません。send の最終結果が auth error の場合は provider 固有の復旧 hint を表示します。
+
+現行の Pi hint は credential source を判別せず、provider login、user auth file、provider 環境変数などを共通案内します。
 
 hint には次の情報が含まれます。
 
@@ -367,6 +405,10 @@ hint には次の情報が含まれます。
 - `agentDir/auth.json`（既定 `~/.ensemble/pi/auth.json`）
 - Pi が認識する provider 固有の環境変数名（例: Anthropic は `ANTHROPIC_OAUTH_TOKEN` / `ANTHROPIC_API_KEY`、OpenAI は `OPENAI_API_KEY`、GitHub Copilot は `COPILOT_GITHUB_TOKEN`）
 - 稼働中 TTY では `/reconnect`。Pi API-key resolver failure で通常 dispatch が失敗した場合は `/recovery show <recoveryId>` で内容を確認し、現在の状態と副作用を踏まえて未完了分だけ新しい operator message で指示します。process 終了後は `--resume <agentId>`（または `--continue`）で session を再開できますが、snapshot は復元されません。worker / worktree の現在状態を確認してから新しい message を送ります
+
+この共通 hint は source に応じた案内ではありません。`source=runtime` や project entry が有効なときに user login / user auth file の案内を実行しても、実効 credential は変わりません。また、`settings.json` command が status に現れず `fallback` / `models_json_command` / `environment` など下位 source が表示される場合もあります。現行 status の `source` だけで更新先を決めず、上記の request 優先順に沿って設定層を確認してください。
+
+`apiKeys[provider]` が空文字のときも、status だけで更新先を決めないでください。現行 status は user / project のどちらの `settings.json` に entry があるかを示しません。両方の settings root と、user / project の `auth.json` / `models.json`、provider の環境設定を確認してください。空 entry を修正・削除する場合は、対象 root と、その後に有効になる下位 credential を確認してから行い、秘密値を画面や log に出さないでください。
 
 実行中の `ensemble issue` で通常の event dispatch が `API key auth failed for provider ...: Failed to resolve API key ...` という最終結果になった場合、harness は手動復旧用の report 候補を一つ保持します。候補に残すのは `sendCount`、`runId`、`sourceKey`、event type / count、最大20件の安全な event 参照、自動 retry 回数、初回 send / retry 中に `onToolCallStarted` callback を受け取ったかです。tool 開始 callback の有無は Pi transcript から推測しません。参照の超過分は `eventReferencesTruncated` で示します。認証 error の本文、shell command / path、operator message、worker prompt / 結果、permission の raw payload は載せません。event に共通の永続 ID はないため、この参照は既存 dispatch を照合する手掛かりです。
 

@@ -121,6 +121,8 @@ worker は未 attach の lazy worker も含め、セッションに登録され�
 
 ---
 
+`modelTag: lite` は team tier の慣習であり、Cursor fast mode を指定しません。Cursor の fast mode を表すのは別設定の `cursorFast` です。
+
 ### 2.4 TTY 終了サマリ例
 
 `sessionUsage` があるときは、agent ごとに input / output tokens、取得できた cache 値、hit rate を同じ行に表示し、最後に `totals.tokens` の input / output だけを合計行として表示する。cache / hit rate の全体行は出さない。worker の ACP usage がない完了ラウンドは応答文からの推定を行末の `推定` で示す。失敗などで usage round が残らなかった消費分は含まれないが、usage ブロック末尾に記録範囲の脚注を出す。cache rate は取得できる項目だけ表示し、式は [token-usage-semantics.md §3.2](token-usage-semantics.md#32-集計値の読み方) のとおり。cost / compaction も取得できる項目だけ表示する。
