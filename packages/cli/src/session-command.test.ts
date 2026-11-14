@@ -149,6 +149,8 @@ describe('ensemble session commands', () => {
         conductorAgentId,
         '--repo-root',
         repoRoot,
+        '--issue-url',
+        ISSUE_URL,
         '--output',
         outputDirectory,
         '--json',

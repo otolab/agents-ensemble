@@ -113,6 +113,7 @@ describe('exportSessionBundle', () => {
     const result = await exportSessionBundle({
       repoRoot,
       conductorAgentId: SESSION_ID,
+      issueUrl: ISSUE_URL,
       outputDirectory,
       ensembleVersion: '0.21.0',
       cliVersion: '0.21.1',
@@ -271,6 +272,7 @@ describe('exportSessionBundle', () => {
     const result = await exportSessionBundle({
       repoRoot,
       conductorAgentId: SESSION_ID,
+      issueUrl: ISSUE_URL,
       outputDirectory,
       ensembleVersion: '0.21.0',
       cliVersion: '0.21.0',
@@ -323,6 +325,7 @@ describe('exportSessionBundle', () => {
     const result = await exportSessionBundle({
       repoRoot,
       conductorAgentId: SESSION_ID,
+      issueUrl: ISSUE_URL,
       outputDirectory,
       ensembleVersion: '0.21.0',
       cliVersion: '0.21.0',
@@ -358,6 +361,7 @@ describe('exportSessionBundle', () => {
     const result = await exportSessionBundle({
       repoRoot,
       conductorAgentId: SESSION_ID,
+      issueUrl: ISSUE_URL,
       outputDirectory: join(tempRoot, 'idle-bundle'),
       ensembleVersion: '0.21.0',
       cliVersion: '0.21.0',
@@ -383,6 +387,7 @@ describe('exportSessionBundle', () => {
     const result = await exportSessionBundle({
       repoRoot,
       conductorAgentId: SESSION_ID,
+      issueUrl: ISSUE_URL,
       outputDirectory: join(tempRoot, 'partial-bundle'),
       ensembleVersion: '0.21.0',
       cliVersion: '0.21.0',
@@ -437,6 +442,7 @@ describe('exportSessionBundle', () => {
       exportSessionBundle({
         repoRoot,
         conductorAgentId: SESSION_ID,
+        issueUrl: ISSUE_URL,
         outputDirectory,
         ensembleVersion: '0.21.0',
         cliVersion: '0.21.0',
@@ -453,6 +459,7 @@ describe('exportSessionBundle', () => {
       exportSessionBundle({
         repoRoot,
         conductorAgentId: SESSION_ID,
+        issueUrl: ISSUE_URL,
         outputDirectory,
         ensembleVersion: '0.21.0',
         cliVersion: '0.21.0',
@@ -483,6 +490,7 @@ describe('exportSessionBundle', () => {
     const result = await exportSessionBundle({
       repoRoot,
       conductorAgentId: SESSION_ID,
+      issueUrl: ISSUE_URL,
       outputDirectory,
       ensembleVersion: '0.21.0',
       cliVersion: '0.21.0',
