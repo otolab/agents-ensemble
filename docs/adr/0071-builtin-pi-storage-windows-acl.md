@@ -15,9 +15,10 @@ ADR 0070 は POSIX の mode と `umask 077` を定めたが、Windows では Nod
 - Directory の ACE は child file / directory に継承させる。upstream `pi-acp@0.0.34` の map と同梱 Pi CLI の transcript は wrapper が指定した専用 directory 内に作られるため、新規ファイルにもこの DACL が継承される。既存の repository storage tree 内も再帰的に設定し、読み戻した ACL が owner・ACE 数・identity・権限・継承設定の条件を満たすことを確認する。
 - PowerShell / `icacls.exe` が起動できない、ACL を変更できない、または検証に失敗した場合は、upstream adapter を起動せず builtin attach を失敗させる。
 - ACL の対象は builtin worker の専用保存先と session map / transcript である。Pi の共有 settings / auth root、BYO の保存先、その他の利用者データは変更しない。upstream 更新時は map / transcript の作成先と permission の振る舞いを確認する。
+- 新しく作られた child の owner は Windows process token の default owner に従う。elevated process では `Administrators` group になる場合があるため、検証は child の owner ではなく、current account SID だけに許可する継承 DACL を対象とする。
 
 ## Consequences
 
 - Windows でも、通常権限の別 OS account に対して map / transcript へのアクセスを現在の account に限定する。POSIX では引き続き directory `0700`、file `0600`、および wrapper process の `umask 077` を使う。
-- 同じ Windows account で動く別 process、管理者、SYSTEM、backup privilege を持つ主体からのアクセスは防がない。NTFS ACL を無視する・別 ACL を重ねる storage、保存先の外へ書く将来の upstream、upstream が ACL を明示的に広げる変更もこの保証の対象外である。
+- 同じ Windows account で動く別 process、owner が Administrators group になる elevated process の管理者、SYSTEM、backup privilege を持つ主体からのアクセスは防がない。NTFS ACL を無視する・別 ACL を重ねる storage、保存先の外へ書く将来の upstream、upstream が ACL を明示的に広げる変更もこの保証の対象外である。
 - 既存 storage の ACL を変更できない環境では builtin runtime は fail closed になる。BYO runtime の挙動は変わらない。

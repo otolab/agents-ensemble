@@ -340,7 +340,6 @@ try {
     }
     if (
       $acl.AreAccessRulesProtected -or
-      $acl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value -ne $sid.Value -or
       $rules.Count -ne 1 -or
       $rules[0].IdentityReference.Value -ne $sid.Value -or
       $rules[0].AccessControlType -ne
@@ -351,7 +350,7 @@ try {
       -not $rules[0].IsInherited
     ) {
       throw (
-        "New builtin Pi data at '$path' did not inherit the owner-only ACL. " +
+        "New builtin Pi data at '$path' did not inherit the account-only DACL. " +
         "Owner=$($acl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value); " +
         "Protected=$($acl.AreAccessRulesProtected); Rules=$($rules | Out-String)"
       )
