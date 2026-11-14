@@ -1611,6 +1611,7 @@ describe('Pi conductor authentication', () => {
         provider: 'anthropic',
         configured: true,
         source: 'stored',
+        mode: 'api_key',
       }),
     ]);
     expect(JSON.stringify(status)).not.toContain('secret-value');

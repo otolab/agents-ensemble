@@ -551,6 +551,14 @@ addConductorCommandOptions(auth.command('login'))
   .description(
     'Log in to the configured conductor backend (Cursor browser login or Pi provider login)',
   )
+  .option(
+    '--api-key-prompt',
+    'Select Pi API-key login and enter the key at a hidden TTY prompt',
+  )
+  .option(
+    '--api-key-stdin',
+    'Read a Pi API key from non-TTY standard input and store it in the user auth.json',
+  )
   .action(async (options: ConductorCommandOptions) => {
     try {
       const result = await runConductorLogin(options);
@@ -598,8 +606,9 @@ addConductorCommandOptions(auth.command('status'))
         for (const provider of status.providers) {
           const state = provider.configured ? 'configured' : 'not configured';
           const source = provider.source ? `; source=${provider.source}` : '';
+          const mode = provider.mode ? `; mode=${provider.mode}` : '';
           const label = provider.label ? `; label=${provider.label}` : '';
-          console.log(`Pi: ${provider.provider}: ${state}${source}${label}`);
+          console.log(`Pi: ${provider.provider}: ${state}${source}${mode}${label}`);
         }
         return;
       }

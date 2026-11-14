@@ -6,7 +6,7 @@
 
 ## Context
 
-`ensemble auth` は Cursor SDK の保存型 login と、Pi conductor の provider 単位の login / status を提供する。Pi では provider に応じて TTY の API key prompt または OAuth flow が user `auth.json` を使う。OpenAI provider の現行 `ensemble auth login --provider openai` は OAuth を開始し、API key 保存の選択肢は提供しない。実行時には project `auth.json`、user `ModelRuntime`、Pi resource の `settings.json` / `models.json`、provider 環境変数から credential を解決し、project の OAuth entry は refresh できないため拒否する。
+`ensemble auth` は Cursor SDK の保存型 login と、Pi conductor の provider 単位の login / status を提供する。Pi では provider に応じて TTY の API key prompt または OAuth flow が user `auth.json` を使う。OpenAI provider の `ensemble auth login --provider openai` は既定で OAuth を開始し、TTY の `--api-key-prompt` または非 TTY の `--api-key-stdin` を指定すると API key を保存する。実行時には project `auth.json`、user `ModelRuntime`、Pi resource の `settings.json` / `models.json`、provider 環境変数から credential を解決し、project の OAuth entry は refresh できないため拒否する。
 
 Pi の `!command` はすでに Pi resource の API key として実行時に委譲できるが、`ensemble auth` からの登録導線はない。Issue #356 では command 登録を非スコープとした。その後、Epic #679 が複数認証モードの設計と登録 UX を改めて対象にした。#356 の判断を当時の履歴として残しつつ、登録を認める条件をここで整理する。
 
@@ -20,11 +20,11 @@ request では、まず project `auth.json` の API key / command を確認し�
 
 この source だけでは、たとえば `settings.json` の通常 key と `!command` を見分けられない。認証エラー時の Pi hint も provider 共通で、effective source に応じた分岐はしない。
 
-ADR 0028 は accepted のため本文を変更しない。本 ADR は、Issue #680 が求める認証方式の分類、status の拡張方針、復旧案内の設計を提案する。以下で「現行」と記す内容は調査時点の実装・docs の説明であり、Decision に記す status / hint / command 登録の契約は実装済みの仕様ではない。後続 Issue の実装がマージされるまで現行動作を変更せず、この ADR も現行動作の安全性を保証するものではない。
+ADR 0028 は accepted のため本文を変更しない。本 ADR は、Issue #680 が求める認証方式の分類、status の拡張方針、復旧案内の設計を記録する。以下で「現行」と記す内容は調査時点の実装・docs の説明である。API key の TTY / stdin login と、既知の `auth.json` entry に対する `mode` は現行機能に含まれる。その他の source に対する `mode` 判定、`scope`、mode-aware recovery hint、command 登録の契約は引き続き提案であり、この ADR はそれらの安全性を保証するものではない。
 
-現行 CLI では backend を config / profile で選び、`ensemble auth login` は選択済み backend の login を実行する。Pi の OpenAI provider で `ensemble auth login --provider openai` を実行すると OAuth login になる。OpenAI API key は `OPENAI_API_KEY` や Pi resource から request 時に利用できるが、現行のこの login コマンドには user `auth.json` へ OpenAI API key を登録する選択肢はない。
+現行 CLI では backend を config / profile で選び、`ensemble auth login` は選択済み backend の login を実行する。Pi の OpenAI provider で `ensemble auth login --provider openai` を実行すると既定で OAuth login になる。API key を user `auth.json` に登録するには、TTY では `--api-key-prompt`、非 TTY では `--api-key-stdin` を指定する。`OPENAI_API_KEY` や Pi resource からの request 時認証も引き続き利用できる。
 
-Issue #684 の [PR #689](https://github.com/otolab/agents-ensemble/pull/689) で追加した setup では、最初に Pi（OpenAI）または Cursor を選ぶ。Pi を選んだ場合、OAuth は現行の login path に委譲し、OpenAI API key は setup 用の `authMethod: 'api_key'` 分岐から既存 core の保存処理を呼ぶ。これは現行 `ensemble auth login --provider openai` の選択肢ではない。Cursor は既存の Cursor SDK login に委譲する。この setup は選んだ backend を user config に保存する。backend 未指定時の既定は Phase B の [ADR 0075](0075-pi-conductor-default-and-model-selection.md) で Pi と定める。本 ADR は backend 選択や setup を定めるものではなく、その後の認証 mode / status / recovery の語彙を提案する。
+Issue #684 の [PR #689](https://github.com/otolab/agents-ensemble/pull/689) で追加した setup では、最初に Pi（OpenAI）または Cursor を選ぶ。Pi を選んだ場合、OAuth は現行の login path に委譲し、OpenAI API key は setup 用の `authMethod: 'api_key'` 分岐から既存 core の保存処理を呼ぶ。Issue #682 では同じ user 層保存経路を `ensemble auth login` からも選べるようにする。Cursor は既存の Cursor SDK login に委譲する。この setup は選んだ backend を user config に保存する。backend 未指定時の既定は Phase B の [ADR 0075](0075-pi-conductor-default-and-model-selection.md) で Pi と定める。本 ADR は backend 選択や setup を定めるものではなく、その後の認証 mode / status / recovery の語彙を提案する。
 
 ## Decision
 
@@ -36,14 +36,14 @@ Issue #684 の [PR #689](https://github.com/otolab/agents-ensemble/pull/689) で
 |----|------|------------------|----------------|
 | `oauth_browser` | OAuth login flow | Pi provider の credential は user `auth.json` / `ModelRuntime` が管理する。Cursor backend は Cursor SDK の user auth store を使う。実際の browser 起動方法は provider による | Pi は `ensemble auth login --provider <provider>`、Cursor は `ensemble auth login` を使って再認証する |
 | `oauth_manual` | OAuth login flow | URL、device code、manual code を使う flow。保存先と refresh は `oauth_browser` と同じ | Pi の provider login を再実行し、表示された URL / code で login を完了する。challenge は認証操作中だけ operator に渡す |
-| `api_key_stored` | 保存型 API key | Pi の API-key prompt を持つ provider は TTY から user `auth.json` に保存する。OpenAI の `ensemble auth login --provider openai` は引き続き OAuth のみだが、`ensemble setup` では API key を選んで user `auth.json` に保存できる | API-key prompt を持つ provider の user credential は、その provider の login で更新する。OpenAI の API key は `ensemble setup` で API key を選び直す。`ensemble auth login --provider openai` は OAuth に進むため、API key の更新先として案内しない。非対話時の案内は #682 の決定に従い、操作が確定するまでは command や flag を推測しない。値を CLI 引数やログへ書かない |
+| `api_key_stored` | 保存型 API key | Pi の TTY prompt または `--api-key-stdin` から user `auth.json` に保存する。OAuth と共存する provider は TTY で `--api-key-prompt` を指定しない限り既定の OAuth flow を使う | API key は TTY の非表示 prompt、または非 TTY の stdin から provider login で更新する。OpenAI を含む OAuth 共存 provider は API-key mode を明示する。非 TTY では `--api-key-stdin` を使い、値を CLI 引数・hint・log に書かない |
 | `command_delegated` | command による実行時取得 | Pi resource の `settings.json` / `models.json` または project `auth.json` にある `!command` を Pi runtime が実行時に解決する。現行 CLI に command 登録機能はない | command と認証元を信頼できる設定で確認・修正する。これは `ensemble auth login` の保存型 credential ではない |
 | `environment` | process 環境変数 | credential は保存せず、provider が認識する環境変数から取得する | 対応する変数を設定・ローテーションする。login は環境変数を変更しない |
 | `project_override` | scope / 優先順位 | project の `auth.json` または `settings.json` / `models.json` の credential が解決順で選ばれた状態。project `auth.json` の API key / command は user credential より優先される | project 側で選ばれた値を確認・更新する。user login が effective credential を変えない場合がある。project OAuth は拒否されるため user 層へ移す |
 
 この表の保存先は Pi backend の設定を中心に示す。Cursor backend の既存 login・保存先・環境変数の挙動は変更しない。
 
-taxonomy ID と status の `source` / `mode` は別の軸である。`api_key_stored` は user `auth.json` に保存する login 経路を指す一方、`mode=api_key` は `settings.json.apiKeys` の runtime override や provider 設定にも使う。どこから来た key かは `source` と `scope` で示し、`mode=api_key` だけから保存先を推測しない。OAuth credential の保存形式からは browser と manual のどちらで login したか分からないため、status は `oauth` までを示し、login 時の対話方式を推測しない。
+taxonomy ID と status の `source` / `mode` は別の軸である。`api_key_stored` は user `auth.json` に保存する login 経路を指す一方、`mode=api_key` は `settings.json.apiKeys` の runtime override や provider 設定にも使う。どこから来た key かは `source` と `scope` で示し、`mode=api_key` だけから保存先を推測しない。現行 status は auth entry の型を識別できる場合に限り `mode` を返し、API-key entry では `mode=api_key` と `source=stored` を併記する。既存 `source` は credential の出所として維持する。OAuth credential の保存形式からは browser と manual のどちらで login したか分からないため、status は `oauth` までを示し、login 時の対話方式を推測しない。
 
 ### 2. status の source 互換性
 
@@ -84,9 +84,9 @@ interface PiProviderAuthStatus {
 }
 ```
 
-これは実装案であり、現行の型・出力ではない。新しい optional field の追加は、既存の `source` を読む利用者が未知の field を無視できる形にする。`source` の型を閉じた union に狭める変更は、任意文字列を扱う TypeScript 利用者に source-level の影響がある。既存の値を別名へ置き換えると、CLI 出力を完全一致で比較する利用者にも影響する。そのため、既存の `source` 値を保ったまま `mode` / `scope` を付加する。
+現行の `mode` は optional で、known `auth.json` entry が API key / OAuth / command のどれか判定できる場合に出力する。`scope` は引き続き将来の追加候補である。optional field は既存の `source` を読む利用者が無視できる形にする。`source` の型を閉じた union に狭める変更は、任意文字列を扱う TypeScript 利用者に source-level の影響がある。既存の値を別名へ置き換えると、CLI 出力を完全一致で比較する利用者にも影響する。そのため、既存の `source` 値を保ったまま `mode` を付加する。
 
-将来の `mode` は `oauth_browser` / `oauth_manual` を `oauth`、`api_key_stored` を `api_key`、`command_delegated` を `command` として示す。`environment` はそのまま `environment` とする。`project_override` は mode にせず、実際に project 層の credential が選ばれた場合の `scope: 'project'` で表す。process 環境変数など user / project に属さない場合は `scope` を省略する。
+taxonomy と status `mode` の対応は `oauth_browser` / `oauth_manual` → `oauth`、`api_key_stored` → `api_key`、`command_delegated` → `command`、`environment` → `environment` とする。`project_override` は mode にせず、実際に project 層の credential が選ばれた場合の `scope: 'project'` で表す。process 環境変数など user / project に属さない場合は `scope` を省略する。
 
 Issue #682 の status もこの対応を使う。`api_key_stored` は taxonomy 上の識別子であり、status の機械可読な `mode` 値は `api_key` とする。既存の `source` は出所として引き続き維持する。
 
@@ -98,7 +98,7 @@ Issue #682 の status もこの対応を使う。`api_key_stored` は taxonomy �
 |------------------------------------------------------|------------------|
 | `mode=oauth`（`oauth_browser` / `oauth_manual`） | Pi は `ensemble auth login --provider <provider>`、Cursor は `ensemble auth login` を再実行する。provider が提示する browser / URL / device code / manual code の flow を完了する。保存後に flow の違いを判別できないため、両者で同じ案内にする |
 | `mode=api_key` + `source=runtime` | 有効な user / project `settings.json.apiKeys[provider]` entry を確認・更新する。空文字は有効な entry とみなさず、status / recovery はその値を指さない。project 側の値は user 側より優先され、`auth.json` login だけでは runtime override は置き換わらない。status が `scope` を持たない間は両 root を確認する |
-| `mode=api_key` + `source=stored`（`api_key_stored`） | user `auth.json` の保存 credential を provider の API-key login で更新する。OpenAI の `ensemble auth login --provider openai` は OAuth を開始し、API key は保存しない。OpenAI API key は `ensemble setup` で設定する。非対話時は Issue #682 が決める user 層の入力経路を案内し、確定前の flag 名を推測しない |
+| `mode=api_key` + `source=stored`（`api_key_stored`） | user `auth.json` の保存 credential を API-key login で更新する。OpenAI の `ensemble auth login --provider openai` は既定で OAuth を開始するため、TTY では `--api-key-prompt`、非 TTY では `--api-key-stdin` を指定する |
 | `mode=api_key` + `source=settings_json` | 有効な settings key を確認・更新する。scalar `apiKey` が先で、なければ `apiKeys[provider]`。この source だけでは user / project root を区別できないため、scope が分からなければ両 root を確認する |
 | `mode=api_key` + `source=fallback` / `models_json_key` | effective source として確認できた場合に限り、`models.json` の provider `apiKey` を確認・更新する。現行 status は settings command を反映しない場合があるため、source 名だけを根拠に下位 key を更新させない。通常の registered provider key は `fallback`、Ensemble の直接 fallback は `models_json_key` と表示される。`models_json_key` だけでは key / command を区別できず、提案する `mode` も判定できない場合は共通案内にする |
 | `mode=command`（`command_delegated`） | `source` / `scope` から信頼済み resource root の command 設定と認証元を確認する。status / hint は command、stdout、stderr を表示せず、command も実行しない |
@@ -114,7 +114,7 @@ Issue #682 の status もこの対応を使う。`api_key_stored` は taxonomy �
 以下は後続実装が満たすべき要件であり、現行実装の検証結果ではない。各 mode と scope で、API key、access / refresh token、環境変数の値を status、復旧 hint、SessionLogEvent、終了 JSON、recovery report、Issue / PR に含めない。
 
 - `oauth_browser` / `oauth_manual`: token は出力しない。URL、device code、manual code は login 中に operator へ一時表示する場合に限り、status や永続 session log へ残さない。
-- `api_key_stored`: secret prompt で受け取った値を status、hint、ログ、Issue / PR に含めない。
+- `api_key_stored`: TTY prompt または stdin で受け取った値を status、hint、ログ、Issue / PR に含めない。`ensemble auth login` は standalone CLI command で、session log / harness JSON を生成しない。
 - `command_delegated`: command 文字列、stdout、stderr、実行結果、失敗 cause を status、hint、ログ、Issue / PR に含めない。
 - `environment`: 変数名など秘密値を含まない label だけを表示し、値を出力しない。
 - `project_override`: 選択される credential の種類にかかわらず、project 層にも同じ出力制約を適用する。
