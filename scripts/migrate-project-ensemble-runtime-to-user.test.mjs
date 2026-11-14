@@ -1137,6 +1137,65 @@ test('user docs distinguish bulk inventory from resume-time lazy promotion', asy
   }
 });
 
+test('persistence docs use canonical slug writes and separate legacy fallback from bulk migration', async () => {
+  const repositoryRoot = resolve(dirname(scriptPath), '..');
+  const documentPaths = [
+    'docs/settings.md',
+    'docs/architecture.md',
+    'docs/operator-input.md',
+    'docs/cli/README.md',
+    'docs/config.md',
+  ];
+  const documents = await Promise.all(
+    documentPaths.map((path) =>
+      readFile(join(repositoryRoot, path), 'utf8'),
+    ),
+  );
+
+  for (const [index, document] of documents.entries()) {
+    assert.ok(
+      document.includes('~/.ensemble/sessions/github.com/<owner>/<repo>'),
+      `${documentPaths[index]} must describe canonical slug storage`,
+    );
+    assert.doesNotMatch(
+      document,
+      /~\/\.ensemble\/sessions\/<repoKey>/u,
+      `${documentPaths[index]} must not describe path-hash as the current Issue-session destination`,
+    );
+    assert.doesNotMatch(
+      document,
+      /~\/\.ensemble\/operator-agent\/<repoKey>\/session\.json/u,
+      `${documentPaths[index]} must not describe the old repoKey conversation destination`,
+    );
+    assert.doesNotMatch(
+      document,
+      /移行期間中は両方に同一内容を保存/u,
+      `${documentPaths[index]} must not claim path-hash and slug dual-write`,
+    );
+  }
+
+  assert.match(
+    documents[0],
+    /resume-time lazy promotion.*一括 migration tool/u,
+  );
+  assert.match(
+    documents[1],
+    /旧 operator-agent watch state も.*一括 migration/u,
+  );
+  assert.match(
+    documents[2],
+    /この lazy promotion は選択した session の範囲.*一括 migration/u,
+  );
+  assert.match(
+    documents[3],
+    /閲覧時の fallback.*lazy promotion.*一括 inventory/u,
+  );
+  assert.match(
+    documents[4],
+    /resume 時に対象 file.*一括 inventory \/ copy/u,
+  );
+});
+
 function makeStore(conductorAgentId, storeIssueUrl, repoRoot) {
   return {
     version: 1,
