@@ -27,6 +27,8 @@ conductor:
 
 Pi backend の初回セットアップ、resource root、provider 認証、`ensemble auth` / `ensemble models list`、missing key / 401 からの復旧は [Pi conductor セットアップと認証](https://github.com/otolab/agents-ensemble/blob/main/docs/pi-conductor-setup.md) が正本です。Pi の model catalog を扱う `models remote` / `diff` / `add` と旧 `sync` からの移行も同ガイドを参照してください。Pi の user root は `conductor.pi.agentDir`、`PI_CODING_AGENT_DIR`、`~/.ensemble/pi/` の順、project root は `conductor.pi.projectDir`、`<repoRoot>/.ensemble/pi/` の順で解決します。
 
+clone 後に TTY で初期設定する場合は `ensemble setup` を実行します。Pi（OpenAI）または Cursor を選び、Pi では OAuth / API key も選べます。設定は user 層に保存し、既存 project config・project Pi resource・profile の値は変更しません。user の保存先が project `.ensemble` / Pi resource と重なる場合や、project の symlink から path として辿れる保存先と重なる場合は書き込みを中止します。project と共有していない外部 user symlink は利用できます。project/profile が backend を指定している場合は user 設定より優先されます。CI / headless では user config・Pi settings・認証情報を手動で設定してください。`ensemble auth login` の対話 login には TTY が必要です。手順は [Pi conductor セットアップと認証](https://github.com/otolab/agents-ensemble/blob/main/docs/pi-conductor-setup.md) を参照してください。
+
 Pi の認証 CLI は backend に分岐します。Cursor は Cursor SDK のログイン、Pi は provider 単位のログインです。TTY の動作、OAuth の stderr 出力、project OAuth の制約、認証優先順、復旧手順は [Pi conductor セットアップと認証](https://github.com/otolab/agents-ensemble/blob/main/docs/pi-conductor-setup.md) を参照してください。
 
 Pi は headless の `createAgentSession` を使い、Pi CLI の `<cwd>/.pi/` 設定とは独立しています。resource discovery、`settings.json` の headless 対応範囲、`models.json`、MCP の制約は [config.md](https://github.com/otolab/agents-ensemble/blob/main/docs/config.md) と [ADR 0025](https://github.com/otolab/agents-ensemble/blob/main/docs/adr/0025-conductor-agent-backend-sdk-and-pi.md) を参照してください。
@@ -55,22 +57,27 @@ dispatch hold が続く間、harness は既定 **30 分ごと**に、held buffer
 
 | 対象 | 準備 |
 |------|------|
+| conductor の初期設定と login | `ensemble setup`（TTY で Pi/OpenAI または Cursor を選択。Pi では OAuth / API key も選択） |
 | worker（既定の Cursor ACP） | `agent login` |
 | worker（Pi BYO） | PATH 上の Pi CLI と、その Pi runtime の provider 認証 |
 | worker（Pi builtin） | `acp.defaultPreset: pi` と `acp.pi.runtime: builtin` を設定。Pi CLI の追加 install は不要。provider credential は Pi user config または provider 環境変数で用意。`ensemble auth login --provider <id>` を使う場合は、選択中の conductor backend / profile も Pi にする |
 | conductor（Cursor SDK、既定） | `ensemble auth login` |
-| conductor（Pi、API key） | `ensemble auth login --provider <id>`（TTY の secret prompt） |
-| conductor（Pi、OAuth） | `ensemble auth login --provider <id>`（TTY。URL / device code は stderr） |
+| conductor（Pi、OpenAI API key） | `ensemble setup` で API key を選ぶ（TTY の非表示 prompt） |
+| conductor（Pi、他 provider の API key） | `ensemble auth login --provider <id>`（TTY の非表示 prompt） |
+| conductor（Pi、OAuth の再 login） | `ensemble auth login --provider <id>`（TTY。URL / device code は stderr） |
 | GitHub API（gh CLI を使う場合） | `gh auth login` |
 
 ```bash
 # worker（既定の Cursor ACP）
 agent login
 
-# conductor（Cursor SDK を使う場合）
+# conductor 初期設定（TTY。Pi/OpenAI または Cursor を選択）
+ensemble setup
+
+# conductor（Cursor SDK の再 login）
 ensemble auth login
 
-# conductor（Pi を使う場合。provider 省略時は settings.json から解決）
+# conductor（Pi provider を再ログイン。OpenAI は OAuth を選択）
 ensemble auth login --provider <provider-id>
 ensemble auth status
 ensemble models list

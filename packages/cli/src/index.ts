@@ -41,6 +41,7 @@ import {
   resolveConductorCommandContext,
   type ConductorCommandOptions,
 } from './conductor-auth-command.js';
+import { runSetupCommand } from './setup-command.js';
 import {
   runPiModelsAdd,
   runPiModelsDiff,
@@ -526,6 +527,23 @@ function addConductorCommandOptions(command: Command, catalog = false): Command 
       catalog ? 'Pi model id (does not select the catalog provider)' : 'Pi model id used to infer the provider',
     );
 }
+
+program
+  .command('setup')
+  .description('Set up the conductor backend and log in')
+  .option(
+    '--repo-root <path>',
+    'Repository root used to resolve project configuration',
+    process.cwd(),
+  )
+  .action(async (options: { repoRoot: string }) => {
+    try {
+      await runSetupCommand({ repoRoot: resolve(options.repoRoot) });
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : error);
+      process.exit(1);
+    }
+  });
 
 const auth = program.command('auth').description('Conductor authentication');
 

@@ -1,14 +1,20 @@
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { PassThrough, Writable } from 'node:stream';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   resolveConductorCommandContext,
+  runConductorLogin,
   runConductorAuthStatus,
   runConductorLogout,
 } from './conductor-auth-command.js';
 
 describe('conductor auth CLI wiring', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it('resolves Pi backend and configured resource roots from the ensemble config', async () => {
     const repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-cli-auth-'));
     const agentDir = join(repoRoot, 'user-pi');
@@ -70,5 +76,120 @@ describe('conductor auth CLI wiring', () => {
     await expect(readFile(join(agentDir, 'auth.json'), 'utf8')).resolves.not.toContain(
       'cli-secret',
     );
+  });
+
+  it('lets setup log in to its selected backend while preserving project precedence', async () => {
+    const repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-cli-auth-setup-'));
+    const userRoot = await mkdtemp(join(tmpdir(), 'ensemble-cli-auth-setup-user-'));
+    const agentDir = join(userRoot, 'pi');
+    vi.stubEnv('ENSEMBLE_USER_ROOT', userRoot);
+    await mkdir(join(repoRoot, '.ensemble'), { recursive: true });
+    await writeFile(
+      join(userRoot, 'config.yaml'),
+      `config:\n  loadProjectConfig: true\nconductor:\n  backend: pi\n  pi:\n    agentDir: ${agentDir}\n`,
+    );
+    await writeFile(
+      join(repoRoot, '.ensemble', 'config.yaml'),
+      'conductor:\n  backend: cursor\n',
+    );
+
+    const context = await resolveConductorCommandContext({
+      repoRoot,
+      backend: 'pi',
+      piAgentDir: agentDir,
+    });
+
+    expect(context.config.conductor.backend).toBe('cursor');
+    expect(context.auth.backend).toBe('pi');
+    expect(context.auth.pi?.pi?.agentDir).toBe(agentDir);
+  });
+
+  it('accepts an explicit OpenAI API key without echoing it to terminal output', async () => {
+    const repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-cli-auth-key-project-'));
+    const userRoot = await mkdtemp(join(tmpdir(), 'ensemble-cli-auth-key-user-'));
+    const agentDir = join(userRoot, 'pi');
+    const authPath = join(agentDir, 'auth.json');
+    const secret = 'test-openai-secret-value';
+    await mkdir(join(repoRoot, '.ensemble'), { recursive: true });
+    await mkdir(agentDir, { recursive: true });
+    await writeFile(
+      join(userRoot, 'config.yaml'),
+      `config:\n  loadProjectConfig: true\nconductor:\n  backend: pi\n  pi:\n    agentDir: ${agentDir}\n`,
+    );
+    await writeFile(
+      join(agentDir, 'settings.json'),
+      JSON.stringify({ defaultProvider: 'openai', defaultModel: 'gpt-6.1-sol' }),
+    );
+    vi.stubEnv('ENSEMBLE_USER_ROOT', userRoot);
+
+    const originalStdin = Object.getOwnPropertyDescriptor(process, 'stdin');
+    const originalStderr = Object.getOwnPropertyDescriptor(process, 'stderr');
+    const originalStdout = Object.getOwnPropertyDescriptor(process, 'stdout');
+    const input = new PassThrough() as PassThrough & { isTTY: boolean };
+    input.isTTY = true;
+    let stderrText = '';
+    let stdoutText = '';
+    const stderr = new Writable({
+      write(chunk, _encoding, callback) {
+        const text = String(chunk);
+        stderrText += text;
+        if (text.includes('Pi API key for openai: ')) {
+          setImmediate(() => input.end(`${secret}\n`));
+        }
+        callback();
+      },
+    });
+    const stdout = new Writable({
+      write(chunk, _encoding, callback) {
+        stdoutText += String(chunk);
+        callback();
+      },
+    });
+
+    Object.defineProperty(process, 'stdin', {
+      configurable: true,
+      enumerable: true,
+      value: input,
+    });
+    Object.defineProperty(process, 'stderr', {
+      configurable: true,
+      enumerable: true,
+      value: stderr,
+    });
+    Object.defineProperty(process, 'stdout', {
+      configurable: true,
+      enumerable: true,
+      value: stdout,
+    });
+
+    try {
+      const result = await runConductorLogin({
+        repoRoot,
+        backend: 'pi',
+        piAgentDir: agentDir,
+        provider: 'openai',
+        modelId: 'gpt-6.1-sol',
+        authMethod: 'api_key',
+      });
+
+      expect(result).toMatchObject({
+        backend: 'pi',
+        provider: 'openai',
+        method: 'api_key',
+        authPath,
+      });
+      expect(stderrText).toContain('Pi API key for openai: ');
+      expect(stderrText).not.toContain(secret);
+      expect(stdoutText).not.toContain(secret);
+      expect(JSON.stringify(result)).not.toContain(secret);
+      await expect(readFile(authPath, 'utf8')).resolves.toContain(secret);
+    } finally {
+      if (originalStdin) Object.defineProperty(process, 'stdin', originalStdin);
+      if (originalStderr) Object.defineProperty(process, 'stderr', originalStderr);
+      if (originalStdout) Object.defineProperty(process, 'stdout', originalStdout);
+      input.destroy();
+      stderr.destroy();
+      stdout.destroy();
+    }
   });
 });
