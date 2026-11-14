@@ -119,7 +119,7 @@ TTY + Ink 時は harness / observation イベントを **stderr に書かず**�
 | メトリクス | `startedAt`（Unix epoch ms）, `durationMs`（`SessionLogger` 生成から終了 snapshot 生成まで）, `sendCount`, `stopReason`, `lastRunStatus` |
 | 末尾のみ | `lastResult`, `lastError` |
 | 蓄積（全履歴） | `workerDispatches` / CLI 出力では `workerResponses` に要約 |
-| harness 参照用 | `agentId`, `issueUrl`, `repoRoot` |
+| harness 参照用 | `agentId`, `issueUrl`, `repoRoot`（run ごとの実行 context） |
 | 終了時スナップショット | `escalations`, `openQuestions` |
 | LLM usage | `sessionUsage`（`get_session_usage` と同型。cache stats / compaction count は計測可能な場合のみ、cost は conductor の実課金データがある場合のみ `scope: conductor-only` でマージ） |
 | モデル構成 | `sessionModels`（conductor の backend・設定 model ID / reasoning・最後の send が報告した model ID、各 worker の名前・kind・`modelTag`・ACP preset・起動設定に注入した model ID / reasoning / 明示した Cursor fast 値） |
@@ -128,6 +128,8 @@ TTY + Ink 時は harness / observation イベントを **stderr に書かず**�
 フィールドごとの型・ソース・ツールとの対応・未取得時の扱いは [session-metrics.md](session-metrics.md) を正本とする。
 `sessionModels` は usage が取得できない場合も出力する。TTY の終了テキストは stderr に conductor の設定値・最終 send の報告値と、各 worker のモデル・推論・Cursor fast 設定を表示する。conductor の reasoning は CLI / API 明示値・env / config の優先順位で解決した指定値で、provider が実際に適用した値の読み戻しではありません。send の報告値は失敗時にも含まれることがあります。worker の `model` / `reasoning` / `cursorFast` は preset の設定経路に渡した値で、ACP option の `currentValue` も adapter が報告する session option です。これらは実際の runtime model や推論動作を証明するものではありません。
 `durationMs` は終了 snapshot を作る時点で算出するため、その後に実行する resource teardown や worktree cleanup の時間は含みません。teardown の所要時間は `harness.teardown.durationMs` として別に記録します。
+
+`repoRoot` はその run を実行した clone の path です。同じ session を別 clone から resume すると run ごとに値が異なり得ます。`session timeline` は `agentId` / `issueUrl` で session を照合し、summary の `repoRoot` は文字列形式だけを検証します。保存 Store と path が異なる場合も読み込み、その差は source 診断に表示します。Pi history の send 相関には各 summary の `startedAt` と `durationMs` が示す run の時間窓を使い、境界時刻は隣接 run と区別できないため対象外です。
 
 resume 用の harness 状態は SessionResumeStore と open question YAML に保存します。open question の正本は YAML で、SessionResumeStore JSON の `openQuestions` / `sequence` は移行期間中の互換コピーです。operator 向け statusLine は別の session-state YAML に保存します。終了 JSON の `agentId` は参照用コピーです。
 

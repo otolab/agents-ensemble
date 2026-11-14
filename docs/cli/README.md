@@ -138,6 +138,12 @@ ensemble session show <conductorAgentId> --issue-url https://github.com/OWNER/RE
 # session をまとめてオフライン調査する
 ensemble session export <conductorAgentId> --github-repo OWNER/REPOSITORY --output ./session-bundle
 
+# 終了時 summary も bundle に保存し、その summary で timeline を確認する
+ensemble session export <conductorAgentId> --github-repo OWNER/REPOSITORY \
+  --summary ./session-summary.json --output ./session-bundle-with-summary
+ensemble session timeline <conductorAgentId> --github-repo OWNER/REPOSITORY \
+  --summary ./session-bundle-with-summary/inputs/session-summary.json
+
 # Pi / Cursor の conductor 会話履歴を見る
 ensemble session messages <conductorAgentId> --github-repo OWNER/REPOSITORY
 
@@ -164,6 +170,8 @@ ensemble session timeline <conductorAgentId> \
 
 bundle には SessionResumeStore の raw JSON、ハーネスの `session-state.yaml` / `open-questions.yaml`、各 worker の全文 reader 結果 JSON（`messages` の 100 件制限なし）を収録します。worker JSON には元 transcript の絶対 path も含まれます。Pi conductor は canonical slug、現在 clone の path-hash、保存時 clone の path-hash、現在または保存済み `conductorCwd` 配下の legacy `.ensemble/pi/sessions/` の順に探して raw JSONL をコピーします。Cursor conductor は SDK から取得できた run metadata と conversation snapshot を `conductor/cursor-runs.json` に収録します。`--include-tool-calls` を指定すると `.tool-calls` もコピーし、`--summary <path>` / `--harness-log <path>` を指定すると、それぞれの入力を bundle に含めます。これらの相対 path は CLI を実行した directory 基準です。
 
+export した summary は `inputs/session-summary.json` に置かれ、上の例のように `timeline --summary` へ渡せます。timeline は summary file を bundle から読みますが、SessionResumeStore と provider history は実行環境から別途読み取ります。bundle だけを渡して timeline を完全にオフライン再生する機能ではありません。
+
 export は raw のままコピーし、API key・token・password、会話中の秘密値や tool 出力を自動 redaction しません。bundle と manifest の絶対 source path は機密情報として扱ってください。Issue / PR・ログ・集計先へ載せる前に利用者側でサニタイズしてください。
 
 出力 directory と file の権限は OS によって異なります。POSIX では directory に `0700`、file に `0600` の mode bits を設定します。Windows では Node.js の `fs` mode で変更できるのは書き込み権限だけで、owner / group / others を区別できません。exporter も Windows ACL を設定・検証しません。新しく作成する bundle は親 directory から継承される ACL に従うため、owner-only は保証されません。Windows で使う場合は、意図した利用者だけにアクセスを許す ACL を設定した保存先を選び、必要に応じて ACL を確認してください（[Node.js `fs` の file modes](https://nodejs.org/download/release/latest-jod/docs/api/fs.html#file-modes)、[Windows file security](https://learn.microsoft.com/en-us/windows/win32/fileio/file-security-and-access-rights)）。
@@ -186,9 +194,9 @@ Codex ACP の `sessionId` は Codex thread ID です。Codex CLI は `$CODEX_HOM
 
 reader は閲覧 CLI の現在の環境から `CODEX_HOME` を読み、相対値は保存済み worker `acpCwd` を基準に解決します。未設定時の `~/.codex` は閲覧 CLI の home を使います。worker 起動時だけ別の `HOME` / `CODEX_HOME` を指定していた場合、ResumeStore には spawn env の digest しか残らず、元の値や保存先は復元できません。そのため、閲覧 CLI の環境からその Codex home を特定できないと、rollout が存在していても `unavailable` になることがあります。
 
-`timeline` は SessionResumeStore、conductor provider history、および任意の SessionSummary JSON / 保存済み harness stderr log を読みます。SessionSummary は `ensemble issue --summary-format json` の終了出力をファイルへ保存したものを `--summary <path>` で指定します。`--harness-log <path>` には、`[harness] conductor.send n=... status=...` と `[harness] conductor.transport.reconnect status=...` を含む stderr log を指定できます。これらのファイルは harness が自動保存するものではありません。データ源の未指定・読取不能・不正な JSON / schema・session 不一致は JSON / text に source 状態と理由を表示し、対象行がない log は認識件数 0 として示します。
+`timeline` は SessionResumeStore、conductor provider history、および任意の SessionSummary JSON / 保存済み harness stderr log を読みます。SessionSummary は `ensemble issue --summary-format json` の終了出力をファイルへ保存したものを `--summary <path>` で指定します。`--harness-log <path>` には、`[harness] conductor.send n=... status=...` と `[harness] conductor.transport.reconnect status=...` を含む stderr log を指定できます。これらのファイルは harness が自動保存するものではありません。summary は `agentId` と `issueUrl` で保存 session を識別し、`repoRoot` は実行時 clone の情報として文字列形式だけを検証します。同じ session を別 clone から resume した場合、summary と Store の `repoRoot` が異なっても読み込み、その差を JSON / text の source 診断に表示します。別 session / Issue の summary と不正な schema は引き続き拒否します。データ源の未指定・読取不能・不正な JSON / schema・session 不一致は JSON / text に source 状態と理由を表示し、対象行がない log は認識件数 0 として示します。
 
-Pi の provider history には `sendCount` がありますが、番号は harness process ごとに 0 から始まるため、resume をまたぐと再利用されます。誤った対応付けを避けるため、対象 session と一致する SessionSummary が読めた場合だけ、summary の `startedAt` より後、`startedAt + durationMs` より前に完了した Pi history を send 番号で照合します。開始・終了時刻と同じミリ秒の履歴は隣接 run と区別できないため照合せず、別枠に表示します。時間窓は生成元 SessionLogger の契約（開始が `Date.now()`、`durationMs` が終了時の `Date.now() - startedAt`）と照合します。相関に使うのは、`startedAt` と導出した終了時刻が `Date.now()` で表せる整数 Unix epoch ms で、`durationMs` が非負の安全な整数としてミリ秒精度を保てる場合だけです。契約や精度に合わない値は理由付きで `unavailable` とし、send 番号では照合しません。Cursor history には同じ番号がないので、時間と provider ID を別々に表示します。provider history は最大100件で、さらに古い履歴は表示されません。
+Pi の provider history には `sendCount` がありますが、番号は harness process ごとに 0 から始まるため、resume をまたぐと再利用されます。誤った対応付けを避けるため、対象 session と一致する SessionSummary が読めた場合だけ、summary が表すその run の `startedAt` より後、`startedAt + durationMs` より前に完了した Pi history を send 番号で照合します。clone が異なる summary も、その summary 自身の時間窓で履歴を絞ります。開始・終了時刻と同じミリ秒の履歴は隣接 run と区別できないため照合せず、別枠に表示します。時間窓は生成元 SessionLogger の契約（開始が `Date.now()`、`durationMs` が終了時の `Date.now() - startedAt`）と照合します。相関に使うのは、`startedAt` と導出した終了時刻が `Date.now()` で表せる整数 Unix epoch ms で、`durationMs` が非負の安全な整数としてミリ秒精度を保てる場合だけです。契約や精度に合わない値は理由付きで `unavailable` とし、send 番号では照合しません。Cursor history には同じ番号がないので、時間と provider ID を別々に表示します。provider history は最大100件で、さらに古い履歴は表示されません。
 
 この時間相関は、同じ session の process が重ならず、実行中にシステム時計が大きく変わらない前提です。SessionSummary と provider history には run / process ID や単調時計の時刻がないため、CLI は process の重複や時計の変更を検出できません。負の duration や表現できない時刻は相関を止めますが、前向きの時計変更で生じた範囲内の時間窓は判別できないことがあります。重複実行や時計変更の可能性がある調査では、時間相関を同一 run の証明として扱わないでください。
 

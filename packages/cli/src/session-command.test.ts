@@ -602,44 +602,176 @@ describe('ensemble session commands', () => {
     expect(output.gaps).toEqual([]);
   });
 
-  it('rejects a SessionSummary from another repository root', async () => {
-    const summaryPath = join(tempRoot, 'session-summary.json');
-    await writeFile(
-      summaryPath,
-      `${JSON.stringify({
-        agentId: conductorAgentId,
-        issueUrl: ISSUE_URL,
-        repoRoot: join(tempRoot, 'other-repository'),
-        startedAt: 1_800_000_000_000,
-        durationMs: 100,
-        sendCount: 1,
-        lastRunStatus: 'finished',
-      })}\n`,
-      'utf8',
+  it('uses summaries from both clones after a resume updates the Store and export', async () => {
+    const fixturePath = fileURLToPath(
+      new URL('../test/fixtures/session-716-clone-runs.json', import.meta.url),
+    );
+    const fixture = JSON.parse(await readFile(fixturePath, 'utf8')) as {
+      conductorAgentId: string;
+      issueUrl: string;
+      runs: Array<{
+        clone: string;
+        repoRoot: string;
+        startedAt: number;
+        durationMs: number;
+        sendCount: number;
+        lastRunStatus: string;
+        providerEntry: {
+          sendCount: number;
+          dispatchSource: string;
+          completedAt: number;
+          inbound: string;
+          response: string;
+        };
+      }>;
+    };
+    const cloneRoots = new Map(
+      fixture.runs.map((run) => [run.clone, join(tempRoot, run.repoRoot)]),
+    );
+    const cloneARoot = cloneRoots.get('A')!;
+    const cloneBRoot = cloneRoots.get('B')!;
+    repoRoot = cloneBRoot;
+    conductorAgentId = fixture.conductorAgentId;
+    conductorCwd = join(cloneBRoot, '.ensemble', 'worktrees', 'issue-716');
+    await Promise.all(
+      [cloneARoot, conductorCwd].map((path) =>
+        mkdir(path, { recursive: true }),
+      ),
     );
 
-    const result = runCli([
+    // This is the Store state after clone B resumes and flushes the session.
+    await writeResumeStore({ issueUrl: fixture.issueUrl });
+    await writePiHistory(
+      fixture.runs.map((run) => run.providerEntry),
+      fixture.issueUrl,
+    );
+
+    const summaryPaths = new Map<string, string>();
+    for (const run of fixture.runs) {
+      const summaryPath = join(
+        tempRoot,
+        `session-summary-clone-${run.clone}.json`,
+      );
+      await writeFile(
+        summaryPath,
+        `${JSON.stringify({
+          agentId: fixture.conductorAgentId,
+          issueUrl: fixture.issueUrl,
+          repoRoot: cloneRoots.get(run.clone),
+          startedAt: run.startedAt,
+          durationMs: run.durationMs,
+          sendCount: run.sendCount,
+          lastRunStatus: run.lastRunStatus,
+        })}\n`,
+        'utf8',
+      );
+      summaryPaths.set(run.clone, summaryPath);
+    }
+
+    const bundlePath = join(tempRoot, 'session-bundle-clone-a');
+    const exportResult = runCli([
       'session',
-      'timeline',
+      'export',
       conductorAgentId,
       '--repo-root',
-      repoRoot,
+      cloneBRoot,
+      '--issue-url',
+      fixture.issueUrl,
+      '--output',
+      bundlePath,
       '--summary',
-      summaryPath,
+      summaryPaths.get('A')!,
       '--json',
     ]);
+    expect(exportResult.status).toBe(0);
+    const exportedSummaryPath = join(
+      bundlePath,
+      'inputs',
+      'session-summary.json',
+    );
+    expect(await readFile(exportedSummaryPath, 'utf8')).toBe(
+      await readFile(summaryPaths.get('A')!, 'utf8'),
+    );
 
-    expect(result.status).toBe(0);
-    const output = JSON.parse(result.stdout);
-    expect(output.sources.sessionSummary).toMatchObject({
-      status: 'unavailable',
-      path: summaryPath,
-      reason: expect.stringContaining('repoRoot'),
-    });
-    expect(output.sendTimeline).toEqual([]);
-    expect(output.uncorrelatedProviderMessages).toMatchObject([
-      { sendCount: 1 },
-    ]);
+    for (const run of fixture.runs) {
+      const otherRun = fixture.runs.find(
+        (candidate) => candidate.clone !== run.clone,
+      )!;
+      const summaryPath =
+        run.clone === 'A'
+          ? exportedSummaryPath
+          : summaryPaths.get(run.clone)!;
+      const result = runCli([
+        'session',
+        'timeline',
+        conductorAgentId,
+        '--repo-root',
+        cloneBRoot,
+        '--issue-url',
+        fixture.issueUrl,
+        '--summary',
+        summaryPath,
+        '--json',
+      ]);
+
+      expect(result.status).toBe(0);
+      const output = JSON.parse(result.stdout);
+      expect(output.session.repoRoot).toBe(cloneBRoot);
+      expect(output.sources.sessionSummary).toMatchObject({
+        status: 'available',
+        path: summaryPath,
+      });
+      expect(output.sources.sendCorrelation.status).toBe('available');
+      expect(output.sendTimeline).toMatchObject([
+        {
+          sendCount: run.sendCount,
+          providerPairStatus: 'available',
+          providerMessages: [
+            {
+              inbound: run.providerEntry.inbound,
+              text: run.providerEntry.response,
+            },
+          ],
+          summary: { startedAt: run.startedAt },
+        },
+      ]);
+      expect(output.sendTimeline).toHaveLength(1);
+      expect(output.uncorrelatedProviderMessages).toMatchObject([
+        {
+          sendCount: otherRun.providerEntry.sendCount,
+          inbound: otherRun.providerEntry.inbound,
+          text: otherRun.providerEntry.response,
+        },
+      ]);
+      expect(output.gaps).toEqual([]);
+
+      if (run.clone === 'A') {
+        expect(output.sources.sessionSummary.repoRootMismatch).toEqual({
+          summaryRepoRoot: cloneARoot,
+          storedSessionRepoRoot: cloneBRoot,
+        });
+
+        const text = runCli([
+          'session',
+          'timeline',
+          conductorAgentId,
+          '--repo-root',
+          cloneBRoot,
+          '--issue-url',
+          fixture.issueUrl,
+          '--summary',
+          summaryPath,
+        ]);
+        expect(text.status).toBe(0);
+        expect(text.stdout).toContain(
+          'clone 間の実行 context 差として許容しました',
+        );
+      } else {
+        expect(output.sources.sessionSummary).not.toHaveProperty(
+          'repoRootMismatch',
+        );
+      }
+    }
   });
 
   it('marks malformed and invalid SessionSummary sources unavailable in JSON and text', async () => {
@@ -655,6 +787,37 @@ describe('ensemble session commands', () => {
         name: 'malformed',
         content: '{"agentId":',
         reason: '有効な JSON ではありません。',
+      },
+      {
+        name: 'wrong-agent-id',
+        content: JSON.stringify({
+          ...baseSummary,
+          agentId: 'another-session',
+          startedAt: 1_800_000_000_000,
+          durationMs: 100,
+        }),
+        reason:
+          'SessionSummary の agentId が指定した session と一致しません。',
+      },
+      {
+        name: 'wrong-issue-url',
+        content: JSON.stringify({
+          ...baseSummary,
+          issueUrl: 'https://github.com/otolab/agents-ensemble/issues/715',
+          startedAt: 1_800_000_000_000,
+          durationMs: 100,
+        }),
+        reason: 'SessionSummary の issueUrl が保存 session と一致しません。',
+      },
+      {
+        name: 'invalid-repo-root-format',
+        content: JSON.stringify({
+          ...baseSummary,
+          repoRoot: 42,
+          startedAt: 1_800_000_000_000,
+          durationMs: 100,
+        }),
+        reason: 'SessionSummary の repoRoot は文字列である必要があります。',
       },
       {
         name: 'negative-duration',
@@ -1734,6 +1897,7 @@ describe('ensemble session commands', () => {
       inbound: string;
       response: string;
     }>,
+    issueUrl = ISSUE_URL,
   ): Promise<void> {
     const piPackageEntry = new URL(
       '../../core/node_modules/@earendil-works/pi-coding-agent/dist/index.js',
@@ -1743,7 +1907,7 @@ describe('ensemble session commands', () => {
     const sessionDir = resolveEnsemblePaths({
       repoRoot,
       userEnsembleRoot: userRoot,
-    }).canonicalPiSessionsDir(ISSUE_URL);
+    }).canonicalPiSessionsDir(issueUrl);
     const manager = SessionManager.create(conductorCwd, sessionDir, {
       id: conductorAgentId,
     });
