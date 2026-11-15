@@ -78,6 +78,7 @@ export function createOperatorWorkspaceFileTools(
         additionalProperties: false,
       },
       execute: async (args) => {
+        assertOnlyInputProperties(args, ['path']);
         const requested = resolveWorkspaceFilePath(root, args.path);
         const canonicalPath = await resolveExistingFile(root, requested);
         const handle = await open(canonicalPath, fsConstants.O_RDONLY | NOFOLLOW);
@@ -139,6 +140,7 @@ export function createOperatorWorkspaceFileTools(
         additionalProperties: false,
       },
       execute: async (args) => {
+        assertOnlyInputProperties(args, ['path', 'content']);
         const requested = resolveWorkspaceFilePath(root, args.path);
         if (typeof args.content !== 'string') {
           throw new Error('content must be a string.');
@@ -188,6 +190,15 @@ export function createOperatorWorkspaceFileTools(
       },
     },
   };
+}
+
+function assertOnlyInputProperties(
+  args: Record<string, ConductorJsonValue>,
+  allowed: string[],
+): void {
+  if (Object.keys(args).some((key) => !allowed.includes(key))) {
+    throw new Error('The workspace file tool received an unexpected argument.');
+  }
 }
 
 function resolveWorkspaceFilePath(

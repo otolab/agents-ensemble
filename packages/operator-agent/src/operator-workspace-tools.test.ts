@@ -151,6 +151,50 @@ describe('operator profile workspace file tools', () => {
     });
   });
 
+  it('accepts exactly 1 MiB for reads and writes, measured in UTF-8 bytes', async () => {
+    const exactLimit =
+      'あ'.repeat(Math.floor(MAX_OPERATOR_WORKSPACE_FILE_BYTES / 3)) + 'x';
+    expect(Buffer.byteLength(exactLimit, 'utf8')).toBe(
+      MAX_OPERATOR_WORKSPACE_FILE_BYTES,
+    );
+
+    await writeFile(join(workspace, 'exact-read.txt'), exactLimit);
+    const readResult = await tools[READ_OPERATOR_WORKSPACE_FILE_TOOL]!.execute(
+      { path: 'exact-read.txt' },
+    );
+    expect(readResult.structuredContent).toEqual({
+      path: 'exact-read.txt',
+      content: exactLimit,
+    });
+
+    const writeResult = await tools[WRITE_OPERATOR_WORKSPACE_FILE_TOOL]!.execute(
+      { path: 'exact-write.txt', content: exactLimit },
+    );
+    expect(writeResult.structuredContent).toEqual({
+      path: 'exact-write.txt',
+      bytesWritten: MAX_OPERATOR_WORKSPACE_FILE_BYTES,
+    });
+    await expect(
+      readFile(join(workspace, 'exact-write.txt'), 'utf8'),
+    ).resolves.toBe(exactLimit);
+  });
+
+  it('rejects input properties outside each tool schema at execution time', async () => {
+    await expect(
+      tools[READ_OPERATOR_WORKSPACE_FILE_TOOL]!.execute({
+        path: 'note.txt',
+        extra: 'ignored by schema',
+      }),
+    ).rejects.toThrow(/unexpected argument/u);
+    await expect(
+      tools[WRITE_OPERATOR_WORKSPACE_FILE_TOOL]!.execute({
+        path: 'note.txt',
+        content: 'safe',
+        extra: 'ignored by schema',
+      }),
+    ).rejects.toThrow(/unexpected argument/u);
+  });
+
   it('rejects a symlink as the profile workspace root', async () => {
     const linkedRoot = join(root, 'linked-workspace');
     await symlink(
