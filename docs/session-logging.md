@@ -300,7 +300,7 @@ canonical slug と legacy location に同じ SessionResumeStore が残ってい�
 
 operator-agent の `list_operator_sessions` は `issueUrl` / `conductorAgentId` でも絞り込めます。同一 Issue の複数 run は別々の Store として返し、各行の `conductorAgentId` を後続照会に使います。`openQuestionHistory` は Open Questions YAML を正本として全状態の質問・回答を返します。YAML が見つからない旧 session だけは `SessionResumeStore.openQuestions` の互換コピーを使い、出力元を明示します。YAML が壊れている場合は履歴を `unavailable` とし、古い互換コピーへ黙って切り替えません。保存 worker 名と profile 上の worker 構成も別々に示し、構成にあるのに session record がない worker を識別できます。
 
-`list_worker_messages` は Issue URL、run の `conductorAgentId`、worker 名を使って保存 ACP transcript を読みます。対応 preset でも保存 session record や transcript が見つからない場合は `unavailable` と理由を返します。worker prompt lifecycle / failure event は harness log sink へ出ますが SessionResumeStore には保存されません。終了 JSON に残る `workerFailureCount` も失敗した worker の識別情報を含まないため、failure を特定できるのは終了 summary の別保存や captured harness log がある場合に限られます。session record や transcript がないことを prompt failure と解釈してはいけません。
+`list_worker_messages` は Issue URL、run の `conductorAgentId`、worker 名を使って保存 ACP transcript を読みます。対応 preset でも保存 session record や transcript が見つからない場合は `unavailable` と理由を返します。worker prompt lifecycle / failure event は harness log sink へ出ますが SessionResumeStore には保存されません。終了 JSON の `workerFailureCount` から失敗件数は分かりますが、どの worker かは分かりません。worker ごとの failure を特定できるのは captured harness log など詳細を残した記録がある場合に限られます。session record や transcript がないことを prompt failure と解釈してはいけません。
 
 ### legacy data の一括 inventory / copy
 
