@@ -414,6 +414,7 @@ describe('Pi command auth through the real conductor session', () => {
     const timeline = await readSavedSessionTimeline({
       repoRoot,
       conductorAgentId: result.agentId,
+      issueUrl: TEST_ISSUE.url,
       summaryPath,
       harnessLogPath: sessionLogPath,
     });
@@ -705,6 +706,7 @@ describe('Pi command auth through the real conductor session', () => {
     const timeline = await readSavedSessionTimeline({
       repoRoot,
       conductorAgentId: result.agentId,
+      issueUrl: TEST_ISSUE.url,
       summaryPath,
       harnessLogPath: sessionLogPath,
     });

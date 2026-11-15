@@ -4,9 +4,9 @@ import chalk, { Chalk } from 'chalk';
 import {
   CONDUCTOR_PROVIDER_HISTORY_LIMIT,
   escapeTerminalControlCharacters,
-  findSessionResumeStore,
   harnessPhaseFromLegacyLifecycle,
   listConductorProviderHistory,
+  listLocatedSessionResumeStores,
   type ConductorBackend,
   type ConductorProviderHistoryMessage,
   type HarnessPhase,
@@ -144,6 +144,7 @@ interface MutableSessionTimelineSend {
 export async function readSavedSessionTimeline(input: {
   repoRoot: string;
   conductorAgentId: string;
+  issueUrl?: string;
   summaryPath?: string;
   harnessLogPath?: string;
 }): Promise<SessionTimelineResult> {
@@ -152,7 +153,12 @@ export async function readSavedSessionTimeline(input: {
     input.conductorAgentId,
     'conductorAgentId',
   );
-  const located = await findSessionResumeStore(repoRoot, conductorAgentId);
+  const located = (await listLocatedSessionResumeStores(repoRoot)).find(
+    (candidate) =>
+      candidate.resumeStore.conductorAgentId === conductorAgentId &&
+      (input.issueUrl === undefined ||
+        candidate.resumeStore.issueUrl === input.issueUrl),
+  );
   if (
     !located ||
     resolve(located.resumeStore.repoRoot) !== repoRoot
