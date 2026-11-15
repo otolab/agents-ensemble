@@ -4,13 +4,20 @@ import { dirname, join } from 'node:path';
 import {
   CONDUCTOR_MESSAGE_PAGE_DEFAULT_LIMIT,
   findSessionResumeStore,
+  findUserSessionResumeStore,
   loadOpenQuestionsStore,
   loadSessionStateStore,
+  listLocatedSessionResumeStores,
+  listUserLocatedSessionResumeStoresPage,
   OPEN_QUESTION_CONTROL_METHODS,
   OpenQuestionControlRemoteError,
   OpenQuestionControlTransportError,
+  parseIssueUrl,
+  resolveEnsemblePaths,
+  resolveUserEnsembleRoot,
   sendOpenQuestionControlRequest,
   sessionSnapshotPaths,
+  userSessionSnapshotPaths,
   type OpenQuestionControlConductorMessage,
   type ConductorJsonValue,
   type ConductorTool,
@@ -20,8 +27,9 @@ import {
   type SessionResumeStore,
 } from '@agents-ensemble/core/operator-runtime';
 import {
-  operatorRepositoryStatePath,
-  resolveOperatorRepositoryStatePaths,
+  legacyOperatorWatchStatePaths,
+  listOperatorWatchStatePaths,
+  operatorWatchStatePath as profileOperatorWatchStatePath,
 } from './operator-state-paths.js';
 import type {
   OperatorDispatchEvent,
@@ -104,30 +112,164 @@ export interface OperatorWatchPool {
 }
 
 export interface CreateOperatorWatchPoolOptions {
-  repoRoot: string;
+  /** User storage root used by the operator-agent runtime. */
+  userEnsembleRoot?: string;
+  /** Profile whose watch state is active. */
+  profile?: string;
+  /** @deprecated Test and internal compatibility for pre-Phase 3 callers. */
+  repoRoot?: string;
   dispatchQueue: OperatorDispatchQueue;
   onError?: (message: string) => void;
 }
 
 export function operatorWatchStatePath(
-  repoRoot: string,
-  options: {
-    location?: 'canonical-slug' | 'user-path-hash';
-    issueUrl?: string;
-  } = {},
+  userEnsembleRoot: string,
+  profileOrLegacyOptions?:
+    | string
+    | {
+        location?: 'canonical-slug' | 'user-path-hash';
+        issueUrl?: string;
+      },
+  issueUrl?: string,
 ): string {
-  return operatorRepositoryStatePath(repoRoot, 'watch', options);
+  if (typeof profileOrLegacyOptions === 'string' && issueUrl !== undefined) {
+    return profileOperatorWatchStatePath(
+      userEnsembleRoot,
+      profileOrLegacyOptions,
+      issueUrl,
+    );
+  }
+  if (
+    typeof profileOrLegacyOptions === 'object' &&
+    profileOrLegacyOptions &&
+    profileOrLegacyOptions.location === 'canonical-slug' &&
+    profileOrLegacyOptions.issueUrl
+  ) {
+    return resolveEnsemblePaths({
+      repoRoot: userEnsembleRoot,
+    }).canonicalOperatorWatchStatePath(profileOrLegacyOptions.issueUrl);
+  }
+  return resolveEnsemblePaths({
+    repoRoot: userEnsembleRoot,
+  }).operatorWatchStatePath;
 }
 
 export async function createOperatorWatchPool(
   options: CreateOperatorWatchPoolOptions,
 ): Promise<OperatorWatchPool> {
-  const root = options.repoRoot;
-  const statePaths = await resolveOperatorRepositoryStatePaths(root, 'watch');
-  const path = statePaths.targetPath;
-  const sourcePath = (await firstExistingPath(statePaths.readPaths)) ?? path;
-  let state = await loadWatchState(sourcePath);
-  if (sourcePath !== path) await saveWatchState(path, state);
+  const legacyMode = options.userEnsembleRoot === undefined;
+  const root = options.userEnsembleRoot ?? options.repoRoot ?? resolveUserEnsembleRoot();
+  const profile = options.profile ?? 'default';
+  const stores = legacyMode
+    ? await listLocatedSessionResumeStores(root)
+    : (
+        await listUserLocatedSessionResumeStoresPage(
+          {},
+          { userEnsembleRoot: root },
+        )
+      ).sessions;
+  const storesById = new Map<string, LocatedSessionResumeStore[]>();
+  for (const located of stores) {
+    const matches = storesById.get(located.resumeStore.conductorAgentId) ?? [];
+    matches.push(located);
+    storesById.set(located.resumeStore.conductorAgentId, matches);
+  }
+  const issueUrlById = new Map<string, string>();
+  const pathById = new Map<string, string>();
+  const legacyPaths = resolveEnsemblePaths({ repoRoot: root });
+  const canonicalIssueUrls = new Set(
+    stores
+      .filter(({ location }) => location === 'canonical-slug')
+      .map(({ resumeStore }) => resumeStore.issueUrl),
+  );
+  const canonicalRepositories = new Set(
+    [...canonicalIssueUrls].map((url) => {
+      const issue = parseIssueUrl(url);
+      return `${issue.owner.toLowerCase()}/${issue.repo.toLowerCase()}`;
+    }),
+  );
+  const legacyTargetPath =
+    stores.length > 0 &&
+    stores.every(({ location }) => location === 'canonical-slug') &&
+    canonicalRepositories.size === 1 &&
+    canonicalIssueUrls.size > 0
+      ? legacyPaths.canonicalOperatorWatchStatePath(
+          canonicalIssueUrls.values().next().value!,
+        )
+      : legacyPaths.operatorWatchStatePath;
+  for (const [id, matches] of storesById) {
+    if (matches.length !== 1) continue;
+    const issueUrl = matches[0]!.resumeStore.issueUrl;
+    try {
+      const targetPath = legacyMode
+        ? legacyTargetPath
+        : profileOperatorWatchStatePath(root, profile, issueUrl);
+      issueUrlById.set(id, issueUrl);
+      pathById.set(id, targetPath);
+    } catch {
+      options.onError?.(
+        `watch state for ${id} has no valid GitHub Issue URL and remains in its legacy source.`,
+      );
+    }
+  }
+
+  const newStatePaths = legacyMode
+    ? [legacyTargetPath]
+    : await listOperatorWatchStatePaths(root, profile);
+  const migratedPaths = new Set(
+    await Promise.all(
+      newStatePaths.map(async (path) => ((await pathExists(path)) ? path : '')),
+    ),
+  );
+  migratedPaths.delete('');
+  let state = emptyWatchState();
+  for (const path of newStatePaths) {
+    state = mergeWatchStates(state, await loadWatchState(path));
+  }
+  let loadedLegacyState = false;
+  if (legacyMode) {
+    const sourcePaths = [
+      legacyPaths.legacyOperatorWatchStatePath,
+      ...(legacyTargetPath === legacyPaths.operatorWatchStatePath ||
+      migratedPaths.has(legacyTargetPath)
+        ? []
+        : [legacyPaths.operatorWatchStatePath]),
+    ];
+    for (const path of sourcePaths) {
+      if (!(await pathExists(path))) continue;
+      loadedLegacyState = true;
+      state = mergeWatchStates(state, await loadWatchState(path));
+    }
+  } else {
+    const issueUrls = [...new Set(issueUrlById.values())];
+    const legacyPaths = new Set<string>();
+    for (const issueUrl of issueUrls) {
+      for (const path of await legacyOperatorWatchStatePaths(root, issueUrl)) {
+        legacyPaths.add(path);
+      }
+    }
+    for (const path of legacyPaths) {
+      if (migratedPaths.has(path) || !(await pathExists(path))) continue;
+      loadedLegacyState = true;
+      state = mergeLegacyWatchState(
+        state,
+        await loadWatchState(path),
+        pathById,
+        migratedPaths,
+        issueUrlById,
+      );
+    }
+  }
+  const statePaths = new Set(newStatePaths);
+  for (const path of pathById.values()) {
+    if (await pathExists(path)) statePaths.add(path);
+  }
+  if (loadedLegacyState && !legacyMode) {
+    for (const path of pathById.values()) statePaths.add(path);
+  }
+  if (loadedLegacyState && legacyMode) {
+    await saveWatchState([...statePaths][0]!, state);
+  }
   const timers = new Map<string, NodeJS.Timeout>();
   const polling = new Set<string>();
   const messageTimers = new Map<string, NodeJS.Timeout>();
@@ -146,7 +288,21 @@ export async function createOperatorWatchPool(
   let persistQueue = Promise.resolve();
 
   const persist = async () => {
-    const next = persistQueue.then(() => saveWatchState(path, state));
+    const next = persistQueue.then(async () => {
+      if (legacyMode) {
+        const path = [...statePaths][0]!;
+        await saveWatchState(path, state);
+        return;
+      }
+      const partitions = partitionWatchState(state, pathById, issueUrlById, options.onError);
+      for (const [path, partition] of partitions) {
+        statePaths.add(path);
+        await saveWatchState(path, partition);
+      }
+      for (const path of statePaths) {
+        if (!partitions.has(path)) await saveWatchState(path, emptyWatchState());
+      }
+    });
     persistQueue = next.catch(() => {});
     await next;
   };
@@ -177,7 +333,9 @@ export async function createOperatorWatchPool(
   const pool: OperatorWatchPool = {
     async register(conductorAgentId, input = {}) {
       const id = requireNonEmptyString(conductorAgentId, 'conductorAgentId');
-      const located = await findSessionResumeStore(root, id, {
+      const located = await findSession(id, {
+        legacyMode,
+        root,
         onDuplicate: onResumeStoreDuplicate,
       });
       if (!located) throw new Error(`No saved session found for ${id}.`);
@@ -234,7 +392,9 @@ export async function createOperatorWatchPool(
     },
     async registerConductorMessageListen(conductorAgentId, input = {}) {
       const id = requireNonEmptyString(conductorAgentId, 'conductorAgentId');
-      const located = await findSessionResumeStore(root, id, {
+      const located = await findSession(id, {
+        legacyMode,
+        root,
         onDuplicate: onResumeStoreDuplicate,
       });
       if (!located) throw new Error(`No saved session found for ${id}.`);
@@ -323,7 +483,9 @@ export async function createOperatorWatchPool(
       if (!watch || closed || polling.has(id)) return 0;
       polling.add(id);
       try {
-        const located = await findSessionResumeStore(root, id, {
+        const located = await findSession(id, {
+          legacyMode,
+          root,
           onDuplicate: onResumeStoreDuplicate,
         });
         if (!located) return 0;
@@ -331,7 +493,7 @@ export async function createOperatorWatchPool(
           snapshot: observation,
           source,
           connectivity,
-        } = await readObservation(root, located);
+        } = await readObservation(root, located, legacyMode);
         const resumeStore = located.resumeStore;
         const previousLiveStatus = liveStatuses.get(id);
         const checkedAt = Date.now();
@@ -391,7 +553,9 @@ export async function createOperatorWatchPool(
       if (!listener || closed || messagePolling.has(id)) return 0;
       messagePolling.add(id);
       try {
-        const located = await findSessionResumeStore(root, id, {
+        const located = await findSession(id, {
+          legacyMode,
+          root,
           onDuplicate: onResumeStoreDuplicate,
         });
         const resumeStore = located?.resumeStore;
@@ -790,6 +954,7 @@ function formatConductorMessageReport(
 async function readObservation(
   repoRoot: string,
   located: LocatedSessionResumeStore,
+  legacyMode: boolean,
 ): Promise<{
   snapshot: SessionObservationSnapshot;
   source: 'uds' | 'resume_store';
@@ -826,10 +991,12 @@ async function readObservation(
       const questions = await loadPersistedOpenQuestions(
         repoRoot,
         located,
+        legacyMode,
       );
       const sessionState = await loadPersistedSessionState(
         repoRoot,
         located,
+        legacyMode,
       );
       return {
         snapshot: {
@@ -845,10 +1012,12 @@ async function readObservation(
   const questions = await loadPersistedOpenQuestions(
     repoRoot,
     located,
+    legacyMode,
   );
   const sessionState = await loadPersistedSessionState(
     repoRoot,
     located,
+    legacyMode,
   );
   return {
     snapshot: {
@@ -864,8 +1033,12 @@ async function readObservation(
 async function loadPersistedOpenQuestions(
   repoRoot: string,
   located: LocatedSessionResumeStore,
+  legacyMode: boolean,
 ) {
-  for (const path of sessionSnapshotPaths(repoRoot, located, 'open-questions')) {
+  const paths = legacyMode
+    ? sessionSnapshotPaths(repoRoot, located, 'open-questions')
+    : userSessionSnapshotPaths(repoRoot, located, 'open-questions');
+  for (const path of paths) {
     const snapshot = await loadOpenQuestionsStore(path);
     if (snapshot) return snapshot;
   }
@@ -875,8 +1048,12 @@ async function loadPersistedOpenQuestions(
 async function loadPersistedSessionState(
   repoRoot: string,
   located: LocatedSessionResumeStore,
+  legacyMode: boolean,
 ) {
-  for (const path of sessionSnapshotPaths(repoRoot, located, 'session-state')) {
+  const paths = legacyMode
+    ? sessionSnapshotPaths(repoRoot, located, 'session-state')
+    : userSessionSnapshotPaths(repoRoot, located, 'session-state');
+  for (const path of paths) {
     const state = await loadSessionStateStore(path);
     if (state) return state;
   }
@@ -1107,6 +1284,150 @@ function formatQuestionSummary(value: string, maxLength = 240): string {
 function formatQuestionTimestamp(value: number): string {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? String(value) : date.toISOString();
+}
+
+function emptyWatchState(): OperatorWatchState {
+  return {
+    version: WATCH_STATE_VERSION,
+    watches: {},
+    cursors: {},
+    messageListeners: {},
+    messageCursors: {},
+    pendingReports: [],
+  };
+}
+
+function mergeWatchStates(
+  preferred: OperatorWatchState,
+  fallback: OperatorWatchState,
+): OperatorWatchState {
+  const merged = emptyWatchState();
+  for (const field of [
+    'watches',
+    'cursors',
+    'messageListeners',
+    'messageCursors',
+  ] as const) {
+    Object.assign(merged[field], fallback[field], preferred[field]);
+  }
+  const reportsById = new Map(
+    fallback.pendingReports.map((report) => [report.reportId, report]),
+  );
+  for (const report of preferred.pendingReports) {
+    reportsById.set(report.reportId, report);
+  }
+  merged.pendingReports = [...reportsById.values()];
+  return merged;
+}
+
+function mergeLegacyWatchState(
+  current: OperatorWatchState,
+  legacy: OperatorWatchState,
+  pathById: ReadonlyMap<string, string>,
+  migratedPaths: ReadonlySet<string>,
+  issueUrlById: ReadonlyMap<string, string>,
+): OperatorWatchState {
+  const eligible = emptyWatchState();
+  const stateFields = [
+    'watches',
+    'cursors',
+    'messageListeners',
+    'messageCursors',
+  ] as const;
+  for (const field of stateFields) {
+    for (const [id, value] of Object.entries(legacy[field])) {
+      const path = pathById.get(id);
+      if (!path || migratedPaths.has(path)) continue;
+      (eligible[field] as Record<string, unknown>)[id] = value;
+    }
+  }
+  eligible.pendingReports = legacy.pendingReports.filter((report) => {
+    const targetPath = pathById.get(report.conductorAgentId);
+    const expectedIssueUrl = issueUrlById.get(report.conductorAgentId);
+    if (!targetPath || migratedPaths.has(targetPath)) return false;
+    return Boolean(
+      expectedIssueUrl &&
+        issueIdentity(expectedIssueUrl) === issueIdentity(report.issueUrl),
+    );
+  });
+  return mergeWatchStates(current, eligible);
+}
+
+function partitionWatchState(
+  state: OperatorWatchState,
+  pathById: ReadonlyMap<string, string>,
+  issueUrlById: ReadonlyMap<string, string>,
+  onError?: (message: string) => void,
+): Map<string, OperatorWatchState> {
+  const partitions = new Map<string, OperatorWatchState>();
+  const getPartition = (path: string) => {
+    let partition = partitions.get(path);
+    if (!partition) {
+      partition = emptyWatchState();
+      partitions.set(path, partition);
+    }
+    return partition;
+  };
+  for (const field of [
+    'watches',
+    'cursors',
+    'messageListeners',
+    'messageCursors',
+  ] as const) {
+    for (const [id, value] of Object.entries(state[field])) {
+      const path = pathById.get(id);
+      if (!path) {
+        onError?.(
+          `watch state for ${id} cannot be assigned to a verified Issue session and remains in its legacy source.`,
+        );
+        continue;
+      }
+      (getPartition(path)[field] as Record<string, unknown>)[id] = value;
+    }
+  }
+  for (const report of state.pendingReports) {
+    const expectedIssueUrl = issueUrlById.get(report.conductorAgentId);
+    const path = pathById.get(report.conductorAgentId);
+    if (
+      !path ||
+      !expectedIssueUrl ||
+      issueIdentity(expectedIssueUrl) !== issueIdentity(report.issueUrl)
+    ) {
+      onError?.(
+        `pending watch report ${report.reportId} could not be matched to its Issue session and remains in its legacy source.`,
+      );
+      continue;
+    }
+    getPartition(path).pendingReports.push(report);
+  }
+  return partitions;
+}
+
+function issueIdentity(issueUrl: string): string | undefined {
+  try {
+    const issue = parseIssueUrl(issueUrl);
+    return `${issue.owner.toLowerCase()}/${issue.repo.toLowerCase()}#${issue.number}`;
+  } catch {
+    return undefined;
+  }
+}
+
+async function findSession(
+  conductorAgentId: string,
+  options: {
+    legacyMode: boolean;
+    root: string;
+    onDuplicate?: (diagnostic: SessionResumeStoreDuplicateDiagnostic) => void;
+  },
+): Promise<LocatedSessionResumeStore | undefined> {
+  return options.legacyMode
+    ? findSessionResumeStore(options.root, conductorAgentId, {
+        onDuplicate: options.onDuplicate,
+      })
+    : findUserSessionResumeStore(conductorAgentId, {
+        userEnsembleRoot: options.root,
+        onDuplicate: options.onDuplicate,
+      });
 }
 
 async function loadWatchState(path: string): Promise<OperatorWatchState> {

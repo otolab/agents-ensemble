@@ -6,6 +6,7 @@ import {
   legacySessionStateStorePath,
   sessionStateStorePath,
 } from './session-state-store.js';
+import { resolveEnsemblePaths } from '../ensemble-paths.js';
 import type {
   LocatedSessionResumeStore,
   SessionResumeStoreLocation,
@@ -54,4 +55,42 @@ export function sessionSnapshotPaths(
     ...roots.map(legacyPath),
   ];
   return [...new Set(paths)];
+}
+
+/**
+ * Return user-layer snapshot paths for a repository-independent operator.
+ *
+ * The saved repoRoot is used only to derive that session's old path-hash
+ * fallback. Project-local `.ensemble` paths are deliberately excluded.
+ */
+export function userSessionSnapshotPaths(
+  userEnsembleRoot: string,
+  located: LocatedSessionResumeStore,
+  kind: SessionSnapshotKind,
+): string[] {
+  const { resumeStore } = located;
+  const paths = resolveEnsemblePaths({
+    repoRoot: resumeStore.repoRoot,
+    userEnsembleRoot,
+  });
+  const input = {
+    repoRoot: resumeStore.repoRoot,
+    conductorAgentId: resumeStore.conductorAgentId,
+    issueUrl: resumeStore.issueUrl,
+  };
+  const canonicalPath =
+    kind === 'open-questions'
+      ? paths.canonicalOpenQuestionsPath(
+          input.issueUrl,
+          input.conductorAgentId,
+        )
+      : paths.canonicalSessionStatePath(
+          input.issueUrl,
+          input.conductorAgentId,
+        );
+  const hashPath =
+    kind === 'open-questions'
+      ? paths.openQuestionsPath(input.conductorAgentId)
+      : paths.sessionStatePath(input.conductorAgentId);
+  return [...new Set([canonicalPath, hashPath])];
 }

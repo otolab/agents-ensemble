@@ -1200,16 +1200,11 @@ test('persistence docs use canonical slug writes and separate legacy fallback fr
     );
   }
 
-  // #696 defers operator-agent state-path migration to #697/#698. This
-  // copy-only migration's docs must not imply that the runtime path has already
-  // moved from its current repoKey fallback.
+  // #697 moves new operator state to profile and canonical-slug paths. The
+  // settings reference must describe that runtime destination.
   assert.match(
     documents[0],
-    /全選択済み Store.*~\/\.ensemble\/operator-agent\/<repoKey>\//u,
-  );
-  assert.match(
-    documents[1],
-    /全選択済み Store.*~\/\.ensemble\/operator-agent\/<repoKey>\//u,
+    /operator-agent の新規 state は user 層に保存します。conversation record \/ Pi transcript は `operatorAgentId` ごと、watch state は profile と canonical repository slug ごとに分けます/u,
   );
 
   assert.match(

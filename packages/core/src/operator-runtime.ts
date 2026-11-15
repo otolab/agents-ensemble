@@ -8,6 +8,7 @@ export {
   type EnsemblePaths,
   type ResolveEnsemblePathsOptions,
 } from './ensemble-paths.js';
+export { resolveUserEnsembleRoot } from './resolve-user-ensemble-root.js';
 export type { EnsembleConfig, EnsembleConfigControlConfig } from './config/types.js';
 export {
   resolveConductorBackendSetting,
@@ -108,9 +109,11 @@ export { renderCompiledPrompt } from './prompt/render-compiled-prompt.js';
 export {
   loadSessionResumeStore,
   harnessPhaseFromLegacyLifecycle,
+  findUserSessionResumeStore,
   findSessionResumeStoreBySelector,
   findSessionResumeStore,
   listLocatedSessionResumeStoresPage,
+  listUserLocatedSessionResumeStoresPage,
   listLocatedSessionResumeStores,
   listSessionResumeStoresPage,
   listSessionResumeStores,
@@ -124,6 +127,11 @@ export {
   type SessionResumeStoreLocation,
   type SessionResumeStore,
 } from './session/session-resume-store.js';
+export {
+  sessionSnapshotPaths,
+  userSessionSnapshotPaths,
+  type SessionSnapshotKind,
+} from './session/session-snapshot-paths.js';
 /** @deprecated Use the SessionResumeStore exports; supported for one release only. */
 export {
   listSessionSidecars,
@@ -167,10 +175,6 @@ export {
   type SessionStateStore,
   type SessionStatusLine,
 } from './session/session-state-store.js';
-export {
-  sessionSnapshotPaths,
-  type SessionSnapshotKind,
-} from './session/session-snapshot-paths.js';
 export {
   getWorkerSessionHistoryReaderSupport,
   readWorkerSessionHistory,

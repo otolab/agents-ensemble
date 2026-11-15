@@ -61,18 +61,33 @@ program
 
 program
   .command('operator-agent')
-  .description('Chat with an operator agent about repository session state')
-  .option('--repo-root <path>', 'Repository root for config and saved sessions', process.cwd())
+  .description('Chat with an operator agent using a user-scoped operator profile')
+  .option('--profile <name>', 'Select a profile from ~/.ensemble/operator-agents.config.yaml')
   .option(
-    '--config <path>',
-    'Use this file instead of ~/.ensemble/config.yaml; project config still applies',
+    '--repo-filter <owner/repo|owner/*>',
+    'Limit Issue sessions to matching repositories (repeatable)',
+    (value: string, previous: string[]) => [...previous, value],
+    [],
   )
-  .option('--new', 'Start a fresh operator-agent session')
-  .action(async (options: { repoRoot: string; config?: string; new: boolean }) => {
+  .addOption(
+    new Option('--resume <operatorAgentId>', 'Resume a specific saved conversation')
+      .conflicts('new'),
+  )
+  .addOption(
+    new Option('--new', 'Start a new conversation and keep all existing conversations')
+      .conflicts('resume'),
+  )
+  .action(async (options: {
+    profile?: string;
+    repoFilter: string[];
+    resume?: string;
+    new: boolean;
+  }) => {
     try {
       await runOperatorAgent({
-        repoRoot: resolve(options.repoRoot),
-        configPath: options.config,
+        profile: options.profile,
+        repoFilters: options.repoFilter,
+        resumeId: options.resume,
         newSession: options.new,
       });
     } catch (error) {

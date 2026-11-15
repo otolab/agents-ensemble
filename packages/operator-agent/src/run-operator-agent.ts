@@ -1,5 +1,7 @@
 import { clearLine, createInterface, cursorTo } from 'node:readline';
-import { resolve } from 'node:path';
+import { mkdir } from 'node:fs/promises';
+import { join, resolve } from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { compile, merge } from '@modular-prompt/core';
 import {
   closeConductorAgentOnce,
@@ -8,25 +10,15 @@ import {
   ConductorRecoveryInbox,
   executeRecoveryInboxCommand,
   escapeTerminalControlCharacters,
-  filterMaterialsForKind,
   formatConductorAuthRecoveryHint,
   isConductorSendAuthError,
   isOperatorCommand,
-  loadEnsembleConfig,
-  loadProfile,
-  profilePromptModule,
   reconnectConductorAgent,
   renderCompiledPrompt,
   resolvePiConductorProvider,
-  resolveAgentPromptModule,
-  resolveConductorBackendSetting,
-  resolveConductorModelId,
-  resolveConductorPiResourcePaths,
-  resolveConductorReasoning,
-  resolveEnsemblePaths,
+  resolveUserEnsembleRoot,
   settleConductorDispatch,
   sendConductorWithReconnect,
-  sessionStateFromProfile,
   type ConductorAgent,
   type ConductorAgentCreateOptions,
   type ConductorAgentHandle,
@@ -34,8 +26,6 @@ import {
   type ConductorBackend,
   type ConductorRecoveryReconnect,
   type ConductorSendResult,
-  type EnsembleConfig,
-  type ResolvedProfile,
   type SessionResumeStoreDuplicateDiagnostic,
 } from '@agents-ensemble/core/operator-runtime';
 import { operatorBaseModule } from './operator-base-module.js';
@@ -67,14 +57,32 @@ import {
   createShutdownIssueSessionTool,
 } from './open-question-control-tools.js';
 import {
-  clearOperatorAgentState,
+  listOperatorAgentStates,
   loadOperatorAgentState,
   saveOperatorAgentState,
+  clearOperatorAgentState,
+  operatorPiSessionDirectory,
+  type OperatorAgentState,
 } from './operator-agent-state.js';
+import {
+  loadOperatorAgentConfiguration,
+  OPERATOR_AGENT_BACKEND_ENV,
+  OPERATOR_AGENT_MODEL_ENV,
+  OPERATOR_AGENT_PROFILE_ENV,
+  OPERATOR_AGENT_REASONING_ENV,
+  normalizeRepositoryPattern,
+  resolveOperatorPath,
+  validateProfileName,
+  type OperatorAgentConfiguration,
+  type OperatorAgentProfile,
+} from './operator-agent-config.js';
 
 export interface RunOperatorAgentOptions {
-  repoRoot?: string;
-  configPath?: string;
+  profile?: string;
+  repoFilters?: string[];
+  resumeId?: string;
+  /** @deprecated Use resumeId. */
+  resume?: string;
   newSession?: boolean;
 }
 
@@ -90,18 +98,21 @@ export interface RunOperatorAgentDependencies {
   stdin?: OperatorAgentInput;
   stdout?: OperatorAgentOutput;
   stderr?: OperatorAgentOutput;
-  loadConfig?: typeof loadEnsembleConfig;
-  loadProfile?: typeof loadProfile;
+  userEnsembleRoot?: string;
   agentFactory?: ConductorAgentFactory;
 }
 
 interface OperatorRuntime {
-  repoRoot: string;
-  config: EnsembleConfig;
-  profile: ResolvedProfile;
+  userEnsembleRoot: string;
+  workspace: string;
+  profileName: string;
+  profile: OperatorAgentProfile;
+  config: OperatorAgentConfiguration;
+  repoFilters: string[];
   backend: ConductorBackend;
   modelId: string;
   reasoning?: string;
+  piResourceRoots: { agentDir: string; projectDir: string };
   systemPrompt: string;
 }
 
@@ -134,14 +145,50 @@ export async function runOperatorAgent(
   const stderr = dependencies.stderr ?? process.stderr;
   assertTty(stdin, stdout);
 
-  const runtime = await resolveOperatorRuntime(options, dependencies);
-  const factory =
-    dependencies.agentFactory ?? createConductorAgentFactory(runtime.backend);
-  const dispatchQueue = createOperatorDispatchQueue();
   const ttyChannels: OperatorTtyChannels = {
     harness: (detail) => stdout.write(`\n[harness] ${detail}\n\n`),
     observation: (detail) => stdout.write(`\n[observation] ${detail}\n\n`),
   };
+  const userEnsembleRoot = resolve(
+    resolveUserEnsembleRoot({
+      ...(dependencies.userEnsembleRoot
+        ? { userEnsembleRoot: dependencies.userEnsembleRoot }
+        : {}),
+    }),
+  );
+  if ((options.resumeId ?? options.resume) && options.newSession) {
+    throw new Error('--resume and --new cannot be used together.');
+  }
+  const savedStates = await listOperatorAgentStates(userEnsembleRoot);
+  const requestedResumeId = options.resumeId ?? options.resume;
+  let existingState: OperatorAgentState | undefined;
+  if (requestedResumeId) {
+    existingState = await loadOperatorAgentState(
+      userEnsembleRoot,
+      requestedResumeId,
+    );
+    if (!existingState) {
+      throw new Error(`No operator-agent conversation found for ${requestedResumeId}.`);
+    }
+  } else if (!options.newSession) {
+    if (savedStates.length === 1) existingState = savedStates[0];
+    else if (savedStates.length > 1) {
+      existingState = await selectSavedConversation(
+        savedStates,
+        stdin,
+        stdout,
+      );
+    }
+  }
+  const runtime = await resolveOperatorRuntime(
+    options,
+    dependencies,
+    existingState,
+    { stdin, stdout },
+  );
+  const factory =
+    dependencies.agentFactory ?? createConductorAgentFactory(runtime.backend);
+  const dispatchQueue = createOperatorDispatchQueue();
   const reportResumeStoreDuplicate = (
     diagnostic: SessionResumeStoreDuplicateDiagnostic,
   ) => {
@@ -161,32 +208,41 @@ export async function runOperatorAgent(
         `candidates: ${candidates}`,
     );
   };
-  const existingState = options.newSession
-    ? undefined
-    : await loadOperatorAgentState(runtime.repoRoot);
-  if (existingState && existingState.repoRoot !== runtime.repoRoot) {
-    throw new Error(
-      `Operator-agent session belongs to ${existingState.repoRoot}, not ${runtime.repoRoot}.`,
+  if (existingState && existingState.profile !== runtime.profileName) {
+    ttyChannels.observation(
+      `保存会話の profile=${existingState.profile} と今回の profile=${runtime.profileName} が異なります。今回の profile 設定で再開を試みます。`,
+    );
+  }
+  if (existingState && existingState.workspace !== runtime.workspace) {
+    ttyChannels.observation(
+      `保存会話の workspace=${existingState.workspace} と今回の workspace=${runtime.workspace} が異なります。起動 cwd の違いでは中断せず、今回の workspace で再開を試みます。`,
     );
   }
   if (existingState && existingState.backend !== runtime.backend) {
-    throw new Error(
-      `Operator-agent session uses the ${existingState.backend} backend, but the current configuration selects ${runtime.backend}. ` +
-        'Use --new to start a fresh session.',
+    ttyChannels.observation(
+      `保存会話の backend=${existingState.backend} と選択中 backend=${runtime.backend} が異なります。選択中 backend で再開を試みます。`,
     );
   }
-  if (options.newSession) {
-    await clearOperatorAgentState(runtime.repoRoot);
+  if (
+    existingState?.piResourceRoots &&
+    (existingState.piResourceRoots.agentDir !== runtime.piResourceRoots.agentDir ||
+      existingState.piResourceRoots.projectDir !== runtime.piResourceRoots.projectDir)
+  ) {
+    ttyChannels.observation(
+      '保存会話の Pi resource root と選択 profile の設定が異なります。選択中 root で再開を試みます。',
+    );
   }
+  const operatorAgentId = existingState?.operatorAgentId ?? `operator-${randomUUID()}`;
   const watchPool = await createOperatorWatchPool({
-    repoRoot: runtime.repoRoot,
+    userEnsembleRoot: runtime.userEnsembleRoot,
+    profile: runtime.profileName,
     dispatchQueue,
     onError: (message) =>
       ttyChannels.harness(`watch warning: ${message}`),
   });
 
   const agentOptions = {
-    cwd: runtime.repoRoot,
+    cwd: runtime.workspace,
     systemPrompt: runtime.systemPrompt,
     modelId: runtime.modelId,
     ...(runtime.reasoning !== undefined
@@ -196,40 +252,40 @@ export async function runOperatorAgent(
     builtinTools: false,
     ...(runtime.backend === 'pi'
       ? {
-          pi: resolveConductorPiResourcePaths({
-            repoRoot: runtime.repoRoot,
-            config: runtime.config,
-          }),
-          sessionDir: resolveEnsemblePaths({
-            repoRoot: runtime.repoRoot,
-          }).operatorPiSessionsDir,
-          legacySessionDir: resolveEnsemblePaths({
-            repoRoot: runtime.repoRoot,
-          }).legacyPiSessionsDir,
-          piSkills: runtime.profile.conductor?.piSkills !== false,
+          pi: runtime.piResourceRoots,
+          sessionDir: operatorPiSessionDirectory(
+            runtime.userEnsembleRoot,
+            operatorAgentId,
+          ),
+          legacySessionDirs: [],
+          piSkills: runtime.profile.pi?.skills !== false,
           piExtensions: false,
         }
       : {}),
     customTools: {
       list_operator_sessions: createListOperatorSessionsTool(
-        runtime.repoRoot,
+        {
+          userEnsembleRoot: runtime.userEnsembleRoot,
+          profileIncludes: runtime.profile.include,
+          repoFilters: runtime.repoFilters,
+        },
         (conductorAgentId) => watchPool.getLiveStatus(conductorAgentId),
         reportResumeStoreDuplicate,
       ),
       list_live_open_questions: createListLiveOpenQuestionsTool(
-        runtime.repoRoot,
+        { userEnsembleRoot: runtime.userEnsembleRoot },
         reportResumeStoreDuplicate,
       ),
       answer_live_open_question: createAnswerLiveOpenQuestionTool(
-        runtime.repoRoot,
+        { userEnsembleRoot: runtime.userEnsembleRoot },
         reportResumeStoreDuplicate,
       ),
       get_last_conductor_message: createGetLastConductorMessageTool(
-        runtime.repoRoot,
+        { userEnsembleRoot: runtime.userEnsembleRoot },
         reportResumeStoreDuplicate,
       ),
       list_conductor_messages: createListConductorMessagesTool(
-        runtime.repoRoot,
+        { userEnsembleRoot: runtime.userEnsembleRoot },
         reportResumeStoreDuplicate,
       ),
       register_session_watch: createRegisterSessionWatchTool(watchPool),
@@ -241,11 +297,11 @@ export async function runOperatorAgent(
       set_report_hold: createSetReportHoldTool(dispatchQueue),
       release_reports: createReleaseReportsTool(dispatchQueue),
       send_operator_message: createSendOperatorMessageTool(
-        runtime.repoRoot,
+        { userEnsembleRoot: runtime.userEnsembleRoot },
         reportResumeStoreDuplicate,
       ),
       shutdown_issue_session: createShutdownIssueSessionTool(
-        runtime.repoRoot,
+        { userEnsembleRoot: runtime.userEnsembleRoot },
         reportResumeStoreDuplicate,
       ),
     },
@@ -253,7 +309,7 @@ export async function runOperatorAgent(
   let agent: ConductorAgent;
   try {
     agent = existingState
-      ? await factory.resume(existingState.agentId, agentOptions)
+      ? await factory.resume(existingState.providerSessionId, agentOptions)
       : await factory.create(agentOptions);
   } catch (error) {
     watchPool.close();
@@ -272,12 +328,24 @@ export async function runOperatorAgent(
     stdin.isTTY && stdout.isTTY && stderr.isTTY,
   );
   try {
-    await saveOperatorAgentState(runtime.repoRoot, {
-      version: 1,
-      agentId: agent.agentId,
+    const now = Date.now();
+    const state: OperatorAgentState = {
+      version: 2,
+      operatorAgentId,
+      providerSessionId: agent.agentId,
       backend: runtime.backend,
-      repoRoot: runtime.repoRoot,
-    });
+      profile: runtime.profileName,
+      workspace: runtime.workspace,
+      ...(runtime.backend === 'pi'
+        ? { piResourceRoots: runtime.piResourceRoots }
+        : {}),
+      createdAt: existingState?.createdAt ?? now,
+      updatedAt: now,
+    };
+    await saveOperatorAgentState(runtime.userEnsembleRoot, state);
+    ttyChannels.observation(
+      `operatorAgentId=${operatorAgentId} を${existingState ? '再開' : '作成'}しました。次回は --resume ${operatorAgentId} で選べます。`,
+    );
     const exitContinuity = await runTtyConversation({
       agentHandle,
       backend: runtime.backend,
@@ -295,7 +363,7 @@ export async function runOperatorAgent(
         Boolean(stdin.isTTY && stdout.isTTY) && process.env.NO_COLOR === undefined,
     });
     if (exitContinuity) {
-      await clearOperatorAgentState(runtime.repoRoot);
+      await clearOperatorAgentState(runtime.userEnsembleRoot, operatorAgentId);
     }
   } finally {
     recoveryInbox.dispose();
@@ -307,47 +375,209 @@ export async function runOperatorAgent(
 async function resolveOperatorRuntime(
   options: RunOperatorAgentOptions,
   dependencies: RunOperatorAgentDependencies,
+  existingState?: OperatorAgentState,
+  tty?: { stdin: OperatorAgentInput; stdout: OperatorAgentOutput },
 ): Promise<OperatorRuntime> {
-  const repoRoot = resolve(options.repoRoot ?? process.cwd());
-  const config = await (dependencies.loadConfig ?? loadEnsembleConfig)(repoRoot, {
-    ...(options.configPath !== undefined ? { configPath: options.configPath } : {}),
-  });
-  const { profile, profilePath } = await (dependencies.loadProfile ?? loadProfile)({
-    cwd: repoRoot,
+  const userEnsembleRoot = resolve(
+    resolveUserEnsembleRoot({
+      ...(dependencies.userEnsembleRoot
+        ? { userEnsembleRoot: dependencies.userEnsembleRoot }
+        : {}),
+    }),
+  );
+  const config = await loadOperatorAgentConfiguration(userEnsembleRoot);
+  const repoFilters = (options.repoFilters ?? []).map((pattern) =>
+    normalizeRepositoryPattern(pattern, '--repo-filter'),
+  );
+  const selectedProfileName = await selectProfileName(
+    options,
     config,
-  });
-  const backend = resolveConductorBackendSetting({ profile, config });
-  const modelId = resolveConductorModelId(undefined, { config });
-  const reasoning = resolveConductorReasoning(undefined, { config });
-  const sessionState = sessionStateFromProfile(profile);
-  const profileModule = profilePromptModule({
-    agentModule: resolveAgentPromptModule('operator', profile.agents),
-    materials: filterMaterialsForKind(sessionState.materials, 'operator'),
-  });
-  const promptModule = profileModule
-    ? merge(operatorBaseModule, profileModule)
+    existingState,
+    tty,
+  );
+  const profile = config.profiles[selectedProfileName];
+  if (!profile) {
+    throw new Error(`Operator-agent profile "${selectedProfileName}" is not defined.`);
+  }
+  const workspace = join(userEnsembleRoot, 'operator-agents', selectedProfileName);
+  await mkdir(workspace, { recursive: true, mode: 0o700 });
+  const backend = resolveOperatorSetting(
+    process.env[OPERATOR_AGENT_BACKEND_ENV],
+    profile.conductor?.backend,
+    config.common.conductor?.backend,
+    'pi',
+    'backend',
+  ) as ConductorBackend;
+  const modelId =
+    process.env[OPERATOR_AGENT_MODEL_ENV]?.trim() ||
+    profile.conductor?.model ||
+    config.common.conductor?.model ||
+    'default';
+  const reasoning =
+    process.env[OPERATOR_AGENT_REASONING_ENV]?.trim() ||
+    profile.conductor?.reasoning ||
+    config.common.conductor?.reasoning;
+  const agentDir = resolveOperatorPath(
+    config.common.pi?.agentDir ??
+      process.env.PI_CODING_AGENT_DIR ??
+      join(userEnsembleRoot, 'pi'),
+    userEnsembleRoot,
+  );
+  const projectDir = resolveOperatorPath(
+    profile.pi?.projectDir ?? join(workspace, 'pi'),
+    workspace,
+  );
+  const piResourceRoots = { agentDir, projectDir };
+  const promptModule = profile.prompt?.instructions?.length
+    ? merge(operatorBaseModule, {
+        instructions: profile.prompt.instructions,
+      })
     : operatorBaseModule;
   const systemPrompt = renderCompiledPrompt(
     compile(
       promptModule,
       {
-        repoRoot,
-        conductorBackend: backend,
-        profileName: profile.meta?.title ?? profilePath,
-        workers: profile.workers.map(({ name, kind }) => ({ name, kind })),
+        workspace,
+        backend,
+        profileName: selectedProfileName,
       },
     ),
   );
 
   return {
-    repoRoot,
+    userEnsembleRoot,
+    workspace,
+    profileName: selectedProfileName,
     config,
+    repoFilters,
     profile,
     backend,
     modelId,
     ...(reasoning !== undefined ? { reasoning } : {}),
+    piResourceRoots,
     systemPrompt,
   };
+}
+
+async function selectSavedConversation(
+  states: readonly OperatorAgentState[],
+  stdin: OperatorAgentInput,
+  stdout: OperatorAgentOutput,
+): Promise<OperatorAgentState> {
+  const selected = await promptForChoice(
+    [
+      '再開する operator-agent conversation を選んでください:',
+      ...states.map(
+        (state, index) =>
+          `${index + 1}) ${state.operatorAgentId}  profile=${state.profile}  updated=${new Date(state.updatedAt).toISOString()}`,
+      ),
+    ].join('\n'),
+    states.map((state) => state.operatorAgentId),
+    stdin,
+    stdout,
+  );
+  return states.find((state) => state.operatorAgentId === selected)!;
+}
+
+async function selectProfileName(
+  options: RunOperatorAgentOptions,
+  config: OperatorAgentConfiguration,
+  existingState?: OperatorAgentState,
+  tty?: { stdin: OperatorAgentInput; stdout: OperatorAgentOutput },
+): Promise<string> {
+  const commandLineProfile = options.profile?.trim();
+  const environmentProfile = process.env[OPERATOR_AGENT_PROFILE_ENV]?.trim();
+  const requested = commandLineProfile || environmentProfile;
+  if (requested) {
+    validateProfileName(requested);
+    if (!Object.hasOwn(config.profiles, requested)) {
+      throw new Error(`Operator-agent profile "${requested}" is not defined.`);
+    }
+    return requested;
+  }
+  if (existingState && Object.hasOwn(config.profiles, existingState.profile)) {
+    return existingState.profile;
+  }
+  if (existingState) {
+    tty?.stdout.write(
+      `\n[observation] 保存会話の profile=${existingState.profile} は現在の operator config にありません。利用可能な profile を選びます。\n\n`,
+    );
+  }
+  if (config.defaultProfile) return config.defaultProfile;
+  const profiles = Object.keys(config.profiles).sort();
+  if (profiles.length === 1) return profiles[0]!;
+  if (profiles.length === 0) {
+    throw new Error(
+      'operator-agents.config.yaml に少なくとも1つの profile を定義してください。',
+    );
+  }
+  if (!tty) {
+    throw new Error(
+      `Profile must be selected with --profile. Available profiles: ${profiles.join(', ')}.`,
+    );
+  }
+  const selected = await promptForChoice(
+    [
+      'operator-agent profile を選んでください:',
+      ...profiles.map((profile, index) => `${index + 1}) ${profile}`),
+    ].join('\n'),
+    profiles,
+    tty.stdin,
+    tty.stdout,
+  );
+  return selected;
+}
+
+async function promptForChoice(
+  prompt: string,
+  choices: readonly string[],
+  stdin: OperatorAgentInput,
+  stdout: OperatorAgentOutput,
+): Promise<string> {
+  stdout.write(`${prompt}\n> `);
+  const terminal = createInterface({
+    input: stdin,
+    output: stdout,
+    terminal: true,
+    crlfDelay: Infinity,
+  });
+  return new Promise<string>((resolveChoice, rejectChoice) => {
+    terminal.question('', (answer) => {
+      terminal.close();
+      const normalized = answer.trim();
+      const byIndex = Number(normalized);
+      if (Number.isInteger(byIndex) && byIndex >= 1 && byIndex <= choices.length) {
+        resolveChoice(choices[byIndex - 1]!);
+        return;
+      }
+      if (choices.includes(normalized)) {
+        resolveChoice(normalized);
+        return;
+      }
+      rejectChoice(
+        new Error(
+          `Invalid selection "${normalized}". Enter a number from 1 to ${choices.length} or an exact ID.`,
+        ),
+      );
+    });
+  });
+}
+
+function resolveOperatorSetting(
+  environmentValue: string | undefined,
+  profileValue: string | undefined,
+  commonValue: string | undefined,
+  fallback: string,
+  name: 'backend',
+): string {
+  const selected =
+    environmentValue?.trim() || profileValue || commonValue || fallback;
+  if (name === 'backend' && selected !== 'pi' && selected !== 'cursor') {
+    throw new Error(
+      `${OPERATOR_AGENT_BACKEND_ENV} must be "pi" or "cursor" (received "${selected}").`,
+    );
+  }
+  return selected;
 }
 
 async function runTtyConversation(options: {

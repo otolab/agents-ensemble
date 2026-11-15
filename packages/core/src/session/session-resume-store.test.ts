@@ -12,8 +12,10 @@ import {
   findLatestSessionSidecarForIssue,
   findSessionResumeStore,
   findSessionResumeStoreBySelector,
+  findUserSessionResumeStore,
   legacySessionResumeStoreDir,
   listLocatedSessionResumeStoresPage,
+  listUserLocatedSessionResumeStoresPage,
   listLocatedSessionResumeStores,
   listSessionSidecars,
   loadSessionResumeStore,
@@ -1113,6 +1115,104 @@ describe('SessionResumeStore', () => {
         issueUrl: 'https://github.com/org/repo/issues/2',
         repoRoot: originRepoRoot,
       },
+    });
+  });
+
+  it('lists all user slug and path-hash stores without reading project-local data', async () => {
+    tempDir = await createHome('ensemble-session-resume-store-');
+    const userEnsembleRoot = join(tempDir, '.ensemble');
+    const oldCloneA = join(tempDir, 'checkout-a');
+    const oldCloneB = join(tempDir, 'checkout-b');
+    const paths = resolveEnsemblePaths({
+      repoRoot: oldCloneA,
+      userEnsembleRoot,
+    });
+    const canonical = baseResumeStore({
+      conductorAgentId: 'canonical-session',
+      issueUrl: 'https://github.com/org/one/issues/1',
+      repoRoot: oldCloneA,
+      updatedAt: 30,
+    });
+    const hashA = baseResumeStore({
+      conductorAgentId: 'hash-session-a',
+      issueUrl: 'https://github.com/org/two/issues/2',
+      repoRoot: oldCloneA,
+      updatedAt: 20,
+    });
+    const hashBPaths = resolveEnsemblePaths({
+      repoRoot: oldCloneB,
+      userEnsembleRoot,
+    });
+    const hashB = baseResumeStore({
+      conductorAgentId: 'hash-session-b',
+      issueUrl: 'https://github.com/other/repo/issues/3',
+      repoRoot: oldCloneB,
+      updatedAt: 10,
+    });
+    const projectLocal = baseResumeStore({
+      conductorAgentId: 'project-local-session',
+      issueUrl: 'https://github.com/org/local/issues/4',
+      repoRoot: oldCloneA,
+      updatedAt: 40,
+    });
+    const targets = [
+      [
+        paths.canonicalSessionResumeStorePath(
+          canonical.issueUrl,
+          canonical.conductorAgentId,
+        ),
+        canonical,
+      ],
+      [
+        paths.sessionResumeStorePath(hashA.conductorAgentId),
+        hashA,
+      ],
+      [
+        hashBPaths.sessionResumeStorePath(hashB.conductorAgentId),
+        hashB,
+      ],
+      [
+        join(oldCloneA, '.ensemble', 'sessions', `${projectLocal.conductorAgentId}.json`),
+        projectLocal,
+      ],
+    ] as const;
+    for (const [path, store] of targets) {
+      await mkdir(dirname(path), { recursive: true });
+      await writeFile(path, `${JSON.stringify(store)}\n`, 'utf8');
+    }
+
+    const firstPage = await listUserLocatedSessionResumeStoresPage(
+      { limit: 2 },
+      { userEnsembleRoot },
+    );
+    expect(firstPage.total).toBe(3);
+    expect(firstPage.sessions.map(({ resumeStore }) => resumeStore.conductorAgentId)).toEqual([
+      'canonical-session',
+      'hash-session-a',
+    ]);
+    expect(firstPage.nextCursor).toBeDefined();
+    const secondPage = await listUserLocatedSessionResumeStoresPage(
+      { limit: 2, cursor: firstPage.nextCursor },
+      { userEnsembleRoot },
+    );
+    expect(secondPage.sessions.map(({ resumeStore }) => resumeStore.conductorAgentId)).toEqual([
+      'hash-session-b',
+    ]);
+    expect(secondPage.nextCursor).toBeUndefined();
+    await expect(
+      findUserSessionResumeStore('hash-session-b', { userEnsembleRoot }),
+    ).resolves.toMatchObject({
+      location: 'user-path-hash',
+      resumeStore: { repoRoot: oldCloneB },
+    });
+    await expect(
+      listUserLocatedSessionResumeStoresPage(
+        { githubRepo: 'ORG/TWO' },
+        { userEnsembleRoot },
+      ),
+    ).resolves.toMatchObject({
+      total: 1,
+      sessions: [{ resumeStore: { conductorAgentId: 'hash-session-a' } }],
     });
   });
 

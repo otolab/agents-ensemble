@@ -2,6 +2,7 @@ import {
   CONDUCTOR_MESSAGE_PAGE_DEFAULT_LIMIT,
   CONDUCTOR_PROVIDER_HISTORY_LIMIT,
   findSessionResumeStore,
+  findUserSessionResumeStore,
   listConductorProviderHistory,
   OPEN_QUESTION_CONTROL_METHODS,
   sendOpenQuestionControlRequest,
@@ -21,6 +22,12 @@ type SessionResumeStoreDiagnosticHandler = (
   diagnostic: SessionResumeStoreDuplicateDiagnostic,
 ) => void;
 
+export interface OperatorSessionStoreRoot {
+  userEnsembleRoot: string;
+}
+
+type OperatorSessionStoreLocation = string | OperatorSessionStoreRoot;
+
 export const LIST_LIVE_OPEN_QUESTIONS_TOOL = 'list_live_open_questions';
 export const ANSWER_LIVE_OPEN_QUESTION_TOOL = 'answer_live_open_question';
 export const GET_LAST_CONDUCTOR_MESSAGE_TOOL = 'get_last_conductor_message';
@@ -38,10 +45,10 @@ interface LastConductorMessageResult {
 
 /** Read selected user prompts and final responses from provider session history. */
 export function createListConductorMessagesTool(
-  repoRoot: string,
+  repoRoot: OperatorSessionStoreLocation,
   onDuplicate?: SessionResumeStoreDiagnosticHandler,
 ): ConductorTool {
-  const root = resolve(repoRoot);
+  const root = normalizeStoreRoot(repoRoot);
   return {
     name: LIST_CONDUCTOR_MESSAGES_TOOL,
     description:
@@ -123,10 +130,10 @@ export function createListConductorMessagesTool(
 
 /** Read Open Questions from an active harness through its session UDS. */
 export function createListLiveOpenQuestionsTool(
-  repoRoot: string,
+  repoRoot: OperatorSessionStoreLocation,
   onDuplicate?: SessionResumeStoreDiagnosticHandler,
 ): ConductorTool {
-  const root = resolve(repoRoot);
+  const root = normalizeStoreRoot(repoRoot);
   return {
     name: LIST_LIVE_OPEN_QUESTIONS_TOOL,
     description:
@@ -166,10 +173,10 @@ export function createListLiveOpenQuestionsTool(
 
 /** Read the last successful conductor response from an active harness. */
 export function createGetLastConductorMessageTool(
-  repoRoot: string,
+  repoRoot: OperatorSessionStoreLocation,
   onDuplicate?: SessionResumeStoreDiagnosticHandler,
 ): ConductorTool {
-  const root = resolve(repoRoot);
+  const root = normalizeStoreRoot(repoRoot);
   return {
     name: GET_LAST_CONDUCTOR_MESSAGE_TOOL,
     description:
@@ -209,10 +216,10 @@ export function createGetLastConductorMessageTool(
 
 /** Submit an explicit operator answer to the owning active harness. */
 export function createAnswerLiveOpenQuestionTool(
-  repoRoot: string,
+  repoRoot: OperatorSessionStoreLocation,
   onDuplicate?: SessionResumeStoreDiagnosticHandler,
 ): ConductorTool {
-  const root = resolve(repoRoot);
+  const root = normalizeStoreRoot(repoRoot);
   return {
     name: ANSWER_LIVE_OPEN_QUESTION_TOOL,
     description:
@@ -271,10 +278,10 @@ export function createAnswerLiveOpenQuestionTool(
 
 /** Send an operator message to a running Issue harness. */
 export function createSendOperatorMessageTool(
-  repoRoot: string,
+  repoRoot: OperatorSessionStoreLocation,
   onDuplicate?: SessionResumeStoreDiagnosticHandler,
 ): ConductorTool {
-  const root = resolve(repoRoot);
+  const root = normalizeStoreRoot(repoRoot);
   return {
     name: SEND_OPERATOR_MESSAGE_TOOL,
     description:
@@ -328,10 +335,10 @@ export function createSendOperatorMessageTool(
 
 /** Request close or exit for a running Issue harness over its live UDS. */
 export function createShutdownIssueSessionTool(
-  repoRoot: string,
+  repoRoot: OperatorSessionStoreLocation,
   onDuplicate?: SessionResumeStoreDiagnosticHandler,
 ): ConductorTool {
-  const root = resolve(repoRoot);
+  const root = normalizeStoreRoot(repoRoot);
   return {
     name: SHUTDOWN_ISSUE_SESSION_TOOL,
     description:
@@ -379,20 +386,30 @@ export function createShutdownIssueSessionTool(
 }
 
 async function requireSession(
-  repoRoot: string,
+  root: OperatorSessionStoreLocation,
   value: ConductorJsonValue | undefined,
   onDuplicate?: SessionResumeStoreDiagnosticHandler,
 ): Promise<SessionResumeStore> {
   const conductorAgentId = requireString(value, 'conductorAgentId');
-  const located = await findSessionResumeStore(
-    repoRoot,
-    conductorAgentId,
-    { onDuplicate },
-  );
+  const located =
+    typeof root === 'string'
+      ? await findSessionResumeStore(root, conductorAgentId, { onDuplicate })
+      : await findUserSessionResumeStore(conductorAgentId, {
+          userEnsembleRoot: root.userEnsembleRoot,
+          onDuplicate,
+        });
   if (!located) {
     throw new Error(`No saved session found for ${conductorAgentId}.`);
   }
   return located.resumeStore;
+}
+
+function normalizeStoreRoot(
+  root: OperatorSessionStoreLocation,
+): OperatorSessionStoreLocation {
+  return typeof root === 'string'
+    ? resolve(root)
+    : { userEnsembleRoot: resolve(root.userEnsembleRoot) };
 }
 
 function requireSocketPath(resumeStore: SessionResumeStore): string {

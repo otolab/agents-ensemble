@@ -134,6 +134,65 @@ describe('list_operator_sessions', () => {
     ]);
   });
 
+  it('applies profile and CLI repository scopes with cursor pagination', async () => {
+    const firstUrl = 'https://github.com/org/one/issues/1';
+    const secondUrl = 'https://github.com/org/one/issues/2';
+    await writeResumeStore('one-first', 30, firstUrl);
+    await writeResumeStore('one-second', 20, secondUrl);
+    await writeResumeStore(
+      'profile-excluded',
+      40,
+      'https://github.com/org/two/issues/3',
+    );
+    await writeResumeStore(
+      'filter-excluded',
+      50,
+      'https://github.com/other/repo/issues/4',
+    );
+    const tool = createListOperatorSessionsTool({
+      userEnsembleRoot: join(repoRoot, '.user-ensemble'),
+      profileIncludes: ['org/*'],
+      repoFilters: ['org/one', 'other/*'],
+    });
+
+    const first = JSON.parse(
+      (await tool.execute({ limit: 1 })).content[0]!.text,
+    ) as {
+      total: number;
+      returned: number;
+      nextCursor?: string;
+      sessions: Array<{ conductorAgentId: string }>;
+      repoRoot?: string;
+    };
+    expect(first).toMatchObject({
+      total: 2,
+      returned: 1,
+      sessions: [{ conductorAgentId: 'one-first' }],
+    });
+    expect(first.nextCursor).toBeDefined();
+    expect(first).not.toHaveProperty('repoRoot');
+
+    const second = JSON.parse(
+      (
+        await tool.execute({
+          limit: 1,
+          cursor: first.nextCursor,
+        })
+      ).content[0]!.text,
+    ) as {
+      total: number;
+      returned: number;
+      nextCursor?: string;
+      sessions: Array<{ conductorAgentId: string }>;
+    };
+    expect(second).toMatchObject({
+      total: 2,
+      returned: 1,
+      sessions: [{ conductorAgentId: 'one-second' }],
+    });
+    expect(second.nextCursor).toBeUndefined();
+  });
+
   it('returns bounded statusLine history through the existing list tool', async () => {
     const issueUrl = 'https://github.com/example/project/issues/499';
     await writeResumeStore('history', 30, issueUrl, {

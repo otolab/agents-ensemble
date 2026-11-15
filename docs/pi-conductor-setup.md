@@ -2,7 +2,7 @@
 
 > **正本:** `ensemble issue` の Pi conductor を初回設定し、provider 認証を取得・確認・復旧する利用者向け手順。
 
-このガイドは conductor の既定 backend である Pi の設定を説明します。worker の ACP preset `pi` や、Pi CLI の通常の `<cwd>/.pi/` 設定とは別の経路です。
+このガイドは `ensemble issue` conductor の既定 backend である Pi の設定を説明します。worker の ACP preset `pi` や、Pi CLI の通常の `<cwd>/.pi/` 設定とは別の経路です。operator-agent は専用 profile と resource root を使い、起動元 repository の Pi project root を読みません。詳しくは下記の [operator-agent の Pi resources](#operator-agent-の-pi-resources) を参照してください。
 
 ## 最短セットアップ
 
@@ -71,6 +71,12 @@ Pi の設定を置く場所は次の 2 層です。
 | project | `<repoRoot>/.ensemble/pi/` | リポジトリ固有の model/resource と project credential |
 
 user resource root は `conductor.pi.agentDir` → `PI_CODING_AGENT_DIR` → `~/.ensemble/pi/`、project resource root は `conductor.pi.projectDir` → `<repoRoot>/.ensemble/pi/` の順で解決します。config の相対パスはリポジトリ root 基準、`~` はユーザ home 基準です。
+
+### operator-agent の Pi resources
+
+operator-agent は generic `conductor.pi.projectDir` を使わず、`~/.ensemble/operator-agents.config.yaml` の選択 profile から Pi roots を解決します。共通 user root は `common.pi.agentDir` > `PI_CODING_AGENT_DIR` > `~/.ensemble/pi/`、profile root は `profiles.<profile>.pi.projectDir` > `~/.ensemble/operator-agents/<profile>/pi/` です。共通 root と profile root の両方を明示的に Pi resource loader へ渡します。relative `agentDir` は `~/.ensemble/`、relative `projectDir` は profile workspace 基準です。
+
+起動 directory の `.ensemble/pi/`、profile workspace 内の `.ensemble/pi/`、Pi 標準の cwd 自動探索は使いません。Pi extension は読み込まず、`pi.skills: false` で skills の索引を無効にできます。Pi transcript は profile resource と分け、`~/.ensemble/operator-agents/conversations/<operatorAgentId>/pi-sessions/` に保存します。operator-agent 用 backend / model / prompt / repository include の設定例は [CLI README](cli/README.md#operator-agent) と [config reference](config.md#operator-agent-専用設定) を参照してください。
 
 ```yaml
 conductor:

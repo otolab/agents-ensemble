@@ -126,6 +126,8 @@ CLI メッセージと `ENSEMBLE_OPERATOR_MESSAGE` は同時に指定できま�
 
 ## operator-agent の会話中の監視 hold
 
+operator-agent は Issue TUI と別の会話 runtime です。`~/.ensemble/operator-agents.config.yaml` の profile と user workspace を使い、global `operatorAgentId` を選択して再開します。CLI option、profile、会話の選び方は [CLI README の operator-agent 節](cli/README.md#operator-agent)を参照してください。
+
 TTY では各 `agent.send` の開始時に `[harness] operator: 処理中` を表示し、backend から tool 開始 callback が届いた場合は `[harness] operator: calling <tool>` を追加します。thinking / reasoning 本文や tool 引数は表示しません。`NO_COLOR` が有効な場合も活動表示は残し、色だけを抑制します。operator-agent は stdin と stdout の TTY を必要とするため、非 TTY では起動せず、活動表示も行いません。
 
 `ensemble operator-agent` では、空でない通常の TTY 入力を受け取った時点で会話 hold を有効にし、登録済み session の自動 watch report が operator-agent の LLM に割り込まないようにします。watch pool の登録や polling は止めず、会話中に得た report は queue に保留します。user 入力は通常どおり最優先で dispatch され、明示的な `send_operator_message` もこの hold の対象外です。既に開始した `agent.send` は取り消しません。

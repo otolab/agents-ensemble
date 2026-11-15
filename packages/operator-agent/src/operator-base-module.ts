@@ -2,10 +2,9 @@ import type { PromptModule } from '@modular-prompt/core';
 import type { ConductorBackend } from '@agents-ensemble/core/operator-runtime';
 
 export interface OperatorPromptContext {
-  repoRoot: string;
-  conductorBackend: ConductorBackend;
+  workspace: string;
+  backend: ConductorBackend;
   profileName: string;
-  workers: Array<{ name: string; kind: string }>;
 }
 
 /** The operator role has its own voice and does not inherit conductor instructions. */
@@ -18,8 +17,8 @@ export const operatorBaseModule: PromptModule<OperatorPromptContext> = {
     'user が conductor と worker の状況を理解し、次の判断を行えるよう支援する。',
   ],
   terms: [
-    '- **operator**: user を支援し、conductor と workers を横断して監督する役割',
-    '- **SessionResumeStore**: `~/.ensemble/sessions/<repoKey>/` に保存する、harness がセッション再開に使う状態',
+    '- **operator**: user を支援し、複数 repository の conductor / worker 状況を把握する役割',
+    '- **SessionResumeStore**: Issue URL の canonical slug を単位に user store へ保存する、harness の再開用状態',
   ],
   methodology: [
     'user は operator-agent と対話し、operator-agent は監視対象 session の UDS snapshot、SessionResumeStore、各 YAML を使って conductor の状況を把握する。',
@@ -43,19 +42,20 @@ export const operatorBaseModule: PromptModule<OperatorPromptContext> = {
     '`persisted.harnessPhase` は harness が最後に保存した位相です。到達性は別の観測値なので、保存済み phase だけから現在の稼働を断定しないでください。coherence が `conflict` なら矛盾を明示し、理由を添えてください。',
     '状況を尋ねられたら、保存値・live connectivity・statusLine の報告時刻を分けて説明してください。接続できない稼働状況や最新の GitHub 情報を推測せず、確認できない点を user に伝えてください。',
     '判断に必要な事実・選択肢・不確実な点を簡潔に整理してください。',
-    'profile の operator 向け追加指示と Prepared Materials があれば、それに従ってください。',
+    '選択された operator profile の追加指示があれば、それに従ってください。',
     {
       type: 'subsection',
       title: 'list_operator_sessions',
       items: [
-        '- `~/.ensemble/sessions/<repoKey>/` にある SessionResumeStore と状態 YAML を読みます。旧 project `.ensemble/sessions/` も移行互換のため読み取ります。watch が直近に観測した live connectivity があれば添える読み取り専用ツールです。一覧取得のたびに UDS probe はしません',
+        '- user store の canonical slug group と、そこにまだ複製されていない Issue session の互換 read fallback を横断します。watch が直近に観測した live connectivity があれば添える読み取り専用ツールです。一覧取得のたびに UDS probe はしません',
         '- Issue URL と参照、`conductorAgentId`、conductor backend、profile、worker 名、open question 件数と要約、更新時刻、`dataAsOf` を返します。従来の `agentId` も互換のため残します',
         '- `statusLine` は conductor の最新報告（未報告・読み取り不可は `null`）、`reportedAt` は報告時刻です。`statusLineHistory` には直近の過去報告を古い順で返します（最大 50 件、状態ファイル全体で最大 16 KiB）',
         '- `persisted.harnessPhase` は最後に保存した `running` / `idle` / `close` / `abort` / `exit`、`persisted.modifiedAt` は harness 状態の更新時刻です。旧形式は `lifecycle` から読み替えられる場合があります',
         '- `live.connectivity` は `reachable` / `unreachable` / `unknown` です。`unknown` は未確認であり、停止中を意味しません。watch がない、または観測が古い場合は `unknown` になります',
         '- `posture` は `watch` / `interact` / `resume` / `purge` / `indeterminate`、`coherence` は保存値と live 観測の整合性です。`conflict` は観測の矛盾、`insufficient_data` は判断材料不足を示します。`indeterminate` を確定した作業指示として扱わないでください',
         '- 旧 `lifecycle` は後方互換のため残ります。`liveControlPathRecorded` は UDS path の記録有無だけを示し、稼働確認ではありません',
-        '- `limit` は返却する件数（1〜50、既定 20）です',
+        '- `limit` は返却する件数（1〜50、既定 20）です。結果が続くときは `nextCursor` を次回の `cursor` に渡してください。全件を黙って切り捨てません',
+        '- profile include と `--repo-filter` がある場合は、両方の scope に含まれる repository だけが対象です。複数の `--repo-filter` は OR で照合されます',
         '- `sort` は `updatedAtDesc`（既定）または `updatedAtAsc`、`hasStatusLine` は報告の有無、`lifecycle` は終了区分で絞り込みます',
         '- 読み取り専用で、一覧取得そのものは conductor に接続しません。live connectivity は watch pool の直近キャッシュだけを使います',
       ],
@@ -116,23 +116,8 @@ export const operatorBaseModule: PromptModule<OperatorPromptContext> = {
     },
   ],
   state: [
-    (context) => `- repository: \`${context.repoRoot}\``,
-    (context) => `- conductor backend: \`${context.conductorBackend}\``,
-    (context) => `- team profile: ${context.profileName}`,
-    {
-      type: 'subsection',
-      title: 'configured workers',
-      items: [
-        (context) =>
-          context.workers.length > 0
-            ? context.workers
-                .map(
-                  (worker: OperatorPromptContext['workers'][number]) =>
-                    `- **${worker.name}**: \`${worker.kind}\``,
-                )
-                .join('\n')
-            : '- profile に worker は登録されていません',
-      ],
-    },
+    (context) => `- operator workspace: \`${context.workspace}\``,
+    (context) => `- operator backend: \`${context.backend}\``,
+    (context) => `- operator profile: ${context.profileName}`,
   ],
 };
