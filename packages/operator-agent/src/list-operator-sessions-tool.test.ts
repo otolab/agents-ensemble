@@ -134,6 +134,65 @@ describe('list_operator_sessions', () => {
     ]);
   });
 
+  it('applies profile and CLI repository scopes with cursor pagination', async () => {
+    const firstUrl = 'https://github.com/org/one/issues/1';
+    const secondUrl = 'https://github.com/org/one/issues/2';
+    await writeResumeStore('one-first', 30, firstUrl);
+    await writeResumeStore('one-second', 20, secondUrl);
+    await writeResumeStore(
+      'profile-excluded',
+      40,
+      'https://github.com/org/two/issues/3',
+    );
+    await writeResumeStore(
+      'filter-excluded',
+      50,
+      'https://github.com/other/repo/issues/4',
+    );
+    const tool = createListOperatorSessionsTool({
+      userEnsembleRoot: join(repoRoot, '.user-ensemble'),
+      profileIncludes: ['org/*'],
+      repoFilters: ['org/one', 'other/*'],
+    });
+
+    const first = JSON.parse(
+      (await tool.execute({ limit: 1 })).content[0]!.text,
+    ) as {
+      total: number;
+      returned: number;
+      nextCursor?: string;
+      sessions: Array<{ conductorAgentId: string }>;
+      repoRoot?: string;
+    };
+    expect(first).toMatchObject({
+      total: 2,
+      returned: 1,
+      sessions: [{ conductorAgentId: 'one-first' }],
+    });
+    expect(first.nextCursor).toBeDefined();
+    expect(first).not.toHaveProperty('repoRoot');
+
+    const second = JSON.parse(
+      (
+        await tool.execute({
+          limit: 1,
+          cursor: first.nextCursor,
+        })
+      ).content[0]!.text,
+    ) as {
+      total: number;
+      returned: number;
+      nextCursor?: string;
+      sessions: Array<{ conductorAgentId: string }>;
+    };
+    expect(second).toMatchObject({
+      total: 2,
+      returned: 1,
+      sessions: [{ conductorAgentId: 'one-second' }],
+    });
+    expect(second.nextCursor).toBeUndefined();
+  });
+
   it('returns bounded statusLine history through the existing list tool', async () => {
     const issueUrl = 'https://github.com/example/project/issues/499';
     await writeResumeStore('history', 30, issueUrl, {
@@ -181,7 +240,7 @@ describe('list_operator_sessions', () => {
     );
   });
 
-  it('loads status YAML according to the selected ResumeStore location and its fallback', async () => {
+  it('loads status YAML from the canonical slug before hash fallbacks', async () => {
     const paths = resolveEnsemblePaths({ repoRoot });
     const hashIssueUrl = 'https://github.com/example/hash-list/issues/607';
     const slugIssueUrl = 'https://github.com/example/slug-list/issues/607';
@@ -195,7 +254,7 @@ describe('list_operator_sessions', () => {
     await mkdir(dirname(hashSlugYaml), { recursive: true });
     await writeFile(
       hashSlugYaml,
-      'version: 1\nstatusLine: "orphan slug snapshot"\nreportedAt: 11\n',
+      'version: 1\nstatusLine: "canonical slug snapshot"\nreportedAt: 11\n',
       'utf8',
     );
 
@@ -227,7 +286,7 @@ describe('list_operator_sessions', () => {
       expect.arrayContaining([
         expect.objectContaining({
           conductorAgentId: 'hash-selected',
-          statusLine: 'hash snapshot',
+          statusLine: 'canonical slug snapshot',
         }),
         expect.objectContaining({
           conductorAgentId: 'slug-selected',

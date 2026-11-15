@@ -424,6 +424,7 @@ describe('Pi command auth through the real conductor session', () => {
     const exported = await exportSessionBundle({
       repoRoot,
       conductorAgentId: result.agentId,
+      issueUrl: TEST_ISSUE.url,
       outputDirectory: bundlePath,
       ensembleVersion: '0.21.0',
       cliVersion: '0.21.0',
@@ -714,6 +715,7 @@ describe('Pi command auth through the real conductor session', () => {
     const exported = await exportSessionBundle({
       repoRoot,
       conductorAgentId: result.agentId,
+      issueUrl: TEST_ISSUE.url,
       outputDirectory: bundlePath,
       ensembleVersion: '0.21.0',
       cliVersion: '0.21.0',

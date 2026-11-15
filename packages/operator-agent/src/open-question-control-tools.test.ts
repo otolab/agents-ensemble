@@ -356,6 +356,39 @@ describe('operator-agent live Open Question tools', () => {
     });
   });
 
+  it('rejects an ID-only control lookup when the session id exists in multiple repositories', async () => {
+    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-ambiguous-'));
+    const agentId = 'agent-shared-across-repositories';
+    const paths = resolveEnsemblePaths({ repoRoot });
+    for (const [index, issueUrl] of [
+      'https://github.com/org/first-repo/issues/1',
+      'https://github.com/org/second-repo/issues/2',
+    ].entries()) {
+      await saveSessionResumeStore(
+        paths.canonicalSessionResumeStorePath(issueUrl, agentId),
+        {
+          version: SESSION_RESUME_STORE_VERSION,
+          conductorAgentId: agentId,
+          issueUrl,
+          repoRoot: join(repoRoot, `clone-${index}`),
+          profile: { workers: [] },
+          openQuestions: [],
+          sequence: 0,
+          workers: {},
+          harnessSocketPath: '/tmp/unused-control.sock',
+          updatedAt: index + 1,
+        },
+      );
+    }
+
+    await expect(
+      createSendOperatorMessageTool(repoRoot).execute({
+        conductorAgentId: agentId,
+        text: 'Do not route this to an arbitrary repository.',
+      }),
+    ).rejects.toThrow(/is ambiguous across saved Issues/);
+  });
+
   it('sends one operator message through the live session UDS', async () => {
     repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-send-'));
     const sendOperatorMessage = vi.fn().mockReturnValue(true);

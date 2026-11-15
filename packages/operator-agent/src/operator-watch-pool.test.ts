@@ -11,6 +11,7 @@ import {
   startOpenQuestionControlServer,
   type SessionObservationSnapshot,
 } from '@agents-ensemble/core';
+import { listUserLocatedSessionResumeStoresPage } from '@agents-ensemble/core/operator-runtime';
 import {
   createOperatorDispatchQueue,
   formatOperatorDispatchBatch,
@@ -219,6 +220,129 @@ describe('operator watch pool', () => {
       await expect(
         readFile(hashStatePath, 'utf8').then((text) => JSON.parse(text)),
       ).resolves.toMatchObject(state);
+    } finally {
+      pool.close();
+    }
+  });
+
+  it('splits a legacy watch bundle by verified Issue slug without losing its related cursors or reports', async () => {
+    const userRoot = join(homeRoot, '.ensemble');
+    const firstIssue = 'https://github.com/org/one/issues/1';
+    const secondIssue = 'https://github.com/org/two/issues/2';
+    const firstId = 'legacy-watch-one';
+    const secondId = 'legacy-watch-two';
+    const paths = resolveEnsemblePaths({
+      repoRoot: '/old/checkout',
+      userEnsembleRoot: userRoot,
+    });
+    for (const [conductorAgentId, issueUrl] of [
+      [firstId, firstIssue],
+      [secondId, secondIssue],
+    ]) {
+      const path = paths.canonicalSessionResumeStorePath(
+        issueUrl,
+        conductorAgentId,
+      );
+      await mkdir(dirname(path), { recursive: true });
+      await writeFile(
+        path,
+        JSON.stringify({
+          version: 1,
+          conductorAgentId,
+          issueUrl,
+          repoRoot: '/old/checkout',
+          profile: { workers: [] },
+          openQuestions: [],
+          sequence: 0,
+          workers: {},
+          updatedAt: 1,
+        }),
+      );
+    }
+    const legacyPath = join(
+      userRoot,
+      'operator-agent',
+      'a'.repeat(64),
+      'watch-state.json',
+    );
+    const legacyState = {
+      version: 1,
+      watches: Object.fromEntries(
+        [firstId, secondId].map((conductorAgentId) => [
+          conductorAgentId,
+          { conductorAgentId, pollIntervalMs: 60_000, debounceMs: 0 },
+        ]),
+      ),
+      cursors: Object.fromEntries(
+        [firstId, secondId].map((conductorAgentId, sequence) => [
+          conductorAgentId,
+          {
+            sequence: sequence + 1,
+            questionFingerprints: {},
+            statusFingerprints: {},
+          },
+        ]),
+      ),
+      messageListeners: Object.fromEntries(
+        [firstId, secondId].map((conductorAgentId) => [
+          conductorAgentId,
+          { conductorAgentId, messageDebounceMs: 1_000 },
+        ]),
+      ),
+      messageCursors: { [firstId]: 10, [secondId]: 20 },
+      pendingReports: [firstIssue, secondIssue].map((issueUrl, index) => ({
+        reportId: `legacy-report-${index + 1}`,
+        reportType: 'open_question',
+        conductorAgentId: index === 0 ? firstId : secondId,
+        issueUrl,
+        text: `pending ${index + 1}`,
+        debounceMs: 0,
+      })),
+    };
+    await mkdir(dirname(legacyPath), { recursive: true });
+    await writeFile(legacyPath, JSON.stringify(legacyState));
+    const stores = await listUserLocatedSessionResumeStoresPage(
+      {},
+      { userEnsembleRoot: userRoot },
+    );
+    expect(stores.total).toBe(2);
+    expect(
+      stores.sessions.map(({ resumeStore }) => resumeStore.conductorAgentId),
+    ).toEqual(expect.arrayContaining([firstId, secondId]));
+
+    const pool = await createOperatorWatchPool({
+      userEnsembleRoot: userRoot,
+      profile: 'work',
+      dispatchQueue: createOperatorDispatchQueue(),
+    });
+    try {
+      expect(pool.list()).toHaveLength(2);
+      expect(pool.listConductorMessageListens()).toHaveLength(2);
+      await pool.register(firstId, {
+        pollIntervalMs: 60_000,
+        debounceMs: 0,
+      });
+      const firstPath = operatorWatchStatePath(userRoot, 'work', firstIssue);
+      const secondPath = operatorWatchStatePath(userRoot, 'work', secondIssue);
+      const first = JSON.parse(await readFile(firstPath, 'utf8')) as typeof legacyState;
+      const second = JSON.parse(await readFile(secondPath, 'utf8')) as typeof legacyState;
+      expect(first).toMatchObject({
+        watches: { [firstId]: expect.any(Object) },
+        cursors: { [firstId]: { sequence: 1 } },
+        messageListeners: { [firstId]: expect.any(Object) },
+        messageCursors: { [firstId]: 10 },
+        pendingReports: [{ reportId: 'legacy-report-1', issueUrl: firstIssue }],
+      });
+      expect(second).toMatchObject({
+        watches: { [secondId]: expect.any(Object) },
+        cursors: { [secondId]: { sequence: 2 } },
+        messageListeners: { [secondId]: expect.any(Object) },
+        messageCursors: { [secondId]: 20 },
+        pendingReports: [{ reportId: 'legacy-report-2', issueUrl: secondIssue }],
+      });
+      await expect(readFile(legacyPath, 'utf8')).resolves.toBe(
+        JSON.stringify(legacyState),
+      );
     } finally {
       pool.close();
     }
@@ -574,7 +698,7 @@ describe('operator watch pool', () => {
     }
   });
 
-  it('uses only snapshot fallbacks consistent with the selected ResumeStore location', async () => {
+  it('reads canonical slug snapshots before clone-local hash fallbacks', async () => {
     repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-watch-location-yaml-'));
     const paths = resolveEnsemblePaths({ repoRoot });
     const slugIssueUrl = 'https://github.com/example/slug-fallback/issues/607';
@@ -642,7 +766,7 @@ describe('operator watch pool', () => {
     await writeStore(hashStorePath, hashAgentId, hashIssueUrl);
     await writeQuestions(
       paths.canonicalOpenQuestionsPath(hashIssueUrl, hashAgentId),
-      [{ id: 'inq-1', question: 'orphan slug must be ignored for selected hash' }],
+      [{ id: 'inq-1', question: 'canonical slug for hash-selected session' }],
     );
     await writeQuestions(
       paths.openQuestionsPath(hashAgentId),
@@ -671,6 +795,17 @@ describe('operator watch pool', () => {
         ],
       );
       await expect(pool.pollOnce(slugAgentId)).resolves.toBe(1);
+      await expect(pool.pollOnce(hashAgentId)).resolves.toBe(0);
+      await writeQuestions(
+        paths.canonicalOpenQuestionsPath(hashIssueUrl, hashAgentId),
+        [
+          { id: 'inq-1', question: 'canonical slug for hash-selected session' },
+          {
+            id: 'inq-2',
+            question: 'new canonical slug snapshot for hash-selected session',
+          },
+        ],
+      );
       await expect(pool.pollOnce(hashAgentId)).resolves.toBe(1);
       const reports = [0, 1]
         .flatMap(() =>
@@ -684,11 +819,13 @@ describe('operator watch pool', () => {
       expect(reports).toEqual(
         expect.arrayContaining([
           expect.stringContaining('new hash fallback for selected slug'),
-          expect.stringContaining('new hash snapshot for selected hash'),
+          expect.stringContaining(
+            'new canonical slug snapshot for hash-selected session',
+          ),
         ]),
       );
       expect(reports?.join('\n')).not.toContain(
-        'orphan slug must be ignored for selected hash',
+        'new hash snapshot for selected hash',
       );
     } finally {
       pool.close();
@@ -1368,7 +1505,7 @@ describe('operator watch pool', () => {
       )!;
       expect(batch.events.map((event) => event.sendCount)).toEqual([5, 6]);
       expect(formatOperatorDispatchBatch(batch.events)).toContain(
-        '### 1/2\n\n対象: https://github.com/example/repo/issues/message-listen-one (message-listen-one)\nsendCount: 5',
+        '### 1/2\n\n対象: https://github.com/example/repo/issues/1 (message-listen-one)\nsendCount: 5',
       );
       const formatted = formatOperatorDispatchBatch(batch.events);
       expect(formatted.indexOf('sendCount: 5')).toBeLessThan(
@@ -2024,7 +2161,7 @@ describe('operator watch pool', () => {
     agentId: string,
     updatedAt: number,
     harnessSocketPath?: string,
-    issueUrl = `https://github.com/example/repo/issues/${agentId}`,
+    issueUrl = 'https://github.com/example/repo/issues/1',
   ) {
     await writeFile(
       join(repoRoot, '.ensemble', 'sessions', `${agentId}.json`),

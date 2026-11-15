@@ -64,18 +64,33 @@ program
 
 program
   .command('operator-agent')
-  .description('Chat with an operator agent about repository session state')
-  .option('--repo-root <path>', 'Repository root for config and saved sessions', process.cwd())
+  .description('Chat with an operator agent using a user-scoped operator profile')
+  .option('--profile <name>', 'Select a profile from ~/.ensemble/operator-agents.config.yaml')
   .option(
-    '--config <path>',
-    'Use this file instead of ~/.ensemble/config.yaml; project config still applies',
+    '--repo-filter <owner/repo|owner/*>',
+    'Limit Issue sessions to matching repositories (repeatable)',
+    (value: string, previous: string[]) => [...previous, value],
+    [],
   )
-  .option('--new', 'Start a fresh operator-agent session')
-  .action(async (options: { repoRoot: string; config?: string; new: boolean }) => {
+  .addOption(
+    new Option('--resume <operatorAgentId>', 'Resume a specific saved conversation')
+      .conflicts('new'),
+  )
+  .addOption(
+    new Option('--new', 'Start a new conversation and keep all existing conversations')
+      .conflicts('resume'),
+  )
+  .action(async (options: {
+    profile?: string;
+    repoFilter: string[];
+    resume?: string;
+    new: boolean;
+  }) => {
     try {
       await runOperatorAgent({
-        repoRoot: resolve(options.repoRoot),
-        configPath: options.config,
+        profile: options.profile,
+        repoFilters: options.repoFilter,
+        resumeId: options.resume,
         newSession: options.new,
       });
     } catch (error) {
@@ -99,9 +114,11 @@ session
   .requiredOption('--output <dir>', 'Create a new bundle directory at this path')
   .option(
     '--repo-root <path>',
-    'Repository root for saved sessions',
+    'Current clone for local fallback paths; session lookup uses an explicit GitHub scope',
     process.cwd(),
   )
+  .option('--github-repo <owner/repo>', 'Repository scope for the saved session')
+  .option('--issue-url <url>', 'Issue scope for the saved session')
   .option(
     '--include-tool-calls',
     'Include optional tool-call snapshot history when available',
@@ -115,6 +132,8 @@ session
       options: {
         output: string;
         repoRoot: string;
+        githubRepo?: string;
+        issueUrl?: string;
         includeToolCalls?: boolean;
         summary?: string;
         harnessLog?: string;
@@ -125,6 +144,8 @@ session
         const result = await exportSessionBundle({
           repoRoot: options.repoRoot,
           conductorAgentId,
+          githubRepo: options.githubRepo,
+          issueUrl: options.issueUrl,
           outputDirectory: options.output,
           ensembleVersion: readCliPackageVersion(),
           cliVersion: readCliPackageVersion(),
@@ -146,24 +167,40 @@ session
 
 session
   .command('list')
-  .description('List saved sessions for a repository')
+  .description('List local saved sessions across all repositories by default')
   .option(
     '--repo-root <path>',
-    'Repository root for saved sessions',
+    'Current clone for local fallback paths; it does not limit slug lookup',
     process.cwd(),
   )
+  .option('--github-repo <owner/repo>', 'Filter by GitHub repository slug')
   .option('--issue-url <url>', 'Filter by GitHub Issue URL')
+  .option('--conductor-agent-id <id>', 'Filter by conductor session id')
+  .option(
+    '--limit <n>',
+    'Page size (1–500); without a limit, return every matching local session',
+    parseSessionListLimit,
+  )
+  .option('--cursor <cursor>', 'Continue from the previous page')
   .option('--json', 'Output JSON')
   .action(
     async (options: {
       repoRoot: string;
+      githubRepo?: string;
       issueUrl?: string;
+      conductorAgentId?: string;
+      limit?: number;
+      cursor?: string;
       json?: boolean;
     }) => {
       try {
         const result = await listSavedSessions({
           repoRoot: options.repoRoot,
+          githubRepo: options.githubRepo,
           issueUrl: options.issueUrl,
+          conductorAgentId: options.conductorAgentId,
+          limit: options.limit,
+          cursor: options.cursor,
         });
         console.log(
           options.json
@@ -183,19 +220,28 @@ session
   .argument('<conductorAgentId>', 'Conductor session id')
   .option(
     '--repo-root <path>',
-    'Repository root for saved sessions',
+    'Current clone for local fallback paths',
     process.cwd(),
   )
+  .option('--github-repo <owner/repo>', 'Repository scope for the saved session')
+  .option('--issue-url <url>', 'Issue scope for the saved session')
   .option('--json', 'Output JSON')
   .action(
     async (
       conductorAgentId: string,
-      options: { repoRoot: string; json?: boolean },
+      options: {
+        repoRoot: string;
+        githubRepo?: string;
+        issueUrl?: string;
+        json?: boolean;
+      },
     ) => {
       try {
         const result = await showSavedSession({
           repoRoot: options.repoRoot,
           conductorAgentId,
+          githubRepo: options.githubRepo,
+          issueUrl: options.issueUrl,
         });
         console.log(
           options.json
@@ -217,9 +263,11 @@ session
   .argument('<conductorAgentId>', 'Conductor session id')
   .option(
     '--repo-root <path>',
-    'Repository root for saved sessions',
+    'Current clone for local fallback paths',
     process.cwd(),
   )
+  .option('--github-repo <owner/repo>', 'Repository scope for the saved session')
+  .option('--issue-url <url>', 'Issue scope for the saved session')
   .option(
     '--limit <n>',
     'Number of messages to return (default: 20, maximum: 100)',
@@ -237,6 +285,8 @@ session
       conductorAgentId: string,
       options: {
         repoRoot: string;
+        githubRepo?: string;
+        issueUrl?: string;
         limit?: number;
         order: string;
         cursor?: string;
@@ -247,6 +297,8 @@ session
         const result = await listSavedSessionMessages({
           repoRoot: options.repoRoot,
           conductorAgentId,
+          githubRepo: options.githubRepo,
+          issueUrl: options.issueUrl,
           limit: options.limit,
           order: parseSessionMessageOrder(options.order),
           cursor: options.cursor,
@@ -276,9 +328,11 @@ sessionWorkers
   .requiredOption('--worker <name>', 'Worker name from the saved session')
   .option(
     '--repo-root <path>',
-    'Repository root for saved sessions',
+    'Current clone for local fallback paths',
     process.cwd(),
   )
+  .option('--github-repo <owner/repo>', 'Repository scope for the saved session')
+  .option('--issue-url <url>', 'Issue scope for the saved session')
   .option('--json', 'Output JSON')
   .action(
     async (
@@ -286,6 +340,8 @@ sessionWorkers
       options: {
         worker: string;
         repoRoot: string;
+        githubRepo?: string;
+        issueUrl?: string;
         json?: boolean;
       },
     ) => {
@@ -294,6 +350,8 @@ sessionWorkers
           repoRoot: options.repoRoot,
           conductorAgentId,
           workerName: options.worker,
+          githubRepo: options.githubRepo,
+          issueUrl: options.issueUrl,
         });
         console.log(
           options.json
@@ -317,9 +375,11 @@ session
   .argument('<conductorAgentId>', 'Conductor session id')
   .option(
     '--repo-root <path>',
-    'Repository root for saved sessions',
+    'Current clone for local fallback paths',
     process.cwd(),
   )
+  .option('--github-repo <owner/repo>', 'Repository scope for the saved session')
+  .option('--issue-url <url>', 'Issue scope for the saved session')
   .option(
     '--summary <path>',
     'Read an existing SessionSummary JSON file',
@@ -334,6 +394,8 @@ session
       conductorAgentId: string,
       options: {
         repoRoot: string;
+        githubRepo?: string;
+        issueUrl?: string;
         summary?: string;
         harnessLog?: string;
         json?: boolean;
@@ -343,6 +405,8 @@ session
         const result = await readSavedSessionTimeline({
           repoRoot: options.repoRoot,
           conductorAgentId,
+          githubRepo: options.githubRepo,
+          issueUrl: options.issueUrl,
           summaryPath: options.summary,
           harnessLogPath: options.harnessLog,
         });
@@ -952,6 +1016,14 @@ function parseSessionLimit(value: string): number {
   const limit = Number(value);
   if (!Number.isSafeInteger(limit)) {
     throw new Error('limit must be an integer.');
+  }
+  return limit;
+}
+
+function parseSessionListLimit(value: string): number {
+  const limit = Number(value);
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 500) {
+    throw new Error('limit must be an integer between 1 and 500.');
   }
   return limit;
 }

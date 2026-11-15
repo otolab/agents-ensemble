@@ -1,10 +1,12 @@
 import { resolve } from 'node:path';
 import {
   listLocatedSessionResumeStores,
+  listUserLocatedSessionResumeStoresPage,
   harnessPhaseFromLegacyLifecycle,
   loadSessionStateStore,
   parseIssueUrl,
   sessionSnapshotPaths,
+  userSessionSnapshotPaths,
   type ConductorJsonValue,
   type ConductorTool,
   type SessionLifecycle,
@@ -15,6 +17,10 @@ import {
   type HarnessPhase,
 } from '@agents-ensemble/core/operator-runtime';
 import type { OperatorSessionLiveStatus } from './operator-watch-pool.js';
+import {
+  normalizeRepositoryPattern,
+  repositoryMatchesPatterns,
+} from './operator-agent-config.js';
 
 export const LIST_OPERATOR_SESSIONS_TOOL = 'list_operator_sessions';
 
@@ -67,15 +73,43 @@ interface OperatorSessionSummary {
 
 type SessionSort = 'updatedAtDesc' | 'updatedAtAsc';
 
-/** Build a read-only tool over this repository's saved conductor session data. */
+interface SessionListSnapshot {
+  located: LocatedSessionResumeStore;
+  resumeStore: SessionResumeStore;
+  status: SessionStateStore | undefined;
+}
+
+interface OperatorSessionListCursor {
+  version: 1;
+  sort: SessionSort;
+  scope: string;
+  updatedAt: number;
+  issueKey: string;
+  conductorAgentId: string;
+}
+
+export interface OperatorSessionListScope {
+  userEnsembleRoot: string;
+  profileIncludes?: readonly string[];
+  repoFilters?: readonly string[];
+}
+
+/** Build a read-only tool over the user-scoped saved conductor session data. */
 export function createListOperatorSessionsTool(
-  repoRoot: string,
+  scope: string | OperatorSessionListScope,
   getLiveStatus?: (
     conductorAgentId: string,
   ) => OperatorSessionLiveStatus | undefined,
   onDuplicate?: (diagnostic: SessionResumeStoreDuplicateDiagnostic) => void,
 ): ConductorTool {
-  const root = resolve(repoRoot);
+  const legacyMode = typeof scope === 'string';
+  const root = resolve(legacyMode ? scope : scope.userEnsembleRoot);
+  const profileIncludes = legacyMode
+    ? undefined
+    : (scope as OperatorSessionListScope).profileIncludes;
+  const repoFilters = legacyMode
+    ? undefined
+    : (scope as OperatorSessionListScope).repoFilters;
   return {
     name: LIST_OPERATOR_SESSIONS_TOOL,
     description:
@@ -88,6 +122,14 @@ export function createListOperatorSessionsTool(
           minimum: 1,
           maximum: MAX_LIMIT,
           description: `Maximum number of recent sessions to return (default ${DEFAULT_LIMIT}).`,
+        },
+        cursor: {
+          type: 'string',
+          description: 'Opaque cursor returned by the previous page.',
+        },
+        githubRepo: {
+          type: 'string',
+          description: 'Optional exact owner/repo filter.',
         },
         sort: {
           type: 'string',
@@ -111,17 +153,44 @@ export function createListOperatorSessionsTool(
       const sort = resolveSort(args.sort);
       const hasStatusLine = resolveHasStatusLine(args.hasStatusLine);
       const lifecycle = resolveLifecycle(args.lifecycle);
+      const githubRepo = resolveGithubRepo(args.githubRepo);
       const dataAsOf = new Date().toISOString();
-      const resumeStores = await listLocatedSessionResumeStores(root, {
-        onDuplicate,
-      });
+      const resumeStores = legacyMode
+        ? await listLocatedSessionResumeStores(root, { onDuplicate })
+        : (
+            await listUserLocatedSessionResumeStoresPage(
+              {},
+              { userEnsembleRoot: root, onDuplicate },
+            )
+          ).sessions;
+      const normalizedRepoFilters = repoFilters?.length
+        ? repoFilters.map((pattern) => normalizeRepositoryPattern(pattern))
+        : undefined;
+      const normalizedProfileIncludes = profileIncludes?.length
+        ? profileIncludes.map((pattern) => normalizeRepositoryPattern(pattern))
+        : undefined;
       const snapshots = await Promise.all(
         resumeStores.map(async (located) => ({
+          located,
           resumeStore: located.resumeStore,
-          status: await loadStatusLine(root, located),
+          status: await loadStatusLine(root, located, legacyMode),
         })),
       );
       const filtered = snapshots.filter(({ resumeStore, status }) => {
+        const repository = repositoryForIssueUrl(resumeStore.issueUrl);
+        if (githubRepo && repository !== githubRepo) return false;
+        if (
+          normalizedProfileIncludes !== undefined &&
+          !repositoryMatchesPatterns(repository, normalizedProfileIncludes)
+        ) {
+          return false;
+        }
+        if (
+          normalizedRepoFilters !== undefined &&
+          !repositoryMatchesPatterns(repository, normalizedRepoFilters)
+        ) {
+          return false;
+        }
         if (
           hasStatusLine !== undefined &&
           Boolean(status) !== hasStatusLine
@@ -132,17 +201,28 @@ export function createListOperatorSessionsTool(
         return lifecycle === undefined || sessionLifecycle === lifecycle;
       });
       filtered.sort((left, right) => {
-        const direction = sort === 'updatedAtDesc' ? -1 : 1;
-        return (
-          direction * (left.resumeStore.updatedAt - right.resumeStore.updatedAt) ||
-          left.resumeStore.conductorAgentId.localeCompare(
-            right.resumeStore.conductorAgentId,
-          )
-        );
+        return compareSnapshots(left, right, sort);
       });
-      const sessions = filtered
-        .slice(0, limit)
-        .map(({ resumeStore, status }) =>
+      const cursorScope = JSON.stringify({
+        sort,
+        githubRepo: githubRepo ?? null,
+        hasStatusLine: hasStatusLine ?? null,
+        lifecycle: lifecycle ?? null,
+        profileIncludes: normalizedProfileIncludes ?? null,
+        repoFilters: normalizedRepoFilters ?? null,
+      });
+      const cursor = resolveListCursor(args.cursor, sort, cursorScope);
+      const remaining = cursor
+        ? filtered.filter(
+            (snapshot) => compareSnapshotToCursor(snapshot, cursor, sort) > 0,
+          )
+        : filtered;
+      const page = remaining.slice(0, limit);
+      const nextCursor =
+        remaining.length > page.length
+          ? encodeListCursor(page.at(-1)!, sort, cursorScope)
+          : undefined;
+      const sessions = page.map(({ resumeStore, status }) =>
           summarizeSession(
             resumeStore,
             status,
@@ -150,10 +230,11 @@ export function createListOperatorSessionsTool(
           ),
         );
       const payload = {
-        repoRoot: root,
+        ...(legacyMode ? { repoRoot: root } : {}),
         dataAsOf,
         total: filtered.length,
         returned: sessions.length,
+        ...(nextCursor ? { nextCursor } : {}),
         sessions,
       };
       const structuredContent = payload as unknown as Record<string, ConductorJsonValue>;
@@ -215,15 +296,15 @@ function resolveLifecycle(
 }
 
 async function loadStatusLine(
-  repoRoot: string,
+  userEnsembleRoot: string,
   located: LocatedSessionResumeStore,
+  legacyMode: boolean,
 ): Promise<SessionStateStore | undefined> {
   try {
-    for (const path of sessionSnapshotPaths(
-      repoRoot,
-      located,
-      'session-state',
-    )) {
+    const paths = legacyMode
+      ? sessionSnapshotPaths(userEnsembleRoot, located, 'session-state')
+      : userSessionSnapshotPaths(userEnsembleRoot, located, 'session-state');
+    for (const path of paths) {
       const status = await loadSessionStateStore(path);
       if (status) return status;
     }
@@ -233,6 +314,122 @@ async function loadStatusLine(
     // unsupported file must not hide an otherwise readable session.
     return undefined;
   }
+}
+
+function resolveGithubRepo(value: ConductorJsonValue | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string') {
+    throw new Error('githubRepo must be an owner/repo string.');
+  }
+  const normalized = normalizeRepositoryPattern(value);
+  if (normalized.endsWith('/*')) {
+    throw new Error('githubRepo must be an exact owner/repo, not owner/*.');
+  }
+  return normalized;
+}
+
+function repositoryForIssueUrl(issueUrl: string): string {
+  try {
+    const issue = parseIssueUrl(issueUrl);
+    return `${issue.owner.toLowerCase()}/${issue.repo.toLowerCase()}`;
+  } catch {
+    return '';
+  }
+}
+
+function issueKeyForSnapshot(snapshot: SessionListSnapshot): string {
+  try {
+    const issue = parseIssueUrl(snapshot.resumeStore.issueUrl);
+    return `${issue.owner.toLowerCase()}/${issue.repo.toLowerCase()}#${issue.number}`;
+  } catch {
+    return snapshot.resumeStore.issueUrl.toLowerCase();
+  }
+}
+
+function compareSnapshots(
+  left: SessionListSnapshot,
+  right: SessionListSnapshot,
+  sort: SessionSort,
+): number {
+  const direction = sort === 'updatedAtDesc' ? -1 : 1;
+  return (
+    direction * (left.resumeStore.updatedAt - right.resumeStore.updatedAt) ||
+    issueKeyForSnapshot(left).localeCompare(issueKeyForSnapshot(right)) ||
+    left.resumeStore.conductorAgentId.localeCompare(
+      right.resumeStore.conductorAgentId,
+    )
+  );
+}
+
+function compareSnapshotToCursor(
+  snapshot: SessionListSnapshot,
+  cursor: OperatorSessionListCursor,
+  sort: SessionSort,
+): number {
+  const direction = sort === 'updatedAtDesc' ? -1 : 1;
+  return (
+    direction * (snapshot.resumeStore.updatedAt - cursor.updatedAt) ||
+    issueKeyForSnapshot(snapshot).localeCompare(cursor.issueKey) ||
+    snapshot.resumeStore.conductorAgentId.localeCompare(
+      cursor.conductorAgentId,
+    )
+  );
+}
+
+function encodeListCursor(
+  snapshot: SessionListSnapshot,
+  sort: SessionSort,
+  scope: string,
+): string {
+  const cursor: OperatorSessionListCursor = {
+    version: 1,
+    sort,
+    scope,
+    updatedAt: snapshot.resumeStore.updatedAt,
+    issueKey: issueKeyForSnapshot(snapshot),
+    conductorAgentId: snapshot.resumeStore.conductorAgentId,
+  };
+  return Buffer.from(JSON.stringify(cursor), 'utf8').toString('base64url');
+}
+
+function resolveListCursor(
+  value: ConductorJsonValue | undefined,
+  sort: SessionSort,
+  scope: string,
+): OperatorSessionListCursor | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string') throw new Error('cursor must be a string.');
+  let cursor: unknown;
+  try {
+    cursor = JSON.parse(Buffer.from(value, 'base64url').toString('utf8'));
+  } catch {
+    throw new Error('Invalid operator session cursor.');
+  }
+  if (
+    !cursor ||
+    typeof cursor !== 'object' ||
+    Array.isArray(cursor) ||
+    (cursor as Record<string, unknown>).version !== 1 ||
+    (cursor as Record<string, unknown>).sort !== sort ||
+    (cursor as Record<string, unknown>).scope !== scope ||
+    typeof (cursor as Record<string, unknown>).updatedAt !== 'number' ||
+    !Number.isFinite((cursor as Record<string, unknown>).updatedAt) ||
+    typeof (cursor as Record<string, unknown>).issueKey !== 'string' ||
+    typeof (cursor as Record<string, unknown>).conductorAgentId !== 'string'
+  ) {
+    throw new Error(
+      'Invalid operator session cursor or it does not match the current filters.',
+    );
+  }
+  const record = cursor as Record<string, unknown>;
+  return {
+    version: 1,
+    sort,
+    scope,
+    updatedAt: record.updatedAt as number,
+    issueKey: record.issueKey as string,
+    conductorAgentId: record.conductorAgentId as string,
+  };
 }
 
 function summarizeSession(

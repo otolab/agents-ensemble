@@ -19,6 +19,7 @@ export {
 } from '../worktree/worktree.js';
 export type {
   RemoveWorkerWorktreeResult,
+  ResolveWorkerWorkspaceOptions,
   WorktreeRef,
   WorkerWorktreeMode,
 } from '../worktree/worktree.js';

@@ -1,0 +1,36 @@
+{
+  "conductorAgentId": "session-fixture-716-clone",
+  "issueUrl": "https://github.com/otolab/agents-ensemble/issues/716",
+  "runs": [
+    {
+      "clone": "A",
+      "repoRoot": "clone-a",
+      "startedAt": 1800000100000,
+      "durationMs": 1000,
+      "sendCount": 1,
+      "lastRunStatus": "finished",
+      "providerEntry": {
+        "sendCount": 1,
+        "dispatchSource": "operator",
+        "completedAt": 1800000100100,
+        "inbound": "Clone A run, send #1.",
+        "response": "Clone A response."
+      }
+    },
+    {
+      "clone": "B",
+      "repoRoot": "clone-b",
+      "startedAt": 1800000200000,
+      "durationMs": 1000,
+      "sendCount": 1,
+      "lastRunStatus": "finished",
+      "providerEntry": {
+        "sendCount": 1,
+        "dispatchSource": "operator",
+        "completedAt": 1800000200100,
+        "inbound": "Clone B run, send #1.",
+        "response": "Clone B response."
+      }
+    }
+  ]
+}

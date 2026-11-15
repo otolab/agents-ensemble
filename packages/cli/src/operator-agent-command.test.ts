@@ -1,26 +1,13 @@
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 describe('ensemble operator-agent command', () => {
-  let repoRoot = '';
-
-  beforeEach(async () => {
-    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-agent-cli-'));
-  });
-
-  afterEach(async () => {
-    await rm(repoRoot, { recursive: true, force: true });
-  });
-
   it('rejects non-TTY invocation before starting an agent session', () => {
     const cliEntry = fileURLToPath(new URL('../dist/index.js', import.meta.url));
     const result = spawnSync(
       process.execPath,
-      [cliEntry, 'operator-agent', '--repo-root', repoRoot],
+      [cliEntry, 'operator-agent'],
       { encoding: 'utf8' },
     );
 
@@ -30,7 +17,7 @@ describe('ensemble operator-agent command', () => {
     );
   });
 
-  it('documents config selection and the explicit fresh-session option', () => {
+  it('shows operator profile, repository filters, and conversation selection options', () => {
     const cliEntry = fileURLToPath(new URL('../dist/index.js', import.meta.url));
     const result = spawnSync(
       process.execPath,
@@ -39,7 +26,23 @@ describe('ensemble operator-agent command', () => {
     );
 
     expect(result.status).toBe(0);
+    expect(result.stdout).toContain('--profile <name>');
+    expect(result.stdout).toContain('--repo-filter <owner/repo|owner/*>');
+    expect(result.stdout).toContain('--resume <operatorAgentId>');
     expect(result.stdout).toContain('--new');
-    expect(result.stdout).toContain('--config <path>');
+    expect(result.stdout).not.toContain('--repo-root');
+    expect(result.stdout).not.toContain('--config');
+  });
+
+  it('keeps --repo-root on the ensemble issue command', () => {
+    const cliEntry = fileURLToPath(new URL('../dist/index.js', import.meta.url));
+    const result = spawnSync(
+      process.execPath,
+      [cliEntry, 'issue', '--help'],
+      { encoding: 'utf8' },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('--repo-root <path>');
   });
 });

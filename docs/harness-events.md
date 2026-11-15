@@ -137,8 +137,9 @@ operatorSummary: <short operator-facing summary>
 `tool_call` と `tool_call_update` は `(workerId, ACP sessionId, toolCallId)` ごとに累積する。
 ID は ACP session をまたいで一意とは限らない。累積した履歴は、resume SessionResumeStore 本体とは別の
 `~/.ensemble/sessions/github.com/<owner>/<repo>/{conductorAgentId}.tool-calls` に JSON で原子的に保存する。
-新規作成と通常 flush は canonical slug 側だけに行う。resume 時は slug に file がない場合に限って
-user path-hash、次に現在 checkout の project-local history を read fallback し、slug へ copy する。
+新規作成と通常 flush は canonical slug 側だけに行う。resume 時は slug に file がない場合に限って、
+現在 clone の user path-hash、保存時 clone の user path-hash、保存時 clone の project-local history、
+現在 clone の project-local history の順で read fallback し、slug へ copy する。
 slug file があればその内容を優先し、legacy 側との統合・上書き・削除はしない。
 SessionResumeStore と別にすることで、履歴ファイルの欠損や破損が conductor / worker session の resume を妨げない。
 この file は ACP tool-call snapshot 専用で、すべての `SessionLogEvent` の永続化先ではない。

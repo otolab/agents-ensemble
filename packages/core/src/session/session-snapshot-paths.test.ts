@@ -16,21 +16,12 @@ describe('sessionSnapshotPaths', () => {
   });
 
   it.each([
-    {
-      location: 'canonical-slug',
-      expectedLocations: ['canonical-slug', 'user-path-hash', 'project-legacy'],
-    },
-    {
-      location: 'user-path-hash',
-      expectedLocations: ['user-path-hash', 'project-legacy'],
-    },
-    {
-      location: 'project-legacy',
-      expectedLocations: ['project-legacy'],
-    },
+    'canonical-slug',
+    'user-path-hash',
+    'project-legacy',
   ] as const)(
-    'uses the resume location precedence for $location snapshots',
-    ({ location, expectedLocations }) => {
+    'uses slug-first fallback precedence for $location snapshots',
+    (location) => {
       vi.stubEnv('ENSEMBLE_USER_ROOT', userRoot);
       const paths = resolveEnsemblePaths({ repoRoot, userEnsembleRoot: userRoot });
       const located: LocatedSessionResumeStore = {
@@ -50,7 +41,11 @@ describe('sessionSnapshotPaths', () => {
       };
 
       for (const kind of ['open-questions', 'session-state'] as const) {
-        const expected = expectedLocations.map((selectedLocation) => {
+        const expected = [
+          'canonical-slug',
+          'user-path-hash',
+          'project-legacy',
+        ].map((selectedLocation) => {
           if (selectedLocation === 'project-legacy') {
             return kind === 'open-questions'
               ? paths.legacyOpenQuestionsPath('agent-1')
@@ -70,4 +65,42 @@ describe('sessionSnapshotPaths', () => {
       }
     },
   );
+
+  it('keeps canonical slug first and checks both clone hash fallbacks', () => {
+    vi.stubEnv('ENSEMBLE_USER_ROOT', userRoot);
+    const currentPaths = resolveEnsemblePaths({
+      repoRoot,
+      userEnsembleRoot: userRoot,
+    });
+    const savedRepoRoot = '/origin/repository';
+    const savedPaths = resolveEnsemblePaths({
+      repoRoot: savedRepoRoot,
+      userEnsembleRoot: userRoot,
+    });
+    const located: LocatedSessionResumeStore = {
+      resumeStore: {
+        version: 1,
+        conductorAgentId: 'agent-1',
+        issueUrl,
+        repoRoot: savedRepoRoot,
+        profile: { workers: [] },
+        openQuestions: [],
+        sequence: 0,
+        workers: {},
+        updatedAt: 0,
+      },
+      path: currentPaths.canonicalSessionResumeStorePath(issueUrl, 'agent-1'),
+      location: 'canonical-slug',
+    };
+
+    expect(
+      sessionSnapshotPaths(repoRoot, located, 'session-state'),
+    ).toEqual([
+      currentPaths.canonicalSessionStatePath(issueUrl, 'agent-1'),
+      currentPaths.sessionStatePath('agent-1'),
+      savedPaths.sessionStatePath('agent-1'),
+      currentPaths.legacySessionStatePath('agent-1'),
+      savedPaths.legacySessionStatePath('agent-1'),
+    ]);
+  });
 });

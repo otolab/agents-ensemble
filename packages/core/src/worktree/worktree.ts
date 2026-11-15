@@ -1,4 +1,5 @@
-import { mkdir } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import { lstat, mkdir } from 'node:fs/promises';
 import { realpath } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import type { IssueRef } from '../issue/issue-ref.js';
@@ -14,6 +15,12 @@ export interface WorktreeRef {
   issue: IssueRef;
   /** メイン worktree での直接作業（isolated worktree を使わない）。 */
   inRepo?: boolean;
+}
+
+export interface ResolveWorkerWorkspaceOptions {
+  /** Resume resolves or safely recreates this clone's Issue worktree. */
+  resume?: boolean;
+  onNotice?: (message: string) => void;
 }
 
 export function workerBranchName(issue: Pick<IssueRef, 'number'>): string {
@@ -49,11 +56,170 @@ export async function resolveWorkerWorkspace(
   repoRoot: string,
   issue: IssueRef,
   mode: WorkerWorktreeMode = 'isolated',
+  options: ResolveWorkerWorkspaceOptions = {},
 ): Promise<WorktreeRef> {
   if (mode === 'in_repo') {
     return resolveInRepoWorkspace(repoRoot, issue);
   }
+  if (options.resume) {
+    try {
+      return await resolveWorkerWorktreeForResume(repoRoot, issue, options);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      options.onNotice?.(
+        `Issue #${issue.number} の resume worktree を安全に解決できませんでした。既存の path・worktree・branch は変更していません。原因: ${detail}`,
+      );
+      throw error;
+    }
+  }
   return createWorkerWorktree(repoRoot, issue);
+}
+
+async function resolveWorkerWorktreeForResume(
+  repoRoot: string,
+  issue: IssueRef,
+  options: ResolveWorkerWorkspaceOptions,
+): Promise<WorktreeRef> {
+  const expectedBranch = workerBranchName(issue);
+  const existing = await resolveWorkerWorktree(repoRoot, issue);
+  if (existing?.branch === expectedBranch) return existing;
+
+  const expectedPath = resolve(workerWorktreePath(repoRoot, issue));
+  const issueWorktreeDir = resolveEnsemblePaths({ repoRoot }).worktreesDir;
+  options.onNotice?.(
+    existing
+      ? `保存済みの resume path ${expectedPath} は branch ${existing.branch} に接続されており、対象 Issue の branch ${expectedBranch} ではありません。既存 worktree はそのまま残し、別の workspace を探します。`
+      : `この clone に Issue #${issue.number} の resume worktree ${expectedPath} がありません。${expectedBranch} または通常の base branch から安全な再生成を試みます。SessionResumeStore に保存時の commit SHA がないため、以前の worktree にだけある local commit / 未コミット変更は照合・復元できません。`,
+  );
+
+  const listed = await listWorktrees(repoRoot);
+  const expectedBranchAttached = listed.some(
+    (worktree) => worktree.branch === expectedBranch,
+  );
+  const branchExists = await gitBranchExists(repoRoot, expectedBranch);
+  const recoveryBranch =
+    expectedBranchAttached
+      ? `${expectedBranch}-resume-${randomUUID().slice(0, 8)}`
+      : expectedBranch;
+  let startPoint = branchExists
+    ? expectedBranchAttached
+      ? expectedBranch
+      : undefined
+    : await resolveNewBranchStartPoint(repoRoot);
+  if (!branchExists && !startPoint) {
+    try {
+      await runGit(['rev-parse', '--verify', 'HEAD^{commit}'], repoRoot);
+      startPoint = 'HEAD';
+    } catch {
+      throw new Error(
+        `Issue #${issue.number} に安全な worktree base がありません。対象 branch ${expectedBranch} はなく、現在の clone にも利用可能な commit がありません。`,
+      );
+    }
+  }
+  if (expectedBranchAttached && startPoint) {
+    try {
+      await runGit(
+        ['rev-parse', '--verify', `${startPoint}^{commit}`],
+        repoRoot,
+      );
+    } catch {
+      throw new Error(
+        `Issue #${issue.number} に安全な worktree base がありません。使用中 branch ${expectedBranch} に利用可能な commit がありません。`,
+      );
+    }
+  }
+  let path: string;
+  try {
+    path = await resolveAvailableResumePath({
+      issue,
+      expectedPath,
+      issueWorktreeDir,
+      listed,
+    });
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `Issue #${issue.number} の worktree を安全に復旧できません: ${detail}`,
+      { cause: error },
+    );
+  }
+
+  try {
+    if (branchExists && !expectedBranchAttached) {
+      await runGit(['worktree', 'add', path, recoveryBranch], repoRoot);
+    } else if (startPoint) {
+      await runGit(
+        ['worktree', 'add', '-b', recoveryBranch, path, startPoint],
+        repoRoot,
+      );
+    } else {
+      await runGit(['worktree', 'add', '-b', recoveryBranch, path], repoRoot);
+    }
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `Issue #${issue.number} の worktree を ${path} / branch ${recoveryBranch} に安全に復旧できません: ${detail}`,
+      { cause: error },
+    );
+  }
+
+  const result = { path, branch: recoveryBranch, issue };
+  options.onNotice?.(
+    `Issue #${issue.number} の resume worktree を ${path}、branch ${recoveryBranch} に再生成しました。既存の directory・worktree・branch は変更していません。`,
+  );
+  return result;
+}
+
+async function resolveAvailableResumePath(input: {
+  issue: IssueRef;
+  expectedPath: string;
+  issueWorktreeDir: string;
+  listed: ListedWorktree[];
+}): Promise<string> {
+  if (
+    !(await pathExists(input.expectedPath)) &&
+    !(await isListedWorktreePath(input.listed, input.expectedPath))
+  ) {
+    return input.expectedPath;
+  }
+
+  await mkdir(input.issueWorktreeDir, { recursive: true });
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    const suffix = randomUUID().slice(0, 8);
+    const candidate = join(
+      input.issueWorktreeDir,
+      `issue-${input.issue.number}-resume-${suffix}`,
+    );
+    if (
+      !(await pathExists(candidate)) &&
+      !(await isListedWorktreePath(input.listed, candidate))
+    ) {
+      return candidate;
+    }
+  }
+  throw new Error(
+    `Could not find an unused recovery path for Issue ${input.issue.number}; ${input.expectedPath} is occupied.`,
+  );
+}
+
+async function isListedWorktreePath(
+  listed: ListedWorktree[],
+  path: string,
+): Promise<boolean> {
+  for (const worktree of listed) {
+    if (await pathsEqual(worktree.path, path)) return true;
+  }
+  return false;
+}
+
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await lstat(path);
+    return true;
+  } catch (error) {
+    if (isEnoent(error)) return false;
+    throw error;
+  }
 }
 
 /** メイン worktree（repo root）で直接作業する。通常の isolated worktree は作らない。 */
@@ -301,4 +467,13 @@ async function realpathSafe(path: string): Promise<string> {
   } catch {
     return resolve(path);
   }
+}
+
+function isEnoent(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    (error as NodeJS.ErrnoException).code === 'ENOENT'
+  );
 }

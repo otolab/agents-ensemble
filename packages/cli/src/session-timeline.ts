@@ -4,9 +4,9 @@ import chalk, { Chalk } from 'chalk';
 import {
   CONDUCTOR_PROVIDER_HISTORY_LIMIT,
   escapeTerminalControlCharacters,
+  findSessionResumeStoreBySelector,
   harnessPhaseFromLegacyLifecycle,
   listConductorProviderHistory,
-  listLocatedSessionResumeStores,
   type ConductorBackend,
   type ConductorProviderHistoryMessage,
   type HarnessPhase,
@@ -95,7 +95,14 @@ export interface SessionTimelineResult {
         };
     sessionSummary:
       | { status: 'not-provided' }
-      | { status: 'available'; path: string }
+      | {
+          status: 'available';
+          path: string;
+          repoRootMismatch?: {
+            summaryRepoRoot: string;
+            storedSessionRepoRoot: string;
+          };
+        }
       | { status: 'unavailable'; path: string; reason: string };
     harnessLog:
       | { status: 'not-provided' }
@@ -144,6 +151,7 @@ interface MutableSessionTimelineSend {
 export async function readSavedSessionTimeline(input: {
   repoRoot: string;
   conductorAgentId: string;
+  githubRepo?: string;
   issueUrl?: string;
   summaryPath?: string;
   harnessLogPath?: string;
@@ -153,16 +161,12 @@ export async function readSavedSessionTimeline(input: {
     input.conductorAgentId,
     'conductorAgentId',
   );
-  const located = (await listLocatedSessionResumeStores(repoRoot)).find(
-    (candidate) =>
-      candidate.resumeStore.conductorAgentId === conductorAgentId &&
-      (input.issueUrl === undefined ||
-        candidate.resumeStore.issueUrl === input.issueUrl),
-  );
-  if (
-    !located ||
-    resolve(located.resumeStore.repoRoot) !== repoRoot
-  ) {
+  const located = await findSessionResumeStoreBySelector(repoRoot, {
+    githubRepo: input.githubRepo,
+    issueUrl: input.issueUrl,
+    conductorAgentId,
+  });
+  if (!located) {
     throw new Error(`No saved session found for ${conductorAgentId}.`);
   }
 
@@ -174,8 +178,17 @@ export async function readSavedSessionTimeline(input: {
         backend,
         conductorAgentId,
         cwd: resumeStore.conductorCwd ?? resumeStore.repoRoot,
-        repoRoot: resumeStore.repoRoot,
+        repoRoot,
         issueUrl: resumeStore.issueUrl,
+        ...(backend === 'pi'
+          ? {
+              fallbackCwds: [
+                resumeStore.conductorCwd,
+                resumeStore.repoRoot,
+              ].filter((cwd): cwd is string => Boolean(cwd)),
+              fallbackRepoRoots: [resumeStore.repoRoot],
+            }
+          : {}),
         ...(resumeStore.cursorBootstrapRunId
           ? { cursorBootstrapRunId: resumeStore.cursorBootstrapRunId }
           : {}),
@@ -611,6 +624,7 @@ async function readProviderHistory(input: {
   cwd: string;
   repoRoot: string;
   issueUrl: string;
+  fallbackCwds?: readonly string[];
   cursorBootstrapRunId?: string;
 }): Promise<
   | {
@@ -627,6 +641,7 @@ async function readProviderHistory(input: {
       cwd: input.cwd,
       repoRoot: input.repoRoot,
       issueUrl: input.issueUrl,
+      fallbackCwds: input.fallbackCwds,
       ...(input.cursorBootstrapRunId
         ? { cursorBootstrapRunId: input.cursorBootstrapRunId }
         : {}),
@@ -690,7 +705,6 @@ async function readSessionSummary(input: {
     value,
     input.conductorAgentId,
     input.issueUrl,
-    input.repoRoot,
   );
   if ('reason' in parsed) {
     return {
@@ -699,8 +713,19 @@ async function readSessionSummary(input: {
     };
   }
 
+  const repoRootMismatch =
+    resolve(parsed.repoRoot) === resolve(input.repoRoot)
+      ? undefined
+      : {
+          summaryRepoRoot: parsed.repoRoot,
+          storedSessionRepoRoot: input.repoRoot,
+        };
   return {
-    source: { status: 'available', path },
+    source: {
+      status: 'available',
+      path,
+      ...(repoRootMismatch ? { repoRootMismatch } : {}),
+    },
     summary: parsed.summary,
   };
 }
@@ -709,8 +734,7 @@ function parseSessionSummary(
   value: unknown,
   conductorAgentId: string,
   issueUrl: string,
-  repoRoot: string,
-): { summary: SessionTimelineSummary } | { reason: string } {
+): { summary: SessionTimelineSummary; repoRoot: string } | { reason: string } {
   if (!isRecord(value)) {
     return { reason: 'JSON の最上位は object である必要があります。' };
   }
@@ -724,12 +748,9 @@ function parseSessionSummary(
       reason: 'SessionSummary の issueUrl が保存 session と一致しません。',
     };
   }
-  if (
-    typeof value.repoRoot !== 'string' ||
-    resolve(value.repoRoot) !== resolve(repoRoot)
-  ) {
+  if (typeof value.repoRoot !== 'string') {
     return {
-      reason: 'SessionSummary の repoRoot が保存 session と一致しません。',
+      reason: 'SessionSummary の repoRoot は文字列である必要があります。',
     };
   }
   if (!Object.hasOwn(value, 'startedAt')) {
@@ -825,6 +846,7 @@ function parseSessionSummary(
           }
         : {}),
     },
+    repoRoot: value.repoRoot,
   };
 }
 
@@ -1019,7 +1041,11 @@ function formatOptionalSource(
       if ('recognizedEventCount' in source) {
         return `読取済み: ${source.recognizedEventCount} 件の対象行 (${source.path})`;
       }
-      return `読取済み (${source.path})`;
+      return `読取済み (${source.path})${
+        'repoRootMismatch' in source && source.repoRootMismatch
+          ? `。repoRoot が異なります（summary: ${escapeTerminalControlCharacters(source.repoRootMismatch.summaryRepoRoot)} / 保存 session: ${escapeTerminalControlCharacters(source.repoRootMismatch.storedSessionRepoRoot)}）。clone 間の実行 context 差として許容しました`
+          : ''
+      }`;
   }
 }
 

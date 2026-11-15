@@ -2,7 +2,7 @@
 
 > **正本:** `.ensemble/config.yaml` の配置・書き方・スキーマと conductor MCP 設定。本書以外の設定層の一覧・解決パターンは [settings.md](settings.md) を参照します。
 
-`.ensemble/config.yaml` は harness 横断の設定の正本。team-profile（`profile.yaml`）や conductor backend の認証とは別系統。
+`.ensemble/config.yaml` は `ensemble issue` harness の設定の正本。team-profile（`profile.yaml`）や conductor backend の認証とは別系統です。`ensemble operator-agent` はこの設定・team profile を読み込まず、専用の `~/.ensemble/operator-agents.config.yaml` を使います（本書の [operator-agent 設定](#operator-agent-専用設定) を参照）。
 
 conductor に渡す MCP 設定もこの config.yaml とは別の JSON ファイルで管理する（下記の [Conductor MCP 設定](#conductor-mcp-設定mcpjson) を参照）。
 
@@ -50,7 +50,6 @@ acp:
 
 ```sh
 ensemble issue 42 --config ~/.ensemble/litellm.config.yaml
-ensemble operator-agent --config ~/.ensemble/litellm.config.yaml
 ```
 
 token などの秘密情報はこのファイルへ平文で書かず、provider が参照する環境変数や認証ストアで管理します。
@@ -59,25 +58,59 @@ token などの秘密情報はこのファイルへ平文で書かず、provider
 
 `conductor.backend` はこの共通順序の例外です。CLI / 環境変数による上書きはなく、選択した profile の `profile.conductor.backend` > merged config（project > 選択された user config）> `pi` の順で解決します。Cursor SDK を使う場合は config または profile に `backend: cursor` を指定してください。
 
-`ensemble issue` は GitHub monitor / Issue コンテキスト取得より前に config を読み込みます。`ensemble operator-agent` も `--config` を指定でき、同じ default → 選択された user config → project config（読み込み有効時）の loader を使います。`--config` は team profile の `--profile` とは別系統で、profile 名から config ファイルを推測しません。
+`ensemble issue` は GitHub monitor / Issue コンテキスト取得より前に config を読み込みます。`ensemble operator-agent` は独立した operator 設定ファイルだけを読み、`--config` は受け付けません。`--profile` は operator profile の選択に使います。
+
+## operator-agent 専用設定
+
+operator-agent は `~/.ensemble/operator-agents.config.yaml` を読み、選択 profile の workspace を `~/.ensemble/operator-agents/<profile>/` に固定します。相対 Pi path は共通設定なら `~/.ensemble/`、profile の `pi.projectDir` なら profile workspace を基準にします。profile 名は安全な単一 path segment でなければなりません。
+
+```yaml
+version: 1
+defaultProfile: personal
+common:
+  conductor:
+    backend: pi
+    model: default
+    reasoning: high
+  pi:
+    agentDir: ~/.ensemble/pi
+profiles:
+  personal:
+    include:
+      - otolab/*
+    conductor:
+      model: YOUR_MODEL_ID
+    prompt:
+      instructions:
+        - Review saved sessions across the selected repositories.
+    pi:
+      projectDir: pi
+      skills: true
+```
+
+profile は `--profile` > `ENSEMBLE_OPERATOR_AGENT_PROFILE` > 再開対象 conversation に記録された profile > `defaultProfile` > 唯一の profile の順に選びます。まだ複数候補が残る場合は TTY で選択します。保存 conversation の profile が config から消えていて選び直す場合は、その差を表示します。
+
+`backend` / `model` / `reasoning` は `ENSEMBLE_OPERATOR_AGENT_BACKEND` / `ENSEMBLE_OPERATOR_AGENT_MODEL` / `ENSEMBLE_OPERATOR_AGENT_REASONING` > 選択 profile > `common.conductor` > 既定値の順です。operator-agent は `CONDUCTOR_*`、generic config、project config、team profile から値を継承しません。Pi 共通 root は `common.pi.agentDir` > `PI_CODING_AGENT_DIR` > `~/.ensemble/pi`、profile root は `profiles.<name>.pi.projectDir` > `<profile workspace>/pi` の順です。Pi はこの user 共通 root と選択 profile root のみを読み、launch cwd や profile workspace から `.ensemble/pi` を自動探索しません。
+
+profile の `include` は `owner/repo` または `owner/*` の repository pattern 配列です。未指定または空なら scope を狭めません。CLI の複数 `--repo-filter` は OR で照合し、指定した `include` との AND を取ります。対象は user store にある session data で、GitHub API から repository を列挙しません。
 
 #### resume と config 変更
 
-新しい session は SessionResumeStore に `ensembleConfigDigestScheme: resume-feasibility` と digest を記録します。この digest が比較するのは merge 後の `session.worktree`、`acp.defaultPreset`、`acp.pi.runtime` です。BYO は既定値として省略し、従来の設定 digest を変えません。builtin と BYO の切り替えは resume を拒否します（[ADR 0048](adr/0048-session-resume-feasibility-config-digest.md)、[ADR 0067](adr/0067-pi-acp-upstream-package-wrapper.md)）。
+新しい session は SessionResumeStore に `ensembleConfigDigestScheme: resume-feasibility` と digest を記録します。この digest が要約するのは merge 後の `session.worktree`、`acp.defaultPreset`、`acp.pi.runtime` です。BYO は既定値として省略し、従来の設定 digest を変えません。resume は保存時の clone / config / profile を復元せず、現在 clone で解決した設定を使います。digest 差だけで resume を拒否しません。実際の backend / ACP が session を復元できない場合は、その失敗を通知します。Pi runtime の切り替え後に builtin Pi の保存 session を読み込めない場合は、新規 session へ黙って置き換えず worker attach を失敗させます（[ADR 0048](adr/0048-session-resume-feasibility-config-digest.md)、[ADR 0067](adr/0067-pi-acp-upstream-package-wrapper.md)）。
 
-`acpModelConfigDigest` は `acp.env` / `acp.models` / `acp.tags` を hash し、worker の ACP spawn fingerprint は `piRuntime`、`modelTag`、解決済み model ID、reasoning、明示値の `cursorFast`、spawn env digest と Codex の実効 `MODEL_PROVIDER` digest を記録します。秘密の環境値は平文で保存しません。model / reasoning / env の値は診断用で、新しい `resume-feasibility` sidecar の resume 拒否には使いません。fingerprint では preset を照合し、Pi は runtime の切り替えも検出します。`custom` のときは command / args も照合します（[ADR 0054](adr/0054-cursor-acp-runtime-verification.md)、[ADR 0067](adr/0067-pi-acp-upstream-package-wrapper.md)）。
+`acpModelConfigDigest` は `acp.env` / `acp.models` / `acp.tags` を hash し、worker の ACP spawn fingerprint は `piRuntime`、`modelTag`、解決済み model ID、reasoning、明示値の `cursorFast`、spawn env digest と Codex の実効 `MODEL_PROVIDER` digest を記録します。秘密の環境値は平文で保存しません。これらは保存時の設定を説明する診断情報です。resume 時は現在の preset / runtime / command / args を使って `session/load` を試み、保存 fingerprint の差だけで先に拒否しません。load failure 後に新しい ACP session へ復旧する runtime では、旧 session の文脈を復元できなかったことを operator と conductor に通知します。中断した古い instruction は自動再送しません（[ADR 0054](adr/0054-cursor-acp-runtime-verification.md)、[ADR 0067](adr/0067-pi-acp-upstream-package-wrapper.md)）。
 
-`conductor.model` と `conductor.reasoning` は `resume-feasibility` digest の対象外です。これらの config 値を変えても resume は拒否されず、再開時に最新の merged config を使います。Issue session の `--model` / `--reasoning` と `CONDUCTOR_MODEL_ID` / `CONDUCTOR_REASONING` は digest に含めず、resume ごとに再解決します。operator-agent は専用 CLI option を持たず、`CONDUCTOR_MODEL_ID` / `CONDUCTOR_REASONING` > merged config の順で解決します。
+`conductor.model` と `conductor.reasoning` は `resume-feasibility` digest の対象外です。これらの config 値を変えても Issue session の resume は拒否されず、再開時に現在の merged config を使います。Issue session の `--model` / `--reasoning` と `CONDUCTOR_MODEL_ID` / `CONDUCTOR_REASONING` は digest に含めず、resume ごとに再解決します。operator-agent は別の専用 config と `ENSEMBLE_OPERATOR_AGENT_MODEL` / `ENSEMBLE_OPERATOR_AGENT_REASONING` を使います。
 
 conductor model の優先順は `--model` / `RunConductorSessionOptions.modelId` > `CONDUCTOR_MODEL_ID` > merged config の `conductor.model` > backend default です。直接 API でも同じ優先順で選択し、Cursor / Pi の組み込み factory には解決値を create / resume 時に渡します。既定の `model: default` は Pi では特別なモデル ID として送らず、Pi resource settings の `defaultProvider` / `defaultModel`（`model` / `modelId` alias も可）に選択を委ねます。設定がなければ明示 model を指定するか、初回導線の `ensemble setup` で Pi model settings を用意してください。custom factory では互換性を保つため、config または code default から `default` が選ばれた場合は `modelId: undefined` を渡し、factory 自身の既定値に委ねます。一方、CLI / API の明示値または `CONDUCTOR_MODEL_ID` が `default` / `auto` を選んだ場合は `'default'` を渡し、その invocation override を保ちます。詳しくは[設定全体の解決順](settings.md)を参照してください。
 
-resume では model / reasoning を保存値に固定せず、CLI / 環境変数の invocation override と最新の merged config から毎回解決します。新しい `resume-feasibility` digest は `conductor.model` / `conductor.reasoning` を比較しません。scheme のない旧 sidecar と `full` sidecar は従来どおり config 全体を照合するため、変更が resume を拒否することがあります。
+resume では model / reasoning を保存値に固定せず、CLI / 環境変数の invocation override と最新の merged config から毎回解決します。保存時に `full` scheme を使っていた旧 sidecar も、config digest の違いだけでは拒否しません。比較できる場合は差を診断情報として扱い、現在の clone の設定で backend resume を試みます。
 
-ACP spawn fingerprint の model / reasoning / env 情報の差は resume を拒否しません。preset は照合し、Pi は builtin / BYO の runtime marker も照合します。marker のない既存 Pi session は BYO として扱います。`custom` の場合は command / args も照合します。sidecar profile の復元と worker `acpCwd` の照合、conductor backend、MCP digest、session identity の検証は引き続き行います。
+保存時と現在の conductor backend / MCP digest / profile / worker `acpCwd` が異なる場合も、保存値へ戻したり digest 不一致だけで拒否したりせず、現在の設定で復元を試みます。worker は現在の workspace cwd で `session/load` し、保存時 cwd が無い・読めない場合や保存時 clone にだけ残るローカル状態を引き継げない場合は具体的な warning を出します。conductor backend の `resume` が失敗した場合、session の起動を成功扱いしません。
 
-scheme がない旧 sidecar と `full` sidecar は、従来の `EnsembleConfig` 全体 hash で比較します。そのため、config に含まれる model / reasoning / env を変えた場合も resume が拒否されることがあります。resume・再保存では旧 scheme と digest の意味を保ち、自動で v2 に読み替えません。scheme 省略 / `full` で digest がない旧 store は warning を出して全体 config の比較を省略し、欠如したまま保存します。旧 `resume-feasibility` store に `acpModelConfigDigest` がない場合は診断情報がない旨を warning で知らせますが、resume は許可し、digest もバックフィルしません。model-related field のない旧 fingerprint もそのまま引き継ぎ、比較に使いません。`resume-feasibility` digest がない sidecar と未知の scheme は不正データとして拒否します。
+resume・再保存では旧 scheme と digest をそのまま記録情報として保持し、自動で新しい scheme に読み替えません。scheme 省略 / `full` で digest がない旧 store は比較できない旨を warning で知らせ、欠如したまま保存します。旧 `resume-feasibility` store に `acpModelConfigDigest` がない場合も診断情報がない旨を warning で知らせますが、digest はバックフィルしません。`resume-feasibility` digest がない sidecar と未知の scheme は不正データとして拒否します。
 
-hash には merge 後の値を使い、設定ファイルのパスや秘密値を sidecar に保存しません。旧 sidecar の平文 ACP env は resume 検証前に digest へ置き換えて書き戻します。neutral な config 変更で `full` digest が一致しなくなった旧 session は自動移行せず、新しい session を開始してください（[ADR 0048](adr/0048-session-resume-feasibility-config-digest.md)、[`conductor.reasoning` の分類](adr/0051-conductor-reasoning-resume-digest.md)、[Cursor runtime と worker metadata](adr/0054-cursor-acp-runtime-verification.md)）。
+hash には merge 後の値を使い、設定ファイルのパスや秘密値を sidecar に保存しません。旧 sidecar の平文 ACP env は読み込み時に digest へ置き換えて書き戻します。保存時と現在の設定差があっても、新しい session を開始する前に現在の backend で復元を試みます（[ADR 0048](adr/0048-session-resume-feasibility-config-digest.md)、[`conductor.reasoning` の分類](adr/0051-conductor-reasoning-resume-digest.md)、[Cursor runtime と worker metadata](adr/0054-cursor-acp-runtime-verification.md)）。
 
 ## テンプレート
 
@@ -187,7 +220,7 @@ tui:
 
 ### Conductor reasoning
 
-`conductor.reasoning` は空でない文字列です。`ensemble issue` と `ensemble operator-agent` が共有し、値は固定 enum にせず、選択した backend と model が受け付ける値かを起動時に検証します。`ensemble issue` と直接 API では明示した `--reasoning` / `RunConductorSessionOptions.reasoning` > `CONDUCTOR_REASONING` > merged config の順、`ensemble operator-agent` では `CONDUCTOR_REASONING` > merged config の順で解決します。どちらも未指定なら reasoning を明示せず、backend に既定の選択を任せます。適用範囲と CLI override の境界は [ADR 0050](adr/0050-operator-agent-conductor-reasoning.md) を参照してください。
+`conductor.reasoning` は空でない文字列です。`ensemble issue` と直接 API では `--reasoning` / `RunConductorSessionOptions.reasoning` > `CONDUCTOR_REASONING` > merged config の順で解決します。operator-agent は専用 config の `profiles.<name>.conductor.reasoning` / `common.conductor.reasoning` と `ENSEMBLE_OPERATOR_AGENT_REASONING` を使い、`CONDUCTOR_REASONING` は参照しません。どちらも値は固定 enum にせず、選択した backend と model が受け付けるかを起動時に検証します。未指定なら reasoning を渡さず、backend の既定に任せます。設計判断は [ADR 0050](adr/0050-operator-agent-conductor-reasoning.md) と [ADR 0061](adr/0061-github-slug-session-persistence.md) を参照してください。
 
 - **Pi**: 指定値を Pi 1.x `createAgentSession({ thinkingLevel })` に渡します。Pi の native level は `off` / `minimal` / `low` / `medium` / `high` / `xhigh` / `max` です。選択 model の対応 level を session 作成前に確認し、未知・未対応値はエラーにします。provider 固有のリクエスト値への変換は Pi model の `thinkingLevelMap` と Pi の provider adapter に委ねます。現在の Pi 1.2.0 は Google Gemini 4 を thinking-level API として扱わないため、`google-generative-ai` / `google-vertex` の Gemini 4 model に reasoning を明示した場合も session 作成前にエラーにします。値を省略した場合、`settings.json` の `defaultThinkingLevel` は従来どおり headless conductor / operator-agent で読みません。
 - **Cursor**: [Cursor SDK の model parameter catalog](https://cursor.com/docs/sdk/typescript#model-parameters) を照会し、選択 model の reasoning / thinking / effort parameter と値を特定して `ModelSelection.params` に渡します。parameter ID と値は model / account ごとに異なるため、catalog 上で一意に対応しない値や候補は agent の create / resume 前にエラーにします。値を省略したときは catalog を照会せず、SDK の既定に任せます。
@@ -416,7 +449,7 @@ acp:
 
 #### resume と `acp.env` 変更
 
-新しい `resume-feasibility` sidecar では `acp.env` / `acp.models` / `acp.tags` の変更を resume 拒否に使いません。`acpModelConfigDigest` と ACP spawn fingerprint には診断用の情報として記録します。ACP preset と `acp.pi.runtime` は引き続き照合し、Pi runtime の切り替えを拒否します。`custom` では command / args の変更も拒否します。scheme のない旧 sidecar / `full` sidecar は従来どおり全 config digest を比較するため、config 上の model / reasoning / env 変更で拒否されることがあります。詳細は [ADR 0048](adr/0048-session-resume-feasibility-config-digest.md)、[ADR 0054](adr/0054-cursor-acp-runtime-verification.md)、[ADR 0067](adr/0067-pi-acp-upstream-package-wrapper.md) を参照してください。
+config digest と ACP spawn fingerprint の差は、`resume-feasibility` / 旧 `full` scheme のどちらでも resume を事前拒否する条件にしません。保存時の preset / runtime / command / args / model / reasoning / env は診断情報として保持し、resume は現在 clone の config と profile で `session/load` を試みます。保存 session を実際に復元できない場合は、backend / runtime の復旧方針に従って失敗を通知します。古い prompt や tool call は再送しません。詳細は [ADR 0048](adr/0048-session-resume-feasibility-config-digest.md)、[ADR 0054](adr/0054-cursor-acp-runtime-verification.md)、[ADR 0067](adr/0067-pi-acp-upstream-package-wrapper.md) を参照してください。
 
 ### Pi resource root
 
@@ -467,7 +500,7 @@ headless conductor の設定正本は常に `~/.ensemble/pi/settings.json` と `
 - **reload**: Pi `AgentSession.reload()` の後に、create 時に解決した同じ settings-manager スナップショットを再適用します。実行中の `.ensemble/pi/settings.json` の変更を hot reload する契約ではないため、設定変更を反映するには `resume` または新しい create が必要です。`AgentSession.reload()` または snapshot の再適用が失敗した場合は、snapshot の復元を試みた後、session を close / dispose して unusable とします。失敗が 1 つだけで close / dispose が成功した場合はその元のエラーを reject し、reload と snapshot 復元の両方、または close / dispose の cleanup error も発生した場合は `AggregateError` を reject します。`AggregateError.errors` には発生した元の reload / snapshot エラーと cleanup error が含まれます。失敗した session は send で再利用せず、同じ transcript を続ける場合も `resume`、新しい作業なら create で再作成してください。
 - **resume**: 新しい Pi session を作るため `.ensemble/pi` を再読込し、create と同じチャネル適用を行ってから既存 transcript を開きます。resume でも `<cwd>/.pi/settings.json` は読みません。
 
-Pi の `settings.md` にあるが headless conductor / operator-agent が適用しないキーは、Pi SDK の SettingsManager へ渡さず、拒否せず警告なしで無視します。`defaultThinkingLevel` を無視する契約は Pi settings に対するものです。明示的な reasoning は ensemble config の `conductor.reasoning` から指定します。
+Pi の `settings.md` にあるが headless conductor / operator-agent が適用しないキーは、Pi SDK の SettingsManager へ渡さず、拒否せず警告なしで無視します。`defaultThinkingLevel` を無視する契約は Pi settings に対するものです。Issue conductor の reasoning は ensemble config の `conductor.reasoning`、operator-agent の reasoning は専用 config の profile / `common.conductor.reasoning` から指定します。
 
 | 無視するキー（または prefix） | 適用されない挙動 |
 |------------------------------|------------------|
@@ -476,7 +509,7 @@ Pi の `settings.md` にあるが headless conductor / operator-agent が適用�
 | `defaultTools` / `codemode.*` | `defaultTools` は headless conductor では無視します。built-in coding tools は profile の `conductor.builtinTools`（省略・未指定は有効、`false` のみ無効）で制御し、`config.yaml` には同キーを設けません。 |
 | `packages` | Pi package の install・解決。package が提供する resource は自動導入しません。 |
 | `enableSkillCommands` | skill command の登録 toggle。読み込んだ skill の `/skill:<name>` 展開可否はこのキーで変更できません。 |
-| `sessionDir` | Pi の settings にある session 保存先は conductor では変更できません。Issue transcript は `~/.ensemble/sessions/github.com/<owner>/<repo>/pi/` に保存します。互換期間は slug にない transcript に限り、現在の `repoRoot` から導ける user path-hash と旧 `<conductorCwd>/.ensemble/pi/sessions/` を read fallback として使い、resume 時に対象 file を slug 側へ copy します。これは再開対象の lazy promotion で、全 path-hash と列挙 checkout の project-local data は migration tool の一括 inventory / copy で扱います。 |
+| `sessionDir` | Pi の settings にある session 保存先は conductor では変更できません。Issue transcript は `~/.ensemble/sessions/github.com/<owner>/<repo>/pi/` に保存します。Pi transcript は canonical slug → 現在・保存時の user path-hash → 該当する CWD の project-local `.ensemble/pi/sessions/` の順に読みます。resume 時は slug 側にない対象 file だけを copy し、source は保持します。全 path-hash と列挙 checkout の project-local data の inventory / copy は #698 migration tool が担います。 |
 | `theme` / `quietStartup` / `tuiMode` / `fullscreen*` / `terminal.*` / `images.*` / `markdown.*` | headless conductor の TUI・terminal 表示 |
 | `transport` / `httpProxy` / `httpIdleTimeoutMs` / `websocketConnectTimeoutMs` / `retry.*` / `shellPath` / `shellCommandPrefix` / `npmCommand` | Pi coding-agent の network、shell、package runtime |
 | `collapseChangelog` / `enableInstallTelemetry` / `enableAnalytics` / `warnings.*` | coding-agent の update、telemetry、UI warning |
@@ -556,13 +589,13 @@ MCP 設定は次の 2 層から読み込み、`mcpServers` のサーバー名単
 }
 ```
 
-解決済み設定は conductor の両 backend に同じ map として渡す。Cursor SDK では `Agent.create` / `Agent.resume` の inline MCP として、Pi では Pi 1.x の `DefaultResourceLoader` に `createMcpExtension({ loadConfig })` を extension factory として登録し、`createAgentSession` の起動時に注入する。Pi 側で `.pi/mcp.json` へ同期・コピー・symlink は行わず、resume 時も harness が解決した同じ map を再注入する。SessionResumeStore にはこの map の canonical SHA-256 digest だけを保存し、resume 時に現在の digest と比較するため、設定変更は新しい session を要求する。digest に秘密値そのものは保存しない。MCP 接続の管理、tool discovery、OAuth、resource tools は Pi 公式 extension に委ね、core は MCP client/transport を実装しない。
+解決済み設定は conductor の両 backend に同じ map として渡す。Cursor SDK では `Agent.create` / `Agent.resume` の inline MCP として、Pi では Pi 1.x の `DefaultResourceLoader` に `createMcpExtension({ loadConfig })` を extension factory として登録し、`createAgentSession` の起動時に注入する。Pi 側で `.pi/mcp.json` へ同期・コピー・symlink は行わず、resume 時は現在 clone で解決した map を使う。SessionResumeStore にはこの map の canonical SHA-256 digest を診断情報として保存するが、digest の差だけで resume を拒否しない。digest に秘密値そのものは保存しない。MCP 接続の管理、tool discovery、OAuth、resource tools は Pi 公式 extension に委ね、core は MCP client/transport を実装しない。
 
 `env` / `headers` / `cwd` は harness 境界で Cursor 形式の placeholder を解決してから Pi 公式 extension に渡す。`${env:VAR}` は現在の process environment の値、`${workspaceFolder}` / `${workspaceFolderBasename}` は conductor の cwd へ変換し、値が見つからない placeholder は literal のまま渡さず明確なエラーにする。Pi 標準の `$VAR` / `${VAR}` は公式 resolver に委ねる。Pi は `stdio` と Streamable HTTP (`http`) をサポートするが、shared `mcp.json` の `sse` 定義は Pi 1.x ではサポートしないため、Pi conductor の起動時に明確なエラーにする。HTTP の `auth` (`CLIENT_ID` / `CLIENT_SECRET` / `scopes`) は Pi の MCP OAuth 設定へ渡され、認可フローと credential 保存は公式 extension が管理する。`.cursor/mcp.json` や `.pi/mcp.json` へのコピー・symlink、`settings.json` の書き換えは行わず、ACP worker にはこの設定を渡さない。MCP server tool は公式名 `mcp__<server>__<tool>`（長すぎる・衝突する場合は Pi の hash suffix）で公開される。resources がある場合は公式の `list_mcp_resources`、`list_mcp_resource_templates`、`read_mcp_resource` が提供される。`codemode` / `tool_search` の exposure は公式 extension の設定に従う。
 
 Pi backend は `@earendil-works/pi-coding-agent@1.2.x` の公式 MCP extension を使う。MCP 未設定時は extension に空の解決結果を渡し、conductor は harness tools と local extension tools だけで起動する。
 
-JSON が不正、または `mcpServers` / サーバー定義の形式が不正な場合は、そのファイルを `[mcp]` 警告とともにスキップする。もう一方の層が有効ならそちらは引き続き読み込み、両方をスキップした場合は MCP なしで起動する。MCP のホットリロードは行わない。実行中の session の設定を変更した場合は、resume 時に digest mismatch として fail fast するため、新しい session を開始する。
+JSON が不正、または `mcpServers` / サーバー定義の形式が不正な場合は、そのファイルを `[mcp]` 警告とともにスキップする。もう一方の層が有効ならそちらは引き続き読み込み、両方をスキップした場合は MCP なしで起動する。MCP のホットリロードは行いません。実行中の session の設定を変更した場合、再開時は現在 clone の MCP config で復元を試み、backend が復元できない場合はその失敗を通知します。
 
 ## 秘密情報を config に書かない
 
