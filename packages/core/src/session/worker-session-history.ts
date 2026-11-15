@@ -13,6 +13,7 @@ import { parseIssueUrl } from '../issue/issue-ref.js';
 import { resolveEnsemblePaths } from '../ensemble-paths.js';
 import { resolvePiAcpSessionMapPaths } from '../acp/pi-session-map.js';
 import type { PiAcpRuntimeMarker } from '../acp/resolve-acp-spawn.js';
+import { resolveCursorConfigRoot } from './cursor-config-root.js';
 import {
   findSessionResumeStoreBySelector,
   listUserLocatedSessionResumeStoresPage,
@@ -718,7 +719,13 @@ async function readCursorAcpSessionHistoryWithSources(
   }
 
   const sessionDirectory = join(
-    resolveCursorConfigRoot(input.acpCwd),
+    resolveCursorConfigRoot({
+      acpCwd: input.acpCwd,
+      platform: process.platform,
+      cursorConfigDir: process.env.CURSOR_CONFIG_DIR,
+      xdgConfigHome: process.env.XDG_CONFIG_HOME,
+      homeDirectory: homedir(),
+    }),
     'acp-sessions',
     sessionId,
   );
@@ -824,17 +831,6 @@ async function readCursorAcpSessionHistoryWithSources(
   } finally {
     database?.close();
   }
-}
-
-function resolveCursorConfigRoot(acpCwd: string): string {
-  const configuredRoot = process.env.CURSOR_CONFIG_DIR?.trim();
-  if (configuredRoot) return resolve(acpCwd, configuredRoot);
-
-  const xdgConfigHome = process.env.XDG_CONFIG_HOME?.trim();
-  if (xdgConfigHome) {
-    return join(resolve(acpCwd, xdgConfigHome), 'cursor');
-  }
-  return join(homedir(), '.cursor');
 }
 
 function parseCursorAcpSessionMetadata(raw: string): CursorAcpSessionMetadata {
