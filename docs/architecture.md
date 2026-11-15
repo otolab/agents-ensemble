@@ -109,7 +109,7 @@ operator ロールは人間が Issue TTY / TUI で直接担う場合と、user �
 
 現行の `ensemble issue` では、人間が TTY / CLI 経由で conductor を監督する（プロンプト terms の「オペレータ」）。operator-agent はその **代替・補助の実行者**として足す。Open Question の外部連携（[#481](https://github.com/otolab/agents-ensemble/issues/481)）は operator 層の入出力として扱う。
 
-**operator-agent の設定・会話・状態**: Issue session と同じ `ConductorAgent` factory を使いますが、`~/.ensemble/operator-agents.config.yaml` の operator profile だけから設定し、workspace は `~/.ensemble/operator-agents/<profile>/` に固定します。launch cwd、project `.ensemble/`、generic config、team profile は参照しません。conversation record と Pi transcript は `operatorAgentId` ごとに global 保存し、起動 cwd の差だけでは再開を拒否しません。watch state は profile と canonical repository slug で分けます。詳細は [CLI README](cli/README.md#operator-agent) と [ADR 0061](adr/0061-github-slug-session-persistence.md)。
+**operator-agent の設定・会話・状態**: Issue session と同じ `ConductorAgent` factory を使いますが、`~/.ensemble/operator-agents.config.yaml` の operator profile だけから設定し、workspace は `~/.ensemble/operator-agents/<profile>/` に固定します。起動時に workspace root を実 path へ正規化し、read / write custom tool はその root 内だけを扱います。`..`、絶対 path、realpath 解決後に root 外となる symlink path は拒否し、file size は read / write とも 1 MiB に制限します。backend built-in coding tools は無効で、Pi extension は読み込まず、MCP server も渡しません。launch cwd、project `.ensemble/`、generic config、team profile は参照しません。conversation record と Pi transcript は `operatorAgentId` ごとに global 保存し、起動 cwd の差だけでは再開を拒否しません。watch state は profile と canonical repository slug で分けます。詳細は [CLI README](cli/README.md#operator-agent) と [ADR 0061](adr/0061-github-slug-session-persistence.md)。
 
 ### レイヤー
 

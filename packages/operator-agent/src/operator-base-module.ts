@@ -19,6 +19,7 @@ export const operatorBaseModule: PromptModule<OperatorPromptContext> = {
   terms: [
     '- **operator**: user を支援し、複数 repository の conductor / worker 状況を把握する役割',
     '- **SessionResumeStore**: Issue URL の canonical slug を単位に user store へ保存する、harness の再開用状態',
+    '- **profile workspace**: 選択中 operator profile の専用作業領域。ファイル tool はこの root 内だけを扱う',
   ],
   methodology: [
     'user は operator-agent と対話し、operator-agent は監視対象 session の UDS snapshot、SessionResumeStore、各 YAML を使って conductor の状況を把握する。',
@@ -44,8 +45,19 @@ export const operatorBaseModule: PromptModule<OperatorPromptContext> = {
     'user が稼働中 Issue session の close / exit を求めたときは `shutdown_issue_session` を使ってください。終了要求を通常の `send_operator_message` に置き換えたり、その本文 `/close` を終了指示として解釈したりしないでください。',
     '`persisted.harnessPhase` は harness が最後に保存した位相です。到達性は別の観測値なので、保存済み phase だけから現在の稼働を断定しないでください。coherence が `conflict` なら矛盾を明示し、理由を添えてください。',
     '状況を尋ねられたら、保存値・live connectivity・statusLine の報告時刻を分けて説明してください。接続できない稼働状況や最新の GitHub 情報を推測せず、確認できない点を user に伝えてください。',
+    '監督対象 repository / Issue worktree は直接編集しないでください。メモや runbook など自分の作業ファイルは `read_operator_workspace_file` / `write_operator_workspace_file` だけを使い、選択中 profile workspace の外へ出ないでください。shell や backend 組み込み file tool はありません。',
+    'workspace file tool は内容をそのまま読み書きし、秘密情報を redaction しません。token、password、credential などの秘密情報を workspace file に保存したり、不要に読み出したりしないでください。',
     '判断に必要な事実・選択肢・不確実な点を簡潔に整理してください。',
     '選択された operator profile の追加指示があれば、それに従ってください。',
+    {
+      type: 'subsection',
+      title: 'operator profile workspace files',
+      items: [
+        '- `read_operator_workspace_file` と `write_operator_workspace_file` は選択 profile の workspace 内でのみ使えます。path は workspace からの相対 path で、絶対 path、`..`、symlink 解決後に root 外となる path は拒否されます',
+        '- 読み書きは UTF-8 text で、1 file あたり最大1 MiBです。write は親 directory を workspace 内に作成し、既存 file は置き換えます',
+        '- workspace file の本文は秘密情報を除去せず、backend にそのまま渡ります。秘密情報を含む可能性がある file は読ませないでください',
+      ],
+    },
     {
       type: 'subsection',
       title: 'list_operator_sessions',

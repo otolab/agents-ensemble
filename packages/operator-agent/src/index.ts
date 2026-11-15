@@ -13,6 +13,13 @@ export {
   createListWorkerMessagesTool,
   LIST_WORKER_MESSAGES_TOOL,
 } from './worker-session-tools.js';
+export {
+  createOperatorWorkspaceFileTools,
+  MAX_OPERATOR_WORKSPACE_FILE_BYTES,
+  READ_OPERATOR_WORKSPACE_FILE_TOOL,
+  resolveOperatorWorkspaceRoot,
+  WRITE_OPERATOR_WORKSPACE_FILE_TOOL,
+} from './operator-workspace-tools.js';
 export { operatorBaseModule } from './operator-base-module.js';
 export type { OperatorPromptContext } from './operator-base-module.js';
 export {
