@@ -22,22 +22,31 @@ function createOutput() {
   return { stdout, text: () => value };
 }
 
-function createContext(repoRoot = '/tmp/doctor-check-repo'): DoctorCheckContext {
+function createContext(
+  repoRoot = '/tmp/doctor-check-repo',
+  backend: 'cursor' | 'pi' = 'pi',
+): DoctorCheckContext {
   const config = structuredClone(DEFAULT_ENSEMBLE_CONFIG);
   return {
     repoRoot,
     config,
-    auth: {
-      backend: 'pi',
-      config,
-      pi: {
-        cwd: repoRoot,
-        pi: {
-          agentDir: '/tmp/doctor-check-user/pi',
-          projectDir: `${repoRoot}/.ensemble/pi`,
-        },
-      },
-    },
+    auth:
+      backend === 'pi'
+        ? {
+            backend,
+            config,
+            pi: {
+              cwd: repoRoot,
+              pi: {
+                agentDir: '/tmp/doctor-check-user/pi',
+                projectDir: `${repoRoot}/.ensemble/pi`,
+              },
+            },
+          }
+        : {
+            backend,
+            config,
+          },
   };
 }
 
@@ -112,7 +121,12 @@ describe('runDoctorCheckCommand', () => {
     expect(report).toMatchObject({
       schemaVersion: 1,
       mode: 'basic',
-      agent: { started: false, turns: 0, answer: null },
+      agent: {
+        started: false,
+        turns: 0,
+        answer: null,
+        answerStatus: 'not_requested',
+      },
       exitCode: 0,
     });
     expect(report.checks.map(({ id }) => id)).toEqual([
@@ -145,6 +159,7 @@ describe('runDoctorCheckCommand', () => {
       started: false,
       turns: 0,
       answer: null,
+      answerStatus: 'unavailable',
     });
     expect(report.nextActions).toEqual([
       'ensemble auth status',
@@ -154,11 +169,14 @@ describe('runDoctorCheckCommand', () => {
     expect(createAgentFactory).not.toHaveBeenCalled();
   });
 
-  it('runs exactly one read-only turn for a natural-language request and sanitizes the report', async () => {
+  it('runs exactly one read-only turn and withholds arbitrary model output', async () => {
     const output = createOutput();
-    const answer =
-      'API_KEY=plain-secret-sentinel ghp_abcdefghijklmnopqrstuvwxyz123456';
+    const answer = 'opaque-secret-sentinel-123; this is arbitrary model output';
     const agent = createFakeAgent(answer);
+    const context = createContext();
+    context.config.acp.env = {
+      PRIVATE_CONFIG_SENTINEL: 'acp-env-secret-sentinel',
+    };
     let createdOptions: ConductorAgentCreateOptions | undefined;
     const factory: ConductorAgentFactory = {
       create: vi.fn(async (options) => {
@@ -174,6 +192,7 @@ describe('runDoctorCheckCommand', () => {
         'auth',
         'API_KEY=prompt-secret-sentinel',
         'ghp_abcdefghijklmnopqrstuvwxyz123456',
+        'opaque-secret-sentinel-123',
       ],
       json: true,
       stdout: output.stdout,
@@ -187,13 +206,19 @@ describe('runDoctorCheckCommand', () => {
 
     expect(report).toMatchObject({
       mode: 'agent',
-      agent: { started: true, turns: 1 },
+      agent: {
+        started: true,
+        turns: 1,
+        answer: null,
+        answerStatus: 'withheld',
+      },
       exitCode: 0,
     });
-    expect(report.agent.answer).not.toContain('plain-secret-sentinel');
-    expect(report.agent.answer).not.toContain('ghp_');
     expect(agent.send).toHaveBeenCalledOnce();
     expect(agent.send.mock.calls[0]?.[0]).toContain('[redacted]');
+    expect(agent.send.mock.calls[0]?.[0]).toContain(
+      'opaque-secret-sentinel-123',
+    );
     expect(agent.send.mock.calls[0]?.[0]).not.toContain('prompt-secret-sentinel');
     expect(agent.send.mock.calls[0]?.[0]).not.toContain('ghp_');
     expect(createAgentFactory).toHaveBeenCalledOnce();
@@ -209,8 +234,45 @@ describe('runDoctorCheckCommand', () => {
     ]);
     expect(createdOptions).not.toHaveProperty('mcpServers');
     expect(agent.close).toHaveBeenCalledOnce();
+    expect(output.text()).not.toContain('opaque-secret-sentinel-123');
     expect(output.text()).not.toContain('plain-secret-sentinel');
     expect(output.text()).not.toContain('prompt-secret-sentinel');
+    expect(output.text()).not.toContain('acp-env-secret-sentinel');
+    expect(output.text()).not.toContain('PRIVATE_CONFIG_SENTINEL');
+    expect(output.text()).not.toContain('ghp_');
+    expect(JSON.stringify(report)).not.toContain('opaque-secret-sentinel-123');
+    expect(JSON.stringify(report)).not.toContain('acp-env-secret-sentinel');
+  });
+
+  it('fails closed for Cursor natural-language requests without creating an agent', async () => {
+    const output = createOutput();
+    const createAgentFactory = vi.fn();
+    const report = await runDoctorCheckCommand({
+      request: 'diagnose the worker setup',
+      json: true,
+      stdout: output.stdout,
+      resolveContext: vi.fn(async () => createContext(undefined, 'cursor')),
+      authCheck: vi.fn(() => true),
+      createAgentFactory,
+      readSettings: vi.fn(async () => snapshot),
+      resolveWorkerSpawn: vi.fn(() => createFakeSpawn()),
+      validateWorkerSpawn: vi.fn(),
+    });
+
+    expect(report).toMatchObject({
+      mode: 'agent',
+      agent: {
+        started: false,
+        turns: 0,
+        answer: null,
+        answerStatus: 'unavailable',
+      },
+      error: { code: 'backend_unsupported' },
+      exitCode: 2,
+    });
+    expect(report.nextActions[0]).toContain('Pi backend');
+    expect(JSON.parse(output.text())).toEqual(report);
+    expect(createAgentFactory).not.toHaveBeenCalled();
   });
 
   it('treats empty positional words as no request', async () => {
@@ -234,7 +296,7 @@ describe('runDoctorCheckCommand', () => {
 
   it('keeps natural-language text output secret-free', async () => {
     const output = createOutput();
-    const agent = createFakeAgent('token: text-secret-sentinel');
+    const agent = createFakeAgent('opaque-secret-sentinel-456');
     const factory: ConductorAgentFactory = {
       create: vi.fn().mockResolvedValue(agent),
       resume: vi.fn(),
@@ -251,9 +313,11 @@ describe('runDoctorCheckCommand', () => {
       validateWorkerSpawn: vi.fn(),
     });
 
-    expect(report.agent.answer).toContain('[redacted]');
+    expect(report.agent.answer).toBeNull();
+    expect(report.agent.answerStatus).toBe('withheld');
     expect(output.text()).toContain('Doctor check (agent)');
-    expect(output.text()).not.toContain('text-secret-sentinel');
+    expect(output.text()).toContain('response withheld');
+    expect(output.text()).not.toContain('opaque-secret-sentinel-456');
   });
 
   it('uses the non-zero report code when a local prerequisite fails', async () => {

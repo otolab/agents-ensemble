@@ -78,14 +78,24 @@ describe('ensemble doctor check e2e', () => {
     const report = JSON.parse(result.stdout) as {
       mode: string;
       checks: Array<{ id: string; status: string }>;
-      agent: { started: boolean; turns: number };
+      agent: {
+        started: boolean;
+        turns: number;
+        answer: null;
+        answerStatus: string;
+      };
       exitCode: number;
     };
 
     expect(result.exitCode).toBe(0);
     expect(report).toMatchObject({
       mode: 'basic',
-      agent: { started: false, turns: 0 },
+      agent: {
+        started: false,
+        turns: 0,
+        answer: null,
+        answerStatus: 'not_requested',
+      },
       exitCode: 0,
     });
     expect(report.checks).toEqual(
@@ -125,6 +135,47 @@ describe('ensemble doctor check e2e', () => {
     expect(textResult.stdout).not.toContain('cursor-secret-sentinel');
     expect(textResult.stdout).not.toContain('do-not-print-this-value');
 
+    const cursorRequestResult = await runEnsembleCli(
+      [
+        'doctor',
+        'check',
+        '--json',
+        'diagnose',
+        'the',
+        'worker',
+        'configuration',
+      ],
+      { env, timeoutMs: 30_000 },
+    );
+    const cursorRequestReport = JSON.parse(cursorRequestResult.stdout) as {
+      mode: string;
+      agent: {
+        started: boolean;
+        turns: number;
+        answer: null;
+        answerStatus: string;
+      };
+      error?: { code: string };
+      exitCode: number;
+    };
+    expect(cursorRequestResult.exitCode).toBe(2);
+    expect(cursorRequestReport).toMatchObject({
+      mode: 'agent',
+      agent: {
+        started: false,
+        turns: 0,
+        answer: null,
+        answerStatus: 'unavailable',
+      },
+      error: { code: 'backend_unsupported' },
+      exitCode: 2,
+    });
+    expect(cursorRequestResult.stdout).not.toContain('cursor-secret-sentinel');
+    expect(cursorRequestResult.stdout).not.toContain('do-not-print-this-value');
+    await expect(readFile(markerPath, 'utf8')).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+
     const unauthenticatedEnv = { ...env };
     delete unauthenticatedEnv.CURSOR_API_KEY;
     const requestResult = await runEnsembleCli(
@@ -141,14 +192,24 @@ describe('ensemble doctor check e2e', () => {
     );
     const requestReport = JSON.parse(requestResult.stdout) as {
       mode: string;
-      agent: { started: boolean; turns: number };
+      agent: {
+        started: boolean;
+        turns: number;
+        answer: null;
+        answerStatus: string;
+      };
       nextActions: string[];
       exitCode: number;
     };
     expect(requestResult.exitCode).toBe(1);
     expect(requestReport).toMatchObject({
       mode: 'agent',
-      agent: { started: false, turns: 0 },
+      agent: {
+        started: false,
+        turns: 0,
+        answer: null,
+        answerStatus: 'unavailable',
+      },
       exitCode: 1,
     });
     expect(requestReport.nextActions).toContain('ensemble auth login');
@@ -162,7 +223,7 @@ describe('ensemble doctor check e2e', () => {
     );
     expect(helpResult.exitCode).toBe(0);
     expect(helpResult.stdout).toContain('[request...]');
-    expect(helpResult.stdout).toContain('one turn');
+    expect(helpResult.stdout).toContain('Pi backend');
 
     const usageResult = await runEnsembleCli(
       ['doctor', 'check', '--unknown'],

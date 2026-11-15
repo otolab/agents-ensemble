@@ -42,11 +42,15 @@ export interface DoctorCheckReport {
   agent: {
     started: boolean;
     turns: number;
-    answer: string | null;
+    answer: null;
+    answerStatus: 'not_requested' | 'unavailable' | 'withheld';
   };
   nextActions: string[];
   error?: {
-    code: 'configuration_unavailable' | 'agent_failed';
+    code:
+      | 'configuration_unavailable'
+      | 'agent_failed'
+      | 'backend_unsupported';
     message: string;
   };
   exitCode: 0 | 1 | 2;
@@ -79,7 +83,7 @@ const AUTH_ACTIONS = [
 const CONFIG_ACTION = '設定ファイルの構文と読み取り権限を確認してください。';
 const WORKER_ACTION =
   '設定済み worker preset の adapter / CLI をインストールし、PATH を確認してください。';
-const MAX_ANSWER_LENGTH = 4_000;
+const MAX_REQUEST_LENGTH = 4_000;
 
 export async function runDoctorCheckCommand(
   options: DoctorCheckCommandOptions = {},
@@ -92,7 +96,12 @@ export async function runDoctorCheckCommand(
     schemaVersion: 1,
     mode,
     checks: [],
-    agent: { started: false, turns: 0, answer: null },
+    agent: {
+      started: false,
+      turns: 0,
+      answer: null,
+      answerStatus: request ? 'unavailable' : 'not_requested',
+    },
     nextActions: [],
     exitCode: 0,
   };
@@ -249,7 +258,18 @@ async function runDiagnosticTurn(options: {
 }): Promise<void> {
   const { report, request, context } = options;
   const backend = context.auth.backend;
-  if (backend !== 'cursor' && backend !== 'pi') {
+  if (backend === 'cursor') {
+    report.error = {
+      code: 'backend_unsupported',
+      message:
+        'Cursor backend では doctor 専用 system prompt を保証できないため、自然言語による agent 診断を実行できません。',
+    };
+    report.nextActions.push(
+      'Pi backend に切り替えて再実行するか、request を省略して基本診断を実行してください。',
+    );
+    return;
+  }
+  if (backend !== 'pi') {
     report.error = {
       code: 'agent_failed',
       message: '診断 agent の backend を解決できませんでした。',
@@ -305,7 +325,7 @@ async function runDiagnosticTurn(options: {
       };
       return;
     }
-    report.agent.answer = sanitizeDoctorText(result.result ?? '');
+    report.agent.answerStatus = 'withheld';
   } catch (error) {
     const message = error instanceof Error ? error.message : '';
     if (isConductorAuthError(message)) {
@@ -350,7 +370,7 @@ function formatDiagnosticRequest(
     : 'The allowlisted config could not be read.';
   return [
     'Operator request:',
-    sanitizeDoctorText(request),
+    sanitizeDiagnosticRequest(request),
     '',
     'Harness checks:',
     checks || '- No checks are available.',
@@ -379,7 +399,7 @@ function normalizeRequest(
   return normalized || undefined;
 }
 
-function sanitizeDoctorText(value: string): string {
+function sanitizeDiagnosticRequest(value: string): string {
   const redacted = value
     .replace(
       /\b(?:github_pat_[A-Za-z0-9_]{16,}|gh[pousr]_[A-Za-z0-9_]{16,}|sk-(?:ant-)?[A-Za-z0-9_-]{16,}|xox[baprs]-[A-Za-z0-9-]{12,}|AKIA[A-Z0-9]{16})\b/giu,
@@ -391,8 +411,8 @@ function sanitizeDoctorText(value: string): string {
       '$1: [redacted]',
     );
   const bounded =
-    redacted.length > MAX_ANSWER_LENGTH
-      ? `${redacted.slice(0, MAX_ANSWER_LENGTH)}\n[response truncated]`
+    redacted.length > MAX_REQUEST_LENGTH
+      ? `${redacted.slice(0, MAX_REQUEST_LENGTH)}\n[request truncated]`
       : redacted;
   return escapeTerminalControlCharacters(bounded, { preserveNewlines: true });
 }
@@ -404,12 +424,15 @@ function formatDoctorCheckText(report: DoctorCheckReport): string {
       ({ id, status, summary }) =>
         `[${status}] ${id}: ${escapeTerminalControlCharacters(summary)}`,
     ),
-    `Agent: ${report.agent.started ? `started (${report.agent.turns} turn)` : 'not started'}`,
+    `Agent: ${
+      report.agent.started
+        ? report.agent.answerStatus === 'withheld'
+          ? `started (${report.agent.turns} turn; response withheld)`
+          : `started (${report.agent.turns} turn; response unavailable)`
+        : 'not started'
+    }`,
   ];
   if (report.error) lines.push(`Error: ${report.error.message}`);
-  if (report.agent.answer) {
-    lines.push('', report.agent.answer);
-  }
   if (report.nextActions.length > 0) {
     lines.push('', 'Next actions:', ...report.nextActions.map((action) => `- ${action}`));
   }
