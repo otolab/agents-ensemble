@@ -64,6 +64,7 @@ dispatch hold が続く間、harness は既定 **30 分ごと**に、held buffer
 | conductor（Cursor SDK、明示選択） | `ensemble auth login` |
 | conductor（Pi、OpenAI API key） | TTY: `ensemble auth login --provider openai --api-key-prompt`、非 TTY: `ensemble auth login --provider openai --api-key-stdin`。user `auth.json` に保存し、`ensemble setup` でも選択可能 |
 | conductor（Pi、他 provider の API key） | TTY: API-key-only provider は `ensemble auth login --provider <id>`、OAuth 共存 provider は `ensemble auth login --provider <id> --api-key-prompt`。非 TTY: `ensemble auth login --provider <id> --api-key-stdin` |
+| conductor（Pi、既存 command credential） | `ensemble auth set-command --provider <id> -- '!command'`。既定で user `settings.json` に保存。project 保存は `--target project` を明示 |
 | conductor（Pi、OAuth の再 login） | `ensemble auth login --provider <id>`（TTY。URL / device code は stderr、authorization code は非表示 prompt。OpenAI は既定で OAuth） |
 | GitHub API（gh CLI を使う場合） | `gh auth login` |
 
@@ -85,6 +86,11 @@ ensemble auth login --provider openai --api-key-prompt
 
 # conductor（API key を stdin から非対話で保存）
 secret-manager read <secret-name> | ensemble auth login --provider <provider-id> --api-key-stdin
+
+# Pi の既存 command credential を user settings.json に登録・確認・削除
+ensemble auth set-command --provider <provider-id> -- '!printf token'
+ensemble auth status --provider <provider-id>
+ensemble auth clear-command --provider <provider-id>
 
 ensemble auth status
 ensemble models list

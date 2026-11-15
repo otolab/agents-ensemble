@@ -84,6 +84,7 @@ jobs:
           --config vitest.config.integration.ts
           test/integration/pi-conductor.integration.test.ts
           test/integration/pi-headless-settings.integration.test.ts
+          test/integration/pi-command-auth.integration.test.ts
           test/integration/pi-conductor-agent-registry.integration.test.ts
 
       - name: CLI TTY close process e2e

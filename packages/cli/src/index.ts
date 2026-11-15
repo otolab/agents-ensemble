@@ -7,6 +7,7 @@ import {
   DEFAULT_PERMISSION_DEADLOCK_STALL_MS,
   listConductorModels,
   resolveIssueUrl,
+  escapeTerminalControlCharacters,
 } from '@agents-ensemble/core';
 import {
   exportSessionBundle,
@@ -36,7 +37,9 @@ import {
 } from './session-timeline.js';
 import {
   runConductorAuthStatus,
+  runConductorClearCommand,
   runConductorLogin,
+  runConductorSetCommand,
   runConductorLogout,
   resolveConductorCommandContext,
   type ConductorCommandOptions,
@@ -574,18 +577,27 @@ program
     },
   );
 
-function addConductorCommandOptions(command: Command, catalog = false): Command {
-  return command
+function addConductorCommandOptions(
+  command: Command,
+  catalog = false,
+  providerRequired = false,
+): Command {
+  const configured = command
     .option(
       '--repo-root <path>',
       'Repository root used for config, profile, and Pi project resources',
       process.cwd(),
     )
-    .option('--profile <name>', 'Team profile used to resolve conductor.backend')
-    .option(
-      '--provider <id>',
-      catalog ? 'Required: configured Pi provider ID' : 'Pi provider (default: settings.json defaultProvider)',
-    )
+    .option('--profile <name>', 'Team profile used to resolve conductor.backend');
+  const providerDescription = catalog
+    ? 'Required: configured Pi provider ID'
+    : 'Pi provider (default: settings.json defaultProvider)';
+  if (providerRequired) {
+    configured.requiredOption('--provider <id>', providerDescription);
+  } else {
+    configured.option('--provider <id>', providerDescription);
+  }
+  return configured
     .option(
       '--model-id <id>',
       catalog ? 'Pi model id (does not select the catalog provider)' : 'Pi model id used to infer the provider',
@@ -657,6 +669,76 @@ addConductorCommandOptions(auth.command('logout'))
     }
   });
 
+addConductorCommandOptions(auth.command('set-command'), false, true)
+  .description('Register a Pi !command credential in settings.json')
+  .argument('<command>', 'Pi API-key command value beginning with !')
+  .addOption(
+    new Option('--target <layer>', 'Pi settings layer to update (default: user)')
+      .choices(['user', 'project'])
+      .default('user'),
+  )
+  .action(
+    async (
+      command: string,
+      options: ConductorCommandOptions & {
+        target: 'user' | 'project';
+      },
+    ) => {
+      try {
+        console.error(
+          [
+            'Warning: Pi will run this command with the conductor process user and environment when resolving provider credentials.',
+            'Review and trust the command before using it. Registration and auth status do not execute it.',
+            ...(options.target === 'project'
+              ? ['Project Pi settings may be committed; verify the repository is trusted and the resource is ignored as intended.']
+              : []),
+          ].join('\n'),
+        );
+        const result = await runConductorSetCommand({
+          ...options,
+          command,
+        });
+        console.log(
+          `Pi: command credential configured for ${result.provider} (${result.target}); settings: ${escapeTerminalControlCharacters(result.settingsPath)}`,
+        );
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : error);
+        process.exit(1);
+      }
+    },
+  );
+
+addConductorCommandOptions(auth.command('clear-command'), false, true)
+  .description('Remove a Pi !command credential from settings.json')
+  .addOption(
+    new Option('--target <layer>', 'Pi settings layer to update (default: user)')
+      .choices(['user', 'project'])
+      .default('user'),
+  )
+  .action(
+    async (
+      options: ConductorCommandOptions & {
+        target: 'user' | 'project';
+      },
+    ) => {
+      try {
+        const result = await runConductorClearCommand(options);
+        if (result.cleared) {
+          console.log(
+            `Pi: command credential cleared for ${result.provider} (${result.target}); settings: ${escapeTerminalControlCharacters(result.settingsPath)}`,
+          );
+        } else {
+          console.log(
+            `Pi: no command credential for ${result.provider} in ${result.target} settings; file left unchanged (${escapeTerminalControlCharacters(result.settingsPath)})`,
+          );
+        }
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : error);
+        process.exit(1);
+      }
+    },
+  );
+
 addConductorCommandOptions(auth.command('status'))
   .description('Show non-secret authentication status for the configured backend')
   .action(async (options: ConductorCommandOptions) => {
@@ -671,8 +753,17 @@ addConductorCommandOptions(auth.command('status'))
           const state = provider.configured ? 'configured' : 'not configured';
           const source = provider.source ? `; source=${provider.source}` : '';
           const mode = provider.mode ? `; mode=${provider.mode}` : '';
+          const scope = provider.scope ? `; scope=${provider.scope}` : '';
+          const configurationPath = provider.configurationPath
+            ? `; config=${escapeTerminalControlCharacters(provider.configurationPath)}`
+            : '';
+          const commandConfiguration = provider.commandConfiguration
+            ? `; command-config=${provider.commandConfiguration.source}; command-scope=${provider.commandConfiguration.scope}; command-path=${escapeTerminalControlCharacters(provider.commandConfiguration.path)}; command-effective=${provider.commandConfiguration.effective}`
+            : '';
           const label = provider.label ? `; label=${provider.label}` : '';
-          console.log(`Pi: ${provider.provider}: ${state}${source}${mode}${label}`);
+          console.log(
+            `Pi: ${provider.provider}: ${state}${source}${mode}${scope}${configurationPath}${commandConfiguration}${label}`,
+          );
         }
         return;
       }

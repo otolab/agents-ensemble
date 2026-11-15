@@ -29,6 +29,7 @@ export type {
 } from './conductor-setup.js';
 export {
   loadPiResources,
+  readPiSettingsFile,
   resolvePiResourceRoots,
 } from './pi-resource-loader.js';
 export type {
@@ -49,6 +50,7 @@ export type {
 } from './pi-resource-loader.js';
 export {
   createPiConductorAuthContext,
+  clearPiConductorCommandAuth,
   getPiConductorAuthStatus,
   hasPiConductorAuth,
   hasPiProviderAuth,
@@ -58,10 +60,13 @@ export {
   logoutPiConductor,
   resolvePiConductorApiKey,
   resolvePiConductorProvider,
+  setPiConductorCommandAuth,
 } from './conductor-pi-auth.js';
 export type {
+  PiConductorAuthTarget,
   PiConductorAuthContext,
   PiConductorAuthOptions,
+  PiConductorCommandAuthResult,
   PiConductorAuthStatus,
   PiConductorLoginResult,
   PiConductorLogoutResult,

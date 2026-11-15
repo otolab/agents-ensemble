@@ -28,10 +28,12 @@ import { withPiUserRootLock } from './pi-user-root-lock.js';
 import {
   canonicalPath,
   getProjectWriteBoundaryPaths,
+  isPathWithin,
   isPathWithinAnyRoot,
 } from './conductor-path-safety.js';
 import {
   loadPiResources,
+  readPiSettingsFile,
   resolvePiResourceRoots,
   type PiModelDefinition,
   type PiModelsFile,
@@ -56,6 +58,15 @@ export interface PiProviderAuthStatus {
   configured: boolean;
   source?: string;
   mode?: 'oauth' | 'api_key' | 'command';
+  scope?: 'user' | 'project';
+  configurationPath?: string;
+  /** Configured settings command metadata when it is not the selected source. */
+  commandConfiguration?: {
+    source: 'settings_json';
+    scope: 'user' | 'project';
+    path: string;
+    effective: boolean;
+  };
   label?: string;
 }
 
@@ -88,6 +99,16 @@ export interface PiConductorModelListEntry {
 export interface PiConductorAuthOptions extends PiResourceLoaderOptions {
   provider?: string;
   modelId?: string;
+}
+
+export type PiConductorAuthTarget = 'user' | 'project';
+
+export interface PiConductorCommandAuthResult {
+  backend: 'pi';
+  provider: string;
+  target: PiConductorAuthTarget;
+  settingsPath: string;
+  cleared?: boolean;
 }
 
 type PiOAuthPrompt = Parameters<OAuthLoginCallbacks['onPrompt']>[0] & {
@@ -324,6 +345,143 @@ export async function logoutPiConductor(
   };
 }
 
+/** Register a Pi `!command` in the selected settings.json apiKeys entry. */
+export async function setPiConductorCommandAuth(
+  options: PiConductorAuthOptions & {
+    command: string;
+    target?: PiConductorAuthTarget;
+  },
+): Promise<PiConductorCommandAuthResult> {
+  const provider = requireCommandAuthProvider(options.provider);
+  validatePiCommandCredential(options.command);
+  const target = requireCommandAuthTarget(options.target);
+  const roots = resolvePiResourceRoots(options);
+  const settingsPath = join(
+    target === 'project' ? roots.projectDir : roots.agentDir,
+    'settings.json',
+  );
+
+  const userSettingsPath = join(roots.agentDir, 'settings.json');
+  const projectSettingsPath = join(roots.projectDir, 'settings.json');
+  const [userSettings, projectSettings] = await Promise.all([
+    readPiSettingsFile(userSettingsPath),
+    roots.agentDir === roots.projectDir
+      ? Promise.resolve(undefined)
+      : readPiSettingsFile(projectSettingsPath),
+  ]);
+  const effectiveScalarApiKey =
+    projectSettings !== undefined &&
+    Object.prototype.hasOwnProperty.call(projectSettings, 'apiKey')
+    ? projectSettings.apiKey
+    : userSettings.apiKey;
+  if (typeof effectiveScalarApiKey === 'string') {
+    throw new Error(
+      'Pi settings apiKey takes precedence over apiKeys[provider]; remove or change the scalar setting before registering a provider command.',
+    );
+  }
+  if (
+    target === 'user' &&
+    roots.agentDir !== roots.projectDir &&
+    isRecord(projectSettings?.apiKeys) &&
+    Object.prototype.hasOwnProperty.call(projectSettings.apiKeys, provider)
+  ) {
+    throw new Error(
+      'Project Pi settings already define apiKeys for this provider; use --target project to update that entry.',
+    );
+  }
+
+  if (target === 'user') {
+    const protectedProjectRoots = await getProjectWriteBoundaryPaths(
+      options.cwd,
+      [roots.projectDir],
+    );
+    if (await isPathWithinAnyRoot(settingsPath, protectedProjectRoots)) {
+      throw new Error(
+        'Refusing to write user Pi settings.json inside a project-owned resource.',
+      );
+    }
+    await mkdir(roots.agentDir, { recursive: true, mode: 0o700 });
+    await withPiUserRootLock(
+      roots.agentDir,
+      options.cwd,
+      [roots.projectDir],
+      async () => {
+        const currentProjectRoots = await getProjectWriteBoundaryPaths(
+          options.cwd,
+          [roots.projectDir],
+        );
+        const targetPath = await resolveSafePiUserSettingsPath(
+          settingsPath,
+          currentProjectRoots,
+        );
+        await writePiSettingsCommand(targetPath, provider, options.command);
+      },
+    );
+  } else {
+    await mkdir(roots.projectDir, { recursive: true });
+    const targetPath = await resolveSafePiProjectSettingsPath(
+      settingsPath,
+      roots.projectDir,
+    );
+    await writePiSettingsCommand(targetPath, provider, options.command);
+  }
+
+  return { backend: 'pi', provider, target, settingsPath };
+}
+
+/** Remove only a command value from the selected settings.json apiKeys entry. */
+export async function clearPiConductorCommandAuth(
+  options: PiConductorAuthOptions & { target?: PiConductorAuthTarget },
+): Promise<PiConductorCommandAuthResult> {
+  const provider = requireCommandAuthProvider(options.provider);
+  const target = requireCommandAuthTarget(options.target);
+  const roots = resolvePiResourceRoots(options);
+  const targetRoot = target === 'project' ? roots.projectDir : roots.agentDir;
+  const settingsPath = join(targetRoot, 'settings.json');
+
+  if (target === 'user') {
+    const protectedProjectRoots = await getProjectWriteBoundaryPaths(
+      options.cwd,
+      [roots.projectDir],
+    );
+    if (await isPathWithinAnyRoot(settingsPath, protectedProjectRoots)) {
+      throw new Error(
+        'Refusing to update user Pi settings.json inside a project-owned resource.',
+      );
+    }
+    if (!(await pathExists(roots.agentDir))) {
+      return { backend: 'pi', provider, target, settingsPath, cleared: false };
+    }
+    const cleared = await withPiUserRootLock(
+      roots.agentDir,
+      options.cwd,
+      [roots.projectDir],
+      async () => {
+        const currentProjectRoots = await getProjectWriteBoundaryPaths(
+          options.cwd,
+          [roots.projectDir],
+        );
+        const targetPath = await resolveSafePiUserSettingsPath(
+          settingsPath,
+          currentProjectRoots,
+        );
+        return clearPiSettingsCommand(targetPath, provider);
+      },
+    );
+    return { backend: 'pi', provider, target, settingsPath, cleared };
+  }
+
+  if (!(await pathExists(roots.projectDir))) {
+    return { backend: 'pi', provider, target, settingsPath, cleared: false };
+  }
+  const targetPath = await resolveSafePiProjectSettingsPath(
+    settingsPath,
+    roots.projectDir,
+  );
+  const cleared = await clearPiSettingsCommand(targetPath, provider);
+  return { backend: 'pi', provider, target, settingsPath, cleared };
+}
+
 /** Return non-secret Pi auth metadata for the selected/default provider. */
 export async function getPiConductorAuthStatus(
   options: PiConductorAuthOptions,
@@ -432,25 +590,28 @@ export async function resolvePiConductorApiKey(options: {
   // its higher precedence over settings and models.
   if (settingsKey !== undefined && isPiCommandConfigValue(settingsKey)) {
     options.modelRuntime.registerProvider(options.provider, { apiKey: settingsKey });
+  } else if (modelsKey !== undefined && isPiCommandConfigValue(modelsKey)) {
+    // models.json command providers are deliberately not registered while a
+    // conductor session is being assembled: ModelRuntime.refresh() checks
+    // provider auth and can execute their command. Register the selected value
+    // only when the request path asks for its credential.
+    options.modelRuntime.registerProvider(options.provider, { apiKey: modelsKey });
   }
   // ModelRuntime owns the Pi 1.x credential store, OAuth refresh, and locking.
   // Resolve it on every request instead of capturing the key at construction.
-  let runtimeError: unknown;
   try {
     const runtimeAuth = await options.modelRuntime.getAuth(options.provider);
     if (runtimeAuth?.auth.apiKey !== undefined) return runtimeAuth.auth.apiKey;
-  } catch (error) {
-    runtimeError = error;
+  } catch {
     // Non-command references can still use the ensemble fallback chain. A
-    // command reference is reported below instead of returning the raw command
-    // as an API key.
+    // command reference is reported below without preserving the raw error.
   }
 
   const commandKey = [settingsKey, modelsKey].find(
     (value): value is string => value !== undefined && isPiCommandConfigValue(value),
   );
   if (commandKey !== undefined) {
-    throw formatPiCommandResolutionError(options.provider, commandKey, runtimeError);
+    throw formatPiCommandResolutionError();
   }
 
   if (settingsKey !== undefined) return settingsKey;
@@ -460,11 +621,93 @@ export async function resolvePiConductorApiKey(options: {
   return getEnvApiKey(options.provider, toProviderEnv(env));
 }
 
+/** Prepare configured Pi commands when a provider request asks ModelRuntime for auth. */
+export async function preparePiConductorCommandAuthForRequest(options: {
+  modelRuntime: ModelRuntime;
+  resources: Pick<PiResources, 'roots' | 'authLayers' | 'settings' | 'models'>;
+  provider: string;
+  env?: NodeJS.ProcessEnv;
+}): Promise<void> {
+  const env = options.env ?? process.env;
+  const projectEntry = options.resources.authLayers.at(-1)?.[options.provider];
+  const projectKey =
+    options.resources.roots.agentDir !== options.resources.roots.projectDir
+      ? resolvePiAuthEntry(projectEntry, env)
+      : undefined;
+
+  if (options.resources.roots.agentDir !== options.resources.roots.projectDir) {
+    if (isPiOAuthAuthEntry(projectEntry)) {
+      throw new Error(formatProjectOAuthAuthError(options.provider));
+    }
+    if (projectKey !== undefined) {
+      if (isPiCommandConfigValue(projectKey)) {
+        await resolvePiProjectCommandApiKey(
+          options.modelRuntime,
+          options.provider,
+          projectKey,
+        );
+      }
+      // Any project auth entry remains above user/settings/model credentials.
+      return;
+    }
+  }
+
+  const settingsKey = resolvePiSettingsApiKey(
+    options.resources.settings,
+    options.provider,
+    env,
+  );
+  const modelsKey = resolvePiModelsApiKey(
+    options.resources.models.providers[options.provider],
+    env,
+  );
+  if (settingsKey !== undefined && isPiCommandConfigValue(settingsKey)) {
+    options.modelRuntime.registerProvider(options.provider, {
+      apiKey: settingsKey,
+    });
+  } else if (modelsKey !== undefined && isPiCommandConfigValue(modelsKey)) {
+    options.modelRuntime.registerProvider(options.provider, {
+      apiKey: modelsKey,
+    });
+  }
+}
+
+/** Whether resolving this provider's configured Pi credential can run a command. */
+export function hasPiConductorCommandCredential(
+  resources: Pick<
+    PiResources,
+    'roots' | 'authLayers' | 'settings' | 'models'
+  >,
+  provider: string,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  if (resources.roots.agentDir !== resources.roots.projectDir) {
+    const projectEntry = resources.authLayers.at(-1)?.[provider];
+    if (isPiOAuthAuthEntry(projectEntry)) return false;
+    const projectKey = resolvePiAuthEntry(projectEntry, env);
+    if (projectKey !== undefined) return isPiCommandConfigValue(projectKey);
+  }
+
+  const settingsKey = resolvePiSettingsApiKey(resources.settings, provider, env);
+  if (settingsKey !== undefined) return isPiCommandConfigValue(settingsKey);
+
+  const modelsKey = resolvePiModelsApiKey(resources.models.providers[provider], env);
+  return modelsKey !== undefined && isPiCommandConfigValue(modelsKey);
+}
+
 /** Return whether a provider has configured auth without exposing its value. */
 export function hasPiProviderAuth(
   provider: string,
   context: PiConductorAuthContext,
-  resources: Pick<PiResources, 'roots' | 'authLayers' | 'settings' | 'models'>,
+  resources: Pick<
+    PiResources,
+    | 'roots'
+    | 'authLayers'
+    | 'settings'
+    | 'settingsLayers'
+    | 'models'
+    | 'modelsLayers'
+  >,
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
   const status = getPiProviderAuthStatus(provider, context, resources, env);
@@ -723,10 +966,20 @@ async function resolveStatusProviders(
   const configured = resolvePiConductorProviderFromResources(options, resources, context);
   if (configured) return [configured];
 
+  const settingsApiKeys = getPiHeadlessSetting(
+    resources.settings,
+    'apiKeys',
+    'auth-fallback',
+  );
   const providers = new Set<string>([
     ...(await context.modelRuntime.listCredentials()).map((entry) => entry.providerId),
     ...context.modelRegistry.getAll().map((model) => model.provider),
     ...Object.keys(resources.models.providers),
+    ...(isRecord(settingsApiKeys)
+      ? Object.entries(settingsApiKeys)
+          .filter(([, value]) => typeof value === 'string')
+          .map(([provider]) => provider)
+      : []),
   ]);
   return [...providers].sort();
 }
@@ -734,9 +987,18 @@ async function resolveStatusProviders(
 function getPiProviderAuthStatus(
   provider: string,
   context: PiConductorAuthContext,
-  resources: Pick<PiResources, 'roots' | 'authLayers' | 'settings' | 'models'>,
+  resources: Pick<
+    PiResources,
+    | 'roots'
+    | 'authLayers'
+    | 'settings'
+    | 'settingsLayers'
+    | 'models'
+    | 'modelsLayers'
+  >,
   env: NodeJS.ProcessEnv,
 ): PiProviderAuthStatus {
+  const settingsCommand = getPiSettingsCommandSource(resources, provider, env);
   if (resources.roots.agentDir !== resources.roots.projectDir) {
     const projectEntry = resources.authLayers.at(-1)?.[provider];
     if (isPiOAuthAuthEntry(projectEntry)) {
@@ -744,6 +1006,16 @@ function getPiProviderAuthStatus(
         provider,
         configured: false,
         source: 'project_oauth_unsupported',
+        ...(settingsCommand
+          ? {
+              commandConfiguration: {
+                source: 'settings_json' as const,
+                scope: settingsCommand.scope,
+                path: settingsCommand.path,
+                effective: false,
+              },
+            }
+          : {}),
       };
     }
     const projectKey = resolvePiAuthEntry(projectEntry, env);
@@ -753,28 +1025,143 @@ function getPiProviderAuthStatus(
         configured: true,
         source: 'project_stored',
         ...getKnownAuthMode(projectEntry),
+        scope: 'project',
+        configurationPath: join(resources.roots.projectDir, 'auth.json'),
+        ...(settingsCommand
+          ? {
+              commandConfiguration: {
+                source: 'settings_json' as const,
+                scope: settingsCommand.scope,
+                path: settingsCommand.path,
+                effective: false,
+              },
+            }
+          : {}),
       };
     }
   }
 
   const registryStatus = context.modelRuntime.getProviderAuthStatus(provider);
-  if (registryStatus.configured || registryStatus.source === 'stored') {
+  if (registryStatus.source === 'stored' || registryStatus.source === 'runtime') {
+    const stored = registryStatus.source === 'stored';
+    const runtimeSettings = stored
+      ? undefined
+      : getPiSettingsApiKeysSource(resources, provider, env);
     return {
       ...normalizePiAuthStatus(provider, registryStatus, true),
-      ...(registryStatus.source === 'stored'
+      ...(stored
         ? getKnownAuthMode(resources.authLayers[0]?.[provider])
+        : { mode: 'api_key' as const }),
+      ...(stored
+        ? { scope: 'user' as const, configurationPath: context.authPath }
+        : runtimeSettings
+          ? {
+              scope: runtimeSettings.scope,
+              configurationPath: runtimeSettings.path,
+            }
+          : {}),
+      ...(settingsCommand
+        ? {
+            commandConfiguration: {
+              source: 'settings_json' as const,
+              scope: settingsCommand.scope,
+              path: settingsCommand.path,
+              effective: false,
+            },
+          }
+        : {}),
+    };
+  }
+
+  if (settingsCommand?.selected) {
+    return {
+      provider,
+      configured: true,
+      source: 'settings_json',
+      mode: 'command',
+      scope: settingsCommand.scope,
+      configurationPath: settingsCommand.path,
+    };
+  }
+
+  if (registryStatus.configured) {
+    const modelsCommand =
+      registryStatus.source === 'models_json_command'
+        ? getPiModelsCommandSource(resources, provider, env)
+        : undefined;
+    return {
+      ...normalizePiAuthStatus(provider, registryStatus, true),
+      ...(modelsCommand
+        ? {
+            mode: 'command' as const,
+            scope: modelsCommand.scope,
+            configurationPath: modelsCommand.path,
+          }
+        : {}),
+      ...(settingsCommand
+        ? {
+            commandConfiguration: {
+              source: 'settings_json' as const,
+              scope: settingsCommand.scope,
+              path: settingsCommand.path,
+              effective: false,
+            },
+          }
         : {}),
     };
   }
 
   const settingsKey = resolvePiSettingsApiKey(resources.settings, provider, env);
   if (settingsKey !== undefined) {
-    return { provider, configured: true, source: 'settings_json' };
+    const settingsSource = getPiSettingsApiKeySource(resources, provider, env);
+    return {
+      provider,
+      configured: true,
+      source: 'settings_json',
+      ...(settingsSource
+        ? {
+            scope: settingsSource.scope,
+            configurationPath: settingsSource.path,
+          }
+        : {}),
+      ...(settingsCommand
+        ? {
+            commandConfiguration: {
+              source: 'settings_json' as const,
+              scope: settingsCommand.scope,
+              path: settingsCommand.path,
+              effective: false,
+            },
+          }
+        : {}),
+    };
   }
 
   const modelsKey = resolvePiModelsApiKey(resources.models.providers[provider], env);
   if (modelsKey !== undefined) {
-    return { provider, configured: true, source: 'models_json_key' };
+    const modelsSource = getPiModelsApiKeySource(resources, provider, env);
+    return {
+      provider,
+      configured: true,
+      source: 'models_json_key',
+      ...(modelsSource
+        ? {
+            scope: modelsSource.scope,
+            configurationPath: modelsSource.path,
+            ...(isPiCommandConfigValue(modelsKey) ? { mode: 'command' as const } : {}),
+          }
+        : {}),
+      ...(settingsCommand
+        ? {
+            commandConfiguration: {
+              source: 'settings_json' as const,
+              scope: settingsCommand.scope,
+              path: settingsCommand.path,
+              effective: false,
+            },
+          }
+        : {}),
+    };
   }
 
   const envKey = getEnvApiKey(provider, toProviderEnv(env));
@@ -784,9 +1171,31 @@ function getPiProviderAuthStatus(
       configured: true,
       source: 'environment',
       label: formatPiProviderEnvHint(provider),
+      ...(settingsCommand
+        ? {
+            commandConfiguration: {
+              source: 'settings_json' as const,
+              scope: settingsCommand.scope,
+              path: settingsCommand.path,
+              effective: false,
+            },
+          }
+        : {}),
     };
   }
-  return normalizePiAuthStatus(provider, registryStatus, false);
+  return {
+    ...normalizePiAuthStatus(provider, registryStatus, false),
+    ...(settingsCommand
+      ? {
+          commandConfiguration: {
+            source: 'settings_json' as const,
+            scope: settingsCommand.scope,
+            path: settingsCommand.path,
+            effective: false,
+          },
+        }
+      : {}),
+  };
 }
 
 function normalizePiAuthStatus(
@@ -800,6 +1209,203 @@ function normalizePiAuthStatus(
     ...(status.source ? { source: status.source } : {}),
     ...(status.label ? { label: status.label } : {}),
   };
+}
+
+interface PiResourceCredentialConfigSource {
+  scope: PiConductorAuthTarget;
+  path: string;
+}
+
+interface PiSettingsCommandSource extends PiResourceCredentialConfigSource {
+  selected: boolean;
+}
+
+function getPiSettingsApiKeySource(
+  resources: Pick<PiResources, 'roots' | 'settings' | 'settingsLayers'>,
+  provider: string,
+  env: NodeJS.ProcessEnv,
+): PiResourceCredentialConfigSource | undefined {
+  const scalarValue = getPiHeadlessSetting(
+    resources.settings,
+    'apiKey',
+    'auth-fallback',
+  );
+  const usesScalar = typeof scalarValue === 'string';
+  const apiKeys = getPiHeadlessSetting(
+    resources.settings,
+    'apiKeys',
+    'auth-fallback',
+  );
+  const providerValue =
+    !usesScalar &&
+    isRecord(apiKeys) &&
+    Object.prototype.hasOwnProperty.call(apiKeys, provider)
+      ? apiKeys[provider]
+      : undefined;
+  const selected = usesScalar ? scalarValue : providerValue;
+  if (typeof selected !== 'string') return undefined;
+  return getPiSettingsLayerSource(
+    resources,
+    provider,
+    env,
+    usesScalar ? 'apiKey' : 'apiKeys',
+    expandEnvReference(selected, env),
+  );
+}
+
+function getPiSettingsApiKeysSource(
+  resources: Pick<PiResources, 'roots' | 'settings' | 'settingsLayers'>,
+  provider: string,
+  env: NodeJS.ProcessEnv,
+): PiResourceCredentialConfigSource | undefined {
+  const apiKeys = getPiHeadlessSetting(
+    resources.settings,
+    'apiKeys',
+    'auth-fallback',
+  );
+  if (!isRecord(apiKeys) || !Object.prototype.hasOwnProperty.call(apiKeys, provider)) {
+    return undefined;
+  }
+  const selected = apiKeys[provider];
+  if (typeof selected !== 'string') return undefined;
+  return getPiSettingsLayerSource(
+    resources,
+    provider,
+    env,
+    'apiKeys',
+    expandEnvReference(selected, env),
+  );
+}
+
+function getPiSettingsLayerSource(
+  resources: Pick<PiResources, 'roots' | 'settingsLayers'>,
+  provider: string,
+  env: NodeJS.ProcessEnv,
+  field: 'apiKey' | 'apiKeys',
+  resolved: string | undefined,
+): PiResourceCredentialConfigSource | undefined {
+  if (resolved === undefined) return undefined;
+
+  for (let index = resources.settingsLayers.length - 1; index >= 0; index -= 1) {
+    const layer = resources.settingsLayers[index]!;
+    const layerApiKeys = getPiHeadlessSetting(layer, 'apiKeys', 'auth-fallback');
+    const layerValue =
+      field === 'apiKey'
+        ? getPiHeadlessSetting(layer, 'apiKey', 'auth-fallback')
+        : isRecord(layerApiKeys) &&
+            Object.prototype.hasOwnProperty.call(layerApiKeys, provider)
+          ? layerApiKeys[provider]
+          : undefined;
+    if (
+      typeof layerValue === 'string' &&
+      expandEnvReference(layerValue, env) === resolved
+    ) {
+      const isProject =
+        index === resources.settingsLayers.length - 1 &&
+        resources.roots.agentDir !== resources.roots.projectDir;
+      return {
+        scope: isProject ? 'project' : 'user',
+        path: join(
+          isProject ? resources.roots.projectDir : resources.roots.agentDir,
+          'settings.json',
+        ),
+      };
+    }
+  }
+  return undefined;
+}
+
+function getPiSettingsCommandSource(
+  resources: Pick<PiResources, 'roots' | 'settings' | 'settingsLayers'>,
+  provider: string,
+  env: NodeJS.ProcessEnv,
+): PiSettingsCommandSource | undefined {
+  const scalarApiKey = getPiHeadlessSetting(
+    resources.settings,
+    'apiKey',
+    'auth-fallback',
+  );
+  if (typeof scalarApiKey === 'string') {
+    const resolvedScalar = expandEnvReference(scalarApiKey, env);
+    if (resolvedScalar !== undefined && isPiCommandConfigValue(resolvedScalar)) {
+      const source = getPiSettingsLayerSource(
+        resources,
+        provider,
+        env,
+        'apiKey',
+        resolvedScalar,
+      );
+      return source ? { ...source, selected: true } : undefined;
+    }
+  }
+
+  const apiKeys = getPiHeadlessSetting(
+    resources.settings,
+    'apiKeys',
+    'auth-fallback',
+  );
+  if (
+    !isRecord(apiKeys) ||
+    !Object.prototype.hasOwnProperty.call(apiKeys, provider) ||
+    typeof apiKeys[provider] !== 'string'
+  ) {
+    return undefined;
+  }
+  const resolvedProviderKey = expandEnvReference(apiKeys[provider] as string, env);
+  if (resolvedProviderKey === undefined || !isPiCommandConfigValue(resolvedProviderKey)) {
+    return undefined;
+  }
+  const source = getPiSettingsLayerSource(
+    resources,
+    provider,
+    env,
+    'apiKeys',
+    resolvedProviderKey,
+  );
+  return source
+    ? {
+        ...source,
+        selected: typeof scalarApiKey !== 'string',
+      }
+    : undefined;
+}
+
+function getPiModelsApiKeySource(
+  resources: Pick<PiResources, 'roots' | 'models' | 'modelsLayers'>,
+  provider: string,
+  env: NodeJS.ProcessEnv,
+): PiResourceCredentialConfigSource | undefined {
+  const selected = resolvePiModelsApiKey(resources.models.providers[provider], env);
+  if (selected === undefined) return undefined;
+  for (let index = resources.modelsLayers.length - 1; index >= 0; index -= 1) {
+    const layerValue = resources.modelsLayers[index]?.providers[provider]?.apiKey;
+    if (
+      typeof layerValue === 'string' &&
+      expandEnvReference(layerValue, env) === selected
+    ) {
+      const isProject =
+        index === resources.modelsLayers.length - 1 &&
+        resources.roots.agentDir !== resources.roots.projectDir;
+      return {
+        scope: isProject ? 'project' : 'user',
+        path: join(
+          isProject ? resources.roots.projectDir : resources.roots.agentDir,
+          'models.json',
+        ),
+      };
+    }
+  }
+  return undefined;
+}
+
+function getPiModelsCommandSource(
+  resources: Pick<PiResources, 'roots' | 'models' | 'modelsLayers'>,
+  provider: string,
+  env: NodeJS.ProcessEnv,
+): PiResourceCredentialConfigSource | undefined {
+  const selected = resolvePiModelsApiKey(resources.models.providers[provider], env);
+  if (selected === undefined || !isPiCommandConfigValue(selected)) return undefined;
+  return getPiModelsApiKeySource(resources, provider, env);
 }
 
 function getKnownAuthMode(
@@ -883,6 +1489,7 @@ function resolvePiSettingsApiKey(
   }
   const apiKeys = getPiHeadlessSetting(settings, 'apiKeys', 'auth-fallback');
   if (!isRecord(apiKeys)) return undefined;
+  if (!Object.prototype.hasOwnProperty.call(apiKeys, provider)) return undefined;
   const value = apiKeys[provider];
   return typeof value === 'string' ? expandEnvReference(value, env) : undefined;
 }
@@ -907,15 +1514,9 @@ function isPiCommandConfigValue(value: string): boolean {
   return value.startsWith('!');
 }
 
-function formatPiCommandResolutionError(
-  provider: string,
-  command: string,
-  cause: unknown,
-): Error {
-  const causeMessage = cause instanceof Error ? ` (${cause.message})` : '';
+function formatPiCommandResolutionError(): Error {
   return new Error(
-    `Failed to resolve API key for Pi provider "${provider}" from shell command: ${command.slice(1)}${causeMessage}`,
-    cause instanceof Error ? { cause } : undefined,
+    'API key auth failed for provider: failed to resolve API key for Pi provider from the configured command.',
   );
 }
 
@@ -934,10 +1535,10 @@ async function resolvePiProjectCommandApiKey(
       await modelRuntime.setRuntimeApiKey(provider, runtimeAuth.auth.apiKey);
       return runtimeAuth.auth.apiKey;
     }
-  } catch (error) {
-    throw formatPiCommandResolutionError(provider, command, error);
+  } catch {
+    throw formatPiCommandResolutionError();
   }
-  throw formatPiCommandResolutionError(provider, command, undefined);
+  throw formatPiCommandResolutionError();
 }
 
 function toProviderEnv(env: NodeJS.ProcessEnv): Record<string, string> {
@@ -966,7 +1567,16 @@ async function createPiModelRuntime(
 
   const env = options.env ?? process.env;
   for (const [provider, config] of Object.entries(resources.models.providers)) {
-    runtime.registerProvider(provider, toPiRuntimeProviderConfig(config, env));
+    const runtimeConfig = toPiRuntimeProviderConfig(config, env);
+    const modelApiKey = resolvePiModelsApiKey(config, env);
+    if (modelApiKey !== undefined && isPiCommandConfigValue(modelApiKey)) {
+      // registerProvider() starts a ModelRuntime availability refresh. Keep a
+      // models.json command out of that startup refresh and register it later,
+      // when the selected provider request resolves its auth.
+      runtime.registerProvider(provider, { ...runtimeConfig, apiKey: undefined });
+    } else {
+      runtime.registerProvider(provider, runtimeConfig);
+    }
   }
 
   if (roots.agentDir !== roots.projectDir) {
@@ -1070,6 +1680,151 @@ async function resolveSafePiUserSettingsPath(
     );
   }
   return canonicalPath(settingsPath);
+}
+
+async function resolveSafePiProjectSettingsPath(
+  settingsPath: string,
+  projectDir: string,
+): Promise<string> {
+  const projectRoot = await canonicalPath(projectDir);
+  const targetPath = await canonicalPath(settingsPath);
+  if (!(await isPathWithin(projectRoot, targetPath))) {
+    throw new Error(
+      'Refusing to write Pi project settings.json outside the configured project resource root.',
+    );
+  }
+  await assertRegularSettingsTarget(targetPath, settingsPath);
+  return targetPath;
+}
+
+async function assertRegularSettingsTarget(
+  targetPath: string,
+  displayPath: string,
+): Promise<void> {
+  let details: Awaited<ReturnType<typeof lstat>>;
+  try {
+    details = await lstat(targetPath);
+  } catch (error) {
+    if (isMissingFile(error)) return;
+    throw error;
+  }
+  if (!details.isFile()) {
+    throw new Error(
+      `Refusing to update Pi settings at ${displayPath} because the destination is not a regular file.`,
+    );
+  }
+}
+
+async function writePiSettingsCommand(
+  settingsPath: string,
+  provider: string,
+  command: string,
+): Promise<void> {
+  await assertRegularSettingsTarget(settingsPath, settingsPath);
+  const settings = await readPiSettingsFile(settingsPath);
+  const existingApiKeys = settings.apiKeys;
+  if (existingApiKeys !== undefined && !isRecord(existingApiKeys)) {
+    throw new Error(
+      'Pi settings apiKeys must be an object; the file was left unchanged.',
+    );
+  }
+  const apiKeys = { ...(existingApiKeys as Record<string, unknown> | undefined) };
+  Object.defineProperty(apiKeys, provider, {
+    configurable: true,
+    enumerable: true,
+    value: command,
+    writable: true,
+  });
+  const updated = { ...settings, apiKeys };
+  await atomicWritePrivatePiUserFile(
+    settingsPath,
+    `${JSON.stringify(updated, null, 2)}\n`,
+  );
+}
+
+async function clearPiSettingsCommand(
+  settingsPath: string,
+  provider: string,
+): Promise<boolean> {
+  await assertRegularSettingsTarget(settingsPath, settingsPath);
+  let settings: PiSettingsFile;
+  try {
+    settings = await readPiSettingsFile(settingsPath);
+  } catch (error) {
+    if (isMissingFile(error)) return false;
+    throw error;
+  }
+  if (settings.apiKeys !== undefined && !isRecord(settings.apiKeys)) {
+    throw new Error(
+      'Pi settings apiKeys must be an object; the file was left unchanged.',
+    );
+  }
+  const apiKeys = settings.apiKeys as Record<string, unknown> | undefined;
+  if (
+    !apiKeys ||
+    !Object.prototype.hasOwnProperty.call(apiKeys, provider) ||
+    typeof apiKeys[provider] !== 'string' ||
+    !isPiCommandConfigValue(apiKeys[provider] as string)
+  ) {
+    return false;
+  }
+
+  const updatedApiKeys = { ...apiKeys };
+  delete updatedApiKeys[provider];
+  const updated = { ...settings };
+  if (Object.keys(updatedApiKeys).length === 0) {
+    delete updated.apiKeys;
+  } else {
+    updated.apiKeys = updatedApiKeys;
+  }
+  await atomicWritePrivatePiUserFile(
+    settingsPath,
+    `${JSON.stringify(updated, null, 2)}\n`,
+  );
+  return true;
+}
+
+function requireCommandAuthProvider(provider: string | undefined): string {
+  const normalized = normalizeProvider(provider);
+  if (
+    !normalized ||
+    normalized !== provider ||
+    /[\u0000-\u001f\u007f]/u.test(normalized)
+  ) {
+    throw new Error('A valid Pi provider ID is required for command credentials.');
+  }
+  return normalized;
+}
+
+function requireCommandAuthTarget(
+  target: PiConductorAuthTarget | undefined,
+): PiConductorAuthTarget {
+  if (target === undefined || target === 'user') return 'user';
+  if (target === 'project') return 'project';
+  throw new Error('Pi command credentials can target only user or project settings.');
+}
+
+function validatePiCommandCredential(command: string): void {
+  if (
+    typeof command !== 'string' ||
+    !command.startsWith('!') ||
+    command.slice(1).trim() === '' ||
+    command.includes('\0')
+  ) {
+    throw new Error(
+      'A Pi command credential must start with ! and include a non-empty command.',
+    );
+  }
+}
+
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await lstat(path);
+    return true;
+  } catch (error) {
+    if (isMissingFile(error)) return false;
+    throw error;
+  }
 }
 
 async function ensurePiUserSettingsSafeForOAuth(

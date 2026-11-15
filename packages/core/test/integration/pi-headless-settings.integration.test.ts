@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -67,6 +68,7 @@ describe('Pi headless settings with the real SDK', () => {
     while (agents.length > 0) {
       await agents.pop()?.close();
     }
+    vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
 
@@ -231,6 +233,68 @@ describe('Pi headless settings with the real SDK', () => {
     });
     await resumed.reload();
     expectSettings(resumedSession, 11_001, 12_001, 13_001, true, false);
+  });
+
+  it('does not execute a settings apiKeys command until a real provider request', async () => {
+    await setupFixture();
+    const markerPath = join(cwd, 'command-ran');
+    await writeJson(join(agentDir, 'settings.json'), {
+      apiKeys: {
+        fixture: `!printf fixture-command-key; touch ${markerPath}`,
+      },
+    });
+    const registerProvider = vi.spyOn(ModelRuntime.prototype, 'registerProvider');
+    const fetch = vi.fn(async () =>
+      new Response(
+        [
+          'data: {"id":"chatcmpl-fixture","object":"chat.completion.chunk","created":1,"model":"fixture-model","choices":[{"index":0,"delta":{"content":"fixture response"},"finish_reason":"stop"}]}',
+          'data: [DONE]',
+          '',
+        ].join('\n\n'),
+        { headers: { 'content-type': 'text/event-stream' } },
+      ),
+    );
+    vi.stubGlobal('fetch', fetch);
+
+    const agent = await PiConductorAgent.create({
+      ...createOptions(),
+      apiKey: undefined,
+    });
+    agents.push(agent);
+
+    expect(getSession(agent)).toBeInstanceOf(AgentSession);
+    expect(existsSync(markerPath)).toBe(false);
+    expect(
+      registerProvider.mock.calls.some(
+        ([provider, config]) =>
+          provider === 'fixture' &&
+          typeof config.apiKey === 'string' &&
+          config.apiKey.startsWith('!'),
+      ),
+    ).toBe(false);
+
+    const sendResult = await agent.send('request a provider response');
+    expect(sendResult, JSON.stringify(sendResult)).toMatchObject({
+      status: 'finished',
+      result: 'fixture response',
+    });
+    expect(
+      registerProvider.mock.calls.some(
+        ([provider, config]) =>
+          provider === 'fixture' &&
+          config.apiKey === `!printf fixture-command-key; touch ${markerPath}`,
+      ),
+    ).toBe(true);
+    expect(existsSync(markerPath)).toBe(true);
+    expect(fetch).toHaveBeenCalledOnce();
+    const [request, requestInit] = fetch.mock.calls[0]!;
+    const requestHeaders =
+      request instanceof Request
+        ? request.headers
+        : new Headers(requestInit?.headers);
+    expect(requestHeaders.get('authorization')).toBe(
+      'Bearer fixture-command-key',
+    );
   });
 
   it('closes each stdio MCP child on reload and close without leaving duplicates', async () => {
