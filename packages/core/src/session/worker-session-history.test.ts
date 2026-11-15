@@ -846,12 +846,10 @@ describe('worker session history', () => {
       updatedAt: 1_800_000_000_000,
     };
     const paths = resolveEnsemblePaths({ repoRoot, userEnsembleRoot: userRoot });
-    const path = workerSession.repoRoot
-      ? paths.canonicalSessionResumeStorePath(
-          `https://github.com/otolab/agents-ensemble/issues/${issueNumber}`,
-          conductorAgentId,
-        )
-      : paths.sessionResumeStorePath(conductorAgentId);
+    const path = paths.canonicalSessionResumeStorePath(
+      `https://github.com/otolab/agents-ensemble/issues/${issueNumber}`,
+      conductorAgentId,
+    );
     await mkdir(dirname(path), { recursive: true });
     await saveSessionResumeStore(path, resumeStore);
   }
