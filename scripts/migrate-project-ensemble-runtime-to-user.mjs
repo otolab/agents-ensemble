@@ -16,11 +16,13 @@
  *     --checkout-root /path/to/checkout \
  *     --checkout-roots-complete \
  *     --profile personal \
+ *     --accept-watch-archive-limitations \
  *     --apply
  *
  * Repeat --checkout-root for every checkout the operator has inventoried.
  * If watch state should be archived without assigning it to a profile, omit
- * --profile. ENSEMBLE_USER_ROOT overrides ~/.ensemble.
+ * --profile. Use --accept-watch-archive-limitations only after reviewing the
+ * archive-only delivery limitations. ENSEMBLE_USER_ROOT overrides ~/.ensemble.
  */
 
 import { createHash, randomUUID } from 'node:crypto';
@@ -72,6 +74,12 @@ const RECOVERABLE_SCAN_ERROR_CODES = new Set([
   'ETIMEDOUT',
 ]);
 const WATCH_STATE_VERSION = 1;
+const WATCH_ARCHIVE_LIMITATIONS = [
+  'If a watch is rebuilt without its archived cursor, its first successful snapshot is a silent baseline; Open Questions already present in that snapshot are not replayed as reports.',
+  'Open Question deduplication uses question IDs, not question text: repeated observations of one ID are deduplicated while its cursor is retained, while identical text with different IDs remains distinct. Report delivery is at-least-once, so a report can be delivered again if sending succeeded but its acknowledgement was not persisted; verify the current Issue state before acting on a repeated report.',
+];
+const WATCH_ARCHIVE_RECOVERY =
+  'The checksum-addressed archive is under operator-agents/legacy/watch. Keep the original source and archive. Restore the complete bundle only after confirming its Issue URL and selecting the intended profile. If rebuilding the watch without its cursor, account for the silent first-snapshot baseline and the Open Question ID / at-least-once delivery constraints recorded in watchArchiveAcceptance.';
 const coreRequire = createRequire(
   new URL('../packages/core/package.json', import.meta.url),
 );
@@ -96,6 +104,8 @@ function usage() {
       '  --checkout-root <path>       Checkout to inventory (repeatable)',
       '  --checkout-roots-complete    Assert that all relevant checkouts are listed',
       '  --profile <name>             Operator-selected profile for eligible watch bundles',
+      '  --accept-watch-archive-limitations',
+      '                               Record operator acceptance for archive-only watch state',
       '  --user-root <path>           User data root (default: ENSEMBLE_USER_ROOT or ~/.ensemble)',
       '  --manifest <path>            Manifest output path',
       '  --dry-run                    Inventory only (default)',
@@ -115,6 +125,7 @@ function parseArgs(argv) {
     checkoutRoots: [],
     checkoutRootsComplete: false,
     profile: undefined,
+    acceptWatchArchiveLimitations: false,
     userRoot:
       process.env[USER_ROOT_ENV] || join(homedir(), '.ensemble'),
     manifest: undefined,
@@ -162,6 +173,10 @@ function parseArgs(argv) {
     }
     if (arg === '--checkout-roots-complete') {
       options.checkoutRootsComplete = true;
+      continue;
+    }
+    if (arg === '--accept-watch-archive-limitations') {
+      options.acceptWatchArchiveLimitations = true;
       continue;
     }
     throw new Error(`Unknown argument: ${arg}`);
@@ -2182,8 +2197,7 @@ function addArchiveCandidate({
       destinationBundleSha256: archiveSha,
       archiveReason: reason,
       collisionReason,
-      recovery:
-        'The archived watch bundle is checksum-addressed under operator-agents/legacy/watch. Keep the original source; restore the complete bundle only after selecting its profile and confirming its Issue URL.',
+      recovery: WATCH_ARCHIVE_RECOVERY,
       provenance,
       evidence,
     });
@@ -2195,8 +2209,7 @@ function addArchiveCandidate({
     entry.destinationBundleSha256 = archiveSha;
     entry.archiveReason = reason;
     entry.collisionReason = collisionReason ?? null;
-    entry.recovery =
-      'The archived watch bundle is checksum-addressed under operator-agents/legacy/watch. Keep the original source; restore the complete bundle only after selecting its profile and confirming its Issue URL.';
+    entry.recovery = WATCH_ARCHIVE_RECOVERY;
   }
   archiveCandidates.push({
     source,
@@ -2215,6 +2228,7 @@ async function scanWatchSource({
   source,
   repoKey,
   sourceType,
+  legacySlug,
   checkoutRoot,
   userRoot,
   profile,
@@ -2224,6 +2238,7 @@ async function scanWatchSource({
   archiveCandidates,
 }) {
   const provenance = makeProvenance(sourceType, repoKey, checkoutRoot);
+  if (legacySlug) provenance.legacySlug = legacySlug;
   const sourceInfo = await readSource(
     source,
     manifest,
@@ -2292,6 +2307,9 @@ async function scanWatchSource({
       reason =
         evidenceProblem ??
         'A unique valid SessionResumeStore issueUrl is required to prove the watch bundle slug.';
+    } else if (legacySlug && evidence.issue.slug !== legacySlug) {
+      reason =
+        `The legacy slug-keyed source path ${legacySlug} does not match the unique SessionResumeStore slug ${evidence.issue.slug}.`;
     } else if (
       reportIssues.some(
         (issue) => !issue || issue.canonicalUrl !== evidence.issueUrl,
@@ -2319,6 +2337,7 @@ async function scanWatchSource({
       conductorAgentId,
       ...(evidence.issueUrl ? { issueUrl: evidence.issueUrl } : {}),
       ...(evidence.slug ? { canonicalSlug: evidence.slug } : {}),
+      ...(legacySlug ? { legacySlug } : {}),
       ...storeEvidenceDetails(evidence),
       ...(profile ? { operatorSelectedProfile: profile } : {}),
       pendingReportIssueUrls: reports.map((report) => report.issueUrl),
@@ -2426,6 +2445,94 @@ async function scanHashWatchSources({
       watchGroups,
       archiveCandidates,
     });
+  }
+}
+
+async function scanLegacySlugWatchSources({
+  userRoot,
+  profile,
+  manifest,
+  storeIndex,
+  watchGroups,
+  archiveCandidates,
+}) {
+  const githubRoot = join(userRoot, 'operator-agent', 'github.com');
+  const owners = await listDirectory(
+    githubRoot,
+    manifest,
+    'legacy-operator-slug-watch-root',
+    { sourceType: 'user-slug-keyed' },
+  );
+  for (const ownerEntry of owners) {
+    const ownerPath = join(githubRoot, ownerEntry.name);
+    if (ownerEntry.isSymbolicLink() || !ownerEntry.isDirectory()) {
+      unresolvedEntry(
+        manifest,
+        ownerPath,
+        'legacy-operator-slug-watch-owner',
+        'Legacy slug-keyed watch owner is not a regular directory.',
+        { sourceType: 'user-slug-keyed', owner: ownerEntry.name },
+      );
+      continue;
+    }
+    const repositories = await listDirectory(
+      ownerPath,
+      manifest,
+      'legacy-operator-slug-watch-owner',
+      { sourceType: 'user-slug-keyed', owner: ownerEntry.name },
+    );
+    for (const repositoryEntry of repositories) {
+      const repositoryPath = join(ownerPath, repositoryEntry.name);
+      const legacySlug = join(
+        'github.com',
+        ownerEntry.name,
+        repositoryEntry.name,
+      );
+      const provenance = {
+        sourceType: 'user-slug-keyed',
+        owner: ownerEntry.name,
+        repository: repositoryEntry.name,
+        legacySlug,
+      };
+      if (
+        repositoryEntry.isSymbolicLink() ||
+        !repositoryEntry.isDirectory()
+      ) {
+        unresolvedEntry(
+          manifest,
+          repositoryPath,
+          'legacy-operator-slug-watch-repository',
+          'Legacy slug-keyed watch repository is not a regular directory.',
+          provenance,
+        );
+        continue;
+      }
+      const source = join(repositoryPath, 'watch-state.json');
+      const sourceInspection = await inspectScanPath(
+        source,
+        manifest,
+        'legacy-operator-slug-watch-source',
+        provenance,
+      );
+      stopOnUnrecoverableScanError(sourceInspection);
+      if (
+        sourceInspection.type === 'missing' ||
+        sourceInspection.type === 'error'
+      ) {
+        continue;
+      }
+      await scanWatchSource({
+        source,
+        sourceType: 'user-slug-keyed',
+        legacySlug,
+        userRoot,
+        profile,
+        manifest,
+        storeIndex,
+        watchGroups,
+        archiveCandidates,
+      });
+    }
   }
 }
 
@@ -3086,6 +3193,34 @@ async function writeManifest(path, manifest, { create = false } = {}) {
 }
 
 function finalizeManifest(manifest) {
+  const archiveEntries = manifest.entries
+    .filter(
+      (entry) =>
+        ['operator-watch-state', 'operator-watch-bundle'].includes(entry.kind) &&
+        entry.archiveReason,
+    )
+    .map((entry) => ({
+      source: entry.source,
+      kind: entry.kind,
+      disposition: entry.disposition,
+      sourceSha256: entry.sourceSha256,
+      sourceBundleSha256: entry.sourceBundleSha256,
+      destination: entry.destination,
+      destinationSha256: entry.destinationSha256,
+      destinationBundleSha256: entry.destinationBundleSha256,
+      reason: entry.archiveReason,
+      collisionReason: entry.collisionReason,
+      recovery: entry.recovery,
+      provenance: entry.provenance,
+      evidence: entry.evidence,
+    }));
+  manifest.watchArchiveAcceptance = {
+    operatorAccepted: manifest.watchArchiveAcceptance.operatorAccepted,
+    acceptedAt: manifest.watchArchiveAcceptance.acceptedAt,
+    acceptanceEvidence: manifest.watchArchiveAcceptance.acceptanceEvidence,
+    limitations: WATCH_ARCHIVE_LIMITATIONS,
+    archiveEntries,
+  };
   manifest.unresolvedSources = manifest.entries
     .filter((entry) =>
       [
@@ -3209,13 +3344,25 @@ async function main() {
     );
   }
 
+  const runAt = new Date().toISOString();
   const manifest = {
     schemaVersion: 1,
     tool: 'migrate-project-ensemble-runtime-to-user',
-    runAt: new Date().toISOString(),
+    runAt,
     mode: options.mode,
     userRoot: options.userRoot,
     operatorSelectedProfile: options.profile ?? null,
+    watchArchiveAcceptance: {
+      operatorAccepted: options.acceptWatchArchiveLimitations,
+      acceptedAt: options.acceptWatchArchiveLimitations
+        ? runAt
+        : null,
+      acceptanceEvidence: options.acceptWatchArchiveLimitations
+        ? '--accept-watch-archive-limitations'
+        : null,
+      limitations: WATCH_ARCHIVE_LIMITATIONS,
+      archiveEntries: [],
+    },
     checkoutInventory: {
       operatorAssertedComplete: options.checkoutRootsComplete,
       complete: false,
@@ -3279,6 +3426,14 @@ async function main() {
     }
     rejectAmbiguousSessionStoreCopies(copyCandidates, storeIndex);
     await scanHashWatchSources({
+      userRoot: options.userRoot,
+      profile: options.profile,
+      manifest,
+      storeIndex,
+      watchGroups,
+      archiveCandidates,
+    });
+    await scanLegacySlugWatchSources({
       userRoot: options.userRoot,
       profile: options.profile,
       manifest,

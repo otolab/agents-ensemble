@@ -1076,6 +1076,367 @@ test('a canonical slug Store can prove an old hash watch bundle destination', as
   );
 });
 
+test('slug-keyed watch sources dry-run, copy complete conductor bundles, and rerun without touching the source', async () => {
+  const root = await makeRoot();
+  const { userRoot } = root;
+  const agentId = 'legacy-slug-watch';
+  const sourcePath = join(
+    userRoot,
+    'operator-agent',
+    'github.com',
+    'example',
+    'repo',
+    'watch-state.json',
+  );
+  const storePath = join(
+    userRoot,
+    'sessions',
+    'github.com',
+    'example',
+    'repo',
+    `${agentId}.json`,
+  );
+  const sourceState = makeWatchState(agentId, issueUrl, 12);
+  const sourceText = `${JSON.stringify(sourceState, null, 2)}\n`;
+  await writeJson(storePath, makeStore(agentId, issueUrl, '/unrelated/clone'));
+  await mkdir(dirname(sourcePath), { recursive: true });
+  await writeFile(sourcePath, sourceText, 'utf8');
+
+  const destination = join(
+    userRoot,
+    'operator-agents',
+    'personal',
+    'watch',
+    'github.com',
+    'example',
+    'repo',
+    'watch-state.json',
+  );
+  const dryRun = runMigration(root, { profile: 'personal' });
+  assert.equal(dryRun.status, 0, dryRun.stderr);
+  let manifest = await readManifest(root);
+  let entry = findEntry(manifest, sourcePath);
+  assert.equal(entry.kind, 'operator-watch-bundle');
+  assert.equal(entry.disposition, 'planned-copy');
+  assert.equal(entry.provenance.sourceType, 'user-slug-keyed');
+  assert.equal(entry.provenance.legacySlug, 'github.com/example/repo');
+  assert.equal(entry.evidence.legacySlug, 'github.com/example/repo');
+  assert.equal(entry.evidence.operatorSelectedProfile, 'personal');
+  assert.equal(
+    entry.evidence.issueUrl,
+    'https://github.com/example/repo/issues/607',
+  );
+  assert.ok(entry.sourceSha256);
+  assert.equal(entry.destination, destination);
+  assert.equal(await fileExists(destination), false);
+  assert.equal(await readFile(sourcePath, 'utf8'), sourceText);
+
+  const apply = runMigration(root, {
+    profile: 'personal',
+    apply: true,
+  });
+  assert.equal(apply.status, 0, apply.stderr);
+  manifest = await readManifest(root);
+  entry = findEntry(manifest, sourcePath);
+  assert.equal(entry.disposition, 'copied');
+  const restored = JSON.parse(await readFile(destination, 'utf8'));
+  assert.deepEqual(restored.watches[agentId], sourceState.watches[agentId]);
+  assert.deepEqual(restored.cursors[agentId], sourceState.cursors[agentId]);
+  assert.deepEqual(
+    restored.messageListeners[agentId],
+    sourceState.messageListeners[agentId],
+  );
+  assert.equal(
+    restored.messageCursors[agentId],
+    sourceState.messageCursors[agentId],
+  );
+  assert.deepEqual(restored.pendingReports, sourceState.pendingReports);
+  assert.equal(entry.destinationSha256, entry.sourceBundleSha256);
+  assert.equal(await readFile(sourcePath, 'utf8'), sourceText);
+
+  const rerun = runMigration(root, {
+    profile: 'personal',
+    apply: true,
+  });
+  assert.equal(rerun.status, 0, rerun.stderr);
+  manifest = await readManifest(root);
+  entry = findEntry(manifest, sourcePath);
+  assert.equal(entry.disposition, 'no-op-identical');
+  assert.equal(
+    entry.sourceSha256,
+    createHash('sha256').update(sourceText).digest('hex'),
+  );
+  assert.equal(await readFile(sourcePath, 'utf8'), sourceText);
+  assert.equal(
+    await readFile(destination, 'utf8'),
+    `${JSON.stringify(restored, null, 2)}\n`,
+  );
+});
+
+test('a slug-keyed source whose path disagrees with its SessionResumeStore is archived', async () => {
+  const root = await makeRoot();
+  const { userRoot } = root;
+  const agentId = 'wrong-legacy-slug';
+  const sourcePath = join(
+    userRoot,
+    'operator-agent',
+    'github.com',
+    'example',
+    'other-repo',
+    'watch-state.json',
+  );
+  const storePath = join(
+    userRoot,
+    'sessions',
+    'github.com',
+    'example',
+    'repo',
+    `${agentId}.json`,
+  );
+  await writeJson(storePath, makeStore(agentId, issueUrl, '/old'));
+  await writeJson(sourcePath, makeWatchState(agentId, issueUrl, 2));
+
+  const result = runMigration(root, {
+    profile: 'personal',
+    apply: true,
+  });
+  assert.equal(result.status, 0, result.stderr);
+  const manifest = await readManifest(root);
+  const entry = findEntry(manifest, sourcePath);
+  assert.equal(entry.disposition, 'archived');
+  assert.match(entry.archiveReason, /source path .* does not match/u);
+  assert.equal(entry.provenance.legacySlug, 'github.com/example/other-repo');
+  assert.ok(entry.sourceSha256);
+  assert.ok(entry.destinationSha256);
+  assert.ok(entry.recovery);
+  assert.match(entry.destination, /operator-agents\/legacy\/watch\//u);
+  assert.equal(
+    await fileExists(
+      join(
+        userRoot,
+        'operator-agents',
+        'personal',
+        'watch',
+        'github.com',
+        'example',
+        'repo',
+        'watch-state.json',
+      ),
+    ),
+    false,
+  );
+  assert.equal(await fileExists(sourcePath), true);
+});
+
+test('slug-keyed watch state is not assigned without an operator-selected profile', async () => {
+  const root = await makeRoot();
+  const { userRoot } = root;
+  const agentId = 'profile-not-selected';
+  const sourcePath = join(
+    userRoot,
+    'operator-agent',
+    'github.com',
+    'example',
+    'repo',
+    'watch-state.json',
+  );
+  const storePath = join(
+    userRoot,
+    'sessions',
+    'github.com',
+    'example',
+    'repo',
+    `${agentId}.json`,
+  );
+  const sourceState = makeWatchState(agentId, issueUrl, 3);
+  const sourceText = `${JSON.stringify(sourceState, null, 2)}\n`;
+  await writeJson(storePath, makeStore(agentId, issueUrl, '/old'));
+  await writeJson(sourcePath, sourceState);
+
+  const result = runMigration(root, { apply: true });
+  assert.equal(result.status, 0, result.stderr);
+  const manifest = await readManifest(root);
+  const entry = findEntry(manifest, sourcePath);
+  assert.equal(entry.disposition, 'archived');
+  assert.match(entry.archiveReason, /No operator-selected profile/u);
+  assert.equal(entry.evidence.operatorSelectedProfile, undefined);
+  assert.equal(
+    entry.evidence.issueUrl,
+    'https://github.com/example/repo/issues/607',
+  );
+  assert.equal(await readFile(sourcePath, 'utf8'), sourceText);
+  assert.equal(manifest.watchArchiveAcceptance.operatorAccepted, false);
+  assert.equal(manifest.watchArchiveAcceptance.archiveEntries.length, 1);
+  assert.ok(manifest.watchArchiveAcceptance.limitations.length >= 2);
+  assert.equal(
+    await fileExists(
+      join(
+        userRoot,
+        'operator-agents',
+        'watch',
+        'github.com',
+        'example',
+        'repo',
+        'watch-state.json',
+      ),
+    ),
+    false,
+  );
+});
+
+test('slug-keyed watch collisions archive intact and record explicit acceptance limitations', async () => {
+  const root = await makeRoot();
+  const { userRoot } = root;
+  const agentId = 'slug-watch-collision';
+  const sourcePath = join(
+    userRoot,
+    'operator-agent',
+    'github.com',
+    'example',
+    'repo',
+    'watch-state.json',
+  );
+  const storePath = join(
+    userRoot,
+    'sessions',
+    'github.com',
+    'example',
+    'repo',
+    `${agentId}.json`,
+  );
+  const destination = join(
+    userRoot,
+    'operator-agents',
+    'personal',
+    'watch',
+    'github.com',
+    'example',
+    'repo',
+    'watch-state.json',
+  );
+  const sourceState = makeWatchState(agentId, issueUrl, 5);
+  const sourceText = `${JSON.stringify(sourceState, null, 2)}\n`;
+  const destinationState = makeWatchState('existing-watch', issueUrl, 99);
+  const destinationText = `${JSON.stringify(destinationState, null, 2)}\n`;
+  await writeJson(storePath, makeStore(agentId, issueUrl, '/old'));
+  await mkdir(dirname(sourcePath), { recursive: true });
+  await writeFile(sourcePath, sourceText, 'utf8');
+  await writeJson(destination, destinationState);
+
+  const result = runMigration(root, {
+    profile: 'personal',
+    apply: true,
+    acceptWatchArchiveLimitations: true,
+  });
+  assert.equal(result.status, 0, result.stderr);
+  const manifest = await readManifest(root);
+  const entry = findEntry(manifest, sourcePath);
+  assert.equal(entry.disposition, 'archived');
+  assert.match(entry.archiveReason, /cannot be overwritten/u);
+  assert.ok(entry.sourceSha256);
+  assert.ok(entry.sourceBundleSha256);
+  assert.ok(entry.destinationSha256);
+  assert.ok(entry.collisionReason);
+  assert.ok(entry.recovery);
+  assert.equal(await readFile(sourcePath, 'utf8'), sourceText);
+  assert.equal(await readFile(destination, 'utf8'), destinationText);
+
+  const acceptance = manifest.watchArchiveAcceptance;
+  assert.equal(acceptance.operatorAccepted, true);
+  assert.equal(
+    acceptance.acceptanceEvidence,
+    '--accept-watch-archive-limitations',
+  );
+  assert.ok(acceptance.acceptedAt);
+  assert.equal(acceptance.archiveEntries.length, 1);
+  assert.equal(acceptance.archiveEntries[0].source, sourcePath);
+  assert.equal(acceptance.archiveEntries[0].sourceSha256, entry.sourceSha256);
+  assert.match(
+    acceptance.limitations.join('\n'),
+    /silent baseline.*not replayed/u,
+  );
+  assert.match(
+    acceptance.limitations.join('\n'),
+    /question IDs, not question text.*at-least-once/u,
+  );
+});
+
+test('unreadable slug-keyed watch sources stay unresolved and corrupt sources are archived intact', async () => {
+  const root = await makeRoot();
+  const sourcePath = join(
+    root.userRoot,
+    'operator-agent',
+    'github.com',
+    'example',
+    'unreadable',
+    'watch-state.json',
+  );
+  await writeJson(sourcePath, makeWatchState('unreadable-watch', issueUrl, 1));
+  const corruptPath = join(
+    root.userRoot,
+    'operator-agent',
+    'github.com',
+    'example',
+    'corrupt',
+    'watch-state.json',
+  );
+  const corruptText = '{"version":1,"watches":';
+  await mkdir(dirname(corruptPath), { recursive: true });
+  await writeFile(corruptPath, corruptText, 'utf8');
+  const preloadPath = join(root.path, 'deny-watch-state-read.mjs');
+  await writeFile(
+    preloadPath,
+    [
+      "import fs from 'node:fs/promises';",
+      "import { syncBuiltinESMExports } from 'node:module';",
+      'const originalReadFile = fs.readFile;',
+      `const targetPath = ${JSON.stringify(sourcePath)};`,
+      'fs.readFile = async (path, ...args) => {',
+      '  if (String(path) === targetPath) {',
+      "    const error = new Error('Injected unreadable watch-state source.');",
+      "    Object.assign(error, { code: 'EACCES', errno: -13, syscall: 'open', path: targetPath });",
+      '    throw error;',
+      '  }',
+      '  return originalReadFile.call(fs, path, ...args);',
+      '};',
+      'syncBuiltinESMExports();',
+      '',
+    ].join('\n'),
+    'utf8',
+  );
+
+  const result = runMigration(root, { preloadPath, apply: true });
+  assert.equal(result.status, 0, result.stderr);
+  const manifest = await readManifest(root);
+  const unreadableEntry = findEntry(manifest, sourcePath);
+  assert.equal(unreadableEntry.disposition, 'unresolved');
+  assert.equal(unreadableEntry.sourceSha256, null);
+  assert.equal(unreadableEntry.error.code, 'EACCES');
+  assert.equal(unreadableEntry.error.syscall, 'open');
+  assert.ok(unreadableEntry.reason);
+  assert.ok(unreadableEntry.recovery);
+  assert.equal(unreadableEntry.provenance.sourceType, 'user-slug-keyed');
+  assert.ok(
+    manifest.unresolvedSources.some(
+      (source) =>
+        source.source === sourcePath &&
+        source.disposition === 'unresolved' &&
+        source.sourceSha256 === null,
+    ),
+  );
+  const corruptEntry = findEntry(manifest, corruptPath);
+  assert.equal(corruptEntry.disposition, 'archived');
+  assert.match(corruptEntry.archiveReason, /invalid JSON/u);
+  assert.equal(
+    corruptEntry.sourceSha256,
+    createHash('sha256').update(corruptText).digest('hex'),
+  );
+  assert.equal(corruptEntry.destinationSha256, corruptEntry.sourceSha256);
+  assert.equal(await readFile(corruptEntry.destination, 'utf8'), corruptText);
+  assert.equal(await fileExists(sourcePath), true);
+  assert.equal(await readFile(corruptPath, 'utf8'), corruptText);
+});
+
 test('user docs distinguish bulk inventory from resume-time lazy promotion', async () => {
   const repositoryRoot = resolve(dirname(scriptPath), '..');
   const sessionLogging = await readFile(
@@ -1124,7 +1485,27 @@ test('user docs distinguish bulk inventory from resume-time lazy promotion', asy
   );
   assert.match(
     liveControl,
-    /旧 `~\/\.ensemble\/operator-agent\/<repoKey>\/watch-state\.json`.*#698 の一括 migration/u,
+    /旧 slug-keyed `~\/\.ensemble\/operator-agent\/github\.com\/<owner>\/<repo>\/watch-state\.json`/u,
+  );
+  assert.match(
+    liveControl,
+    /`--accept-watch-archive-limitations`.*operator acceptance/u,
+  );
+  assert.match(
+    sessionLogging,
+    /旧 slug-keyed `operator-agent\/github\.com\/<owner>\/<repo>\/watch-state\.json`/u,
+  );
+  assert.match(
+    sessionLogging,
+    /`watchArchiveAcceptance` に記録/u,
+  );
+  assert.match(
+    sessionLogging,
+    /silent baseline.*再通知されません/u,
+  );
+  assert.match(
+    sessionLogging,
+    /同じ質問文でも ID が違えば別の質問/u,
   );
   assert.ok(
     liveControl.includes(
@@ -1326,6 +1707,7 @@ function runMigration(
     complete = false,
     profile,
     apply = false,
+    acceptWatchArchiveLimitations = false,
     preloadPath,
   } = {},
 ) {
@@ -1348,6 +1730,9 @@ function runMigration(
   }
   if (complete) args.push('--checkout-roots-complete');
   if (profile) args.push('--profile', profile);
+  if (acceptWatchArchiveLimitations) {
+    args.push('--accept-watch-archive-limitations');
+  }
   return spawnSync(process.execPath, args, { encoding: 'utf8' });
 }
 
