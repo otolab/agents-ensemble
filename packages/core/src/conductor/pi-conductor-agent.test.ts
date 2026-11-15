@@ -134,6 +134,7 @@ describe('PiConductorAgent', () => {
       session: fakeSession,
       extensionsResult: { errors: [] },
     });
+    mcpLoadConfig = undefined;
     mockCreateMcpExtension.mockReset();
     mockCreateMcpExtension.mockImplementation((options: { loadConfig: () => unknown }) => {
       mcpLoadConfig = options.loadConfig;
@@ -822,6 +823,150 @@ describe('PiConductorAgent', () => {
     });
 
     expect(mockCreateAgentSession.mock.calls[0]![0].noTools).toBe('builtin');
+    await conductor.close();
+  });
+
+  it('registers the existing internal Pi extensions by default', async () => {
+    const conductor = await PiConductorAgent.create({
+      cwd,
+      pi: { agentDir },
+      modelId: 'anthropic/model-1',
+      systemPrompt: 'system',
+    });
+
+    expect(mockCreateMcpExtension).toHaveBeenCalledOnce();
+    expect(mockCreateExtension).toHaveBeenCalledTimes(2);
+    await conductor.close();
+  });
+
+  it('keeps Pi prompt templates and skills enabled by default', async () => {
+    const projectDir = join(cwd, '.ensemble', 'pi');
+    await mkdir(join(projectDir, 'prompts'), { recursive: true });
+    await mkdir(join(projectDir, 'skills', 'review'), { recursive: true });
+    await writeFile(
+      join(projectDir, 'prompts', 'review.md'),
+      '---\ndescription: review prompt\n---\nreview template body',
+    );
+    await writeFile(
+      join(projectDir, 'skills', 'review', 'SKILL.md'),
+      '---\ndescription: review skill\n---\nreview skill body',
+    );
+
+    const conductor = await PiConductorAgent.create({
+      cwd,
+      pi: { agentDir, projectDir },
+      modelId: 'anthropic/model-1',
+      systemPrompt: 'issue session system',
+    });
+
+    const sessionOptions = mockCreateAgentSession.mock.calls[0]![0];
+    expect(sessionOptions.resourceLoader).toBeDefined();
+    expect(sessionOptions.resourceLoader.getSkills().skills).toEqual([
+      expect.objectContaining({
+        name: 'review',
+        filePath: join(projectDir, 'skills', 'review', 'SKILL.md'),
+      }),
+    ]);
+    await conductor.send('/review');
+    expect(fakeSession.prompt).toHaveBeenCalledWith('review template body', {
+      expandPromptTemplates: false,
+      source: 'rpc',
+    });
+    await conductor.close();
+  });
+
+  it('opts out of internal Pi extensions and keeps only explicitly supplied tools', async () => {
+    const conductor = await PiConductorAgent.create({
+      cwd,
+      pi: { agentDir },
+      modelId: 'anthropic/model-1',
+      systemPrompt: 'doctor system',
+      builtinTools: false,
+      piPromptResources: false,
+      piSkills: false,
+      piExtensions: false,
+      piInternalExtensions: false,
+      mcpServers: {
+        ignored: {
+          type: 'sse',
+          url: 'https://example.invalid/mcp',
+        },
+      },
+      customTools: {
+        doctor_read_config: {
+          name: 'doctor_read_config',
+          description: 'Read allowlisted non-secret settings',
+          inputSchema: { type: 'object', properties: {} },
+          execute: async () => ({
+            content: [{ type: 'text' as const, text: 'settings' }],
+          }),
+        },
+        doctor_write_config: {
+          name: 'doctor_write_config',
+          description: 'Write one approved setting',
+          inputSchema: { type: 'object', properties: {} },
+          execute: async () => ({
+            content: [{ type: 'text' as const, text: 'written' }],
+          }),
+        },
+      },
+    });
+
+    const sessionOptions = mockCreateAgentSession.mock.calls[0]![0];
+    expect(sessionOptions.noTools).toBe('builtin');
+    expect(sessionOptions.resourceLoader.getSkills().skills).toEqual([]);
+    expect(
+      sessionOptions.customTools?.map((tool: { name: string }) => tool.name),
+    ).toEqual(['doctor_read_config', 'doctor_write_config']);
+    expect(mockCreateMcpExtension).not.toHaveBeenCalled();
+    expect(mockCreateExtension).not.toHaveBeenCalled();
+    expect(mcpLoadConfig).toBeUndefined();
+    await conductor.close();
+  });
+
+  it('does not load or expand Pi prompt templates or skills when explicitly disabled', async () => {
+    const projectDir = join(cwd, '.ensemble', 'pi');
+    await mkdir(join(projectDir, 'prompts'), { recursive: true });
+    await mkdir(join(projectDir, 'skills', 'private'), { recursive: true });
+    await writeFile(
+      join(projectDir, 'prompts', 'private.md'),
+      'doctor prompt leak sentinel',
+    );
+    await writeFile(
+      join(projectDir, 'skills', 'private', 'SKILL.md'),
+      'doctor skill leak sentinel',
+    );
+    const systemPrompt = 'explicit doctor role and materials';
+
+    const conductor = await PiConductorAgent.create({
+      cwd,
+      pi: { agentDir, projectDir },
+      modelId: 'anthropic/model-1',
+      systemPrompt,
+      piPromptResources: false,
+      piSkills: false,
+      builtinTools: false,
+    });
+
+    const sessionOptions = mockCreateAgentSession.mock.calls[0]![0];
+    expect(sessionOptions.resourceLoader.getSkills().skills).toEqual([]);
+    expect(sessionOptions.resourceLoader.getPrompts().prompts).toEqual([]);
+    expect(sessionOptions.resourceLoader.getSystemPrompt()).toContain(
+      systemPrompt,
+    );
+    await conductor.send('/private');
+    expect(fakeSession.prompt).toHaveBeenCalledWith('/private', {
+      expandPromptTemplates: false,
+      source: 'rpc',
+    });
+    await conductor.send('/skill:private');
+    expect(fakeSession.prompt).toHaveBeenLastCalledWith('/skill:private', {
+      expandPromptTemplates: false,
+      source: 'rpc',
+    });
+    expect(
+      JSON.stringify(sessionOptions.resourceLoader),
+    ).not.toMatch(/doctor (prompt|skill) leak sentinel/);
     await conductor.close();
   });
 
