@@ -479,6 +479,7 @@ describe('operator-agent conductor reasoning backend wiring', () => {
     vi.stubEnv('ENSEMBLE_USER_ROOT', userEnsembleRoot);
     vi.stubEnv('CONDUCTOR_MODEL_ID', '');
     vi.stubEnv('CONDUCTOR_REASONING', '');
+    vi.stubEnv('ENSEMBLE_OPERATOR_AGENT_REASONING', '');
     vi.stubEnv('CURSOR_API_KEY', undefined);
 
     fakePiSessionManager = {
@@ -568,9 +569,9 @@ describe('operator-agent conductor reasoning backend wiring', () => {
   ])(
     'passes resolved config / environment reasoning through the $backend adapter',
     async ({ backend, configReasoning, envReasoning, modelId }) => {
-      await writeOperatorProjectConfig(backend, modelId, configReasoning);
+      await writeOperatorProfileConfig(backend, modelId, configReasoning);
       if (envReasoning !== undefined) {
-        process.env.CONDUCTOR_REASONING = envReasoning;
+        process.env.ENSEMBLE_OPERATOR_AGENT_REASONING = envReasoning;
       }
       const agentFactory =
         backend === 'pi'
@@ -622,7 +623,7 @@ describe('operator-agent conductor reasoning backend wiring', () => {
   );
 
   it('fails before creating a Pi session when the configured level is invalid', async () => {
-    await writeOperatorProjectConfig('pi', 'anthropic/model-1', 'ultra');
+    await writeOperatorProfileConfig('pi', 'anthropic/model-1', 'ultra');
     const input = new PassThrough() as PassThrough & { isTTY: boolean };
     input.isTTY = true;
     const output = new PassThrough() as PassThrough & { isTTY: boolean };
@@ -654,7 +655,7 @@ describe('operator-agent conductor reasoning backend wiring', () => {
   });
 
   it('fails before creating a Cursor agent when its catalog rejects the resolved value', async () => {
-    await writeOperatorProjectConfig('cursor', 'cursor-model', 'high');
+    await writeOperatorProfileConfig('cursor', 'cursor-model', 'high');
     mockCursorModelList.mockResolvedValue([
       {
         id: 'cursor-model',
@@ -697,18 +698,22 @@ describe('operator-agent conductor reasoning backend wiring', () => {
     expect(mockCursorAgentCreate).not.toHaveBeenCalled();
   });
 
-  async function writeOperatorProjectConfig(
+  async function writeOperatorProfileConfig(
     backend: 'pi' | 'cursor',
     modelId: string,
     reasoning?: string,
   ): Promise<void> {
     await writeFile(
-      join(repoRoot, '.ensemble', 'config.yaml'),
+      join(userEnsembleRoot, 'operator-agents.config.yaml'),
       [
-        'conductor:',
-        `  backend: ${backend}`,
-        `  model: ${modelId}`,
-        ...(reasoning !== undefined ? [`  reasoning: ${reasoning}`] : []),
+        'version: 1',
+        'defaultProfile: reasoning-test',
+        'profiles:',
+        '  reasoning-test:',
+        '    conductor:',
+        `      backend: ${backend}`,
+        `      model: ${modelId}`,
+        ...(reasoning !== undefined ? [`      reasoning: ${reasoning}`] : []),
         '',
       ].join('\n'),
     );
