@@ -94,8 +94,6 @@ export function resolveEnsemblePaths(
   ) => join(canonicalRepoSessionsDir(issueUrl), conductorAgentId);
   const canonicalPiSessionsDir = (issueUrl: string) =>
     join(canonicalRepoSessionsDir(issueUrl), 'pi');
-  const canonicalOperatorAgentDir = (issueUrl: string) =>
-    join(userRoot, 'operator-agent', canonicalRepoSlug(issueUrl));
 
   return {
     repoRoot,
@@ -151,11 +149,6 @@ export function resolveEnsemblePaths(
         `${conductorAgentId}.tool-calls`,
       ),
     canonicalPiSessionsDir,
-    canonicalOperatorAgentDir,
-    canonicalOperatorAgentSessionPath: (issueUrl: string) =>
-      join(canonicalOperatorAgentDir(issueUrl), 'session.json'),
-    canonicalOperatorWatchStatePath: (issueUrl: string) =>
-      join(canonicalOperatorAgentDir(issueUrl), 'watch-state.json'),
     legacySessionsDir: join(projectRoot, 'sessions'),
     legacySessionResumeStorePath: (conductorAgentId: string) =>
       join(projectRoot, 'sessions', `${conductorAgentId}.json`),
@@ -191,35 +184,6 @@ export function resolveEnsemblePaths(
       ),
     legacyPiSessionsDirForCwd: (cwd = repoRoot) =>
       join(cwd, '.ensemble', 'pi', 'sessions'),
-    operatorAgentDir: join(userRoot, 'operator-agent', repoKey),
-    operatorAgentSessionPath: join(
-      userRoot,
-      'operator-agent',
-      repoKey,
-      'session.json',
-    ),
-    operatorWatchStatePath: join(
-      userRoot,
-      'operator-agent',
-      repoKey,
-      'watch-state.json',
-    ),
-    legacyOperatorAgentSessionPath: join(
-      projectRoot,
-      'operator-agent',
-      'session.json',
-    ),
-    legacyOperatorWatchStatePath: join(
-      projectRoot,
-      'operator-agent',
-      'watch-state.json',
-    ),
-    operatorPiSessionsDir: join(
-      userRoot,
-      'operator-agent',
-      repoKey,
-      'pi-sessions',
-    ),
     legacyPiSessionsDir: join(projectRoot, 'pi', 'sessions'),
     worktreesDir: join(projectRoot, 'worktrees'),
   };

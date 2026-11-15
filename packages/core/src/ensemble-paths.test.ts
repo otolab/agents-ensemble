@@ -116,22 +116,28 @@ describe('resolveEnsemblePaths', () => {
         'pi',
       ),
     );
-    expect(
-      paths.canonicalOperatorAgentSessionPath(
-        'https://github.com/org/repo/issues/1',
-      ),
-    ).toBe(
-      join(
-        tempDir,
-        'home',
-        '.ensemble',
-        'operator-agent',
-        'github.com',
-        'org',
-        'repo',
-        'session.json',
-      ),
+    const retiredOperatorWatchStatePath = join(
+      tempDir,
+      'home',
+      '.ensemble',
+      'operator-agent',
+      paths.repoKey,
+      'watch-state.json',
     );
+    expect(paths).not.toHaveProperty('operatorAgentDir');
+    expect(paths).not.toHaveProperty('operatorAgentSessionPath');
+    expect(paths).not.toHaveProperty('operatorWatchStatePath');
+    expect(paths).not.toHaveProperty('operatorPiSessionsDir');
+    expect(paths).not.toHaveProperty('canonicalOperatorAgentDir');
+    expect(paths).not.toHaveProperty('canonicalOperatorAgentSessionPath');
+    expect(paths).not.toHaveProperty('canonicalOperatorWatchStatePath');
+    expect(paths).not.toHaveProperty('legacyOperatorAgentSessionPath');
+    expect(paths).not.toHaveProperty('legacyOperatorWatchStatePath');
+    expect(
+      Object.values(paths).filter(
+        (value): value is string => typeof value === 'string',
+      ),
+    ).not.toContain(retiredOperatorWatchStatePath);
     expect(paths.legacySessionResumeStorePath('agent-a')).toBe(
       join(repoRoot, '.ensemble', 'sessions', 'agent-a.json'),
     );
@@ -146,16 +152,6 @@ describe('resolveEnsemblePaths', () => {
     );
     expect(paths.legacyPiSessionsDirForCwd(repoRoot)).toBe(
       join(repoRoot, '.ensemble', 'pi', 'sessions'),
-    );
-    expect(paths.operatorWatchStatePath).toBe(
-      join(
-        tempDir,
-        'home',
-        '.ensemble',
-        'operator-agent',
-        paths.repoKey,
-        'watch-state.json',
-      ),
     );
     expect(paths.worktreesDir).toBe(join(repoRoot, '.ensemble', 'worktrees'));
 

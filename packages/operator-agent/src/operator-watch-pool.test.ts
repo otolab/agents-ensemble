@@ -54,6 +54,36 @@ describe('operator watch pool', () => {
     vi.unstubAllEnvs();
   });
 
+  it('resolves canonical watch storage from a valid profile and Issue identity', () => {
+    const userRoot = join(homeRoot, '.ensemble');
+    expect(
+      operatorWatchStatePath(
+        userRoot,
+        'work',
+        'https://github.com/Example/Repo/issues/42',
+      ),
+    ).toBe(
+      join(
+        userRoot,
+        'operator-agents',
+        'work',
+        'watch',
+        'github.com',
+        'example',
+        'repo',
+        'watch-state.json',
+      ),
+    );
+    expect(() => operatorWatchStatePath(userRoot, 'work', '')).toThrow();
+    expect(() =>
+      operatorWatchStatePath(
+        userRoot,
+        '../legacy',
+        'https://github.com/example/repo/issues/42',
+      ),
+    ).toThrow(/Invalid operator-agent profile name/u);
+  });
+
   it('does not load project-local operator watch state', async () => {
     repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-watch-legacy-'));
     const legacyPath = join(
@@ -101,8 +131,18 @@ describe('operator watch pool', () => {
       'default',
       issueUrl,
     );
-    const hashPath = paths.operatorWatchStatePath;
-    const projectPath = paths.legacyOperatorWatchStatePath;
+    const hashPath = join(
+      userRoot,
+      'operator-agent',
+      paths.repoKey,
+      'watch-state.json',
+    );
+    const projectPath = join(
+      repoRoot,
+      '.ensemble',
+      'operator-agent',
+      'watch-state.json',
+    );
     const state = (pollIntervalMs: number) => ({
       version: 1,
       watches: {
@@ -189,7 +229,12 @@ describe('operator watch pool', () => {
       cursors: {},
       pendingReports: [],
     };
-    const hashStatePath = paths.operatorWatchStatePath;
+    const hashStatePath = join(
+      join(homeRoot, '.ensemble'),
+      'operator-agent',
+      paths.repoKey,
+      'watch-state.json',
+    );
     const slugStatePath = operatorWatchStatePath(
       join(homeRoot, '.ensemble'),
       'default',
