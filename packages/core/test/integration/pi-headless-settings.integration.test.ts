@@ -139,6 +139,7 @@ describe('Pi headless settings with the real SDK', () => {
   function createOptions() {
     return {
       cwd,
+      issueUrl: 'https://github.com/org/repo/issues/1',
       pi: { agentDir, projectDir: ensembleProjectDir },
       modelId: FIXTURE_MODEL_ID,
       apiKey: 'fixture-api-key',
