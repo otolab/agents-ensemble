@@ -25,7 +25,6 @@ import {
   loadSessionResumeStore,
   saveSessionResumeStore,
   SESSION_RESUME_STORE_VERSION,
-  sessionResumeStorePath,
 } from '../../src/session/session-resume-store.js';
 import {
   loadOpenQuestionsStore,
@@ -166,10 +165,7 @@ describe('session resume integration', () => {
     };
 
     await saveSessionResumeStore(
-      sessionResumeStorePath({
-        repoRoot,
-        conductorAgentId: RESUME_AGENT_ID,
-      }),
+      resumeStorePathForIssue(repoRoot),
       {
         version: SESSION_RESUME_STORE_VERSION,
         conductorAgentId: RESUME_AGENT_ID,
@@ -313,10 +309,7 @@ describe('session resume integration', () => {
 
   it('prefers open questions YAML over the SessionResumeStore snapshot when resuming', async () => {
     await saveSessionResumeStore(
-      sessionResumeStorePath({
-        repoRoot,
-        conductorAgentId: RESUME_AGENT_ID,
-      }),
+      resumeStorePathForIssue(repoRoot),
       {
         version: SESSION_RESUME_STORE_VERSION,
         conductorAgentId: RESUME_AGENT_ID,
@@ -339,11 +332,13 @@ describe('session resume integration', () => {
         updatedAt: Date.now(),
       },
     );
-    const legacyOpenQuestionsPath = openQuestionsStorePath({
+    const canonicalOpenQuestionsPath = openQuestionsStorePath({
       repoRoot,
       conductorAgentId: RESUME_AGENT_ID,
+      issueUrl: TEST_ISSUE.url,
+      location: 'canonical-slug',
     });
-    await saveOpenQuestionsStore(legacyOpenQuestionsPath, {
+    await saveOpenQuestionsStore(canonicalOpenQuestionsPath, {
       sequence: 8,
       openQuestions: [
         {
@@ -356,10 +351,6 @@ describe('session resume integration', () => {
         },
       ],
     });
-    const legacyOpenQuestionsText = await readFile(
-      legacyOpenQuestionsPath,
-      'utf8',
-    );
 
     mockSend.mockResolvedValue({
       runId: 'run-yaml-resume',
@@ -409,21 +400,17 @@ describe('session resume integration', () => {
       sequence: 8,
       openQuestions: result.openQuestions,
     });
-    await expect(
-      readFile(legacyOpenQuestionsPath, 'utf8'),
-    ).resolves.toBe(legacyOpenQuestionsText);
   });
 
   it('continues resuming when the optional tool-call history is corrupt', async () => {
-    const historyPath = resolveEnsemblePaths({ repoRoot }).toolCallHistoryPath(
-      RESUME_AGENT_ID,
-    );
+    const historyPath = toolCallSnapshotHistoryPath({
+      repoRoot,
+      conductorAgentId: RESUME_AGENT_ID,
+      issueUrl: TEST_ISSUE.url,
+    });
     const corruptHistory = '{invalid json';
     await saveSessionResumeStore(
-      sessionResumeStorePath({
-        repoRoot,
-        conductorAgentId: RESUME_AGENT_ID,
-      }),
+      resumeStorePathForIssue(repoRoot),
       {
         version: SESSION_RESUME_STORE_VERSION,
         conductorAgentId: RESUME_AGENT_ID,
@@ -502,10 +489,7 @@ describe('session resume integration', () => {
     await closeWorkerAcpSession(attached.session);
 
     await saveSessionResumeStore(
-      sessionResumeStorePath({
-        repoRoot,
-        conductorAgentId: RESUME_AGENT_ID,
-      }),
+      resumeStorePathForIssue(repoRoot),
       {
         version: SESSION_RESUME_STORE_VERSION,
         conductorAgentId: RESUME_AGENT_ID,
@@ -907,10 +891,7 @@ describe('session resume integration', () => {
     loadSessionSpy.mockClear();
 
     await saveSessionResumeStore(
-      sessionResumeStorePath({
-        repoRoot,
-        conductorAgentId: RESUME_AGENT_ID,
-      }),
+      resumeStorePathForIssue(repoRoot),
       {
         version: SESSION_RESUME_STORE_VERSION,
         conductorAgentId: RESUME_AGENT_ID,
@@ -1009,10 +990,7 @@ describe('session resume integration', () => {
     await closeWorkerAcpSession(attached.session);
 
     await saveSessionResumeStore(
-      sessionResumeStorePath({
-        repoRoot,
-        conductorAgentId: RESUME_AGENT_ID,
-      }),
+      resumeStorePathForIssue(repoRoot),
       {
         version: SESSION_RESUME_STORE_VERSION,
         conductorAgentId: RESUME_AGENT_ID,
@@ -1106,10 +1084,7 @@ describe('session resume integration', () => {
       promptSession,
       close: vi.fn(),
     };
-    const resumePath = sessionResumeStorePath({
-      repoRoot,
-      conductorAgentId: RESUME_AGENT_ID,
-    });
+    const resumePath = resumeStorePathForIssue(repoRoot);
 
     await saveSessionResumeStore(resumePath, {
       version: SESSION_RESUME_STORE_VERSION,
@@ -1184,3 +1159,13 @@ describe('session resume integration', () => {
     );
   });
 });
+
+function resumeStorePathForIssue(
+  repoRoot: string,
+  conductorAgentId = RESUME_AGENT_ID,
+): string {
+  return resolveEnsemblePaths({ repoRoot }).canonicalSessionResumeStorePath(
+    TEST_ISSUE.url,
+    conductorAgentId,
+  );
+}
