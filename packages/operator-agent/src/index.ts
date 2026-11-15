@@ -9,6 +9,10 @@ export {
   createListOperatorSessionsTool,
   LIST_OPERATOR_SESSIONS_TOOL,
 } from './list-operator-sessions-tool.js';
+export {
+  createListWorkerMessagesTool,
+  LIST_WORKER_MESSAGES_TOOL,
+} from './worker-session-tools.js';
 export { operatorBaseModule } from './operator-base-module.js';
 export type { OperatorPromptContext } from './operator-base-module.js';
 export {

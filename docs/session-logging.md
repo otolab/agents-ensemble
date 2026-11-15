@@ -20,10 +20,10 @@ conductor セッションには性質の異なる出力が混在する。
 | **harness テレメトリ** | 開発者・運用者 | worktree 解決、worker ラウンド完了、send 回数 |
 | **exit report** | e2e / CI / スクリプト | 終了時 JSON（`stopReason`, `workerResponses` 等） |
 | **resume 状態** | 次回 `ensemble issue --resume` | SessionResumeStore JSON と open question YAML |
-| **operator 状態** | `list_operator_sessions` | SessionResumeStore の `lifecycle` と session-state YAML |
+| **operator 状態** | `list_operator_sessions` | Issue / run で絞り込んだ SessionResumeStore、session-state YAML、Open Questions YAML |
 | **保存 session の CLI 閲覧** | `ensemble session list/show` | SessionResumeStore の要約と関連 YAML の件数・時刻 |
 | **conductor 履歴の CLI 閲覧** | `ensemble session messages` | provider session history |
-| **worker 履歴の CLI 閲覧** | `ensemble session workers messages` | Pi / Codex ACP transcript |
+| **worker 履歴の閲覧** | `ensemble session workers messages` / operator-agent `list_worker_messages` | Pi / Codex ACP transcript |
 | **障害調査 timeline** | `ensemble session timeline` | ResumeStore / provider history と、任意の終了サマリ・captured harness log の send 番号照合 |
 
 これらを 1 本の stderr に混ぜると、TTY 利用時に **会話相手が worker に見える**・**conductor の応答が終了まで見えない** といった UX 問題が起きる（#44）。
@@ -297,6 +297,10 @@ slug と path-hash に同じ session があれば slug 側の `harnessSocketPath
 旧 `<repoRoot>/.ensemble/sessions/` は Issue-session data の読み取り fallback です。ResumeStore と open-question YAML、session-state YAML、tool-call history、Pi transcript を resume 時に slug 側へコピーし、source はそのまま残します。operator-agent は project `.ensemble/operator-agent/` や launch / saved `conductorCwd` 配下の `.ensemble/pi/sessions/` を直接読みません。列挙 checkout に残る Issue session data / watch state は copy-only migration で調査・保全します。Issue 用 Git worktree は clone ごとの `<repoRoot>/.ensemble/worktrees/issue-N` を使います。現在 clone に resume 対象 worktree がない場合は警告して、安全な branch/base から再生成を試みます。使用中 branch や占有 directory を移動・削除・reset・上書きせず、安全な path / branch を確保できない場合は理由を示して失敗します。配置判断の詳細は [ADR 0044](adr/0044-user-scoped-runtime-storage.md) を参照してください。
 
 canonical slug と legacy location に同じ SessionResumeStore が残っている場合は slug 側を優先します。新規 Issue session と resume 後の SessionResumeStore / YAML / tool-call history / Pi transcript の flush は slug 側だけに行います。operator-agent の session list は user root にある canonical slug と互換 user path-hash Store を repository 単位で統合し、profile include と `--repo-filter` で絞り込みます。session list tool は `limit` / `cursor` / `nextCursor` を返すため、上限で黙って結果を切りません。Pi operator resource は共通 user root と明示 profile root に限り、Pi transcript は conversation ID ごとです。
+
+operator-agent の `list_operator_sessions` は `issueUrl` / `conductorAgentId` でも絞り込めます。同一 Issue の複数 run は別々の Store として返し、各行の `conductorAgentId` を後続照会に使います。`openQuestionHistory` は Open Questions YAML を正本として全状態の質問・回答を返します。YAML が見つからない旧 session だけは `SessionResumeStore.openQuestions` の互換コピーを使い、出力元を明示します。YAML が壊れている場合は履歴を `unavailable` とし、古い互換コピーへ黙って切り替えません。保存 worker 名と profile 上の worker 構成も別々に示し、構成にあるのに session record がない worker を識別できます。
+
+`list_worker_messages` は Issue URL、run の `conductorAgentId`、worker 名を使って保存 ACP transcript を読みます。対応 preset でも保存 session record や transcript が見つからない場合は `unavailable` と理由を返します。worker prompt lifecycle / failure event は harness log sink へ出ますが SessionResumeStore には保存されません。終了 JSON に残る `workerFailureCount` も失敗した worker の識別情報を含まないため、failure を特定できるのは終了 summary の別保存や captured harness log がある場合に限られます。session record や transcript がないことを prompt failure と解釈してはいけません。
 
 ### legacy data の一括 inventory / copy
 

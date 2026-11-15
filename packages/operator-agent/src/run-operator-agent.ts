@@ -56,6 +56,7 @@ import {
   createSendOperatorMessageTool,
   createShutdownIssueSessionTool,
 } from './open-question-control-tools.js';
+import { createListWorkerMessagesTool } from './worker-session-tools.js';
 import {
   listOperatorAgentStates,
   loadOperatorAgentState,
@@ -288,6 +289,9 @@ export async function runOperatorAgent(
         { userEnsembleRoot: runtime.userEnsembleRoot },
         reportResumeStoreDuplicate,
       ),
+      list_worker_messages: createListWorkerMessagesTool({
+        userEnsembleRoot: runtime.userEnsembleRoot,
+      }),
       register_session_watch: createRegisterSessionWatchTool(watchPool),
       unregister_session_watch: createUnregisterSessionWatchTool(watchPool),
       register_conductor_message_listen:

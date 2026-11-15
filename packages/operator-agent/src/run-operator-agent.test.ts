@@ -689,6 +689,8 @@ describe('runOperatorAgent', () => {
     expect(agentOptions?.systemPrompt).toContain('自動解決はしません');
     expect(agentOptions?.systemPrompt).toContain('get_last_conductor_message');
     expect(agentOptions?.systemPrompt).toContain('list_conductor_messages');
+    expect(agentOptions?.systemPrompt).toContain('list_worker_messages');
+    expect(agentOptions?.systemPrompt).toContain('openQuestionHistory');
     expect(agentOptions?.systemPrompt).toContain('register_conductor_message_listen');
     expect(agentOptions?.systemPrompt).toContain('shutdown_issue_session');
     expect(agentOptions?.customTools).not.toHaveProperty('prompt_worker');
@@ -703,6 +705,7 @@ describe('runOperatorAgent', () => {
       'answer_live_open_question',
       'get_last_conductor_message',
       'list_conductor_messages',
+      'list_worker_messages',
       'register_session_watch',
       'unregister_session_watch',
       'register_conductor_message_listen',

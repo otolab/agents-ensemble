@@ -373,7 +373,9 @@ worker (ACP)                    conductor (Cursor SDK / Pi)  オペレータ
 
 ### オペレータ対話（watch、open question、メッセージ）
 
-Issue session 内で worker に指示し、ユーザへ結果を返す agent は引き続き **conductor**。operator-agent は稼働中 harness の session UDS を介して Open Question の一覧取得・回答、watch 用 snapshot の取得、明示的な outbound `operator.message.send` の送信、最後の conductor 成功応答の読み取り、専用 method `operator.session.shutdown` による remote close / exit を行う。watch pool は `session.observe` が使えないと保存済み YAML / SessionResumeStore の情報を読むが、最後の応答取得や shutdown など個別の live control は停止・接続不能時にエラーとなり、保存済み情報へ fallback しない。Open Question 回答は回答 API で記録し、通常 message は回答から独立した既存 operator message queue に入り、operator-agent が worker を直接 dispatch することはない。
+Issue session 内で worker に指示し、ユーザへ結果を返す agent は引き続き **conductor**。operator-agent は稼働中 harness の session UDS を介して Open Question の一覧取得・回答、watch 用 snapshot の取得、明示的な outbound `operator.message.send` の送信、最後の conductor 成功応答の読み取り、専用 method `operator.session.shutdown` による remote close / exit を行う。停止後の一覧では `issueUrl` と `conductorAgentId` で run を絞り込み、保存済み Open Questions YAML の全履歴と worker transcript も確認できる。worker transcript は保存された ACP session ID / cwd を使って読む。watch pool は `session.observe` が使えないと保存済み YAML / SessionResumeStore の情報を読むが、最後の応答取得や shutdown など個別の live control は停止・接続不能時にエラーとなり、保存済み情報へ fallback しない。Open Question 回答は回答 API で記録し、通常 message は回答から独立した既存 operator message queue に入り、operator-agent が worker を直接 dispatch することはない。
+
+同じ Issue に複数 run がある場合、一覧で各 `conductorAgentId` を見て対象を選び、履歴照会にはその ID を指定する。SessionResumeStore は worker prompt failure event を保持しないため、保存 worker session / transcript の欠如は失敗の証拠ではない。失敗を説明できるのは、別途残された終了 summary や captured harness log がある範囲に限る。
 
 | レイヤ | 役割 |
 |--------|------|

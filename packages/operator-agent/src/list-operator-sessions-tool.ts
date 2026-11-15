@@ -1,8 +1,9 @@
 import { resolve } from 'node:path';
 import {
-  listLocatedSessionResumeStores,
+  listLocatedSessionResumeStoresPage,
   listUserLocatedSessionResumeStoresPage,
   harnessPhaseFromLegacyLifecycle,
+  loadOpenQuestionsStore,
   loadSessionStateStore,
   parseIssueUrl,
   sessionSnapshotPaths,
@@ -59,8 +60,17 @@ interface OperatorSessionSummary {
   posture: 'watch' | 'interact' | 'resume' | 'purge' | 'indeterminate';
   coherence: 'ok' | 'conflict' | 'insufficient_data';
   coherenceReasons?: string[];
-  openQuestionCount: number;
+  openQuestionCount: number | null;
   workers: string[];
+  configuredWorkers: Array<{ name: string; kind: string }>;
+  workersWithoutSavedSession: string[];
+  openQuestionHistoryStatus: 'available' | 'unavailable';
+  openQuestionHistorySource:
+    | 'open_questions_yaml'
+    | 'resume_store_compatibility'
+    | 'unavailable';
+  openQuestionHistoryReason?: string;
+  openQuestionHistory: SessionResumeStore['openQuestions'];
   openQuestions: Array<{
     id: string;
     question: string;
@@ -68,7 +78,7 @@ interface OperatorSessionSummary {
     context?: string;
     relatedPermissionId?: string;
   }>;
-  answeredQuestionCount: number;
+  answeredQuestionCount: number | null;
 }
 
 type SessionSort = 'updatedAtDesc' | 'updatedAtAsc';
@@ -77,6 +87,17 @@ interface SessionListSnapshot {
   located: LocatedSessionResumeStore;
   resumeStore: SessionResumeStore;
   status: SessionStateStore | undefined;
+  questionHistory: OpenQuestionHistory;
+}
+
+interface OpenQuestionHistory {
+  status: 'available' | 'unavailable';
+  source:
+    | 'open_questions_yaml'
+    | 'resume_store_compatibility'
+    | 'unavailable';
+  questions: SessionResumeStore['openQuestions'];
+  reason?: string;
 }
 
 interface OperatorSessionListCursor {
@@ -131,6 +152,14 @@ export function createListOperatorSessionsTool(
           type: 'string',
           description: 'Optional exact owner/repo filter.',
         },
+        issueUrl: {
+          type: 'string',
+          description: 'Optional exact GitHub Issue URL filter.',
+        },
+        conductorAgentId: {
+          type: 'string',
+          description: 'Optional exact run id filter from the session summary.',
+        },
         sort: {
           type: 'string',
           enum: ['updatedAtDesc', 'updatedAtAsc'],
@@ -154,12 +183,22 @@ export function createListOperatorSessionsTool(
       const hasStatusLine = resolveHasStatusLine(args.hasStatusLine);
       const lifecycle = resolveLifecycle(args.lifecycle);
       const githubRepo = resolveGithubRepo(args.githubRepo);
+      const issueUrl = resolveIssueUrl(args.issueUrl);
+      const conductorAgentId = resolveConductorAgentId(
+        args.conductorAgentId,
+      );
       const dataAsOf = new Date().toISOString();
       const resumeStores = legacyMode
-        ? await listLocatedSessionResumeStores(root, { onDuplicate })
+        ? (
+            await listLocatedSessionResumeStoresPage(
+              root,
+              { issueUrl, conductorAgentId },
+              { onDuplicate },
+            )
+          ).sessions
         : (
             await listUserLocatedSessionResumeStoresPage(
-              {},
+              { issueUrl, conductorAgentId },
               { userEnsembleRoot: root, onDuplicate },
             )
           ).sessions;
@@ -174,6 +213,11 @@ export function createListOperatorSessionsTool(
           located,
           resumeStore: located.resumeStore,
           status: await loadStatusLine(root, located, legacyMode),
+          questionHistory: await loadQuestionHistory(
+            root,
+            located,
+            legacyMode,
+          ),
         })),
       );
       const filtered = snapshots.filter(({ resumeStore, status }) => {
@@ -206,6 +250,8 @@ export function createListOperatorSessionsTool(
       const cursorScope = JSON.stringify({
         sort,
         githubRepo: githubRepo ?? null,
+        issueUrl: issueUrl ?? null,
+        conductorAgentId: conductorAgentId ?? null,
         hasStatusLine: hasStatusLine ?? null,
         lifecycle: lifecycle ?? null,
         profileIncludes: normalizedProfileIncludes ?? null,
@@ -222,10 +268,11 @@ export function createListOperatorSessionsTool(
         remaining.length > page.length
           ? encodeListCursor(page.at(-1)!, sort, cursorScope)
           : undefined;
-      const sessions = page.map(({ resumeStore, status }) =>
+      const sessions = page.map(({ resumeStore, status, questionHistory }) =>
           summarizeSession(
             resumeStore,
             status,
+            questionHistory,
             getLiveStatus?.(resumeStore.conductorAgentId),
           ),
         );
@@ -249,6 +296,44 @@ export function createListOperatorSessionsTool(
       };
     },
   };
+}
+
+async function loadQuestionHistory(
+  userEnsembleRoot: string,
+  located: LocatedSessionResumeStore,
+  legacyMode: boolean,
+): Promise<OpenQuestionHistory> {
+  try {
+    const paths = legacyMode
+      ? sessionSnapshotPaths(userEnsembleRoot, located, 'open-questions')
+      : userSessionSnapshotPaths(
+          userEnsembleRoot,
+          located,
+          'open-questions',
+        );
+    for (const path of paths) {
+      const snapshot = await loadOpenQuestionsStore(path);
+      if (snapshot) {
+        return {
+          status: 'available',
+          source: 'open_questions_yaml',
+          questions: snapshot.openQuestions,
+        };
+      }
+    }
+    return {
+      status: 'available',
+      source: 'resume_store_compatibility',
+      questions: located.resumeStore.openQuestions,
+    };
+  } catch {
+    return {
+      status: 'unavailable',
+      source: 'unavailable',
+      questions: [],
+      reason: '保存済み Open Questions YAML を読み取れません。',
+    };
+  }
 }
 
 function resolveLimit(value: ConductorJsonValue | undefined): number {
@@ -326,6 +411,27 @@ function resolveGithubRepo(value: ConductorJsonValue | undefined): string | unde
     throw new Error('githubRepo must be an exact owner/repo, not owner/*.');
   }
   return normalized;
+}
+
+function resolveIssueUrl(
+  value: ConductorJsonValue | undefined,
+): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string' || !value.trim()) {
+    throw new Error('issueUrl must be a non-empty GitHub Issue URL.');
+  }
+  parseIssueUrl(value);
+  return value.trim();
+}
+
+function resolveConductorAgentId(
+  value: ConductorJsonValue | undefined,
+): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string' || !value.trim()) {
+    throw new Error('conductorAgentId must be a non-empty string.');
+  }
+  return value.trim();
 }
 
 function repositoryForIssueUrl(issueUrl: string): string {
@@ -435,6 +541,7 @@ function resolveListCursor(
 function summarizeSession(
   resumeStore: SessionResumeStore,
   status: SessionStateStore | undefined,
+  questionHistory: OpenQuestionHistory,
   cachedLiveStatus?: OperatorSessionLiveStatus,
 ): OperatorSessionSummary {
   let issueRef: OperatorSessionSummary['issueRef'] = null;
@@ -448,9 +555,16 @@ function summarizeSession(
   } catch {
     // Keep the original issueUrl visible for legacy or externally produced data.
   }
-  const openQuestions = resumeStore.openQuestions.filter(
-    (question) => question.status === 'open',
-  );
+  const openQuestions =
+    questionHistory.status === 'available'
+      ? questionHistory.questions.filter(
+          (question) => question.status === 'open',
+        )
+      : [];
+  const configuredWorkers = resumeStore.profile.workers.map((worker) => ({
+    name: worker.name,
+    kind: worker.kind,
+  }));
   const harnessPhase =
     resumeStore.harnessPhase ??
     harnessPhaseFromLegacyLifecycle(resumeStore.lifecycle);
@@ -492,8 +606,19 @@ function summarizeSession(
     },
     live,
     ...projection,
-    openQuestionCount: openQuestions.length,
+    openQuestionCount:
+      questionHistory.status === 'available' ? openQuestions.length : null,
     workers: Object.keys(resumeStore.workers).sort(),
+    configuredWorkers,
+    workersWithoutSavedSession: configuredWorkers
+      .map((worker) => worker.name)
+      .filter((workerName) => !resumeStore.workers[workerName]),
+    openQuestionHistoryStatus: questionHistory.status,
+    openQuestionHistorySource: questionHistory.source,
+    ...(questionHistory.reason
+      ? { openQuestionHistoryReason: questionHistory.reason }
+      : {}),
+    openQuestionHistory: questionHistory.questions,
     openQuestions: openQuestions.map((question) => ({
       id: question.id,
       question: question.question,
@@ -503,9 +628,12 @@ function summarizeSession(
         ? { relatedPermissionId: question.relatedPermissionId }
         : {}),
     })),
-    answeredQuestionCount: resumeStore.openQuestions.filter(
-      (question) => question.status === 'answered',
-    ).length,
+    answeredQuestionCount:
+      questionHistory.status === 'available'
+        ? questionHistory.questions.filter(
+            (question) => question.status === 'answered',
+          ).length
+        : null,
   };
 }
 
