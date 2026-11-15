@@ -63,7 +63,7 @@ describe('tool-call snapshot history', () => {
     expect(path).toBe(
       paths.canonicalToolCallHistoryPath(ISSUE_URL, 'agent-1'),
     );
-    await expect(access(paths.toolCallHistoryPath('agent-1'))).rejects.toMatchObject({
+    await expect(access(paths.legacyHashToolCallHistoryPath('agent-1'))).rejects.toMatchObject({
       code: 'ENOENT',
     });
 
@@ -91,7 +91,7 @@ describe('tool-call snapshot history', () => {
       });
       const legacyPath =
         location === 'user-path-hash'
-          ? paths.toolCallHistoryPath(conductorAgentId)
+          ? paths.legacyHashToolCallHistoryPath(conductorAgentId)
           : paths.legacyToolCallHistoryPath(conductorAgentId);
       const legacyText = JSON.stringify({ version: 1, snapshots: [ENTRY] });
       await mkdir(dirname(legacyPath), { recursive: true });
@@ -123,7 +123,7 @@ describe('tool-call snapshot history', () => {
       conductorAgentId,
       issueUrl: ISSUE_URL,
     });
-    const legacyPath = paths.toolCallHistoryPath(conductorAgentId);
+    const legacyPath = paths.legacyHashToolCallHistoryPath(conductorAgentId);
     const slugEntry = {
       ...ENTRY,
       snapshot: { ...ENTRY.snapshot, toolCallId: 'slug-call' },
@@ -201,7 +201,7 @@ describe('tool-call snapshot history', () => {
   it('does not read an invalid legacy history file', async () => {
     repoRoot = await createHome();
     const conductorAgentId = 'agent-invalid-legacy-history';
-    const legacyPath = resolveEnsemblePaths({ repoRoot }).toolCallHistoryPath(
+    const legacyPath = resolveEnsemblePaths({ repoRoot }).legacyHashToolCallHistoryPath(
       conductorAgentId,
     );
     const legacyText = '{broken json';
@@ -260,7 +260,7 @@ describe('tool-call snapshot history', () => {
       conductorAgentId,
       issueUrl: ISSUE_URL,
     });
-    const hashPath = paths.toolCallHistoryPath(conductorAgentId);
+    const hashPath = paths.legacyHashToolCallHistoryPath(conductorAgentId);
     const canonicalText = '{broken slug history';
     const hashText = JSON.stringify({ version: 1, snapshots: [ENTRY] });
     await mkdir(dirname(canonicalPath), { recursive: true });
@@ -429,7 +429,7 @@ describe('tool-call snapshot history', () => {
       conductorAgentId,
       issueUrl: ISSUE_URL,
     });
-    const legacyPath = paths.toolCallHistoryPath(conductorAgentId);
+    const legacyPath = paths.legacyHashToolCallHistoryPath(conductorAgentId);
     const projectPath = paths.legacyToolCallHistoryPath(conductorAgentId);
     await saveToolCallSnapshotHistory(path, [ENTRY]);
     await saveToolCallSnapshotHistory(legacyPath, [ENTRY]);

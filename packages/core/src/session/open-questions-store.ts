@@ -18,19 +18,14 @@ export interface OpenQuestionsStoreDocument
 export function openQuestionsStorePath(input: {
   repoRoot: string;
   conductorAgentId: string;
-  issueUrl?: string;
+  issueUrl: string;
   location?: SessionResumeStoreLocation;
 }): string {
   const paths = resolveEnsemblePaths({ repoRoot: input.repoRoot });
-  if (input.location === 'canonical-slug') {
-    if (!input.issueUrl) {
-      throw new Error(
-        'issueUrl is required for a canonical-slug open questions path.',
-      );
-    }
-    return paths.canonicalOpenQuestionsPath(input.issueUrl, input.conductorAgentId);
+  if (!input.issueUrl) {
+    throw new Error('issueUrl is required for a canonical open questions path.');
   }
-  return paths.openQuestionsPath(input.conductorAgentId);
+  return paths.canonicalOpenQuestionsPath(input.issueUrl, input.conductorAgentId);
 }
 
 export function legacyOpenQuestionsStorePath(input: {

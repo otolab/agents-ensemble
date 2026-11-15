@@ -286,6 +286,8 @@ conversation record は全 profile / repository 共通の一覧から選び、`-
 
 ResumeStore は user root の canonical slug だけを探索します。保存時 clone の `repoRoot` は作成時の実行 context として記録し、slug discovery の除外条件にはしません。path-hash と project-local ResumeStore は migration source に限られ、通常の list / read / resume では探索しません。
 
+core の `sessionResumeStorePath()` / `sessionResumeStoreDir()` は `repoRoot` と `issueUrl` を受け取り、canonical slug の user store を返します。Open Questions / session-state の path helper も Issue URL を必須とし、同じ slug 配下を使います。Pi conductor adapter は `sessionDir` を省略した場合、`issueUrl` から canonical transcript directory を解決します。Issue identity も明示 `sessionDir` もない場合は失敗し、path-hash / project-local location を既定値にしません。`resolveEnsemblePaths()` が公開する `legacyHash*` path は移行元の調査用です。
+
 Store 選択後の関連データは、種類ごとに次の順で読みます。
 
 - Open Questions / session-state YAML: canonical slug のみ

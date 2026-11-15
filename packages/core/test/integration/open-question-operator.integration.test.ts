@@ -212,6 +212,7 @@ describe('open question / operator flow integration', () => {
         const resumeStore = await loadSessionResumeStore(
           sessionResumeStorePath({
             repoRoot: isolatedRepoRoot,
+            issueUrl: TEST_ISSUE.url,
             conductorAgentId: 'agent-test',
           }),
         );
@@ -340,6 +341,7 @@ describe('open question / operator flow integration', () => {
       await loadOpenQuestionsStore(
         openQuestionsStorePath({
           repoRoot,
+          issueUrl: TEST_ISSUE.url,
           conductorAgentId: result.agentId,
         }),
       ),
@@ -350,6 +352,7 @@ describe('open question / operator flow integration', () => {
     const resumeStore = await loadSessionResumeStore(
       sessionResumeStorePath({
         repoRoot,
+        issueUrl: TEST_ISSUE.url,
         conductorAgentId: result.agentId,
       }),
     );

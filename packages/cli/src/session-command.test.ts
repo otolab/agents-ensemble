@@ -556,7 +556,7 @@ describe('ensemble session commands', () => {
       resolveEnsemblePaths({
         repoRoot,
         userEnsembleRoot: userRoot,
-      }).piSessionsDir,
+      }).legacyHashPiSessionsDir,
       { recursive: true, force: true },
     );
     await rm(
@@ -1162,7 +1162,7 @@ describe('ensemble session commands', () => {
       repoRoot: oldRepoRoot,
       userEnsembleRoot: userRoot,
     });
-    const sourcePath = oldPaths.sessionResumeStorePath(migratedAgentId);
+    const sourcePath = oldPaths.legacyHashSessionResumeStorePath(migratedAgentId);
     await mkdir(dirname(sourcePath), { recursive: true });
     await writeFile(
       sourcePath,

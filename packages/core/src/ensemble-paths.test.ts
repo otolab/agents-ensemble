@@ -24,7 +24,7 @@ describe('resolveEnsemblePaths', () => {
     const workerHome = paths.piWorkerDir('implementer', issueNumber);
 
     expect(paths.repoKey).toMatch(/^[a-f0-9]{64}$/u);
-    expect(paths.sessionsDir).toBe(
+    expect(paths.legacyHashSessionsDir).toBe(
       join(tempDir, 'home', '.ensemble', 'sessions', paths.repoKey),
     );
     expect(paths.piUserDir).toBe(join(tempDir, 'home', '.ensemble', 'pi'));
@@ -63,9 +63,11 @@ describe('resolveEnsemblePaths', () => {
       true,
     );
     expect(unsafeWorkerDirectory).not.toContain(`${sep}..${sep}`);
-    expect(paths.sessionResumeStorePath('agent-a')).toBe(
-      join(paths.sessionsDir, 'agent-a.json'),
+    expect(paths.legacyHashSessionResumeStorePath('agent-a')).toBe(
+      join(paths.legacyHashSessionsDir, 'agent-a.json'),
     );
+    expect(paths).not.toHaveProperty('sessionsDir');
+    expect(paths).not.toHaveProperty('sessionResumeStorePath');
     expect(
       paths.canonicalSessionResumeStorePath(
         'https://github.com/Org/Repo/issues/1',
@@ -170,7 +172,7 @@ describe('resolveEnsemblePaths', () => {
     const paths = resolveEnsemblePaths({ repoRoot: '/tmp/project' });
 
     expect(paths.userRoot).toBe('/tmp/ensemble-user-root');
-    expect(paths.sessionsDir).toBe(
+    expect(paths.legacyHashSessionsDir).toBe(
       join('/tmp/ensemble-user-root', 'sessions', paths.repoKey),
     );
   });

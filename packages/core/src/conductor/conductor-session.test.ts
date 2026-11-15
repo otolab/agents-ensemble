@@ -98,7 +98,9 @@ function sessionResumeStorePath(input: {
 }
 
 function openQuestionsStorePath(
-  input: Parameters<typeof resolveOpenQuestionsStorePath>[0],
+  input: Omit<Parameters<typeof resolveOpenQuestionsStorePath>[0], 'issueUrl'> & {
+    issueUrl?: string;
+  },
 ): string {
   return resolveOpenQuestionsStorePath({
     ...input,
@@ -432,7 +434,7 @@ describe('runConductorSession resume / shutdown', () => {
       TEST_ISSUE.url,
       initial.agentId,
     );
-    const hashResumeStorePath = paths.sessionResumeStorePath(initial.agentId);
+    const hashResumeStorePath = paths.legacyHashSessionResumeStorePath(initial.agentId);
     await expect(loadSessionResumeStore(resumeStorePath)).resolves.toMatchObject({
       version: SESSION_RESUME_STORE_VERSION,
       createdHarnessCliVersion: '0.20.0-created',
@@ -474,7 +476,7 @@ describe('runConductorSession resume / shutdown', () => {
       ),
     ) as SessionResumeStore;
     const resumeStorePath = resolveEnsemblePaths({ repoRoot })
-      .sessionResumeStorePath(agentId);
+      .legacyHashSessionResumeStorePath(agentId);
     const slugResumeStorePath = resolveEnsemblePaths({ repoRoot })
       .canonicalSessionResumeStorePath(TEST_ISSUE.url, agentId);
     await saveSessionResumeStore(resumeStorePath, {
@@ -504,7 +506,7 @@ describe('runConductorSession resume / shutdown', () => {
   it('resumes from the canonical slug store and flushes it without rewriting the stale hash copy', async () => {
     const agentId = 'resume-canonical-slug';
     const paths = resolveEnsemblePaths({ repoRoot });
-    const hashPath = paths.sessionResumeStorePath(agentId);
+    const hashPath = paths.legacyHashSessionResumeStorePath(agentId);
     const slugPath = paths.canonicalSessionResumeStorePath(
       TEST_ISSUE.url,
       agentId,
@@ -556,19 +558,19 @@ describe('runConductorSession resume / shutdown', () => {
   it('resumes migrated Issue data and ignores path-hash sidecars', async () => {
     const agentId = 'resume-hash-location-snapshot';
     const paths = resolveEnsemblePaths({ repoRoot });
-    const hashPath = paths.sessionResumeStorePath(agentId);
+    const hashPath = paths.legacyHashSessionResumeStorePath(agentId);
     const slugOpenQuestionsPath = paths.canonicalOpenQuestionsPath(
       TEST_ISSUE.url,
       agentId,
     );
-    const hashOpenQuestionsPath = paths.openQuestionsPath(agentId);
+    const hashOpenQuestionsPath = paths.legacyHashOpenQuestionsPath(agentId);
     // The resumed backend reports its provider session ID separately from the
     // harness conductorAgentId used by the ResumeStore and question snapshot.
     const slugSessionStatePath = paths.canonicalSessionStatePath(
       TEST_ISSUE.url,
       'agent-test',
     );
-    const hashSessionStatePath = paths.sessionStatePath('agent-test');
+    const hashSessionStatePath = paths.legacyHashSessionStatePath('agent-test');
     const migratedResumeStore = {
       version: SESSION_RESUME_STORE_VERSION,
       conductorAgentId: agentId,
@@ -712,15 +714,15 @@ describe('runConductorSession resume / shutdown', () => {
       const agentId = `resume-ignore-${location}`;
       const sourceStorePath =
         location === 'user-path-hash'
-          ? paths.sessionResumeStorePath(agentId)
+          ? paths.legacyHashSessionResumeStorePath(agentId)
           : paths.legacySessionResumeStorePath(agentId);
       const sourceQuestionsPath =
         location === 'user-path-hash'
-          ? paths.openQuestionsPath(agentId)
+          ? paths.legacyHashOpenQuestionsPath(agentId)
           : paths.legacyOpenQuestionsPath(agentId);
       const sourceStatePath =
         location === 'user-path-hash'
-          ? paths.sessionStatePath(agentId)
+          ? paths.legacyHashSessionStatePath(agentId)
           : paths.legacySessionStatePath(agentId);
       const canonicalStorePath = paths.canonicalSessionResumeStorePath(
         TEST_ISSUE.url,
@@ -787,7 +789,7 @@ describe('runConductorSession resume / shutdown', () => {
   it('continues a slug resume after its first harness socket flush fails without exposing a stale hash endpoint', async () => {
     const agentId = 'resume-slug-first-socket-flush-failure';
     const paths = resolveEnsemblePaths({ repoRoot });
-    const hashPath = paths.sessionResumeStorePath(agentId);
+    const hashPath = paths.legacyHashSessionResumeStorePath(agentId);
     const slugPath = paths.canonicalSessionResumeStorePath(
       TEST_ISSUE.url,
       agentId,
@@ -1110,9 +1112,7 @@ describe('runConductorSession resume / shutdown', () => {
       expect.objectContaining({
         systemPrompt: expect.stringContaining('body'),
         builtinTools: true,
-        sessionDir: resolveEnsemblePaths({ repoRoot }).canonicalPiSessionsDir(
-          TEST_ISSUE.url,
-        ),
+        issueUrl: TEST_ISSUE.url,
       }),
     );
     expect(mockSend).toHaveBeenCalledWith(
@@ -2227,7 +2227,7 @@ describe('runConductorSession resume / shutdown', () => {
       },
       history: [],
     });
-    await expect(access(paths.sessionStatePath('agent-test'))).rejects.toMatchObject({
+    await expect(access(paths.legacyHashSessionStatePath('agent-test'))).rejects.toMatchObject({
       code: 'ENOENT',
     });
   });
@@ -4447,10 +4447,10 @@ describe('runConductorSession resume / shutdown', () => {
       const finalResumeStore = await loadSessionResumeStore(resumeStorePath);
       expect(finalResumeStore?.lifecycle).toBe('closed');
       expect(finalResumeStore?.harnessSocketPath).toBeUndefined();
-      await expect(access(paths.sessionResumeStorePath('agent-test'))).rejects.toMatchObject({
+      await expect(access(paths.legacyHashSessionResumeStorePath('agent-test'))).rejects.toMatchObject({
         code: 'ENOENT',
       });
-      await expect(access(paths.openQuestionsPath('agent-test'))).rejects.toMatchObject({
+      await expect(access(paths.legacyHashOpenQuestionsPath('agent-test'))).rejects.toMatchObject({
         code: 'ENOENT',
       });
       await expect(stat(socketPath!)).rejects.toMatchObject({

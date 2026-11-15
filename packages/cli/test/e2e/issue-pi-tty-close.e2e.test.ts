@@ -576,12 +576,12 @@ globalThis.fetch = async (input, init) => {
         conductorBackend: 'pi',
       });
       expect(
-        existsSync(paths.sessionResumeStorePath(firstRun.summary.agentId)),
+        existsSync(paths.legacyHashSessionResumeStorePath(firstRun.summary.agentId)),
       ).toBe(false);
       expect(
         (await readdir(paths.canonicalPiSessionsDir(ISSUE_URL))).length,
       ).toBeGreaterThan(0);
-      expect(existsSync(paths.piSessionsDir)).toBe(false);
+      expect(existsSync(paths.legacyHashPiSessionsDir)).toBe(false);
 
       const firstPids = (await readFile(pidFile, 'utf8'))
         .trim()

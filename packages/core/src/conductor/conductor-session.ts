@@ -214,7 +214,6 @@ import { createRegisterGitHubWatchTool } from '../github/register-github-watch-t
 import { createUnregisterGitHubWatchTool } from '../github/unregister-github-watch-tool.js';
 import { compileConductorSystemPrompt } from '../prompt/compile-system-prompt.js';
 import { loadUserInstructions } from '../prompt/load-user-instructions.js';
-import { resolveEnsemblePaths } from '../ensemble-paths.js';
 
 export type { OperatorInputContext } from './operator-input-binding.js';
 export type {
@@ -1434,13 +1433,11 @@ async function runConductorSessionWithStartupGuard(
       : {}),
     ...(conductorBackend === 'pi'
       ? {
+          issueUrl: options.issueUrl,
           pi: resolveConductorPiResourcePaths({
             repoRoot: options.repoRoot,
             config: ensembleConfig,
           }),
-          sessionDir: resolveEnsemblePaths({
-            repoRoot: options.repoRoot,
-          }).canonicalPiSessionsDir(options.issueUrl),
           ...(activeLocatedResumeStore
             ? {
                 resumeCwds: [

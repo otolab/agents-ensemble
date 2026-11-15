@@ -37,6 +37,8 @@ import {
   type SessionSidecar,
 } from './session-resume-store.js';
 
+const TEST_ISSUE_URL = 'https://github.com/org/repo/issues/1';
+
 function baseResumeStore(
   overrides: Partial<SessionResumeStore> & Pick<SessionResumeStore, 'conductorAgentId'>,
 ): SessionResumeStore {
@@ -72,10 +74,17 @@ describe('SessionResumeStore', () => {
     tempDir = await createHome('ensemble-session-resume-store-');
     const path = sessionResumeStorePath({
       repoRoot: tempDir,
+      issueUrl: TEST_ISSUE_URL,
       conductorAgentId: 'agent-1',
     });
     expect(path).toBe(
-      join(sessionResumeStoreDir(tempDir), 'agent-1.json'),
+      join(
+        sessionResumeStoreDir({
+          repoRoot: tempDir,
+          issueUrl: TEST_ISSUE_URL,
+        }),
+        'agent-1.json',
+      ),
     );
     const resumeStore = baseResumeStore({
       conductorAgentId: 'agent-1',
@@ -139,6 +148,18 @@ describe('SessionResumeStore', () => {
     expect(
       JSON.parse(await readFile(path, 'utf8')).createdHarnessCliVersion,
     ).toBe('0.19.0');
+    await expect(
+      stat(
+        resolveEnsemblePaths({ repoRoot: tempDir })
+          .legacyHashSessionResumeStorePath('agent-1'),
+      ),
+    ).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(
+      stat(
+        resolveEnsemblePaths({ repoRoot: tempDir })
+          .legacySessionResumeStorePath('agent-1'),
+      ),
+    ).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('loads and saves a legacy fixture without backfilling its CLI version', async () => {
@@ -154,6 +175,7 @@ describe('SessionResumeStore', () => {
     ) as SessionResumeStore;
     const path = sessionResumeStorePath({
       repoRoot: tempDir,
+      issueUrl: TEST_ISSUE_URL,
       conductorAgentId: legacyStore.conductorAgentId,
     });
 
@@ -175,6 +197,7 @@ describe('SessionResumeStore', () => {
       tempDir = await createHome('ensemble-session-resume-store-scheme-');
       const path = sessionResumeStorePath({
         repoRoot: tempDir,
+        issueUrl: TEST_ISSUE_URL,
         conductorAgentId: `agent-${ensembleConfigDigestScheme}`,
       });
       await saveSessionResumeStore(
@@ -200,6 +223,7 @@ describe('SessionResumeStore', () => {
     tempDir = await createHome('ensemble-session-resume-store-invalid-scheme-');
     const path = sessionResumeStorePath({
       repoRoot: tempDir,
+      issueUrl: TEST_ISSUE_URL,
       conductorAgentId: 'agent-invalid-scheme',
     });
     await mkdir(dirname(path), { recursive: true });
@@ -250,6 +274,7 @@ describe('SessionResumeStore', () => {
     tempDir = await createHome('ensemble-session-resume-store-no-digest-');
     const path = sessionResumeStorePath({
       repoRoot: tempDir,
+      issueUrl: TEST_ISSUE_URL,
       conductorAgentId: 'agent-no-digest',
     });
     await saveSessionResumeStore(
@@ -270,6 +295,7 @@ describe('SessionResumeStore', () => {
     tempDir = await createHome('ensemble-session-resume-store-');
     const path = sessionResumeStorePath({
       repoRoot: tempDir,
+      issueUrl: TEST_ISSUE_URL,
       conductorAgentId: 'agent-live',
     });
     await saveSessionResumeStore(
@@ -283,7 +309,12 @@ describe('SessionResumeStore', () => {
 
     const [fileInfo, directoryInfo, loaded] = await Promise.all([
       stat(path),
-      stat(sessionResumeStoreDir(tempDir)),
+      stat(
+        sessionResumeStoreDir({
+          repoRoot: tempDir,
+          issueUrl: TEST_ISSUE_URL,
+        }),
+      ),
       loadSessionResumeStore(path),
     ]);
     expect(loaded?.harnessSocketPath).toBe('/tmp/ens-oq-test/s.sock');
@@ -301,6 +332,7 @@ describe('SessionResumeStore', () => {
       tempDir = await createHome('ensemble-session-resume-store-');
       const path = sessionResumeStorePath({
         repoRoot: tempDir,
+        issueUrl: TEST_ISSUE_URL,
         conductorAgentId: 'agent-acp-spawn',
       });
       const resumeStore = baseResumeStore({
@@ -344,6 +376,7 @@ describe('SessionResumeStore', () => {
     tempDir = await createHome('ensemble-session-resume-store-builtin-pi-');
     const path = sessionResumeStorePath({
       repoRoot: tempDir,
+      issueUrl: TEST_ISSUE_URL,
       conductorAgentId: 'agent-builtin-pi',
     });
     const resumeStore = baseResumeStore({
@@ -385,6 +418,7 @@ describe('SessionResumeStore', () => {
     tempDir = await createHome('ensemble-session-resume-store-cursor-fast-');
     const path = sessionResumeStorePath({
       repoRoot: tempDir,
+      issueUrl: TEST_ISSUE_URL,
       conductorAgentId: 'agent-cursor-fast',
     });
     const resumeStore = baseResumeStore({
@@ -423,6 +457,7 @@ describe('SessionResumeStore', () => {
     tempDir = await createHome('ensemble-session-resume-store-legacy-reasoning-');
     const path = sessionResumeStorePath({
       repoRoot: tempDir,
+      issueUrl: TEST_ISSUE_URL,
       conductorAgentId: 'agent-legacy-reasoning',
     });
     const resumeStore = baseResumeStore({
@@ -461,6 +496,7 @@ describe('SessionResumeStore', () => {
     tempDir = await createHome('ensemble-session-resume-store-');
     const path = sessionResumeStorePath({
       repoRoot: tempDir,
+      issueUrl: TEST_ISSUE_URL,
       conductorAgentId: 'agent-legacy-acp-env',
     });
     const marker = 'LEGACY_ACP_SECRET_MARKER';
@@ -481,7 +517,13 @@ describe('SessionResumeStore', () => {
         },
       },
     };
-    await mkdir(sessionResumeStoreDir(tempDir), { recursive: true });
+    await mkdir(
+      sessionResumeStoreDir({
+        repoRoot: tempDir,
+        issueUrl: TEST_ISSUE_URL,
+      }),
+      { recursive: true },
+    );
     await writeFile(path, `${JSON.stringify(legacyResumeStore)}\n`, 'utf8');
 
     const loaded = await loadSessionResumeStore(path);
@@ -502,10 +544,12 @@ describe('SessionResumeStore', () => {
     tempDir = await createHome('ensemble-session-resume-store-');
     const closedPath = sessionResumeStorePath({
       repoRoot: tempDir,
+      issueUrl: TEST_ISSUE_URL,
       conductorAgentId: 'closed-agent',
     });
     const legacyPath = sessionResumeStorePath({
       repoRoot: tempDir,
+      issueUrl: TEST_ISSUE_URL,
       conductorAgentId: 'legacy-agent',
     });
 
@@ -537,6 +581,7 @@ describe('SessionResumeStore', () => {
     tempDir = await createHome('ensemble-session-resume-store-');
     const path = sessionResumeStorePath({
       repoRoot: tempDir,
+      issueUrl: TEST_ISSUE_URL,
       conductorAgentId: 'active-agent',
     });
 
@@ -560,13 +605,20 @@ describe('SessionResumeStore', () => {
     tempDir = await createHome('ensemble-session-resume-store-');
     const path = sessionResumeStorePath({
       repoRoot: tempDir,
+      issueUrl: TEST_ISSUE_URL,
       conductorAgentId: 'legacy-agent',
     });
     const legacyResumeStore = baseResumeStore({
       conductorAgentId: 'legacy-agent',
       repoRoot: tempDir,
     });
-    await mkdir(sessionResumeStoreDir(tempDir), { recursive: true });
+    await mkdir(
+      sessionResumeStoreDir({
+        repoRoot: tempDir,
+        issueUrl: TEST_ISSUE_URL,
+      }),
+      { recursive: true },
+    );
     await writeFile(path, `${JSON.stringify(legacyResumeStore)}\n`, 'utf8');
 
     const loaded = await loadSessionResumeStore(path);
@@ -702,10 +754,7 @@ describe('SessionResumeStore', () => {
     const agentId = 'duplicate-agent';
     const issueUrl = 'https://github.com/org/repo/issues/9';
     const paths = resolveEnsemblePaths({ repoRoot: tempDir });
-    const hashPath = sessionResumeStorePath({
-      repoRoot: tempDir,
-      conductorAgentId: agentId,
-    });
+    const hashPath = paths.legacyHashSessionResumeStorePath(agentId);
     const slugPath = paths.canonicalSessionResumeStorePath(issueUrl, agentId);
     const projectPath = join(paths.legacySessionsDir, `${agentId}.json`);
     const hashStore = baseResumeStore({
@@ -788,7 +837,7 @@ describe('SessionResumeStore', () => {
       const paths = resolveEnsemblePaths({ repoRoot: tempDir });
       const malformedPath =
         location === 'user-path-hash'
-          ? paths.sessionResumeStorePath(agentId)
+          ? paths.legacyHashSessionResumeStorePath(agentId)
           : paths.legacySessionResumeStorePath(agentId);
       const slugPath = paths.canonicalSessionResumeStorePath(
         issueUrl,
@@ -866,10 +915,8 @@ describe('SessionResumeStore', () => {
       tempDir = await createHome('ensemble-session-resume-store-');
       const agentId = `corrupt-hash-only-${contents.length}`;
       const issueUrl = 'https://github.com/org/repo/issues/9';
-      const hashPath = sessionResumeStorePath({
-        repoRoot: tempDir,
-        conductorAgentId: agentId,
-      });
+      const paths = resolveEnsemblePaths({ repoRoot: tempDir });
+      const hashPath = paths.legacyHashSessionResumeStorePath(agentId);
       const raw = `${contents}\n`;
       await mkdir(dirname(hashPath), { recursive: true });
       await writeFile(hashPath, raw, 'utf8');
@@ -896,7 +943,7 @@ describe('SessionResumeStore', () => {
     const agentId = 'cross-clone-duplicate-agent';
     const issueUrl = 'https://github.com/org/repo/issues/9';
     const paths = resolveEnsemblePaths({ repoRoot: currentRepoRoot });
-    const hashPath = paths.sessionResumeStorePath(agentId);
+    const hashPath = paths.legacyHashSessionResumeStorePath(agentId);
     const slugPath = canonicalSessionResumeStorePath({
       repoRoot: currentRepoRoot,
       issueUrl,
@@ -1127,11 +1174,11 @@ describe('SessionResumeStore', () => {
         canonical,
       ],
       [
-        paths.sessionResumeStorePath(hashA.conductorAgentId),
+        paths.legacyHashSessionResumeStorePath(hashA.conductorAgentId),
         hashA,
       ],
       [
-        hashBPaths.sessionResumeStorePath(hashB.conductorAgentId),
+        hashBPaths.legacyHashSessionResumeStorePath(hashB.conductorAgentId),
         hashB,
       ],
       [
@@ -1222,7 +1269,7 @@ describe('SessionResumeStore', () => {
       const paths = resolveEnsemblePaths({ repoRoot });
       const sourcePath =
         location === 'user-path-hash'
-          ? paths.sessionResumeStorePath(agentId)
+          ? paths.legacyHashSessionResumeStorePath(agentId)
           : paths.legacySessionResumeStorePath(agentId);
       const sourceStore = baseResumeStore({
         conductorAgentId: agentId,
@@ -1412,7 +1459,11 @@ describe('SessionResumeStore', () => {
 
   it('keeps deprecated sidecar API aliases compatible through the deprecation period', async () => {
     tempDir = await createHome('ensemble-session-resume-store-');
-    const options = { repoRoot: tempDir, conductorAgentId: 'legacy-agent' };
+    const options = {
+      repoRoot: tempDir,
+      issueUrl: TEST_ISSUE_URL,
+      conductorAgentId: 'legacy-agent',
+    };
     const path = sessionResumeStorePath(options);
     const state: SessionSidecar = baseResumeStore({
       conductorAgentId: options.conductorAgentId,
@@ -1421,7 +1472,17 @@ describe('SessionResumeStore', () => {
     });
 
     expect(SESSION_SIDECAR_VERSION).toBe(SESSION_RESUME_STORE_VERSION);
-    expect(sessionSidecarDir(tempDir)).toBe(sessionResumeStoreDir(tempDir));
+    expect(
+      sessionSidecarDir({
+        repoRoot: tempDir,
+        issueUrl: TEST_ISSUE_URL,
+      }),
+    ).toBe(
+      sessionResumeStoreDir({
+        repoRoot: tempDir,
+        issueUrl: TEST_ISSUE_URL,
+      }),
+    );
     expect(sessionSidecarPath(options)).toBe(path);
     assertSessionSidecarMatches(state, {
       conductorAgentId: options.conductorAgentId,
@@ -1434,13 +1495,16 @@ describe('SessionResumeStore', () => {
       issueUrl: state.issueUrl,
       repoRoot: tempDir,
     });
-    await expect(listSessionSidecars(tempDir)).resolves.toHaveLength(0);
+    await expect(listSessionSidecars(tempDir)).resolves.toHaveLength(1);
     await expect(
       findLatestSessionSidecarForIssue({
         repoRoot: tempDir,
         issueUrl: state.issueUrl,
       }),
-    ).resolves.toBeUndefined();
+    ).resolves.toMatchObject({
+      conductorAgentId: options.conductorAgentId,
+      issueUrl: state.issueUrl,
+    });
     await expect(
       requireSessionSidecarForResume({
         repoRoot: tempDir,

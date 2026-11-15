@@ -45,6 +45,8 @@ export type {
   LocatedSessionResumeStore,
   SessionLifecycle,
   SessionResumeStoreDuplicateDiagnostic,
+  SessionResumeStoreDirOptions,
+  SessionResumeStorePathOptions,
   SessionResumeStorePage,
   SessionResumeStoreQuery,
   SessionResumeStoreSelector,

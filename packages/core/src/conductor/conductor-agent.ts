@@ -32,7 +32,9 @@ export interface ConductorAgentCreateOptions {
   mcpServers?: McpServerConfigMap;
   /** Pi-only resource root overrides; ignored by other backends. */
   pi?: ConductorPiResourceOptions;
-  /** Pi-only session transcript directory resolved by the harness. */
+  /** Pi-only Issue identity used to resolve the canonical transcript directory. */
+  issueUrl?: string;
+  /** Pi-only explicit transcript directory override. Defaults to the canonical user store from issueUrl. */
   sessionDir?: string;
   /** CWDs from the saved session whose Pi transcript may be resumed in this clone. */
   resumeCwds?: readonly string[];

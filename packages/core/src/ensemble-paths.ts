@@ -14,9 +14,10 @@ export interface ResolveEnsemblePathsOptions {
 /**
  * Resolve user and project paths used by ensemble runtime persistence.
  *
- * New Issue-session data is stored under the user root and keyed by canonical
- * GitHub slug. The repository-root hash and project paths remain available for
- * legacy reads and the existing repository-local Git worktree layout.
+ * Issue-session runtime data is stored under the user root and keyed by
+ * canonical GitHub slug. The repository-root hash remains available for Pi
+ * worker storage and for explicitly named legacy-source paths. Runtime
+ * SessionResumeStore, sidecar, and transcript reads do not use those paths.
  */
 export function resolveEnsemblePaths(
   options: ResolveEnsemblePathsOptions,
@@ -33,7 +34,7 @@ export function resolveEnsemblePaths(
   const projectRoot = join(repoRoot, '.ensemble');
   const repoKey = createHash('sha256').update(repoRoot).digest('hex');
   const sessionsRoot = join(userRoot, 'sessions');
-  const sessionsDir = join(sessionsRoot, repoKey);
+  const legacyHashSessionsDir = join(sessionsRoot, repoKey);
   const piUserDir = join(userRoot, 'pi');
   const piWorkerRoot = join(piUserDir, 'worker', repoKey);
   const piWorkerDirectoryName = (workerName: string) => {
@@ -57,8 +58,8 @@ export function resolveEnsemblePaths(
       piWorkerDirectoryName(workerName),
     );
   };
-  const sessionDataDir = (conductorAgentId: string) =>
-    join(sessionsDir, conductorAgentId);
+  const legacyHashSessionDataDir = (conductorAgentId: string) =>
+    join(legacyHashSessionsDir, conductorAgentId);
   const canonicalRepoSlug = (issueUrl: string) => {
     const issue = parseIssueUrl(issueUrl);
     if (
@@ -115,7 +116,7 @@ export function resolveEnsemblePaths(
         'session-map.json',
       ),
     sessionsRoot,
-    sessionsDir,
+    legacyHashSessionsDir,
     canonicalRepoSessionsDir,
     canonicalSessionResumeStorePath: (
       issueUrl: string,
@@ -158,13 +159,16 @@ export function resolveEnsemblePaths(
     legacySessionsDir: join(projectRoot, 'sessions'),
     legacySessionResumeStorePath: (conductorAgentId: string) =>
       join(projectRoot, 'sessions', `${conductorAgentId}.json`),
-    sessionDataDir,
-    sessionResumeStorePath: (conductorAgentId: string) =>
-      join(sessionsDir, `${conductorAgentId}.json`),
-    openQuestionsPath: (conductorAgentId: string) =>
-      join(sessionDataDir(conductorAgentId), 'open-questions.yaml'),
-    sessionStatePath: (conductorAgentId: string) =>
-      join(sessionDataDir(conductorAgentId), 'session-state.yaml'),
+    legacyHashSessionDataDir,
+    legacyHashSessionResumeStorePath: (conductorAgentId: string) =>
+      join(legacyHashSessionsDir, `${conductorAgentId}.json`),
+    legacyHashOpenQuestionsPath: (conductorAgentId: string) =>
+      join(legacyHashSessionDataDir(conductorAgentId), 'open-questions.yaml'),
+    legacyHashSessionStatePath: (conductorAgentId: string) =>
+      join(legacyHashSessionDataDir(conductorAgentId), 'session-state.yaml'),
+    legacyHashToolCallHistoryPath: (conductorAgentId: string) =>
+      join(legacyHashSessionsDir, `${conductorAgentId}.tool-calls`),
+    legacyHashPiSessionsDir: join(legacyHashSessionsDir, 'pi'),
     legacyOpenQuestionsPath: (conductorAgentId: string) =>
       join(
         projectRoot,
@@ -179,15 +183,12 @@ export function resolveEnsemblePaths(
         conductorAgentId,
         'session-state.yaml',
       ),
-    toolCallHistoryPath: (conductorAgentId: string) =>
-      join(sessionsDir, `${conductorAgentId}.tool-calls`),
     legacyToolCallHistoryPath: (conductorAgentId: string) =>
       join(
         projectRoot,
         'sessions',
         `${conductorAgentId}.tool-calls`,
       ),
-    piSessionsDir: join(sessionsDir, 'pi'),
     legacyPiSessionsDirForCwd: (cwd = repoRoot) =>
       join(cwd, '.ensemble', 'pi', 'sessions'),
     operatorAgentDir: join(userRoot, 'operator-agent', repoKey),

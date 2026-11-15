@@ -815,11 +815,25 @@ function resolvePiConductorThinkingLevel(
 
 type PiSessionStartReason = 'startup' | 'resume';
 
+function resolvePiConductorSessionDir(
+  options: ConductorAgentCreateOptions,
+): string {
+  if (options.sessionDir !== undefined) return options.sessionDir;
+  if (!options.issueUrl) {
+    throw new Error(
+      'Pi conductor transcript storage requires issueUrl or an explicit sessionDir.',
+    );
+  }
+  return resolveEnsemblePaths({ repoRoot: options.cwd })
+    .canonicalPiSessionsDir(options.issueUrl);
+}
+
 async function createPiConductorSession(
   agentId: string,
   options: ConductorAgentCreateOptions,
   reason: PiSessionStartReason,
 ): Promise<PiConductorAgent> {
+  const sessionDir = resolvePiConductorSessionDir(options);
   const piMcpResolution = { cwd: options.cwd };
   const mcpLifecycleState: PiMcpLifecycleState = {
     enabled: Object.keys(options.mcpServers ?? {}).length > 0,
@@ -855,9 +869,6 @@ async function createPiConductorSession(
     await authContext.modelRuntime.setRuntimeApiKey(resolved.provider, options.apiKey);
   }
 
-  const sessionDir =
-    options.sessionDir ??
-    resolveEnsemblePaths({ repoRoot: options.cwd }).piSessionsDir;
   await mkdir(sessionDir, { recursive: true, mode: 0o700 });
   await chmod(sessionDir, 0o700);
   let sessionManager: SessionManager;

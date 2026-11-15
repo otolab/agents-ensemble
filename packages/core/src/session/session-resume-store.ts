@@ -144,7 +144,13 @@ export type FindLatestSessionSidecarInput = FindLatestSessionResumeStoreInput;
 
 export interface SessionResumeStorePathOptions {
   repoRoot: string;
+  issueUrl: string;
   conductorAgentId: string;
+}
+
+export interface SessionResumeStoreDirOptions {
+  repoRoot: string;
+  issueUrl: string;
 }
 
 export type SessionResumeStoreLocation = 'canonical-slug';
@@ -193,8 +199,12 @@ const SESSION_RESUME_STORE_PAGE_CURSOR_VERSION = 1;
 /** @deprecated Use SessionResumeStorePathOptions; supported for one release only. */
 export type SessionSidecarPathOptions = SessionResumeStorePathOptions;
 
-export function sessionResumeStoreDir(repoRoot: string): string {
-  return resolveEnsemblePaths({ repoRoot }).sessionsDir;
+/** Return the canonical user-store directory for an Issue repository. */
+export function sessionResumeStoreDir(
+  input: SessionResumeStoreDirOptions,
+): string {
+  return resolveEnsemblePaths({ repoRoot: input.repoRoot })
+    .canonicalRepoSessionsDir(input.issueUrl);
 }
 
 export function legacySessionResumeStoreDir(repoRoot: string): string {
@@ -202,17 +212,18 @@ export function legacySessionResumeStoreDir(repoRoot: string): string {
 }
 
 export function legacySessionResumeStorePath(
-  options: SessionResumeStorePathOptions,
+  options: Pick<SessionResumeStorePathOptions, 'repoRoot' | 'conductorAgentId'>,
 ): string {
   return resolveEnsemblePaths({
     repoRoot: options.repoRoot,
   }).legacySessionResumeStorePath(options.conductorAgentId);
 }
 
-export function sessionResumeStorePath(options: SessionResumeStorePathOptions): string {
-  return resolveEnsemblePaths({
-    repoRoot: options.repoRoot,
-  }).sessionResumeStorePath(options.conductorAgentId);
+/** Return the canonical user-store path; an Issue URL is required for identity. */
+export function sessionResumeStorePath(
+  options: SessionResumeStorePathOptions,
+): string {
+  return canonicalSessionResumeStorePath(options);
 }
 
 export function canonicalSessionResumeStorePath(input: {

@@ -496,7 +496,7 @@ describe('operator watch pool', () => {
     });
     closeServers.push(() => liveServer.close());
 
-    const hashPath = join(paths.sessionsDir, `${agentId}.json`);
+    const hashPath = join(paths.legacyHashSessionsDir, `${agentId}.json`);
     const slugPath = paths.canonicalSessionResumeStorePath(issueUrl, agentId);
     const hashStore = {
       version: 1,
@@ -581,7 +581,7 @@ describe('operator watch pool', () => {
       workers: {},
       updatedAt: 1,
     };
-    const hashPath = join(paths.sessionsDir, `${agentId}.json`);
+    const hashPath = join(paths.legacyHashSessionsDir, `${agentId}.json`);
     const slugPath = paths.canonicalSessionResumeStorePath(issueUrl, agentId);
     await mkdir(dirname(hashPath), { recursive: true });
     await mkdir(dirname(slugPath), { recursive: true });
@@ -589,7 +589,7 @@ describe('operator watch pool', () => {
     await writeFile(slugPath, JSON.stringify(resumeStore), 'utf8');
 
     const hashYamlPath = join(
-      paths.sessionsDir,
+      paths.legacyHashSessionsDir,
       agentId,
       'open-questions.yaml',
     );
@@ -693,7 +693,7 @@ describe('operator watch pool', () => {
       issueUrl,
       agentId,
     );
-    const hashQuestionsPath = paths.openQuestionsPath(agentId);
+    const hashQuestionsPath = paths.legacyHashOpenQuestionsPath(agentId);
     await mkdir(dirname(canonicalStorePath), { recursive: true });
     await writeFile(canonicalStorePath, JSON.stringify(resumeStore), 'utf8');
     const writeQuestions = async (

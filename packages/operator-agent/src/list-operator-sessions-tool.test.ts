@@ -313,7 +313,7 @@ describe('list_operator_sessions', () => {
     );
 
     await writeResumeStore('slug-selected', 20, slugIssueUrl);
-    const hashStatePath = paths.sessionStatePath('slug-selected');
+    const hashStatePath = paths.legacyHashSessionStatePath('slug-selected');
     await mkdir(dirname(hashStatePath), { recursive: true });
     await writeFile(
       hashStatePath,

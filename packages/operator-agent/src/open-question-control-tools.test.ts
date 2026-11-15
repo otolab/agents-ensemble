@@ -19,7 +19,6 @@ import {
 } from '../../core/src/session/open-question-control.js';
 import {
   saveSessionResumeStore,
-  sessionResumeStorePath,
   SESSION_RESUME_STORE_VERSION,
 } from '../../core/src/session/session-resume-store.js';
 import {
@@ -282,10 +281,8 @@ describe('operator-agent live Open Question tools', () => {
     });
     const agentId = 'agent-duplicate';
     const issueUrl = 'https://github.com/org/repo/issues/4';
-    const hashPath = sessionResumeStorePath({
-      repoRoot,
-      conductorAgentId: agentId,
-    });
+    const hashPath = resolveEnsemblePaths({ repoRoot })
+      .legacyHashSessionResumeStorePath(agentId);
     await saveSessionResumeStore(hashPath, {
       version: SESSION_RESUME_STORE_VERSION,
       conductorAgentId: agentId,
