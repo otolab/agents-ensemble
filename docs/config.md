@@ -2,7 +2,7 @@
 
 > **正本:** `.ensemble/config.yaml` の配置・書き方・スキーマと conductor MCP 設定。本書以外の設定層の一覧・解決パターンは [settings.md](settings.md) を参照します。
 
-`.ensemble/config.yaml` は harness 横断の設定の正本。team-profile（`profile.yaml`）や conductor backend の認証とは別系統。
+`.ensemble/config.yaml` は `ensemble issue` harness の設定の正本。team-profile（`profile.yaml`）や conductor backend の認証とは別系統です。`ensemble operator-agent` はこの設定・team profile を読み込まず、専用の `~/.ensemble/operator-agents.config.yaml` を使います（本書の [operator-agent 設定](#operator-agent-専用設定) を参照）。
 
 conductor に渡す MCP 設定もこの config.yaml とは別の JSON ファイルで管理する（下記の [Conductor MCP 設定](#conductor-mcp-設定mcpjson) を参照）。
 
@@ -50,7 +50,6 @@ acp:
 
 ```sh
 ensemble issue 42 --config ~/.ensemble/litellm.config.yaml
-ensemble operator-agent --config ~/.ensemble/litellm.config.yaml
 ```
 
 token などの秘密情報はこのファイルへ平文で書かず、provider が参照する環境変数や認証ストアで管理します。
@@ -59,7 +58,41 @@ token などの秘密情報はこのファイルへ平文で書かず、provider
 
 `conductor.backend` はこの共通順序の例外です。CLI / 環境変数による上書きはなく、選択した profile の `profile.conductor.backend` > merged config（project > 選択された user config）> `pi` の順で解決します。Cursor SDK を使う場合は config または profile に `backend: cursor` を指定してください。
 
-`ensemble issue` は GitHub monitor / Issue コンテキスト取得より前に config を読み込みます。`ensemble operator-agent` も `--config` を指定でき、同じ default → 選択された user config → project config（読み込み有効時）の loader を使います。`--config` は team profile の `--profile` とは別系統で、profile 名から config ファイルを推測しません。
+`ensemble issue` は GitHub monitor / Issue コンテキスト取得より前に config を読み込みます。`ensemble operator-agent` は独立した operator 設定ファイルだけを読み、`--config` は受け付けません。`--profile` は operator profile の選択に使います。
+
+## operator-agent 専用設定
+
+operator-agent は `~/.ensemble/operator-agents.config.yaml` を読み、選択 profile の workspace を `~/.ensemble/operator-agents/<profile>/` に固定します。相対 Pi path は共通設定なら `~/.ensemble/`、profile の `pi.projectDir` なら profile workspace を基準にします。profile 名は安全な単一 path segment でなければなりません。
+
+```yaml
+version: 1
+defaultProfile: personal
+common:
+  conductor:
+    backend: pi
+    model: default
+    reasoning: high
+  pi:
+    agentDir: ~/.ensemble/pi
+profiles:
+  personal:
+    include:
+      - otolab/*
+    conductor:
+      model: YOUR_MODEL_ID
+    prompt:
+      instructions:
+        - Review saved sessions across the selected repositories.
+    pi:
+      projectDir: pi
+      skills: true
+```
+
+profile は `--profile` > `ENSEMBLE_OPERATOR_AGENT_PROFILE` > 再開対象 conversation に記録された profile > `defaultProfile` > 唯一の profile の順に選びます。まだ複数候補が残る場合は TTY で選択します。保存 conversation の profile が config から消えていて選び直す場合は、その差を表示します。
+
+`backend` / `model` / `reasoning` は `ENSEMBLE_OPERATOR_AGENT_BACKEND` / `ENSEMBLE_OPERATOR_AGENT_MODEL` / `ENSEMBLE_OPERATOR_AGENT_REASONING` > 選択 profile > `common.conductor` > 既定値の順です。operator-agent は `CONDUCTOR_*`、generic config、project config、team profile から値を継承しません。Pi 共通 root は `common.pi.agentDir` > `PI_CODING_AGENT_DIR` > `~/.ensemble/pi`、profile root は `profiles.<name>.pi.projectDir` > `<profile workspace>/pi` の順です。Pi はこの user 共通 root と選択 profile root のみを読み、launch cwd や profile workspace から `.ensemble/pi` を自動探索しません。
+
+profile の `include` は `owner/repo` または `owner/*` の repository pattern 配列です。未指定または空なら scope を狭めません。CLI の複数 `--repo-filter` は OR で照合し、指定した `include` との AND を取ります。対象は user store にある session data で、GitHub API から repository を列挙しません。
 
 #### resume と config 変更
 
@@ -67,7 +100,7 @@ token などの秘密情報はこのファイルへ平文で書かず、provider
 
 `acpModelConfigDigest` は `acp.env` / `acp.models` / `acp.tags` を hash し、worker の ACP spawn fingerprint は `piRuntime`、`modelTag`、解決済み model ID、reasoning、明示値の `cursorFast`、spawn env digest と Codex の実効 `MODEL_PROVIDER` digest を記録します。秘密の環境値は平文で保存しません。これらは保存時の設定を説明する診断情報です。resume 時は現在の preset / runtime / command / args を使って `session/load` を試み、保存 fingerprint の差だけで先に拒否しません。load failure 後に新しい ACP session へ復旧する runtime では、旧 session の文脈を復元できなかったことを operator と conductor に通知します。中断した古い instruction は自動再送しません（[ADR 0054](adr/0054-cursor-acp-runtime-verification.md)、[ADR 0067](adr/0067-pi-acp-upstream-package-wrapper.md)）。
 
-`conductor.model` と `conductor.reasoning` は `resume-feasibility` digest の対象外です。これらの config 値を変えても resume は拒否されず、再開時に最新の merged config を使います。Issue session の `--model` / `--reasoning` と `CONDUCTOR_MODEL_ID` / `CONDUCTOR_REASONING` は digest に含めず、resume ごとに再解決します。operator-agent は専用 CLI option を持たず、`CONDUCTOR_MODEL_ID` / `CONDUCTOR_REASONING` > merged config の順で解決します。
+`conductor.model` と `conductor.reasoning` は `resume-feasibility` digest の対象外です。これらの config 値を変えても Issue session の resume は拒否されず、再開時に現在の merged config を使います。Issue session の `--model` / `--reasoning` と `CONDUCTOR_MODEL_ID` / `CONDUCTOR_REASONING` は digest に含めず、resume ごとに再解決します。operator-agent は別の専用 config と `ENSEMBLE_OPERATOR_AGENT_MODEL` / `ENSEMBLE_OPERATOR_AGENT_REASONING` を使います。
 
 conductor model の優先順は `--model` / `RunConductorSessionOptions.modelId` > `CONDUCTOR_MODEL_ID` > merged config の `conductor.model` > backend default です。直接 API でも同じ優先順で選択し、Cursor / Pi の組み込み factory には解決値を create / resume 時に渡します。既定の `model: default` は Pi では特別なモデル ID として送らず、Pi resource settings の `defaultProvider` / `defaultModel`（`model` / `modelId` alias も可）に選択を委ねます。設定がなければ明示 model を指定するか、初回導線の `ensemble setup` で Pi model settings を用意してください。custom factory では互換性を保つため、config または code default から `default` が選ばれた場合は `modelId: undefined` を渡し、factory 自身の既定値に委ねます。一方、CLI / API の明示値または `CONDUCTOR_MODEL_ID` が `default` / `auto` を選んだ場合は `'default'` を渡し、その invocation override を保ちます。詳しくは[設定全体の解決順](settings.md)を参照してください。
 
@@ -187,7 +220,7 @@ tui:
 
 ### Conductor reasoning
 
-`conductor.reasoning` は空でない文字列です。`ensemble issue` と `ensemble operator-agent` が共有し、値は固定 enum にせず、選択した backend と model が受け付ける値かを起動時に検証します。`ensemble issue` と直接 API では明示した `--reasoning` / `RunConductorSessionOptions.reasoning` > `CONDUCTOR_REASONING` > merged config の順、`ensemble operator-agent` では `CONDUCTOR_REASONING` > merged config の順で解決します。どちらも未指定なら reasoning を明示せず、backend に既定の選択を任せます。適用範囲と CLI override の境界は [ADR 0050](adr/0050-operator-agent-conductor-reasoning.md) を参照してください。
+`conductor.reasoning` は空でない文字列です。`ensemble issue` と直接 API では `--reasoning` / `RunConductorSessionOptions.reasoning` > `CONDUCTOR_REASONING` > merged config の順で解決します。operator-agent は専用 config の `profiles.<name>.conductor.reasoning` / `common.conductor.reasoning` と `ENSEMBLE_OPERATOR_AGENT_REASONING` を使い、`CONDUCTOR_REASONING` は参照しません。どちらも値は固定 enum にせず、選択した backend と model が受け付けるかを起動時に検証します。未指定なら reasoning を渡さず、backend の既定に任せます。設計判断は [ADR 0050](adr/0050-operator-agent-conductor-reasoning.md) と [ADR 0061](adr/0061-github-slug-session-persistence.md) を参照してください。
 
 - **Pi**: 指定値を Pi 1.x `createAgentSession({ thinkingLevel })` に渡します。Pi の native level は `off` / `minimal` / `low` / `medium` / `high` / `xhigh` / `max` です。選択 model の対応 level を session 作成前に確認し、未知・未対応値はエラーにします。provider 固有のリクエスト値への変換は Pi model の `thinkingLevelMap` と Pi の provider adapter に委ねます。現在の Pi 1.2.0 は Google Gemini 4 を thinking-level API として扱わないため、`google-generative-ai` / `google-vertex` の Gemini 4 model に reasoning を明示した場合も session 作成前にエラーにします。値を省略した場合、`settings.json` の `defaultThinkingLevel` は従来どおり headless conductor / operator-agent で読みません。
 - **Cursor**: [Cursor SDK の model parameter catalog](https://cursor.com/docs/sdk/typescript#model-parameters) を照会し、選択 model の reasoning / thinking / effort parameter と値を特定して `ModelSelection.params` に渡します。parameter ID と値は model / account ごとに異なるため、catalog 上で一意に対応しない値や候補は agent の create / resume 前にエラーにします。値を省略したときは catalog を照会せず、SDK の既定に任せます。
@@ -467,7 +500,7 @@ headless conductor の設定正本は常に `~/.ensemble/pi/settings.json` と `
 - **reload**: Pi `AgentSession.reload()` の後に、create 時に解決した同じ settings-manager スナップショットを再適用します。実行中の `.ensemble/pi/settings.json` の変更を hot reload する契約ではないため、設定変更を反映するには `resume` または新しい create が必要です。`AgentSession.reload()` または snapshot の再適用が失敗した場合は、snapshot の復元を試みた後、session を close / dispose して unusable とします。失敗が 1 つだけで close / dispose が成功した場合はその元のエラーを reject し、reload と snapshot 復元の両方、または close / dispose の cleanup error も発生した場合は `AggregateError` を reject します。`AggregateError.errors` には発生した元の reload / snapshot エラーと cleanup error が含まれます。失敗した session は send で再利用せず、同じ transcript を続ける場合も `resume`、新しい作業なら create で再作成してください。
 - **resume**: 新しい Pi session を作るため `.ensemble/pi` を再読込し、create と同じチャネル適用を行ってから既存 transcript を開きます。resume でも `<cwd>/.pi/settings.json` は読みません。
 
-Pi の `settings.md` にあるが headless conductor / operator-agent が適用しないキーは、Pi SDK の SettingsManager へ渡さず、拒否せず警告なしで無視します。`defaultThinkingLevel` を無視する契約は Pi settings に対するものです。明示的な reasoning は ensemble config の `conductor.reasoning` から指定します。
+Pi の `settings.md` にあるが headless conductor / operator-agent が適用しないキーは、Pi SDK の SettingsManager へ渡さず、拒否せず警告なしで無視します。`defaultThinkingLevel` を無視する契約は Pi settings に対するものです。Issue conductor の reasoning は ensemble config の `conductor.reasoning`、operator-agent の reasoning は専用 config の profile / `common.conductor.reasoning` から指定します。
 
 | 無視するキー（または prefix） | 適用されない挙動 |
 |------------------------------|------------------|

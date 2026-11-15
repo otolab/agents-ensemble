@@ -19,7 +19,8 @@
   },
   "dependencies": {
     "@agents-ensemble/core": "workspace:*",
-    "@modular-prompt/core": "0.3.0"
+    "@modular-prompt/core": "0.3.0",
+    "yaml": "2.9.1"
   },
   "devDependencies": {
     "@types/node": "22.18.10",

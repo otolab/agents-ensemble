@@ -1,280 +1,135 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { resolveEnsemblePaths } from '@agents-ensemble/core/operator-runtime';
+import { afterEach, describe, expect, it } from 'vitest';
 import {
+  clearOperatorAgentState,
+  listOperatorAgentStates,
   loadOperatorAgentState,
   operatorAgentStatePath,
+  operatorPiSessionDirectory,
   saveOperatorAgentState,
+  type OperatorAgentState,
 } from './operator-agent-state.js';
 
-describe('operator-agent state', () => {
-  let home = '';
-  let repoRoot = '';
+describe('operator-agent conversation records', () => {
+  let userRoot = '';
 
   afterEach(async () => {
-    if (home) await rm(home, { recursive: true, force: true });
-    vi.unstubAllEnvs();
-    home = '';
-    repoRoot = '';
+    if (userRoot) await rm(userRoot, { recursive: true, force: true });
+    userRoot = '';
   });
 
-  it('loads a legacy project state and migrates it to the user-scoped path', async () => {
-    home = await mkdtemp(join(tmpdir(), 'ensemble-operator-state-home-'));
-    vi.stubEnv('HOME', home);
-    vi.stubEnv('ENSEMBLE_USER_ROOT', join(home, '.ensemble'));
-    repoRoot = join(home, 'repository');
-    const paths = resolveEnsemblePaths({ repoRoot });
-    const state = {
-      version: 1,
-      agentId: 'operator-agent-1',
-      backend: 'pi',
-      repoRoot,
-    };
-    await mkdir(dirname(paths.legacyOperatorAgentSessionPath), {
-      recursive: true,
-    });
-    await writeFile(
-      paths.legacyOperatorAgentSessionPath,
-      `${JSON.stringify(state)}\n`,
-      'utf8',
-    );
+  it('stores global records and Pi transcripts under the operatorAgentId', async () => {
+    userRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-record-'));
+    const first = makeRecord('operator-first', 10);
+    const second = makeRecord('operator-second', 20);
 
-    await expect(loadOperatorAgentState(repoRoot)).resolves.toEqual(state);
+    await saveOperatorAgentState(userRoot, first);
+    await saveOperatorAgentState(userRoot, second);
+
     await expect(
-      readFile(paths.operatorAgentSessionPath, 'utf8'),
-    ).resolves.toContain('operator-agent-1');
+      readFile(operatorAgentStatePath(userRoot, first.operatorAgentId), 'utf8'),
+    ).resolves.toContain('"profile": "personal"');
+    expect(operatorPiSessionDirectory(userRoot, first.operatorAgentId)).toBe(
+      join(
+        userRoot,
+        'operator-agents',
+        'conversations',
+        'operator-first',
+        'pi-sessions',
+      ),
+    );
     await expect(
-      readFile(paths.legacyOperatorAgentSessionPath, 'utf8'),
-    ).resolves.toContain('operator-agent-1');
+      listOperatorAgentStates(userRoot),
+    ).resolves.toEqual([second, first]);
+    await expect(
+      loadOperatorAgentState(userRoot, first.operatorAgentId),
+    ).resolves.toEqual(first);
   });
 
-  it('prefers and continues the canonical slug operator session beside a stale hash copy', async () => {
-    home = await mkdtemp(join(tmpdir(), 'ensemble-operator-state-home-'));
-    vi.stubEnv('HOME', home);
-    vi.stubEnv('ENSEMBLE_USER_ROOT', join(home, '.ensemble'));
-    repoRoot = join(home, 'repository');
-    const paths = resolveEnsemblePaths({ repoRoot });
-    const issueUrl = 'https://github.com/org/repo/issues/12';
-    const hashStorePath = paths.sessionResumeStorePath('conductor-12');
-    const slugStorePath = paths.canonicalSessionResumeStorePath(
-      issueUrl,
-      'conductor-12',
-    );
-    const resumeStore = {
-      version: 1,
-      conductorAgentId: 'conductor-12',
-      issueUrl,
-      repoRoot,
-      profile: { workers: [] },
-      openQuestions: [],
-      sequence: 0,
-      workers: {},
-      updatedAt: 12,
-    };
-    await mkdir(dirname(hashStorePath), { recursive: true });
-    await mkdir(dirname(slugStorePath), { recursive: true });
-    await writeFile(hashStorePath, JSON.stringify(resumeStore), 'utf8');
-    await writeFile(slugStorePath, JSON.stringify(resumeStore), 'utf8');
+  it('rejects a provider session collision and keeps the original record', async () => {
+    userRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-record-'));
+    const original = makeRecord('operator-stable', 10);
+    await saveOperatorAgentState(userRoot, original);
 
-    const staleState = {
-      version: 1,
-      agentId: 'operator-hash',
-      backend: 'pi',
-      repoRoot,
-    };
-    const canonicalState = {
-      ...staleState,
-      agentId: 'operator-slug',
-    };
-    const hashStatePath = paths.operatorAgentSessionPath;
-    const canonicalStatePath =
-      paths.canonicalOperatorAgentSessionPath(issueUrl);
-    await mkdir(dirname(hashStatePath), { recursive: true });
-    await mkdir(dirname(canonicalStatePath), { recursive: true });
-    await writeFile(hashStatePath, `${JSON.stringify(staleState)}\n`, 'utf8');
+    await expect(
+      saveOperatorAgentState(userRoot, {
+        ...original,
+        providerSessionId: 'different-provider-session',
+      }),
+    ).rejects.toThrow(/different provider session/u);
+    await expect(
+      loadOperatorAgentState(userRoot, original.operatorAgentId),
+    ).resolves.toEqual(original);
+  });
+
+  it('does not discover or delete profile-less legacy state or transcripts', async () => {
+    userRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-record-'));
+    const oldDirectory = join(userRoot, 'operator-agent', 'old-repo-key');
+    await mkdir(oldDirectory, { recursive: true });
     await writeFile(
-      canonicalStatePath,
-      `${JSON.stringify(canonicalState)}\n`,
-      'utf8',
+      join(oldDirectory, 'session.json'),
+      JSON.stringify({
+        version: 1,
+        agentId: 'legacy-provider-id',
+        backend: 'pi',
+        repoRoot: '/old/checkout',
+      }),
     );
+    const transcriptDirectory = join(oldDirectory, 'pi-sessions');
+    await mkdir(transcriptDirectory, { recursive: true });
+    await writeFile(join(transcriptDirectory, 'legacy.jsonl'), 'legacy log');
 
-    await expect(loadOperatorAgentState(repoRoot)).resolves.toEqual(
-      canonicalState,
-    );
-    await saveOperatorAgentState(repoRoot, {
-      ...canonicalState,
-      agentId: 'operator-slug-updated',
-    });
-    await expect(readFile(canonicalStatePath, 'utf8')).resolves.toContain(
-      'operator-slug-updated',
-    );
-    await expect(readFile(hashStatePath, 'utf8')).resolves.toContain(
-      'operator-hash',
-    );
+    await expect(listOperatorAgentStates(userRoot)).resolves.toEqual([]);
+    await expect(
+      loadOperatorAgentState(userRoot, 'legacy-provider-id'),
+    ).resolves.toBeUndefined();
+    await clearOperatorAgentState(userRoot, 'legacy-provider-id').catch(() => {});
+    await expect(
+      readFile(join(oldDirectory, 'session.json'), 'utf8'),
+    ).resolves.toContain('legacy-provider-id');
+    await expect(
+      readFile(join(transcriptDirectory, 'legacy.jsonl'), 'utf8'),
+    ).resolves.toBe('legacy log');
   });
 
-  it('migrates hash operator state to the selected slug key without removing the hash copy', async () => {
-    home = await mkdtemp(join(tmpdir(), 'ensemble-operator-state-home-'));
-    vi.stubEnv('HOME', home);
-    vi.stubEnv('ENSEMBLE_USER_ROOT', join(home, '.ensemble'));
-    repoRoot = join(home, 'repository');
-    const paths = resolveEnsemblePaths({ repoRoot });
-    const issueUrl = 'https://github.com/org/repo-migrated/issues/13';
-    const agentId = 'conductor-13';
-    const hashResumePath = paths.sessionResumeStorePath(agentId);
-    const slugResumePath = paths.canonicalSessionResumeStorePath(
-      issueUrl,
-      agentId,
+  it('removes only a selected record while preserving its Pi transcript directory', async () => {
+    userRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-record-'));
+    const record = makeRecord('operator-selected', 10);
+    const transcript = join(
+      operatorPiSessionDirectory(userRoot, record.operatorAgentId),
+      'transcript.jsonl',
     );
-    const resumeStore = {
-      version: 1,
-      conductorAgentId: agentId,
-      issueUrl,
-      repoRoot,
-      profile: { workers: [] },
-      openQuestions: [],
-      sequence: 0,
-      workers: {},
-      updatedAt: 13,
-    };
-    await mkdir(dirname(hashResumePath), { recursive: true });
-    await mkdir(dirname(slugResumePath), { recursive: true });
-    await writeFile(hashResumePath, JSON.stringify(resumeStore), 'utf8');
-    await writeFile(slugResumePath, JSON.stringify(resumeStore), 'utf8');
-    const originalHashState = {
-      version: 1,
-      agentId: 'operator-hash-fallback',
-      backend: 'pi',
-      repoRoot,
-    };
-    const hashStatePath = paths.operatorAgentSessionPath;
-    await mkdir(dirname(hashStatePath), { recursive: true });
-    await writeFile(hashStatePath, `${JSON.stringify(originalHashState)}\n`);
+    await mkdir(dirname(transcript), { recursive: true });
+    await writeFile(transcript, 'conversation');
+    await saveOperatorAgentState(userRoot, record);
 
-    await expect(loadOperatorAgentState(repoRoot)).resolves.toEqual(
-      originalHashState,
-    );
-    const slugStatePath = operatorAgentStatePath(repoRoot, {
-      location: 'canonical-slug',
-      issueUrl,
-    });
-    await expect(readFile(slugStatePath, 'utf8')).resolves.toContain(
-      'operator-hash-fallback',
-    );
-    await expect(readFile(hashStatePath, 'utf8')).resolves.toContain(
-      'operator-hash-fallback',
-    );
+    await clearOperatorAgentState(userRoot, record.operatorAgentId);
+
+    await expect(
+      loadOperatorAgentState(userRoot, record.operatorAgentId),
+    ).resolves.toBeUndefined();
+    await expect(readFile(transcript, 'utf8')).resolves.toBe('conversation');
   });
-
-  it('uses the hash operator state when the selected ResumeStore is hash-only despite an orphan slug state', async () => {
-    home = await mkdtemp(join(tmpdir(), 'ensemble-operator-state-home-'));
-    vi.stubEnv('HOME', home);
-    vi.stubEnv('ENSEMBLE_USER_ROOT', join(home, '.ensemble'));
-    repoRoot = join(home, 'repository');
-    const paths = resolveEnsemblePaths({ repoRoot });
-    const issueUrl = 'https://github.com/org/repo-hash-only/issues/14';
-    const agentId = 'conductor-14';
-    const hashResumePath = paths.sessionResumeStorePath(agentId);
-    const resumeStore = {
-      version: 1,
-      conductorAgentId: agentId,
-      issueUrl,
-      repoRoot,
-      profile: { workers: [] },
-      openQuestions: [],
-      sequence: 0,
-      workers: {},
-      updatedAt: 14,
-    };
-    await mkdir(dirname(hashResumePath), { recursive: true });
-    await writeFile(hashResumePath, JSON.stringify(resumeStore), 'utf8');
-    const hashState = {
-      version: 1,
-      agentId: 'operator-hash-selected',
-      backend: 'pi',
-      repoRoot,
-    };
-    const orphanSlugState = {
-      ...hashState,
-      agentId: 'orphan-slug-must-not-win',
-    };
-    const hashStatePath = paths.operatorAgentSessionPath;
-    const orphanSlugPath =
-      paths.canonicalOperatorAgentSessionPath(issueUrl);
-    await mkdir(dirname(hashStatePath), { recursive: true });
-    await mkdir(dirname(orphanSlugPath), { recursive: true });
-    await writeFile(hashStatePath, `${JSON.stringify(hashState)}\n`);
-    await writeFile(orphanSlugPath, `${JSON.stringify(orphanSlugState)}\n`);
-
-    await expect(loadOperatorAgentState(repoRoot)).resolves.toEqual(hashState);
-    await expect(readFile(orphanSlugPath, 'utf8')).resolves.toContain(
-      'orphan-slug-must-not-win',
-    );
-  });
-
-  it('uses the hash operator state when selected sessions span multiple canonical slugs', async () => {
-    home = await mkdtemp(join(tmpdir(), 'ensemble-operator-state-home-'));
-    vi.stubEnv('HOME', home);
-    vi.stubEnv('ENSEMBLE_USER_ROOT', join(home, '.ensemble'));
-    repoRoot = join(home, 'repository');
-    const paths = resolveEnsemblePaths({ repoRoot });
-    const sessions = [
-      {
-        agentId: 'conductor-old-repo',
-        issueUrl: 'https://github.com/org/repo-old/issues/15',
-      },
-      {
-        agentId: 'conductor-new-repo',
-        issueUrl: 'https://github.com/org/repo-new/issues/16',
-      },
-    ];
-    for (const { agentId, issueUrl } of sessions) {
-      const storePath = paths.canonicalSessionResumeStorePath(
-        issueUrl,
-        agentId,
-      );
-      await mkdir(dirname(storePath), { recursive: true });
-      await writeFile(
-        storePath,
-        JSON.stringify({
-          version: 1,
-          conductorAgentId: agentId,
-          issueUrl,
-          repoRoot,
-          profile: { workers: [] },
-          openQuestions: [],
-          sequence: 0,
-          workers: {},
-          updatedAt: 16,
-        }),
-        'utf8',
-      );
-    }
-    const hashState = {
-      version: 1,
-      agentId: 'operator-hash-for-multiple-slugs',
-      backend: 'pi',
-      repoRoot,
-    };
-    const hashStatePath = paths.operatorAgentSessionPath;
-    await mkdir(dirname(hashStatePath), { recursive: true });
-    await writeFile(hashStatePath, `${JSON.stringify(hashState)}\n`, 'utf8');
-
-    await expect(loadOperatorAgentState(repoRoot)).resolves.toEqual(hashState);
-    await saveOperatorAgentState(repoRoot, {
-      ...hashState,
-      agentId: 'operator-hash-updated',
-    });
-    await expect(readFile(hashStatePath, 'utf8')).resolves.toContain(
-      'operator-hash-updated',
-    );
-    for (const { issueUrl } of sessions) {
-      await expect(
-        readFile(paths.canonicalOperatorAgentSessionPath(issueUrl), 'utf8'),
-      ).rejects.toMatchObject({ code: 'ENOENT' });
-    }
-  });
-
 });
+
+function makeRecord(
+  operatorAgentId: string,
+  updatedAt: number,
+): OperatorAgentState {
+  return {
+    version: 2,
+    operatorAgentId,
+    providerSessionId: `provider-${operatorAgentId}`,
+    backend: 'pi',
+    profile: 'personal',
+    workspace: '/home/user/.ensemble/operator-agents/personal',
+    piResourceRoots: {
+      agentDir: '/home/user/.ensemble/pi',
+      projectDir: '/home/user/.ensemble/operator-agents/personal/pi',
+    },
+    createdAt: 1,
+    updatedAt,
+  };
+}

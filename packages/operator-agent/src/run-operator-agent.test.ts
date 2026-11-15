@@ -5,23 +5,28 @@ import { tmpdir } from 'node:os';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   startOpenQuestionControlServer,
+  resolveEnsemblePaths,
   type SessionObservationSnapshot,
 } from '@agents-ensemble/core';
+import { listUserLocatedSessionResumeStoresPage } from '@agents-ensemble/core/operator-runtime';
 import type {
   ConductorAgent,
   ConductorAgentCreateOptions,
   ConductorAgentFactory,
-  EnsembleConfig,
-  ResolvedProfile,
 } from '@agents-ensemble/core/operator-runtime';
-import { loadEnsembleConfig } from '@agents-ensemble/core/operator-runtime';
 import {
   runOperatorAgent,
   type OperatorAgentInput,
   type OperatorAgentOutput,
 } from './run-operator-agent.js';
 import { operatorWatchStatePath } from './operator-watch-pool.js';
-import { operatorAgentStatePath } from './operator-agent-state.js';
+import {
+  listOperatorAgentStates,
+  operatorAgentStatePath,
+  operatorPiSessionDirectory,
+  saveOperatorAgentState,
+  type OperatorAgentState,
+} from './operator-agent-state.js';
 
 describe('runOperatorAgent', () => {
   let repoRoot = '';
@@ -29,48 +34,54 @@ describe('runOperatorAgent', () => {
   let originalModelEnv: string | undefined;
   let originalReasoningEnv: string | undefined;
   let originalProfileEnv: string | undefined;
+  let originalOperatorModelEnv: string | undefined;
+  let originalOperatorBackendEnv: string | undefined;
+  let originalOperatorReasoningEnv: string | undefined;
+  let originalOperatorProfileEnv: string | undefined;
+  let originalUserRootEnv: string | undefined;
   let originalNoColorEnv: string | undefined;
 
   beforeEach(async () => {
     repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-agent-'));
     vi.stubEnv('HOME', repoRoot);
+    originalUserRootEnv = process.env.ENSEMBLE_USER_ROOT;
+    vi.stubEnv('ENSEMBLE_USER_ROOT', join(repoRoot, '.ensemble'));
     originalModelEnv = process.env.CONDUCTOR_MODEL_ID;
     originalReasoningEnv = process.env.CONDUCTOR_REASONING;
     originalProfileEnv = process.env.ENSEMBLE_DEFAULT_PROFILE;
+    originalOperatorModelEnv = process.env.ENSEMBLE_OPERATOR_AGENT_MODEL;
+    originalOperatorBackendEnv = process.env.ENSEMBLE_OPERATOR_AGENT_BACKEND;
+    originalOperatorReasoningEnv = process.env.ENSEMBLE_OPERATOR_AGENT_REASONING;
+    originalOperatorProfileEnv = process.env.ENSEMBLE_OPERATOR_AGENT_PROFILE;
     originalNoColorEnv = process.env.NO_COLOR;
     delete process.env.CONDUCTOR_MODEL_ID;
     delete process.env.CONDUCTOR_REASONING;
     delete process.env.ENSEMBLE_DEFAULT_PROFILE;
+    delete process.env.ENSEMBLE_OPERATOR_AGENT_MODEL;
+    delete process.env.ENSEMBLE_OPERATOR_AGENT_BACKEND;
+    delete process.env.ENSEMBLE_OPERATOR_AGENT_REASONING;
+    delete process.env.ENSEMBLE_OPERATOR_AGENT_PROFILE;
     delete process.env.NO_COLOR;
     await mkdir(join(repoRoot, '.ensemble', 'teams', 'smoke'), { recursive: true });
     await mkdir(join(repoRoot, '.ensemble', 'sessions'), { recursive: true });
     await writeFile(
-      join(repoRoot, '.ensemble', 'config.yaml'),
+      join(repoRoot, '.ensemble', 'operator-agents.config.yaml'),
       [
-        'profile:',
-        '  default: smoke',
-        'conductor:',
-        '  backend: pi',
-        '  model: smoke-model',
+        'version: 1',
+        'defaultProfile: smoke',
+        'common:',
+        '  conductor:',
+        '    backend: pi',
+        '    model: smoke-model',
         '  pi:',
-        '    agentDir: .ensemble/pi-user',
-        '    projectDir: .ensemble/pi-project',
-        '',
-      ].join('\n'),
-    );
-    await writeFile(
-      join(repoRoot, '.ensemble', 'teams', 'smoke', 'profile.yaml'),
-      [
-        'meta:',
-        '  title: Operator smoke profile',
-        'agents:',
-        '  operator:',
+        '    agentDir: pi-user',
+        'profiles:',
+        '  smoke:',
         '    prompt:',
         '      instructions:',
         '        - Profile operator guidance.',
-        'workers:',
-        '  - name: implementer',
-        '    kind: implementer',
+        '    pi:',
+        '      projectDir: pi-project',
         '',
       ].join('\n'),
     );
@@ -81,6 +92,35 @@ describe('runOperatorAgent', () => {
         conductorAgentId: 'conductor-one',
         conductorBackend: 'pi',
         issueUrl: 'https://github.com/example/project/issues/12',
+        repoRoot,
+        profile: { workers: [], agents: {} },
+        openQuestions: [
+          {
+            id: 'inq-1',
+            question: 'Approve this operation?',
+            responseType: 'yes_no',
+            source: 'conductor',
+            status: 'open',
+            askedAt: 1,
+            relatedPermissionId: 'permission-1',
+          },
+        ],
+        sequence: 1,
+        workers: { implementer: { acpSessionId: 'worker-one' } },
+        updatedAt: 100,
+      }),
+    );
+    const issueUrl = 'https://github.com/example/project/issues/12';
+    const canonicalStorePath = resolveEnsemblePaths({ repoRoot })
+      .canonicalSessionResumeStorePath(issueUrl, 'conductor-one');
+    await mkdir(dirname(canonicalStorePath), { recursive: true });
+    await writeFile(
+      canonicalStorePath,
+      JSON.stringify({
+        version: 1,
+        conductorAgentId: 'conductor-one',
+        conductorBackend: 'pi',
+        issueUrl,
         repoRoot,
         profile: { workers: [], agents: {} },
         openQuestions: [
@@ -119,6 +159,31 @@ describe('runOperatorAgent', () => {
     } else {
       process.env.ENSEMBLE_DEFAULT_PROFILE = originalProfileEnv;
     }
+    if (originalOperatorModelEnv === undefined) {
+      delete process.env.ENSEMBLE_OPERATOR_AGENT_MODEL;
+    } else {
+      process.env.ENSEMBLE_OPERATOR_AGENT_MODEL = originalOperatorModelEnv;
+    }
+    if (originalOperatorBackendEnv === undefined) {
+      delete process.env.ENSEMBLE_OPERATOR_AGENT_BACKEND;
+    } else {
+      process.env.ENSEMBLE_OPERATOR_AGENT_BACKEND = originalOperatorBackendEnv;
+    }
+    if (originalOperatorReasoningEnv === undefined) {
+      delete process.env.ENSEMBLE_OPERATOR_AGENT_REASONING;
+    } else {
+      process.env.ENSEMBLE_OPERATOR_AGENT_REASONING = originalOperatorReasoningEnv;
+    }
+    if (originalOperatorProfileEnv === undefined) {
+      delete process.env.ENSEMBLE_OPERATOR_AGENT_PROFILE;
+    } else {
+      process.env.ENSEMBLE_OPERATOR_AGENT_PROFILE = originalOperatorProfileEnv;
+    }
+    if (originalUserRootEnv === undefined) {
+      delete process.env.ENSEMBLE_USER_ROOT;
+    } else {
+      process.env.ENSEMBLE_USER_ROOT = originalUserRootEnv;
+    }
     if (originalNoColorEnv === undefined) {
       delete process.env.NO_COLOR;
     } else {
@@ -143,37 +208,11 @@ describe('runOperatorAgent', () => {
     expect(output.capturedText()).not.toContain('\u001b[');
   });
 
-  it('loads an explicitly selected config file', async () => {
-    const userEnsembleRoot = join(repoRoot, '.test-user-ensemble');
-    await mkdir(userEnsembleRoot, { recursive: true });
+  it('uses the dedicated operator config and ignores generic project config', async () => {
     await writeFile(
-      join(userEnsembleRoot, 'config.yaml'),
-      [
-        'config:',
-        '  loadProjectConfig: false',
-        'conductor:',
-        '  model: standard-user-model',
-        'github:',
-        '  auth:',
-        '    allowGhAuthTokenFallback: false',
-        'acp:',
-        '  env:',
-        '    USER_ONLY: user',
-        '',
-      ].join('\n'),
+      join(repoRoot, '.ensemble', 'config.yaml'),
+      'conductor:\n  backend: cursor\n  model: project-only-model\n',
     );
-    const configPath = join(repoRoot, 'alternate.config.yaml');
-    await writeFile(
-      configPath,
-      [
-        'conductor:',
-        '  model: alternate-model',
-        'tui:',
-        '  layout: pane',
-        '',
-      ].join('\n'),
-    );
-    let loadedConfig: EnsembleConfig | undefined;
     let agentOptions: ConductorAgentCreateOptions | undefined;
     const fakeAgent = createFakeAgent({
       send: async () => ({
@@ -194,29 +233,156 @@ describe('runOperatorAgent', () => {
     };
 
     await runOperatorAgent(
-      { repoRoot, configPath, newSession: true },
+      { newSession: true },
       {
         stdin: createInput('/exit\n'),
         stdout: createOutput(),
         agentFactory,
-        loadConfig: async (root, options) => {
-          loadedConfig = await loadEnsembleConfig(root, {
-            ...options,
-            userEnsembleRoot,
-          });
-          return loadedConfig;
-        },
       },
     );
 
-    expect(loadedConfig).toMatchObject({
-      conductor: { model: 'smoke-model', backend: 'pi' },
-      github: { auth: { allowGhAuthTokenFallback: true } },
-      tui: { layout: 'pane' },
-    });
-    expect(loadedConfig?.acp.env ?? {}).not.toHaveProperty('USER_ONLY');
     expect(agentOptions?.modelId).toBe('smoke-model');
-    expect(agentOptions?.pi?.agentDir).toBe(join(repoRoot, '.ensemble/pi-user'));
+    expect(agentOptions?.cwd).toBe(
+      join(repoRoot, '.ensemble', 'operator-agents', 'smoke'),
+    );
+    expect(agentOptions?.pi).toEqual({
+      agentDir: join(repoRoot, '.ensemble', 'pi-user'),
+      projectDir: join(
+        repoRoot,
+        '.ensemble',
+        'operator-agents',
+        'smoke',
+        'pi-project',
+      ),
+    });
+  });
+
+  it('honors CLI profile and dedicated environment precedence independently of launch cwd', async () => {
+    const configPath = join(
+      repoRoot,
+      '.ensemble',
+      'operator-agents.config.yaml',
+    );
+    await writeFile(
+      configPath,
+      [
+        'version: 1',
+        'defaultProfile: first',
+        'common:',
+        '  conductor:',
+        '    backend: pi',
+        '    model: common-model',
+        '    reasoning: low',
+        'profiles:',
+        '  first:',
+        '    conductor:',
+        '      model: first-model',
+        '  second:',
+        '    conductor:',
+        '      model: second-model',
+        '      reasoning: medium',
+        '',
+      ].join('\n'),
+    );
+    process.env.ENSEMBLE_OPERATOR_AGENT_PROFILE = 'second';
+    process.env.ENSEMBLE_OPERATOR_AGENT_BACKEND = 'cursor';
+    process.env.ENSEMBLE_OPERATOR_AGENT_MODEL = 'environment-model';
+    process.env.ENSEMBLE_OPERATOR_AGENT_REASONING = 'high';
+    process.env.CONDUCTOR_MODEL_ID = 'generic-model';
+    process.env.CONDUCTOR_REASONING = 'generic-reasoning';
+    const unrelatedLaunchDirectory = join(repoRoot, 'unrelated-launch-directory');
+    await mkdir(unrelatedLaunchDirectory);
+    const originalCwd = process.cwd();
+    process.chdir(unrelatedLaunchDirectory);
+    let agentOptions: ConductorAgentCreateOptions | undefined;
+    try {
+      await runOperatorAgent(
+        { profile: 'first', newSession: true },
+        {
+          stdin: createInput('/exit\n'),
+          stdout: createOutput(),
+          agentFactory: {
+            create: async (options) => {
+              agentOptions = options;
+              return createFakeAgent({
+                send: async () => ({
+                  runId: 'unused',
+                  status: 'completed',
+                  result: '',
+                }),
+              });
+            },
+            resume: async () => {
+              throw new Error('not used');
+            },
+          },
+        },
+      );
+    } finally {
+      process.chdir(originalCwd);
+    }
+    expect(agentOptions).toMatchObject({
+      cwd: join(repoRoot, '.ensemble', 'operator-agents', 'first'),
+      modelId: 'environment-model',
+      reasoning: 'high',
+    });
+    expect(agentOptions).not.toHaveProperty('pi');
+  });
+
+  it('prompts for an operator profile when no default or unique profile exists', async () => {
+    await writeFile(
+      join(repoRoot, '.ensemble', 'operator-agents.config.yaml'),
+      [
+        'version: 1',
+        'profiles:',
+        '  first:',
+        '    conductor:',
+        '      model: first-model',
+        '  second:',
+        '    conductor:',
+        '      model: second-model',
+        '',
+      ].join('\n'),
+    );
+    const input = new PassThrough() as PassThrough & OperatorAgentInput;
+    input.isTTY = true;
+    const output = createOutput();
+    let agentOptions: ConductorAgentCreateOptions | undefined;
+    const run = runOperatorAgent(
+      { newSession: true },
+      {
+        stdin: input,
+        stdout: output,
+        agentFactory: {
+          create: async (options) => {
+            agentOptions = options;
+            return createFakeAgent({
+              send: async () => ({
+                runId: 'unused',
+                status: 'completed',
+                result: '',
+              }),
+            });
+          },
+          resume: async () => {
+            throw new Error('not used');
+          },
+        },
+      },
+    );
+    await vi.waitFor(() =>
+      expect(output.capturedText()).toContain('1) first'),
+    );
+    input.write('2\n');
+    await vi.waitFor(() =>
+      expect(output.capturedText()).toContain('\u001b[2muser>\u001b[0m '),
+    );
+    input.write('/exit\n');
+    await run;
+    expect(agentOptions?.cwd).toBe(
+      join(repoRoot, '.ensemble', 'operator-agents', 'second'),
+    );
+    expect(agentOptions?.modelId).toBe('second-model');
   });
 
   it.each([
@@ -235,20 +401,11 @@ describe('runOperatorAgent', () => {
   ])(
     'resolves config / environment reasoning for $backend before agent creation',
     async ({ backend, configReasoning, envReasoning, expectedReasoning }) => {
-      await writeFile(
-        join(repoRoot, '.ensemble', 'config.yaml'),
-        [
-          'conductor:',
-          `  backend: ${backend}`,
-          `  model: ${backend === 'pi' ? 'smoke-model' : 'cursor-model'}`,
-          `  reasoning: ${configReasoning}`,
-          '',
-        ].join('\n'),
-      );
+      await writeOperatorSettings(repoRoot, backend, configReasoning);
       if (envReasoning === undefined) {
-        delete process.env.CONDUCTOR_REASONING;
+        delete process.env.ENSEMBLE_OPERATOR_AGENT_REASONING;
       } else {
-        process.env.CONDUCTOR_REASONING = envReasoning;
+        process.env.ENSEMBLE_OPERATOR_AGENT_REASONING = envReasoning;
       }
 
       let agentOptions: ConductorAgentCreateOptions | undefined;
@@ -306,28 +463,37 @@ describe('runOperatorAgent', () => {
   ])(
     'passes the resolved $backend reasoning to the resume factory',
     async ({ backend, configReasoning, envReasoning, expectedReasoning }) => {
-      await writeFile(
-        join(repoRoot, '.ensemble', 'config.yaml'),
-        [
-          'conductor:',
-          `  backend: ${backend}`,
-          `  model: ${backend === 'pi' ? 'smoke-model' : 'cursor-model'}`,
-          `  reasoning: ${configReasoning}`,
-          '',
-        ].join('\n'),
-      );
+      await writeOperatorSettings(repoRoot, backend, configReasoning);
       if (envReasoning !== undefined) {
-        process.env.CONDUCTOR_REASONING = envReasoning;
+        process.env.ENSEMBLE_OPERATOR_AGENT_REASONING = envReasoning;
       }
-      const statePath = operatorAgentStatePath(repoRoot);
+      const userRoot = join(repoRoot, '.ensemble');
+      const statePath = operatorAgentStatePath(userRoot, 'saved-operator');
       await mkdir(dirname(statePath), { recursive: true });
       await writeFile(
         statePath,
         JSON.stringify({
-          version: 1,
-          agentId: 'saved-operator-agent',
+          version: 2,
+          operatorAgentId: 'saved-operator',
+          providerSessionId: 'operator-agent-id',
           backend,
-          repoRoot,
+          profile: 'smoke',
+          workspace: join(userRoot, 'operator-agents', 'smoke'),
+          ...(backend === 'pi'
+            ? {
+                piResourceRoots: {
+                  agentDir: join(userRoot, 'pi-user'),
+                  projectDir: join(
+                    userRoot,
+                    'operator-agents',
+                    'smoke',
+                    'pi-project',
+                  ),
+                },
+              }
+            : {}),
+          createdAt: 1,
+          updatedAt: 1,
         }),
       );
 
@@ -368,15 +534,7 @@ describe('runOperatorAgent', () => {
   it.each(['pi', 'cursor'] as const)(
     'leaves %s reasoning unset when config and environment omit it',
     async (backend) => {
-      await writeFile(
-        join(repoRoot, '.ensemble', 'config.yaml'),
-        [
-          'conductor:',
-          `  backend: ${backend}`,
-          `  model: ${backend === 'pi' ? 'smoke-model' : 'cursor-model'}`,
-          '',
-        ].join('\n'),
-      );
+      await writeOperatorSettings(repoRoot, backend);
       let agentOptions: ConductorAgentCreateOptions | undefined;
       const fakeAgent = createFakeAgent({
         send: async () => ({
@@ -411,6 +569,7 @@ describe('runOperatorAgent', () => {
     const input = createInput('状況を教えて\n/exit\n');
     const output = createOutput();
     let agentOptions: ConductorAgentCreateOptions | undefined;
+    let listedSessions = '';
     const sentPrompts: string[] = [];
     const fakeAgent = createFakeAgent({
       send: async (prompt) => {
@@ -418,10 +577,7 @@ describe('runOperatorAgent', () => {
         const tool = agentOptions?.customTools?.list_operator_sessions;
         expect(tool).toBeDefined();
         const toolResult = await tool!.execute({ limit: 1 });
-        expect(toolResult.content[0]?.text).toContain(
-          'https://github.com/example/project/issues/12',
-        );
-        expect(toolResult.content[0]?.text).toContain('permission-1');
+        listedSessions = toolResult.content[0]?.text ?? '';
         return {
           runId: 'run-1',
           status: 'completed',
@@ -438,10 +594,30 @@ describe('runOperatorAgent', () => {
       resume: async () => fakeAgent,
     };
 
+    await expect(
+      listUserLocatedSessionResumeStoresPage(
+        {},
+        { userEnsembleRoot: join(repoRoot, '.ensemble') },
+      ),
+    ).resolves.toMatchObject({
+      total: 1,
+      sessions: [
+        {
+          resumeStore: {
+            conductorAgentId: 'conductor-one',
+            issueUrl: 'https://github.com/example/project/issues/12',
+          },
+        },
+      ],
+    });
     await runOperatorAgent({ repoRoot }, { stdin: input, stdout: output, agentFactory });
 
     const transcript = output.capturedText();
     expect(sentPrompts).toEqual(['状況を教えて']);
+    expect(listedSessions).toContain(
+      'https://github.com/example/project/issues/12',
+    );
+    expect(listedSessions).toContain('permission-1');
     expect(transcript).toContain(
       '\u001b[2m[observation]\u001b[0m (pi) ready — enter /exit to start a fresh session next time.',
     );
@@ -461,12 +637,18 @@ describe('runOperatorAgent', () => {
     expect(transcript).not.toMatch(/(?:^|\n)> /);
     expect(transcript).not.toContain('operator-agent 会話 hold');
     expect(agentOptions).toMatchObject({
-      cwd: repoRoot,
+      cwd: join(repoRoot, '.ensemble', 'operator-agents', 'smoke'),
       modelId: 'smoke-model',
       builtinTools: false,
       pi: {
         agentDir: join(repoRoot, '.ensemble', 'pi-user'),
-        projectDir: join(repoRoot, '.ensemble', 'pi-project'),
+        projectDir: join(
+          repoRoot,
+          '.ensemble',
+          'operator-agents',
+          'smoke',
+          'pi-project',
+        ),
       },
       piExtensions: false,
     });
@@ -501,8 +683,8 @@ describe('runOperatorAgent', () => {
       'shutdown_issue_session',
     ]);
     await expect(
-      readFile(operatorAgentStatePath(repoRoot)),
-    ).rejects.toMatchObject({ code: 'ENOENT' });
+      listOperatorAgentStates(join(repoRoot, '.ensemble')),
+    ).resolves.toEqual([]);
   });
 
   it('shows send and tool activity while preserving the TTY prompt', async () => {
@@ -665,12 +847,7 @@ describe('runOperatorAgent', () => {
     });
     closeServers.push(() => liveServer.close());
 
-    const resumeStorePath = join(
-      repoRoot,
-      '.ensemble',
-      'sessions',
-      'conductor-one.json',
-    );
+    const resumeStorePath = canonicalBaseResumeStorePath(repoRoot);
     const resumeStore = JSON.parse(await readFile(resumeStorePath, 'utf8')) as Record<
       string,
       unknown
@@ -742,7 +919,7 @@ describe('runOperatorAgent', () => {
       await userStarted;
       await vi.waitFor(async () => {
         const state = JSON.parse(
-          await readFile(operatorWatchStatePath(repoRoot), 'utf8'),
+          await readFile(baseWatchStatePath(repoRoot), 'utf8'),
         ) as {
           cursors: Record<string, { sequence: number }>;
         };
@@ -764,7 +941,7 @@ describe('runOperatorAgent', () => {
       };
       await vi.waitFor(async () => {
         const state = JSON.parse(
-          await readFile(operatorWatchStatePath(repoRoot), 'utf8'),
+          await readFile(baseWatchStatePath(repoRoot), 'utf8'),
         ) as {
           cursors: Record<string, { sequence: number }>;
         };
@@ -819,12 +996,7 @@ describe('runOperatorAgent', () => {
     });
     closeServers.push(() => liveServer.close());
 
-    const resumeStorePath = join(
-      repoRoot,
-      '.ensemble',
-      'sessions',
-      'conductor-one.json',
-    );
+    const resumeStorePath = canonicalBaseResumeStorePath(repoRoot);
     const resumeStore = JSON.parse(await readFile(resumeStorePath, 'utf8')) as Record<
       string,
       unknown
@@ -900,7 +1072,7 @@ describe('runOperatorAgent', () => {
       await firstStarted;
       await vi.waitFor(async () => {
         const state = JSON.parse(
-          await readFile(operatorWatchStatePath(repoRoot), 'utf8'),
+          await readFile(baseWatchStatePath(repoRoot), 'utf8'),
         ) as {
           cursors: Record<string, { sequence: number }>;
         };
@@ -987,15 +1159,14 @@ describe('runOperatorAgent', () => {
         });
         setTimeout(() => {
           void (async () => {
-            const sessionDir = join(
-              repoRoot,
-              '.ensemble',
-              'sessions',
-              'conductor-one',
-            );
-            await mkdir(sessionDir, { recursive: true });
+            const questionPath = resolveEnsemblePaths({ repoRoot })
+              .canonicalOpenQuestionsPath(
+                'https://github.com/example/project/issues/12',
+                'conductor-one',
+              );
+            await mkdir(dirname(questionPath), { recursive: true });
             await writeFile(
-              join(sessionDir, 'open-questions.yaml'),
+              questionPath,
               [
                 'version: 1',
                 'sequence: 2',
@@ -1061,12 +1232,7 @@ describe('runOperatorAgent', () => {
     });
     closeServers.push(() => liveServer.close());
 
-    const resumeStorePath = join(
-      repoRoot,
-      '.ensemble',
-      'sessions',
-      'conductor-one.json',
-    );
+    const resumeStorePath = canonicalBaseResumeStorePath(repoRoot);
     const resumeStore = JSON.parse(await readFile(resumeStorePath, 'utf8')) as Record<
       string,
       unknown
@@ -1168,12 +1334,7 @@ describe('runOperatorAgent', () => {
     });
     closeServers.push(() => liveServer.close());
 
-    const resumeStorePath = join(
-      repoRoot,
-      '.ensemble',
-      'sessions',
-      'conductor-one.json',
-    );
+    const resumeStorePath = canonicalBaseResumeStorePath(repoRoot);
     const resumeStore = JSON.parse(await readFile(resumeStorePath, 'utf8')) as Record<
       string,
       unknown
@@ -1183,7 +1344,7 @@ describe('runOperatorAgent', () => {
       JSON.stringify({ ...resumeStore, harnessSocketPath: liveServer.socketPath }),
     );
 
-    const statePath = operatorWatchStatePath(repoRoot);
+    const statePath = baseWatchStatePath(repoRoot);
     const firstInput = new PassThrough() as PassThrough & OperatorAgentInput;
     firstInput.isTTY = true;
     const firstOutput = createOutput();
@@ -1447,6 +1608,7 @@ describe('runOperatorAgent', () => {
   });
 
   it('keeps only authored input after a failed first Cursor send and waits for confirmation', async () => {
+    await writeOperatorSettings(repoRoot, 'cursor');
     const input = new PassThrough() as PassThrough & OperatorAgentInput;
     input.isTTY = true;
     const stdout = createOutput();
@@ -1644,6 +1806,7 @@ describe('runOperatorAgent', () => {
   });
 
   it('holds user input and watch reports that arrive during automatic resume, then dispatches them in order', async () => {
+    await writeOperatorSettings(repoRoot, 'cursor');
     let liveSnapshot: SessionObservationSnapshot = {
       sequence: 0,
       openQuestions: [],
@@ -1657,12 +1820,7 @@ describe('runOperatorAgent', () => {
     });
     closeServers.push(() => liveServer.close());
 
-    const resumeStorePath = join(
-      repoRoot,
-      '.ensemble',
-      'sessions',
-      'conductor-one.json',
-    );
+    const resumeStorePath = canonicalBaseResumeStorePath(repoRoot);
     const resumeStore = JSON.parse(
       await readFile(resumeStorePath, 'utf8'),
     ) as Record<string, unknown>;
@@ -1777,7 +1935,7 @@ describe('runOperatorAgent', () => {
       expect(resumedSend).not.toHaveBeenCalled();
 
       input.write(`${followupInput}\n`);
-      const watchStatePath = operatorWatchStatePath(repoRoot);
+      const watchStatePath = baseWatchStatePath(repoRoot);
       await vi.waitFor(async () => {
         const saved = JSON.parse(
           await readFile(watchStatePath, 'utf8'),
@@ -2081,12 +2239,18 @@ describe('runOperatorAgent', () => {
     expect(resume).toHaveBeenNthCalledWith(
       1,
       'operator-agent-id',
-      expect.objectContaining({ cwd: repoRoot, modelId: 'smoke-model' }),
+      expect.objectContaining({
+        cwd: join(repoRoot, '.ensemble', 'operator-agents', 'smoke'),
+        modelId: 'smoke-model',
+      }),
     );
     expect(resume).toHaveBeenNthCalledWith(
       2,
       'operator-agent-id',
-      expect.objectContaining({ cwd: repoRoot, modelId: 'smoke-model' }),
+      expect.objectContaining({
+        cwd: join(repoRoot, '.ensemble', 'operator-agents', 'smoke'),
+        modelId: 'smoke-model',
+      }),
     );
     expect(send).not.toHaveBeenCalled();
     expect(stdout.capturedText()).toContain('conductor に再接続しました。');
@@ -2172,7 +2336,13 @@ describe('runOperatorAgent', () => {
   });
 
   it('prints Pi auth recovery steps to stderr after reconnect when the send still fails', async () => {
-    const projectDir = join(repoRoot, '.ensemble', 'pi-project');
+    const projectDir = join(
+      repoRoot,
+      '.ensemble',
+      'operator-agents',
+      'smoke',
+      'pi-project',
+    );
     await mkdir(projectDir, { recursive: true });
     await writeFile(
       join(projectDir, 'settings.json'),
@@ -2207,7 +2377,7 @@ describe('runOperatorAgent', () => {
     expect(stderr.capturedText()).not.toContain('ensemble issue');
   });
 
-  it('resumes the default session after ordinary TTY termination and lets exit clear it', async () => {
+  it('resumes the sole global conversation after TTY termination and removes only its record on exit', async () => {
     const create = vi.fn(async () => createFakeAgent({ send: async () => ({
       runId: 'run-1',
       status: 'completed',
@@ -2228,18 +2398,16 @@ describe('runOperatorAgent', () => {
         agentFactory,
       },
     );
-    const statePath = operatorAgentStatePath(repoRoot);
-    const savedState = JSON.parse(await readFile(statePath, 'utf8')) as {
-      version: number;
-      agentId: string;
-      backend: string;
-      repoRoot: string;
-    };
+    const userRoot = join(repoRoot, '.ensemble');
+    const [savedState] = await listOperatorAgentStates(userRoot);
+    expect(savedState).toBeDefined();
     expect(savedState).toMatchObject({
-      version: 1,
-      agentId: 'operator-agent-id',
+      version: 2,
+      operatorAgentId: expect.stringMatching(/^operator-/u),
+      providerSessionId: 'operator-agent-id',
       backend: 'pi',
-      repoRoot,
+      profile: 'smoke',
+      workspace: join(userRoot, 'operator-agents', 'smoke'),
     });
 
     await runOperatorAgent(
@@ -2255,9 +2423,11 @@ describe('runOperatorAgent', () => {
     expect(resume).toHaveBeenCalledOnce();
     expect(resume).toHaveBeenCalledWith(
       'operator-agent-id',
-      expect.objectContaining({ cwd: repoRoot }),
+      expect.objectContaining({
+        cwd: join(userRoot, 'operator-agents', 'smoke'),
+      }),
     );
-    await expect(readFile(statePath)).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(listOperatorAgentStates(userRoot)).resolves.toEqual([]);
   });
 
   it('closes the agent and keeps its identity when the process receives SIGTERM', async () => {
@@ -2290,12 +2460,35 @@ describe('runOperatorAgent', () => {
 
     expect(close).toHaveBeenCalledOnce();
     await expect(
-      readFile(operatorAgentStatePath(repoRoot), 'utf8'),
-    ).resolves.toContain('operator-agent-id');
+      listOperatorAgentStates(join(repoRoot, '.ensemble')),
+    ).resolves.toMatchObject([
+      { providerSessionId: 'operator-agent-id' },
+    ]);
   });
 
-  it('starts fresh with --new and replaces the saved session identity', async () => {
-    const statePath = operatorAgentStatePath(repoRoot);
+  it('starts a new global conversation without removing old conversation or transcript data', async () => {
+    const userRoot = join(repoRoot, '.ensemble');
+    const priorState: OperatorAgentState = {
+      version: 2,
+      operatorAgentId: 'operator-preserved',
+      providerSessionId: 'provider-preserved',
+      backend: 'pi',
+      profile: 'smoke',
+      workspace: join(userRoot, 'operator-agents', 'smoke'),
+      piResourceRoots: {
+        agentDir: join(userRoot, 'pi-user'),
+        projectDir: join(userRoot, 'operator-agents', 'smoke', 'pi-project'),
+      },
+      createdAt: 1,
+      updatedAt: 2,
+    };
+    await saveOperatorAgentState(userRoot, priorState);
+    const oldTranscript = join(
+      operatorPiSessionDirectory(userRoot, priorState.operatorAgentId),
+      'transcript.jsonl',
+    );
+    await mkdir(dirname(oldTranscript), { recursive: true });
+    await writeFile(oldTranscript, 'saved transcript');
     const legacyStatePath = join(
       repoRoot,
       '.ensemble',
@@ -2305,12 +2498,7 @@ describe('runOperatorAgent', () => {
     await mkdir(dirname(legacyStatePath), { recursive: true });
     await writeFile(
       legacyStatePath,
-      JSON.stringify({
-        version: 1,
-        agentId: 'old-operator-agent-id',
-        backend: 'pi',
-        repoRoot,
-      }),
+      JSON.stringify({ version: 1, agentId: 'old-operator-agent-id' }),
     );
     const create = vi.fn(async () =>
       createFakeAgent({ send: async () => ({ runId: 'run-1', status: 'completed' }) }),
@@ -2328,26 +2516,23 @@ describe('runOperatorAgent', () => {
 
     expect(create).toHaveBeenCalledOnce();
     expect(resume).not.toHaveBeenCalled();
-    await expect(readFile(statePath, 'utf8')).resolves.toContain(
-      'operator-agent-id',
+    const states = await listOperatorAgentStates(userRoot);
+    expect(states).toHaveLength(2);
+    expect(states).toContainEqual(priorState);
+    expect(states.find(({ operatorAgentId }) => operatorAgentId !== priorState.operatorAgentId))
+      .toMatchObject({ providerSessionId: 'operator-agent-id' });
+    await expect(readFile(oldTranscript, 'utf8')).resolves.toBe('saved transcript');
+    await expect(readFile(legacyStatePath, 'utf8')).resolves.toContain(
+      'old-operator-agent-id',
     );
-    await expect(readFile(legacyStatePath, 'utf8')).rejects.toMatchObject({
-      code: 'ENOENT',
-    });
   });
 
   it('adds the operator prompt to the first Cursor SDK turn', async () => {
     const input = createInput('hello\n/exit\n');
     const output = createOutput();
-    const config: EnsembleConfig = {
-      profile: { default: 'unused' },
-      conductor: { backend: 'cursor', model: 'cursor-model' },
-    } as EnsembleConfig;
-    const profile: ResolvedProfile = {
-      workers: [],
-      agents: {},
-    };
+    await writeOperatorSettings(repoRoot, 'cursor');
     const sentPrompts: string[] = [];
+    let agentOptions: ConductorAgentCreateOptions | undefined;
     const fakeAgent = createFakeAgent({
       send: async (prompt) => {
         sentPrompts.push(prompt);
@@ -2360,10 +2545,11 @@ describe('runOperatorAgent', () => {
       {
         stdin: input,
         stdout: output,
-        loadConfig: async () => config,
-        loadProfile: async () => ({ profile, profilePath: 'test-profile' }),
         agentFactory: {
-          create: async () => fakeAgent,
+          create: async (options) => {
+            agentOptions = options;
+            return fakeAgent;
+          },
           resume: async () => {
             throw new Error('not used');
           },
@@ -2372,6 +2558,11 @@ describe('runOperatorAgent', () => {
     );
 
     expect(sentPrompts).toHaveLength(1);
+    expect(agentOptions).toMatchObject({
+      cwd: join(repoRoot, '.ensemble', 'operator-agents', 'smoke'),
+      modelId: 'cursor-model',
+    });
+    expect(agentOptions).not.toHaveProperty('pi');
     expect(sentPrompts[0]).toContain('agents-ensemble の operator ロール');
     expect(sentPrompts[0]).toContain('## User message');
     expect(sentPrompts[0]).toContain('hello');
@@ -2411,4 +2602,49 @@ function createFakeAgent(overrides: {
     setSystemPrompt: async () => {},
     close: async () => {},
   };
+}
+
+function canonicalBaseResumeStorePath(repoRoot: string): string {
+  return resolveEnsemblePaths({ repoRoot }).canonicalSessionResumeStorePath(
+    'https://github.com/example/project/issues/12',
+    'conductor-one',
+  );
+}
+
+function baseWatchStatePath(repoRoot: string): string {
+  return operatorWatchStatePath(
+    join(repoRoot, '.ensemble'),
+    'smoke',
+    'https://github.com/example/project/issues/12',
+  );
+}
+
+async function writeOperatorSettings(
+  repoRoot: string,
+  backend: 'pi' | 'cursor',
+  reasoning?: string,
+): Promise<void> {
+  const model = backend === 'pi' ? 'smoke-model' : 'cursor-model';
+  await writeFile(
+    join(repoRoot, '.ensemble', 'operator-agents.config.yaml'),
+    [
+      'version: 1',
+      'defaultProfile: smoke',
+      'common:',
+      '  conductor:',
+      `    backend: ${backend}`,
+      `    model: ${model}`,
+      ...(reasoning ? [`    reasoning: ${reasoning}`] : []),
+      '  pi:',
+      '    agentDir: pi-user',
+      'profiles:',
+      '  smoke:',
+      '    prompt:',
+      '      instructions:',
+      '        - Profile operator guidance.',
+      '    pi:',
+      '      projectDir: pi-project',
+      '',
+    ].join('\n'),
+  );
 }

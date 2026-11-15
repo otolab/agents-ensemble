@@ -11,6 +11,7 @@ import type { AcpModelTag, ConductorBackend } from '../config/types.js';
 import type { ResolvedProfile } from '../profile/types.js';
 import { parseIssueUrl } from '../issue/issue-ref.js';
 import { resolveEnsemblePaths } from '../ensemble-paths.js';
+import { resolveUserEnsembleRoot } from '../resolve-user-ensemble-root.js';
 import { writeFileIfMissing } from './persisted-file.js';
 
 export const SESSION_RESUME_STORE_VERSION = 1;
@@ -517,6 +518,98 @@ export async function listLocatedSessionResumeStoresPage(
   };
 }
 
+/**
+ * List user-scoped canonical slug stores and every user path-hash store.
+ *
+ * This is intended for repository-independent operator tools. It does not
+ * inspect a checkout's `.ensemble/sessions` directory or call GitHub.
+ */
+export async function listUserLocatedSessionResumeStoresPage(
+  query: SessionResumeStoreQuery = {},
+  options: {
+    userEnsembleRoot?: string;
+    onDuplicate?: (diagnostic: SessionResumeStoreDuplicateDiagnostic) => void;
+  } = {},
+): Promise<SessionResumeStorePage<LocatedSessionResumeStore>> {
+  const userRoot = options.userEnsembleRoot ?? resolveUserEnsembleRoot();
+  const scope = resolveSessionResumeStoreScope(query);
+  const stores = (
+    await listSessionResumeStoreLocations(userRoot, {
+      onDuplicate: options.onDuplicate,
+      userEnsembleRoot: userRoot,
+      includeAllUserPathHashes: true,
+      includeProjectLegacy: false,
+    })
+  )
+    .filter(({ resumeStore }) => {
+      const identity = sessionIssueIdentity(resumeStore.issueUrl);
+      return (
+        (!scope.githubRepo || identity.repository === scope.githubRepo) &&
+        (!scope.issueKey || identity.key === scope.issueKey) &&
+        (!query.conductorAgentId ||
+          resumeStore.conductorAgentId === query.conductorAgentId)
+      );
+    })
+    .sort(compareLocatedSessionResumeStores);
+
+  return paginateLocatedSessionResumeStores(stores, query);
+}
+
+export async function findUserSessionResumeStore(
+  conductorAgentId: string,
+  options: {
+    userEnsembleRoot?: string;
+    onDuplicate?: (diagnostic: SessionResumeStoreDuplicateDiagnostic) => void;
+  } = {},
+): Promise<LocatedSessionResumeStore | undefined> {
+  const id = conductorAgentId.trim();
+  if (!id) {
+    throw new Error('conductorAgentId must be a non-empty string.');
+  }
+  const page = await listUserLocatedSessionResumeStoresPage(
+    { conductorAgentId: id },
+    options,
+  );
+  if (page.sessions.length > 1) {
+    throw new Error(
+      `Session ${id} is ambiguous across saved Issues; use a repository or Issue selector.`,
+    );
+  }
+  return page.sessions[0];
+}
+
+function paginateLocatedSessionResumeStores(
+  stores: LocatedSessionResumeStore[],
+  query: SessionResumeStoreQuery,
+): SessionResumeStorePage<LocatedSessionResumeStore> {
+  const limit =
+    query.limit === undefined
+      ? query.cursor === undefined
+        ? undefined
+        : SESSION_RESUME_STORE_PAGE_MAX_LIMIT
+      : validateSessionResumeStorePageLimit(query.limit);
+  if (limit === undefined) {
+    return { sessions: stores, total: stores.length };
+  }
+
+  const cursor =
+    query.cursor === undefined
+      ? undefined
+      : decodeSessionResumeStoreCursor(query.cursor);
+  const remaining = cursor
+    ? stores.filter(
+        (store) => compareLocatedSessionResumeStoreToCursor(store, cursor) > 0,
+      )
+    : stores;
+  const sessions = remaining.slice(0, limit);
+  const next = remaining.length > sessions.length ? sessions.at(-1) : undefined;
+  return {
+    sessions,
+    total: stores.length,
+    ...(next ? { nextCursor: encodeSessionResumeStoreCursor(next) } : {}),
+  };
+}
+
 export async function listSessionResumeStoresPage(
   repoRoot: string,
   query: SessionResumeStoreQuery = {},
@@ -570,10 +663,18 @@ export async function findSessionResumeStoreBySelector(
 async function listSessionResumeStoreLocations(
   repoRoot: string,
   options: {
+    userEnsembleRoot?: string;
     onDuplicate?: (diagnostic: SessionResumeStoreDuplicateDiagnostic) => void;
+    includeAllUserPathHashes?: boolean;
+    includeProjectLegacy?: boolean;
   } = {},
 ): Promise<LocatedSessionResumeStore[]> {
-  const paths = resolveEnsemblePaths({ repoRoot });
+  const paths = resolveEnsemblePaths({
+    repoRoot,
+    ...(options.userEnsembleRoot
+      ? { userEnsembleRoot: options.userEnsembleRoot }
+      : {}),
+  });
   const candidates: LocatedSessionResumeStore[] = [];
   const visited = new Set<string>();
 
@@ -680,12 +781,32 @@ async function listSessionResumeStoreLocations(
   // store or another candidate. Keep the source untouched; direct reads still
   // surface InvalidSessionResumeStoreDataError. Filesystem errors are not
   // treated as malformed data and continue to propagate.
-  await readDirectory(paths.sessionsDir, 'user-path-hash', {
-    skipMalformedStoreData: true,
-  });
-  await readDirectory(paths.legacySessionsDir, 'project-legacy', {
-    skipMalformedStoreData: true,
-  });
+  if (options.includeAllUserPathHashes) {
+    let sessionRoots: Dirent[];
+    try {
+      sessionRoots = await readdir(paths.sessionsRoot, { withFileTypes: true });
+    } catch (error) {
+      if (!isEnoent(error)) throw error;
+      sessionRoots = [];
+    }
+    for (const entry of sessionRoots) {
+      if (!entry.isDirectory() || !/^[a-f0-9]{64}$/u.test(entry.name)) {
+        continue;
+      }
+      await readDirectory(join(paths.sessionsRoot, entry.name), 'user-path-hash', {
+        skipMalformedStoreData: true,
+      });
+    }
+  } else {
+    await readDirectory(paths.sessionsDir, 'user-path-hash', {
+      skipMalformedStoreData: true,
+    });
+  }
+  if (options.includeProjectLegacy !== false) {
+    await readDirectory(paths.legacySessionsDir, 'project-legacy', {
+      skipMalformedStoreData: true,
+    });
+  }
 
   const bySession = new Map<string, LocatedSessionResumeStore[]>();
   for (const candidate of candidates) {

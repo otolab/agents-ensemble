@@ -116,9 +116,25 @@ ensemble issue https://github.com/OWNER/REPOSITORY/issues/123 --reasoning high
 ensemble issue https://github.com/OWNER/REPOSITORY/issues/123 --config ~/.ensemble/litellm.config.yaml
 ```
 
-人間との TTY 対話を operator-agent に委ねる場合は `ensemble operator-agent [--repo-root <path>] [--config <path>]` を使います。Issue セッションとは別の agent session で起動し、backend・model・reasoning・profile・認証は conductor の設定を共有します。reasoning は `conductor.reasoning` または `CONDUCTOR_REASONING` で指定できます。Pi backend ではユーザー／プロジェクト側の Pi extension を operator session に読み込みません。
+### operator-agent
 
-operator-agent は既定で前回の operator 会話を再開します。初回起動では新しい session を作り、backend 固有の会話履歴は backend の保存先に、再開に使う backend・repoRoot・agentId は保存します。`listLocatedSessionResumeStores(repoRoot)` が返す全選択済み Store が1件以上・全件 canonical slug・同一 repository の場合は `~/.ensemble/operator-agent/github.com/<owner>/<repo>/session.json`、それ以外（0件、path-hash / project legacy を含む、複数 repository）は `~/.ensemble/operator-agent/<repoKey>/session.json` が保存先です。この判定は特定の watch 対象 repository だけには絞りません。TTY の EOF、Ctrl+C（SIGINT）、SIGTERM など通常の終了では agent を閉じて再開可能な状態を保ちます。`/exit` または `exit` は連続性を明示的に切り、次回起動を新規 session にします。既存の会話を残したまま新しい会話を始める場合は `ensemble operator-agent --new` を使います。強制終了や電源断では終了時の flush は保証されません。
+複数の Issue session を TTY から監督する場合は `ensemble operator-agent` を使います。起動元 directory、repository の `.ensemble/`、generic team profile、`~/.ensemble/config.yaml` には依存せず、設定は `~/.ensemble/operator-agents.config.yaml`、選択 profile の workspace は `~/.ensemble/operator-agents/<profile>/` に置きます。operator-agent に `--repo-root` / `--config` はありません。`ensemble issue --repo-root` と `ensemble issue --config` は従来どおりです。
+
+```bash
+ensemble operator-agent
+ensemble operator-agent --profile work
+ensemble operator-agent --repo-filter otolab/agents-ensemble --repo-filter 'example/*'
+ensemble operator-agent --resume operator-<id>
+ensemble operator-agent --new
+```
+
+profile は `--profile` > `ENSEMBLE_OPERATOR_AGENT_PROFILE` > 選択した保存会話の profile > `defaultProfile` > profile が一つだけならその profile > TTY 選択の順で決まります。backend / model / reasoning は、それぞれ専用の `ENSEMBLE_OPERATOR_AGENT_BACKEND` / `ENSEMBLE_OPERATOR_AGENT_MODEL` / `ENSEMBLE_OPERATOR_AGENT_REASONING` > profile > `common.conductor` > 既定値の順です。generic `CONDUCTOR_*` は参照しません。以前 project config や team profile にだけ設定していた operator 用 backend / model / prompt / Pi resources は自動変換されないため、専用 config へ手動で移してください。Pi は共通 user resource root と選択 profile の明示 root だけを読み、起動元 repository の `.ensemble/pi/` や Pi の cwd 自動探索は使いません。設定例は [operator-agent 専用設定](../config.md#operator-agent-専用設定)、Pi の詳細は [Pi resources](../pi-conductor-setup.md#operator-agent-の-pi-resources) を参照してください。
+
+session list は user store 内の全 canonical GitHub slug group を既定 scope とし、GitHub API で repository を列挙しません。profile の `include` と複数の `--repo-filter <owner/repo|owner/*>` を指定すると、両者の一致を取り、同じ項目内ではいずれかの filter に合う repository を対象にします。list tool は `limit` / `cursor` / `nextCursor` で続きのページを返し、件数上限で結果を黙って捨てません。
+
+会話 record は repository や profile に結び付けず、`operatorAgentId` ごとに `~/.ensemble/operator-agents/conversations/<operatorAgentId>/conversation.json` へ保存します。起動時は `--resume <operatorAgentId>` で指定でき、保存会話が一件なら自動再開、複数なら TTY で選択します。`--new` は別の会話を作り、既存 record を消しません。Pi transcript も会話 ID ごとに同じ directory の `pi-sessions/` に保存します。起動 cwd が変わっただけでは再開を拒否しません。再現できない context / resource は通知した上で選択中設定による再開を試し、backend が復元できない場合は失敗します。その場合も既存 record は保持します。`/exit` は現在の record だけを削除し、Pi transcript を削除しません。
+
+旧 profile-less operator conversation log は新しい record へ自動移行せず、resume も保証しません。#698 の copy-only migration は Issue session data と watch state の inventory / copy に利用できます。全 checkout を列挙してから dry-run manifest を確認し、必要な場合に `--apply` で移行してください。migration は source を削除・rename せず、異なる destination を上書きしません。手順と保全条件は [session data の migration 手順](../session-logging.md#legacy-data-の一括-inventory-copy) を参照してください。
 
 ## 保存済み session の閲覧
 

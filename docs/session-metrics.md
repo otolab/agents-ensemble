@@ -111,7 +111,7 @@
 
 直接 API でも `modelId` > `CONDUCTOR_MODEL_ID` > `ensembleConfig.conductor.model` > backend default の順に解決します。`default` / `auto` は backend の既定選択を表し、Cursor は Auto、Pi は Pi resource の `settings.json` にある既定モデルを使います。custom factory では config またはコード上の既定値だけで `default` になった場合、従来どおり `modelId: undefined` を渡して factory 自身の既定値を選べるようにします。API の明示値または環境変数が `default` / `auto` を選んだ場合は `'default'` を渡し、上位の選択を保ちます。いずれの場合も `configuredModelId: "default"` だけでは custom factory が選んだ具体的な model ID までは分かりません。
 
-`configuredReasoning` は Issue 起動と直接 API では明示した `--reasoning` / `RunConductorSessionOptions.reasoning` > `CONDUCTOR_REASONING` > merged config、operator-agent では `CONDUCTOR_REASONING` > merged config で解決した指定値です。未指定なら省略します。これは SDK / provider が最終的に適用した値の報告ではありません。Pi は選択 model が対応する値か確認し、Cursor は利用者の model catalog から parameter を解決してから conductor を起動します。
+`configuredReasoning` は Issue 起動と直接 API では明示した `--reasoning` / `RunConductorSessionOptions.reasoning` > `CONDUCTOR_REASONING` > merged config、operator-agent では `ENSEMBLE_OPERATOR_AGENT_REASONING` > 選択 profile > `common.conductor` で解決した指定値です。未指定なら省略します。これは SDK / provider が最終的に適用した値の報告ではありません。Pi は選択 model が対応する値か確認し、Cursor は利用者の model catalog から parameter を解決してから conductor を起動します。
 
 resume では `modelId` と `reasoning` を invocation ごとに再解決します。新しい `resume-feasibility` digest は保存時の `session.worktree` / `acp.defaultPreset` / `acp.pi.runtime` を示し、`conductor.model` / `conductor.reasoning` は対象外です。Pi runtime marker の違いも事前拒否には使わず、現在の設定で backend restore を試みます。scheme 省略 / `full` の旧 digest を含め、config digest と worker fingerprint の差だけでは resume を拒否しません。worker の model / reasoning / Cursor fast / env 情報は保存時設定の診断に使います。
 
