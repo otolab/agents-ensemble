@@ -777,7 +777,7 @@ async function readCursorAcpSessionHistoryWithSources(
     sqlite = await import('node:sqlite');
   } catch {
     throw new WorkerSessionHistoryUnavailableError(
-      'Cursor ACP store の SQLite 読み取りには node:sqlite が必要です（Node.js 22.13.0 以降）。',
+      'Cursor ACP store の SQLite 読み取りには node:sqlite が必要です。Node.js 22.13.0 以降は標準で利用でき、22.5.0〜22.12.x では --experimental-sqlite を付けて起動してください。22.0.0〜22.4.x では利用できません。',
     );
   }
 
@@ -913,12 +913,22 @@ function readCursorConversation(
   const messages: WorkerSessionHistoryMessage[] = [];
   const root = parseCursorProtobuf(readBlob(rootBlobId));
   const turnBlobIds = cursorProtobufBytes(root, 8);
+  if (turnBlobIds.length === 0) {
+    throw new WorkerSessionHistoryUnavailableError(
+      'Cursor ACP transcript root に turn 参照がありません。',
+    );
+  }
 
   for (const [turnIndex, turnBlobId] of turnBlobIds.entries()) {
     const turn = parseCursorProtobuf(
       readBlob(readCursorBlobReference(turnBlobId)),
     );
     const agentTurns = cursorProtobufBytes(turn, 1);
+    if (agentTurns.length === 0) {
+      throw new WorkerSessionHistoryUnavailableError(
+        'Cursor ACP transcript の turn に agent turn がありません。',
+      );
+    }
     for (const agentTurnBytes of agentTurns) {
       const agentTurn = parseCursorProtobuf(agentTurnBytes);
       const userMessageBlobId = cursorProtobufBytes(agentTurn, 1)[0];
@@ -931,6 +941,11 @@ function readCursorConversation(
         readBlob(readCursorBlobReference(userMessageBlobId)),
       );
       const userText = cursorProtobufString(userMessage, 1);
+      if (userText === undefined) {
+        throw new WorkerSessionHistoryUnavailableError(
+          'Cursor ACP transcript の user message に本文 field がありません。',
+        );
+      }
       if (userText?.trim()) {
         const at = cursorProtobufTimestamp(userMessage, 25);
         messages.push({
@@ -947,6 +962,16 @@ function readCursorConversation(
         const step = parseCursorProtobuf(
           readBlob(readCursorBlobReference(stepBlobId)),
         );
+        const hasKnownStepContent = [1, 2, 3].some((fieldNumber) =>
+          step.some((field) => field.number === fieldNumber),
+        );
+        if (!hasKnownStepContent) {
+          throw new WorkerSessionHistoryUnavailableError(
+            'Cursor ACP transcript の step に既知の会話構造がありません。',
+          );
+        }
+        cursorProtobufBytes(step, 2);
+        cursorProtobufBytes(step, 3);
         const assistantMessages = cursorProtobufBytes(step, 1);
         for (const assistantMessageBytes of assistantMessages) {
           const assistantMessage = parseCursorProtobuf(assistantMessageBytes);
@@ -963,6 +988,11 @@ function readCursorConversation(
         }
       }
     }
+  }
+  if (messages.length === 0) {
+    throw new WorkerSessionHistoryUnavailableError(
+      'Cursor ACP transcript に user / assistant 本文がありません。',
+    );
   }
   return messages;
 }

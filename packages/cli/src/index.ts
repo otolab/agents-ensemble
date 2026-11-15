@@ -323,7 +323,7 @@ const sessionWorkers = session
 sessionWorkers
   .command('messages')
   .description(
-    'Read saved worker history for supported ACP presets (currently Pi and Codex; may contain secrets)',
+    'Read saved worker history for supported ACP presets (currently Pi, Codex, and Cursor; may contain secrets)',
   )
   .argument('<conductorAgentId>', 'Conductor session id')
   .requiredOption('--worker <name>', 'Worker name from the saved session')

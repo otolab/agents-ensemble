@@ -25,6 +25,8 @@ import {
 import {
   CURSOR_ACP_FIXTURE_CWD,
   CURSOR_ACP_FIXTURE_SESSION_ID,
+  hasCursorAcpSqliteSupport,
+  writeCursorAcpSessionMetadataFixture,
   writeCursorAcpWorkerSessionFixture,
 } from '../../test/fixtures/cursor-acp-worker-session.js';
 import {
@@ -46,6 +48,7 @@ const CODEX_FILENAME_TIMESTAMP = '2026-11-09T14-03-00';
 const CODEX_FIXTURE_PATH = fileURLToPath(
   new URL('../../test/fixtures/codex-cli-worker-rollout.jsonl', import.meta.url),
 );
+const itWithCursorSqlite = (await hasCursorAcpSqliteSupport()) ? it : it.skip;
 
 describe('worker session history', () => {
   let tempRoot = '';
@@ -143,7 +146,7 @@ describe('worker session history', () => {
     }
   });
 
-  it('reads Cursor ACP user and assistant text while excluding tool and thinking steps', async () => {
+  itWithCursorSqlite('reads Cursor text and excludes tool / thinking steps', async () => {
     await writeResumeStore('cursor', {
       acpSessionId: CURSOR_ACP_FIXTURE_SESSION_ID,
       acpCwd: CURSOR_ACP_FIXTURE_CWD,
@@ -200,8 +203,7 @@ describe('worker session history', () => {
       'acp-sessions',
       CURSOR_ACP_FIXTURE_SESSION_ID,
     );
-    await writeCursorAcpWorkerSessionFixture(sessionDirectory);
-    await rm(join(sessionDirectory, 'store.db'));
+    await writeCursorAcpSessionMetadataFixture(sessionDirectory);
 
     const result = await readHistory();
 
@@ -212,6 +214,62 @@ describe('worker session history', () => {
       messages: [],
     });
   });
+
+  for (const malformed of [
+    {
+      shape: 'empty-messages',
+      expectedReason: 'user / assistant 本文がありません',
+      description: 'contains no readable user or assistant text',
+    },
+    {
+      shape: 'missing-root-blob',
+      expectedReason: 'transcript blob が見つからない',
+      description: 'root blob is missing',
+    },
+    {
+      shape: 'missing-root-turns',
+      expectedReason: 'root に turn 参照がありません',
+      description: 'root has no turn references',
+    },
+    {
+      shape: 'missing-turn-blob',
+      expectedReason: 'transcript blob が見つからない',
+      description: 'referenced turn blob is missing',
+    },
+    {
+      shape: 'unrecognized-turn',
+      expectedReason: 'turn に agent turn がありません',
+      description: 'turn has no readable agent turn structure',
+    },
+  ] as const) {
+    itWithCursorSqlite(
+      `returns unavailable when the Cursor ${malformed.description}`,
+      async () => {
+        await writeResumeStore('cursor', {
+          acpSessionId: CURSOR_ACP_FIXTURE_SESSION_ID,
+          acpCwd: CURSOR_ACP_FIXTURE_CWD,
+        });
+        const sessionDirectory = join(
+          homeRoot,
+          '.cursor',
+          'acp-sessions',
+          CURSOR_ACP_FIXTURE_SESSION_ID,
+        );
+        await writeCursorAcpWorkerSessionFixture(sessionDirectory, {
+          transcriptShape: malformed.shape,
+        });
+
+        const result = await readHistory();
+
+        expect(result).toMatchObject({
+          preset: 'cursor',
+          status: 'unavailable',
+          reason: expect.stringContaining(malformed.expectedReason),
+          messages: [],
+        });
+      },
+    );
+  }
 
   it('returns unavailable when the Cursor ACP session metadata is missing', async () => {
     await writeResumeStore('cursor', {
@@ -224,8 +282,7 @@ describe('worker session history', () => {
       'acp-sessions',
       CURSOR_ACP_FIXTURE_SESSION_ID,
     );
-    await writeCursorAcpWorkerSessionFixture(sessionDirectory);
-    await rm(join(sessionDirectory, 'meta.json'));
+    await mkdir(sessionDirectory, { recursive: true });
 
     const result = await readHistory();
 
@@ -237,7 +294,7 @@ describe('worker session history', () => {
     });
   });
 
-  it('returns unavailable when the Cursor ACP store session ID differs', async () => {
+  itWithCursorSqlite('rejects a mismatched Cursor store session ID', async () => {
     await writeResumeStore('cursor', {
       acpSessionId: CURSOR_ACP_FIXTURE_SESSION_ID,
       acpCwd: CURSOR_ACP_FIXTURE_CWD,
@@ -262,7 +319,7 @@ describe('worker session history', () => {
     });
   });
 
-  it('returns unavailable when the Cursor ACP metadata cwd differs', async () => {
+  itWithCursorSqlite('rejects a mismatched Cursor metadata cwd', async () => {
     await writeResumeStore('cursor', {
       acpSessionId: CURSOR_ACP_FIXTURE_SESSION_ID,
       acpCwd: CURSOR_ACP_FIXTURE_CWD,

@@ -1,6 +1,5 @@
 import { createHash } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
-import { DatabaseSync } from 'node:sqlite';
 import { join } from 'node:path';
 
 const SESSION_ID = 'cursor-acp-worker-fixture-session';
@@ -9,15 +8,46 @@ const ROOT_BLOB_ID = makeBlobId('root');
 export const CURSOR_ACP_FIXTURE_SESSION_ID = SESSION_ID;
 export const CURSOR_ACP_FIXTURE_CWD = '/tmp/cursor-acp-worker-fixture';
 
+export async function hasCursorAcpSqliteSupport(): Promise<boolean> {
+  try {
+    await import('node:sqlite');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function writeCursorAcpSessionMetadataFixture(
+  sessionDirectory: string,
+  options: { cwd?: string } = {},
+): Promise<void> {
+  await mkdir(sessionDirectory, { recursive: true });
+  await writeFile(
+    join(sessionDirectory, 'meta.json'),
+    `${JSON.stringify({
+      schemaVersion: 1,
+      cwd: options.cwd ?? CURSOR_ACP_FIXTURE_CWD,
+    })}\n`,
+    'utf8',
+  );
+}
+
 export async function writeCursorAcpWorkerSessionFixture(
   sessionDirectory: string,
   options: {
     cwd?: string;
     storeSessionId?: string;
+    transcriptShape?:
+      | 'empty-messages'
+      | 'missing-root-blob'
+      | 'missing-root-turns'
+      | 'missing-turn-blob'
+      | 'unrecognized-turn';
   } = {},
 ): Promise<void> {
   const cwd = options.cwd ?? CURSOR_ACP_FIXTURE_CWD;
   await mkdir(sessionDirectory, { recursive: true });
+  const { DatabaseSync } = await import('node:sqlite');
   const storePath = join(sessionDirectory, 'store.db');
   const database = new DatabaseSync(storePath);
   try {
@@ -26,7 +56,7 @@ export async function writeCursorAcpWorkerSessionFixture(
       CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);
     `);
 
-    const blobs = createFixtureBlobs();
+    const blobs = createFixtureBlobs(options.transcriptShape);
     const insertBlob = database.prepare(
       'INSERT INTO blobs (id, data) VALUES (?, ?)',
     );
@@ -45,14 +75,18 @@ export async function writeCursorAcpWorkerSessionFixture(
     database.close();
   }
 
-  await writeFile(
-    join(sessionDirectory, 'meta.json'),
-    `${JSON.stringify({ schemaVersion: 1, cwd })}\n`,
-    'utf8',
-  );
+  await writeCursorAcpSessionMetadataFixture(sessionDirectory, { cwd });
 }
 
-function createFixtureBlobs(): Array<[string, Uint8Array]> {
+function createFixtureBlobs(
+  transcriptShape:
+    | 'empty-messages'
+    | 'missing-root-blob'
+    | 'missing-root-turns'
+    | 'missing-turn-blob'
+    | 'unrecognized-turn'
+    | undefined,
+): Array<[string, Uint8Array]> {
   const blobs: Array<[string, Uint8Array]> = [];
   const addBlob = (name: string, data: Uint8Array): Uint8Array => {
     const id = makeBlobId(name);
@@ -61,7 +95,12 @@ function createFixtureBlobs(): Array<[string, Uint8Array]> {
   };
 
   const userMessage = protobufConcat(
-    protobufString(1, 'Cursor ACP fixture user message.'),
+    protobufString(
+      1,
+      transcriptShape === 'empty-messages'
+        ? ' '
+        : 'Cursor ACP fixture user message.',
+    ),
     protobufString(2, 'cursor-user-message-fixture'),
     protobufVarint(25, Date.parse('2026-11-11T10:00:01.000Z')),
   );
@@ -78,7 +117,12 @@ function createFixtureBlobs(): Array<[string, Uint8Array]> {
   const thinkingStepRef = addBlob('thinking-step', thinkingStep);
 
   const assistantMessage = protobufConcat(
-    protobufString(1, 'Cursor ACP fixture assistant reply.'),
+    protobufString(
+      1,
+      transcriptShape === 'empty-messages'
+        ? ' '
+        : 'Cursor ACP fixture assistant reply.',
+    ),
     protobufVarint(2, Date.parse('2026-11-11T10:00:02.000Z')),
   );
   const assistantStep = protobufMessage(1, assistantMessage);
@@ -90,11 +134,29 @@ function createFixtureBlobs(): Array<[string, Uint8Array]> {
     protobufMessage(2, thinkingStepRef),
     protobufMessage(2, assistantStepRef),
   );
-  const turn = protobufMessage(1, agentTurn);
-  const turnRef = addBlob('turn', turn);
+  const turn =
+    transcriptShape === 'unrecognized-turn'
+      ? protobufString(90, 'future turn field')
+      : protobufConcat(
+          protobufMessage(1, agentTurn),
+          protobufString(90, 'future turn field'),
+        );
+  const turnBlobId = makeBlobId('turn');
+  const turnRef = Buffer.from(turnBlobId, 'hex');
+  if (transcriptShape !== 'missing-turn-blob') {
+    blobs.push([turnBlobId, turn]);
+  }
 
-  const root = protobufMessage(8, turnRef);
-  blobs.push([ROOT_BLOB_ID, root]);
+  const root =
+    transcriptShape === 'missing-root-turns'
+      ? protobufString(90, 'future root field')
+      : protobufConcat(
+          protobufMessage(8, turnRef),
+          protobufString(90, 'future root field'),
+        );
+  if (transcriptShape !== 'missing-root-blob') {
+    blobs.push([ROOT_BLOB_ID, root]);
+  }
   return blobs;
 }
 
