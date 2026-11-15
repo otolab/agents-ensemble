@@ -1,8 +1,13 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { startOpenQuestionControlServer } from '@agents-ensemble/core';
+import { resolveEnsemblePaths } from '@agents-ensemble/core/operator-runtime';
+import {
+  saveSessionResumeStore,
+  SESSION_RESUME_STORE_VERSION,
+} from '../../core/src/session/session-resume-store.js';
 import { createOperatorDispatchQueue } from './operator-dispatch.js';
 import { createSendOperatorMessageTool } from './open-question-control-tools.js';
 
@@ -19,7 +24,6 @@ describe('operator control tools', () => {
 
   it('sends the #525 operator message through live UDS while reports are held', async () => {
     repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-control-'));
-    await mkdir(join(repoRoot, '.ensemble', 'sessions'), { recursive: true });
     const sendOperatorMessage = vi.fn(() => true);
     const server = await startOpenQuestionControlServer({
       listOpenQuestions: () => [],
@@ -29,12 +33,16 @@ describe('operator control tools', () => {
       sendOperatorMessage,
     });
     closeServer = () => server.close();
-    await writeFile(
-      join(repoRoot, '.ensemble', 'sessions', 'conductor-1.json'),
-      JSON.stringify({
-        version: 1,
+    const issueUrl = 'https://github.com/example/repo/issues/1';
+    await saveSessionResumeStore(
+      resolveEnsemblePaths({ repoRoot }).canonicalSessionResumeStorePath(
+        issueUrl,
+        'conductor-1',
+      ),
+      {
+        version: SESSION_RESUME_STORE_VERSION,
         conductorAgentId: 'conductor-1',
-        issueUrl: 'https://github.com/example/repo/issues/1',
+        issueUrl,
         repoRoot,
         harnessSocketPath: server.socketPath,
         profile: { workers: [], agents: {} },
@@ -42,7 +50,7 @@ describe('operator control tools', () => {
         sequence: 0,
         workers: {},
         updatedAt: 1,
-      }),
+      },
     );
     const queue = createOperatorDispatchQueue();
     queue.setHold(true);
