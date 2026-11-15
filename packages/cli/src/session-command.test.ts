@@ -1847,8 +1847,14 @@ describe('ensemble session commands', () => {
 
   async function writeRelatedYaml(): Promise<void> {
     const paths = resolveEnsemblePaths({ repoRoot, userEnsembleRoot: userRoot });
-    const questionsPath = paths.openQuestionsPath(conductorAgentId);
-    const statePath = paths.sessionStatePath(conductorAgentId);
+    const questionsPath = paths.canonicalOpenQuestionsPath(
+      ISSUE_URL,
+      conductorAgentId,
+    );
+    const statePath = paths.canonicalSessionStatePath(
+      ISSUE_URL,
+      conductorAgentId,
+    );
     await mkdir(dirname(questionsPath), { recursive: true });
     await writeFile(
       questionsPath,

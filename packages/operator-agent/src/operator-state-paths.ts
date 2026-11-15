@@ -27,36 +27,6 @@ export function operatorWatchStatePath(
   );
 }
 
-export async function legacyOperatorWatchStatePaths(
-  userEnsembleRoot: string,
-  issueUrl?: string,
-): Promise<string[]> {
-  const paths = resolveEnsemblePaths({
-    repoRoot: userEnsembleRoot,
-    userEnsembleRoot,
-  });
-  const legacyRoot = join(userEnsembleRoot, 'operator-agent');
-  let entries: Array<{ name: string; isDirectory(): boolean }>;
-  try {
-    entries = await readdir(legacyRoot, { withFileTypes: true });
-  } catch (error) {
-    if (isEnoent(error)) return [];
-    throw error;
-  }
-  const oldHashPaths = entries
-    .filter(
-      (entry) =>
-        entry.isDirectory() && /^[a-f0-9]{64}$/u.test(entry.name),
-    )
-    .map((entry) => join(legacyRoot, entry.name, 'watch-state.json'));
-  return [
-    ...new Set([
-      ...(issueUrl ? [paths.canonicalOperatorWatchStatePath(issueUrl)] : []),
-      ...oldHashPaths,
-    ]),
-  ];
-}
-
 export async function listOperatorWatchStatePaths(
   userEnsembleRoot: string,
   profile: string,

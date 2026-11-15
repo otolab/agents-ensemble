@@ -76,7 +76,6 @@ import {
   loadSessionResumeStore,
   saveSessionResumeStore,
   SESSION_RESUME_STORE_VERSION,
-  sessionResumeStorePath,
 } from '../session/session-resume-store.js';
 import * as issueContextModule from '../github/issue-context.js';
 import * as resolveGitHubAuthTokenModule from '../github/resolve-github-auth-token.js';
@@ -1139,7 +1138,7 @@ describe('PiConductorAgent', () => {
   });
 
   it.each(['user-path-hash', 'project-legacy'] as const)(
-    'copies a legacy %s Pi transcript into the canonical slug directory without changing its source',
+    'does not resume from a %s Pi transcript',
     async (location) => {
       const paths = resolveEnsemblePaths({ repoRoot: cwd });
       const slugSessionDir = paths.canonicalPiSessionsDir(PI_TEST_ISSUE_URL);
@@ -1159,47 +1158,27 @@ describe('PiConductorAgent', () => {
           sessionDir === legacySessionDir ? legacySessionFile : undefined,
       );
 
-      const conductor = await PiConductorAgent.resume('legacy-session', {
-        cwd,
-        pi: { agentDir },
-        modelId: 'anthropic/model-1',
-        sessionDir: slugSessionDir,
-        legacySessionDirs: [hashSessionDir, projectSessionDir],
-        systemPrompt: 'recompiled system prompt',
-      });
-
-      const migratedFile = join(slugSessionDir, 'legacy-session.jsonl');
-      const sourceAfter = await readFile(legacySessionFile);
-      const destination = await readFile(migratedFile);
-      expect(sha256(destination)).toBe(sha256(transcript));
-      expect(sourceAfter).toEqual(transcript);
-      expect(sha256(sourceAfter)).toBe(sha256(transcript));
-      expect(mockSessionManagerFindById).toHaveBeenNthCalledWith(
-        1,
-        cwd,
-        'legacy-session',
-        slugSessionDir,
-      );
-      expect(mockSessionManagerFindById).toHaveBeenNthCalledWith(
-        2,
-        cwd,
-        'legacy-session',
-        hashSessionDir,
-      );
-      if (location === 'project-legacy') {
-        expect(mockSessionManagerFindById).toHaveBeenNthCalledWith(
-          3,
+      await expect(
+        PiConductorAgent.resume('legacy-session', {
           cwd,
-          'legacy-session',
-          projectSessionDir,
-        );
-      }
-      expect(mockSessionManagerOpen).toHaveBeenCalledWith(
-        migratedFile,
-        slugSessionDir,
+          pi: { agentDir },
+          modelId: 'anthropic/model-1',
+          sessionDir: slugSessionDir,
+          systemPrompt: 'recompiled system prompt',
+        }),
+      ).rejects.toThrow('Pi session not found for resume');
+
+      expect(mockSessionManagerFindById).toHaveBeenCalledTimes(1);
+      expect(mockSessionManagerFindById).toHaveBeenCalledWith(
         cwd,
+        'legacy-session',
+        slugSessionDir,
       );
-      await conductor.close();
+      expect(mockSessionManagerOpen).not.toHaveBeenCalled();
+      expect(await readFile(legacySessionFile)).toEqual(transcript);
+      await expect(
+        readFile(join(slugSessionDir, 'legacy-session.jsonl')),
+      ).rejects.toMatchObject({ code: 'ENOENT' });
     },
   );
 
@@ -1281,7 +1260,6 @@ describe('PiConductorAgent', () => {
       pi: { agentDir },
       modelId: 'anthropic/model-1',
       sessionDir: slugSessionDir,
-      legacySessionDirs: [hashSessionDir],
       systemPrompt: 'recompiled system prompt',
     });
 
@@ -1548,10 +1526,6 @@ describe('PiConductorAgent', () => {
         conductor: { backend: 'pi' as const },
         workers: [],
       };
-      const hashResumeStorePath = sessionResumeStorePath({
-        repoRoot: cwd,
-        conductorAgentId: agentId,
-      });
       const resumeStorePath = resolveEnsemblePaths({ repoRoot: cwd })
         .canonicalSessionResumeStorePath(issueUrl, agentId);
       await mkdir(join(cwd, '.agents'), { recursive: true });
@@ -1561,7 +1535,7 @@ describe('PiConductorAgent', () => {
       );
 
       if (mode === 'resume') {
-        await saveSessionResumeStore(hashResumeStorePath, {
+        await saveSessionResumeStore(resumeStorePath, {
           version: SESSION_RESUME_STORE_VERSION,
           conductorAgentId: agentId,
           conductorBackend: 'pi',

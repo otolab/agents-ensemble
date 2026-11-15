@@ -1,12 +1,11 @@
 import { resolve } from 'node:path';
 import {
-  listLocatedSessionResumeStoresPage,
   listUserLocatedSessionResumeStoresPage,
   harnessPhaseFromLegacyLifecycle,
   loadOpenQuestionsStore,
   loadSessionStateStore,
   parseIssueUrl,
-  sessionSnapshotPaths,
+  resolveUserEnsembleRoot,
   userSessionSnapshotPaths,
   type ConductorJsonValue,
   type ConductorTool,
@@ -123,14 +122,14 @@ export function createListOperatorSessionsTool(
   ) => OperatorSessionLiveStatus | undefined,
   onDuplicate?: (diagnostic: SessionResumeStoreDuplicateDiagnostic) => void,
 ): ConductorTool {
-  const legacyMode = typeof scope === 'string';
-  const root = resolve(legacyMode ? scope : scope.userEnsembleRoot);
-  const profileIncludes = legacyMode
-    ? undefined
-    : (scope as OperatorSessionListScope).profileIncludes;
-  const repoFilters = legacyMode
-    ? undefined
-    : (scope as OperatorSessionListScope).repoFilters;
+  const root = resolve(
+    typeof scope === 'string'
+      ? resolveUserEnsembleRoot()
+      : scope.userEnsembleRoot,
+  );
+  const profileIncludes =
+    typeof scope === 'string' ? undefined : scope.profileIncludes;
+  const repoFilters = typeof scope === 'string' ? undefined : scope.repoFilters;
   return {
     name: LIST_OPERATOR_SESSIONS_TOOL,
     description:
@@ -188,20 +187,12 @@ export function createListOperatorSessionsTool(
         args.conductorAgentId,
       );
       const dataAsOf = new Date().toISOString();
-      const resumeStores = legacyMode
-        ? (
-            await listLocatedSessionResumeStoresPage(
-              root,
-              { issueUrl, conductorAgentId },
-              { onDuplicate },
-            )
-          ).sessions
-        : (
-            await listUserLocatedSessionResumeStoresPage(
-              { issueUrl, conductorAgentId },
-              { userEnsembleRoot: root, onDuplicate },
-            )
-          ).sessions;
+      const resumeStores = (
+        await listUserLocatedSessionResumeStoresPage(
+          { issueUrl, conductorAgentId },
+          { userEnsembleRoot: root, onDuplicate },
+        )
+      ).sessions;
       const normalizedRepoFilters = repoFilters?.length
         ? repoFilters.map((pattern) => normalizeRepositoryPattern(pattern))
         : undefined;
@@ -212,12 +203,8 @@ export function createListOperatorSessionsTool(
         resumeStores.map(async (located) => ({
           located,
           resumeStore: located.resumeStore,
-          status: await loadStatusLine(root, located, legacyMode),
-          questionHistory: await loadQuestionHistory(
-            root,
-            located,
-            legacyMode,
-          ),
+          status: await loadStatusLine(root, located),
+          questionHistory: await loadQuestionHistory(root, located),
         })),
       );
       const filtered = snapshots.filter(({ resumeStore, status }) => {
@@ -277,7 +264,6 @@ export function createListOperatorSessionsTool(
           ),
         );
       const payload = {
-        ...(legacyMode ? { repoRoot: root } : {}),
         dataAsOf,
         total: filtered.length,
         returned: sessions.length,
@@ -301,16 +287,13 @@ export function createListOperatorSessionsTool(
 async function loadQuestionHistory(
   userEnsembleRoot: string,
   located: LocatedSessionResumeStore,
-  legacyMode: boolean,
 ): Promise<OpenQuestionHistory> {
   try {
-    const paths = legacyMode
-      ? sessionSnapshotPaths(userEnsembleRoot, located, 'open-questions')
-      : userSessionSnapshotPaths(
-          userEnsembleRoot,
-          located,
-          'open-questions',
-        );
+    const paths = userSessionSnapshotPaths(
+      userEnsembleRoot,
+      located,
+      'open-questions',
+    );
     for (const path of paths) {
       const snapshot = await loadOpenQuestionsStore(path);
       if (snapshot) {
@@ -383,12 +366,13 @@ function resolveLifecycle(
 async function loadStatusLine(
   userEnsembleRoot: string,
   located: LocatedSessionResumeStore,
-  legacyMode: boolean,
 ): Promise<SessionStateStore | undefined> {
   try {
-    const paths = legacyMode
-      ? sessionSnapshotPaths(userEnsembleRoot, located, 'session-state')
-      : userSessionSnapshotPaths(userEnsembleRoot, located, 'session-state');
+    const paths = userSessionSnapshotPaths(
+      userEnsembleRoot,
+      located,
+      'session-state',
+    );
     for (const path of paths) {
       const status = await loadSessionStateStore(path);
       if (status) return status;

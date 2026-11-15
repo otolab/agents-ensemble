@@ -461,7 +461,7 @@ describe('runConductorSession resume / shutdown', () => {
     });
   });
 
-  it('resumes a legacy fixture without backfilling its missing CLI version', async () => {
+  it('does not resume from a valid path-hash store', async () => {
     stubUnusedControlServer();
     const agentId = 'resume-legacy-cli-version';
     const legacyStore = JSON.parse(
@@ -484,33 +484,18 @@ describe('runConductorSession resume / shutdown', () => {
       repoRoot,
     });
     const legacySourceBeforeResume = await readFile(resumeStorePath);
-    mockSend.mockResolvedValue({
-      runId: 'run-legacy-cli-version',
-      status: 'finished',
-      result: 'done',
-    });
-
-    const result = await runConductorSession({
-      issueUrl: TEST_ISSUE.url,
-      repoRoot,
-      profile: { workers: [] },
-      resumeAgentId: agentId,
-      cliPackageVersion: '0.21.0-current',
-      permissionPipeline: new PermissionPipeline({}),
-      registerProcessSignalHandlers: false,
-      waitForOperatorExit: false,
-      bindOperatorInput: (api) => {
-        api.submit('/exit');
-      },
-    });
-
-    expect(result.stopReason).toBe('completed');
-    await expect(loadSessionResumeStore(resumeStorePath)).resolves.not.toHaveProperty(
-      'createdHarnessCliVersion',
-    );
-    await expect(loadSessionResumeStore(slugResumeStorePath)).resolves.not.toHaveProperty(
-      'createdHarnessCliVersion',
-    );
+    await expect(
+      runConductorSession({
+        issueUrl: TEST_ISSUE.url,
+        repoRoot,
+        profile: { workers: [] },
+        resumeAgentId: agentId,
+        cliPackageVersion: '0.21.0-current',
+        permissionPipeline: new PermissionPipeline({}),
+        registerProcessSignalHandlers: false,
+      }),
+    ).rejects.toThrow(SessionResumeStoreNotFoundError);
+    await expect(loadSessionResumeStore(slugResumeStorePath)).resolves.toBeUndefined();
     await expect(readFile(resumeStorePath)).resolves.toEqual(
       legacySourceBeforeResume,
     );
@@ -568,7 +553,7 @@ describe('runConductorSession resume / shutdown', () => {
     ).rejects.toThrow('stop after canonical store flush');
   });
 
-  it('prefers existing slug sidecars over older hash sidecars without merging or changing either source', async () => {
+  it('resumes migrated Issue data and ignores path-hash sidecars', async () => {
     const agentId = 'resume-hash-location-snapshot';
     const paths = resolveEnsemblePaths({ repoRoot });
     const hashPath = paths.sessionResumeStorePath(agentId);
@@ -584,7 +569,7 @@ describe('runConductorSession resume / shutdown', () => {
       'agent-test',
     );
     const hashSessionStatePath = paths.sessionStatePath('agent-test');
-    await saveSessionResumeStore(hashPath, {
+    const migratedResumeStore = {
       version: SESSION_RESUME_STORE_VERSION,
       conductorAgentId: agentId,
       issueUrl: TEST_ISSUE.url,
@@ -594,8 +579,13 @@ describe('runConductorSession resume / shutdown', () => {
       sequence: 0,
       workers: {},
       updatedAt: 1,
-    });
+    };
+    await saveSessionResumeStore(hashPath, migratedResumeStore);
     const hashResumeStoreBeforeResume = await readFile(hashPath);
+    await saveSessionResumeStore(
+      paths.canonicalSessionResumeStorePath(TEST_ISSUE.url, agentId),
+      migratedResumeStore,
+    );
     const writeQuestionSnapshot = async (path: string, id: string, text: string) => {
       await mkdir(dirname(path), { recursive: true });
       await writeFile(
@@ -716,31 +706,31 @@ describe('runConductorSession resume / shutdown', () => {
   });
 
   it.each(['user-path-hash', 'project-legacy'] as const)(
-    'copies missing %s ResumeStore and sidecars to slug on resume without modifying legacy files',
+    'does not resume from %s ResumeStore or sidecars',
     async (location) => {
       const paths = resolveEnsemblePaths({ repoRoot });
-      const agentId = `resume-copy-${location}`;
+      const agentId = `resume-ignore-${location}`;
       const sourceStorePath =
         location === 'user-path-hash'
           ? paths.sessionResumeStorePath(agentId)
           : paths.legacySessionResumeStorePath(agentId);
-      const slugStorePath = paths.canonicalSessionResumeStorePath(
-        TEST_ISSUE.url,
-        agentId,
-      );
       const sourceQuestionsPath =
         location === 'user-path-hash'
           ? paths.openQuestionsPath(agentId)
           : paths.legacyOpenQuestionsPath(agentId);
-      const slugQuestionsPath = paths.canonicalOpenQuestionsPath(
-        TEST_ISSUE.url,
-        agentId,
-      );
       const sourceStatePath =
         location === 'user-path-hash'
           ? paths.sessionStatePath(agentId)
           : paths.legacySessionStatePath(agentId);
-      const slugStatePath = paths.canonicalSessionStatePath(
+      const canonicalStorePath = paths.canonicalSessionResumeStorePath(
+        TEST_ISSUE.url,
+        agentId,
+      );
+      const canonicalQuestionsPath = paths.canonicalOpenQuestionsPath(
+        TEST_ISSUE.url,
+        agentId,
+      );
+      const canonicalStatePath = paths.canonicalSessionStatePath(
         TEST_ISSUE.url,
         agentId,
       );
@@ -756,122 +746,41 @@ describe('runConductorSession resume / shutdown', () => {
         lifecycle: 'closed',
         updatedAt: 1,
       });
-      const openQuestionsYaml = [
-        'version: 1',
-        'sequence: 2',
-        'openQuestions:',
-        '  - id: inq-legacy',
-        `    question: ${JSON.stringify(`${location} question`)}`,
-        '    responseType: text',
-        '    source: conductor',
-        '    status: open',
-        '    askedAt: 1',
-        '',
-      ].join('\n');
-      const sessionStateYaml = [
-        'version: 2',
-        'current:',
-        `  statusLine: ${JSON.stringify(`${location} status`)}`,
-        '  reportedAt: 2',
-        'history: []',
-        '',
-      ].join('\n');
       await mkdir(dirname(sourceQuestionsPath), { recursive: true });
-      await writeFile(sourceQuestionsPath, openQuestionsYaml, 'utf8');
+      await writeFile(
+        sourceQuestionsPath,
+        'version: 1\nsequence: 2\nopenQuestions: []\n',
+        'utf8',
+      );
       await mkdir(dirname(sourceStatePath), { recursive: true });
-      await writeFile(sourceStatePath, sessionStateYaml, 'utf8');
+      await writeFile(
+        sourceStatePath,
+        'version: 2\ncurrent:\n  statusLine: legacy\n  reportedAt: 2\nhistory: []\n',
+        'utf8',
+      );
       const sourceStoreBefore = await readFile(sourceStorePath);
       const sourceQuestionsBefore = await readFile(sourceQuestionsPath);
       const sourceStateBefore = await readFile(sourceStatePath);
-      let restoredQuestions: Array<{ id: string; question: string }> = [];
-      mockResume.mockImplementationOnce(async () => ({
-        agentId,
-        send: mockSend,
-        close: mockClose,
-        getUsage: createMockConductorGetUsage(),
-      }));
 
-      mockSend.mockImplementation(async () => {
-        await expect(loadOpenQuestionsStore(slugQuestionsPath)).resolves.toMatchObject({
-          sequence: 2,
-          openQuestions: [
-            expect.objectContaining({
-              id: 'inq-legacy',
-              question: `${location} question`,
-              status: 'open',
-            }),
-          ],
-        });
-        await expect(loadSessionStateStore(slugStatePath)).resolves.toMatchObject({
-          current: {
-            statusLine: `${location} status`,
-            reportedAt: 2,
-          },
-        });
-        return {
-          runId: `run-copy-${location}`,
-          status: 'finished',
-          result: 'resumed from copied state',
-        };
-      });
-
-      const resultPromise = runConductorSession({
-        issueUrl: TEST_ISSUE.url,
-        repoRoot,
-        profile: { workers: [] },
-        resumeAgentId: agentId,
-        maxTurns: 1,
-        stopOnUnansweredInput: true,
-        permissionPipeline: new PermissionPipeline({}),
-        registerProcessSignalHandlers: false,
-        waitForOperatorExit: false,
-        bindOperatorInput: (api) => {
-          restoredQuestions = api.getContext().openQuestions;
-          api.submit('inspect the migrated sidecars', {
-            targetOpenQuestionId: 'missing',
-          });
-          return () => {};
-        },
-      });
-      await vi.waitFor(() => expect(mockResume).toHaveBeenCalled(), {
-        timeout: 2_000,
-      });
-      await vi.waitFor(() => expect(mockSend).toHaveBeenCalled(), {
-        timeout: 2_000,
-      });
-      const result = await resultPromise;
-
-      expect(result.stopReason).toBe('completed');
-      expect(restoredQuestions).toContainEqual(
-        expect.objectContaining({
-          id: 'inq-legacy',
-          question: `${location} question`,
+      await expect(
+        runConductorSession({
+          issueUrl: TEST_ISSUE.url,
+          repoRoot,
+          profile: { workers: [] },
+          resumeAgentId: agentId,
+          permissionPipeline: new PermissionPipeline({}),
+          registerProcessSignalHandlers: false,
         }),
-      );
+      ).rejects.toThrow(SessionResumeStoreNotFoundError);
+      expect(mockResume).not.toHaveBeenCalled();
       await expect(readFile(sourceStorePath)).resolves.toEqual(sourceStoreBefore);
       await expect(readFile(sourceQuestionsPath)).resolves.toEqual(
         sourceQuestionsBefore,
       );
       await expect(readFile(sourceStatePath)).resolves.toEqual(sourceStateBefore);
-      await expect(loadOpenQuestionsStore(slugQuestionsPath)).resolves.toMatchObject({
-        sequence: 2,
-        openQuestions: [
-          expect.objectContaining({
-            id: 'inq-legacy',
-            question: `${location} question`,
-          }),
-        ],
-      });
-      await expect(loadSessionStateStore(slugStatePath)).resolves.toMatchObject({
-        current: {
-          statusLine: `${location} status`,
-          reportedAt: 2,
-        },
-      });
-      await expect(loadSessionResumeStore(slugStorePath)).resolves.toMatchObject({
-        conductorAgentId: agentId,
-        issueUrl: TEST_ISSUE.url,
-      });
+      await expect(loadSessionResumeStore(canonicalStorePath)).resolves.toBeUndefined();
+      await expect(loadOpenQuestionsStore(canonicalQuestionsPath)).resolves.toBeUndefined();
+      await expect(loadSessionStateStore(canonicalStatePath)).resolves.toBeUndefined();
     },
   );
 
@@ -1124,7 +1033,9 @@ describe('runConductorSession resume / shutdown', () => {
       emitted.some(
         (event) =>
           event.type === 'harness.warning' &&
-          event.message.includes('以前の statusLine と履歴は復元されていません'),
+          event.message.includes(
+            '以前の statusLine と履歴を復元する必要がある場合',
+          ),
       ),
     ).toBe(true);
   });

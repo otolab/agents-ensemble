@@ -79,7 +79,7 @@ describe('tool-call snapshot history', () => {
   });
 
   it.each(['user-path-hash', 'project-legacy'] as const)(
-    'promotes %s history to a missing slug file and leaves the legacy source intact',
+    'does not read or promote %s history',
     async (location) => {
       repoRoot = await createHome();
       const conductorAgentId = `agent-${location}-history`;
@@ -103,18 +103,18 @@ describe('tool-call snapshot history', () => {
           conductorAgentId,
           issueUrl: ISSUE_URL,
         }),
-      ).resolves.toEqual({ entries: [ENTRY], needsRewrite: false });
+      ).resolves.toEqual({ entries: [], needsRewrite: false });
 
       const sourceBefore = await readFile(legacyPath);
-      const destination = await readFile(canonicalPath);
-      const sourceAfter = await readFile(legacyPath);
-      expect(sha256(destination)).toBe(sha256(sourceBefore));
-      expect(sourceAfter).toEqual(sourceBefore);
-      expect(sha256(sourceAfter)).toBe(sha256(sourceBefore));
+      await expect(access(canonicalPath)).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
+      expect(await readFile(legacyPath)).toEqual(sourceBefore);
+      expect(sha256(sourceBefore)).toBe(sha256(Buffer.from(legacyText)));
     },
   );
 
-  it('uses an existing slug history without merging a newer hash copy', async () => {
+  it('reads an existing Issue history and ignores a newer hash copy', async () => {
     repoRoot = await createHome();
     const conductorAgentId = 'agent-slug-history-wins';
     const paths = resolveEnsemblePaths({ repoRoot });
@@ -154,7 +154,7 @@ describe('tool-call snapshot history', () => {
     ).resolves.toEqual({ entries: [slugEntry], needsRewrite: false });
   });
 
-  it('prefers the saved clone project legacy history over the current clone project legacy history', async () => {
+  it('does not read project-local tool-call history from current or saved clones', async () => {
     repoRoot = await createHome();
     const savedRepoRoot = join(repoRoot, 'saved-clone');
     const conductorAgentId = 'agent-project-legacy-order';
@@ -194,12 +194,11 @@ describe('tool-call snapshot history', () => {
         repoRoot,
         conductorAgentId,
         issueUrl: ISSUE_URL,
-        fallbackRepoRoots: [savedRepoRoot],
       }),
-    ).resolves.toEqual({ entries: [savedEntry], needsRewrite: false });
+    ).resolves.toEqual({ entries: [], needsRewrite: false });
   });
 
-  it('does not delete an invalid legacy history file while reading fallback data', async () => {
+  it('does not read an invalid legacy history file', async () => {
     repoRoot = await createHome();
     const conductorAgentId = 'agent-invalid-legacy-history';
     const legacyPath = resolveEnsemblePaths({ repoRoot }).toolCallHistoryPath(
@@ -215,9 +214,9 @@ describe('tool-call snapshot history', () => {
         conductorAgentId,
         issueUrl: ISSUE_URL,
       }),
-    ).resolves.toMatchObject({
+    ).resolves.toEqual({
       entries: [],
-      warning: expect.stringContaining('invalid'),
+      needsRewrite: false,
     });
     await expect(readFile(legacyPath, 'utf8')).resolves.toBe(legacyText);
   });

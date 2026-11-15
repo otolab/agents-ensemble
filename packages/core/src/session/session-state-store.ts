@@ -72,17 +72,9 @@ export async function saveSessionStatusLine(
   path: string,
   statusLine: string,
   reportedAt = Date.now(),
-  fallbackPaths?: string | readonly string[],
 ): Promise<void> {
   const current = parseSessionStatusLine({ statusLine, reportedAt });
-  let existing = await loadSessionStateStore(path);
-  const paths = typeof fallbackPaths === 'string'
-    ? [fallbackPaths]
-    : (fallbackPaths ?? []);
-  for (const fallbackPath of paths) {
-    if (existing) break;
-    existing = await loadSessionStateStore(fallbackPath);
-  }
+  const existing = await loadSessionStateStore(path);
   const next = {
     current,
     history: boundHistory(

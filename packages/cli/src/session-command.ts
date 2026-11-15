@@ -226,11 +226,10 @@ export async function listSavedSessionMessages(input: {
     issueUrl: resumeStore.issueUrl,
     ...(backend === 'pi'
       ? {
-          fallbackCwds: [
+          resumeCwds: [
             resumeStore.conductorCwd,
             resumeStore.repoRoot,
           ].filter((cwd): cwd is string => Boolean(cwd)),
-          fallbackRepoRoots: [resumeStore.repoRoot],
         }
       : {}),
     ...(resumeStore.cursorBootstrapRunId

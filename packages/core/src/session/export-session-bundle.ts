@@ -330,7 +330,6 @@ async function writeSessionBundle(input: {
     repoRoot,
     conductorAgentId,
     issueUrl: resumeStore.issueUrl,
-    fallbackRepoRoot: resumeStore.repoRoot,
     include: options.includeToolCalls ?? false,
     outputDirectory,
     files,
@@ -412,8 +411,7 @@ async function exportPiConductorTranscript(input: {
       cwd,
       repoRoot: input.repoRoot,
       issueUrl: input.resumeStore.issueUrl,
-      fallbackRepoRoots: [input.resumeStore.repoRoot],
-      fallbackCwds: [
+      resumeCwds: [
         input.resumeStore.conductorCwd,
         input.resumeStore.repoRoot,
       ].filter((savedCwd): savedCwd is string => Boolean(savedCwd)),
@@ -524,7 +522,6 @@ async function exportToolCallHistory(input: {
   repoRoot: string;
   conductorAgentId: string;
   issueUrl: string;
-  fallbackRepoRoot: string;
   include: boolean;
   outputDirectory: string;
   files: SessionBundleFile[];
@@ -546,7 +543,6 @@ async function exportToolCallHistory(input: {
       repoRoot: input.repoRoot,
       conductorAgentId: input.conductorAgentId,
       issueUrl: input.issueUrl,
-      fallbackRepoRoots: [input.fallbackRepoRoot],
     }),
     outputDirectory: input.outputDirectory,
     bundlePath: 'harness/session.tool-calls',

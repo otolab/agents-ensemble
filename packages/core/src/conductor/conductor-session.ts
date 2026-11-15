@@ -139,7 +139,6 @@ import {
   SESSION_RESUME_STORE_VERSION,
   type HarnessPhase,
   type SessionLifecycle,
-  type SessionResumeStoreLocation,
   type EnsembleConfigDigestScheme,
   type SessionResumeStore,
   type LocatedSessionResumeStore,
@@ -152,9 +151,7 @@ import {
   saveSessionStatusLine,
   sessionStateStorePath,
   loadSessionStateStore,
-  legacySessionStateStorePath,
 } from '../session/session-state-store.js';
-import { copyFileIfMissing } from '../session/persisted-file.js';
 import {
   loadToolCallSnapshotHistory,
   pruneExpiredToolCallSnapshotHistoryFiles,
@@ -163,7 +160,6 @@ import {
 } from '../session/tool-call-snapshot-history.js';
 import {
   loadOpenQuestionsStore,
-  legacyOpenQuestionsStorePath,
   openQuestionsStorePath,
   saveOpenQuestionsStore,
 } from '../session/open-questions-store.js';
@@ -543,7 +539,6 @@ async function runConductorSessionWithStartupGuard(
   let activeResumeStorePath: string | undefined;
   let activeLocatedResumeStore: LocatedSessionResumeStore | undefined;
   let createdHarnessCliVersion = options.cliPackageVersion;
-  let activeStoreLocation: SessionResumeStoreLocation = 'canonical-slug';
   let drainStartupResumeStoreWrites = async () => {};
   const pendingGitHubRecoveries: number[] = [];
   const conductorCwd = options.conductorCwd ?? process.cwd();
@@ -571,7 +566,6 @@ async function runConductorSessionWithStartupGuard(
     // A resume keeps its origin version; a legacy store stays without one.
     createdHarnessCliVersion = loadedResumeStore.createdHarnessCliVersion;
     activeResumeStorePath = locatedResumeStore.path;
-    activeStoreLocation = locatedResumeStore.location;
     const savedConfigDigestScheme =
       loadedResumeStore.ensembleConfigDigestScheme;
     const effectiveConfigDigestScheme = savedConfigDigestScheme ?? 'full';
@@ -740,7 +734,6 @@ async function runConductorSessionWithStartupGuard(
       repoRoot: options.repoRoot,
       conductorAgentId: options.resumeAgentId,
       issueUrl: options.issueUrl,
-      fallbackRepoRoots: [loadedResumeStore.repoRoot],
     });
     resumeToolCallSnapshots = history.entries;
     toolCallHistoryNeedsRewrite = history.needsRewrite;
@@ -750,44 +743,12 @@ async function runConductorSessionWithStartupGuard(
         message: `${history.warning}; the session will continue without affected history`,
       });
     }
-    const openQuestionPaths = sessionSnapshotPaths(
+    const openQuestionsPath = sessionSnapshotPaths(
       options.repoRoot,
       locatedResumeStore,
       'open-questions',
-    );
-    const openQuestionsPath = openQuestionPaths[0]!;
+    )[0]!;
     let openQuestionsSnapshot = await loadOpenQuestionsStore(openQuestionsPath);
-    let openQuestionsSourcePath: string | undefined;
-    if (!openQuestionsSnapshot) {
-      const fallbackPaths = openQuestionPaths.slice(1);
-      for (const fallbackPath of fallbackPaths) {
-        openQuestionsSnapshot = await loadOpenQuestionsStore(fallbackPath);
-        if (openQuestionsSnapshot) {
-          openQuestionsSourcePath = fallbackPath;
-          break;
-        }
-      }
-      if (openQuestionsSnapshot && openQuestionsSourcePath) {
-        try {
-          const copied = await copyFileIfMissing(
-            openQuestionsSourcePath,
-            openQuestionsPath,
-          );
-          if (!copied) {
-            openQuestionsSnapshot =
-              (await loadOpenQuestionsStore(openQuestionsPath)) ??
-              openQuestionsSnapshot;
-          }
-        } catch (error) {
-          const detail = error instanceof Error ? error.message : String(error);
-          sessionLogger.emit({
-            type: 'harness.warning',
-            message:
-              `旧保存先の open question を user 保存先へ移行できませんでした。今回のセッションでは旧 YAML を読み込みます。 error=${detail}`,
-          });
-        }
-      }
-    }
     if (openQuestionsSnapshot) {
       openQuestions.restore(openQuestionsSnapshot);
     } else {
@@ -1414,25 +1375,10 @@ async function runConductorSessionWithStartupGuard(
             repoRoot: options.repoRoot,
             conductorAgentId: conductorAgent.agentId,
             issueUrl: options.issueUrl,
-            location: activeStoreLocation,
+            location: 'canonical-slug',
           }),
           statusLine,
           undefined,
-          [
-            ...(activeStoreLocation === 'canonical-slug'
-              ? [
-                  sessionStateStorePath({
-                    repoRoot: options.repoRoot,
-                    conductorAgentId: conductorAgent.agentId,
-                    location: 'user-path-hash',
-                  }),
-                ]
-              : []),
-            legacySessionStateStorePath({
-              repoRoot: options.repoRoot,
-              conductorAgentId: conductorAgent.agentId,
-            }),
-          ],
         ),
       );
       sessionStateWriteQueue = write.catch(() => {});
@@ -1495,39 +1441,6 @@ async function runConductorSessionWithStartupGuard(
           sessionDir: resolveEnsemblePaths({
             repoRoot: options.repoRoot,
           }).canonicalPiSessionsDir(options.issueUrl),
-          legacySessionDirs: [
-            resolveEnsemblePaths({
-              repoRoot: options.repoRoot,
-            }).piSessionsDir,
-            ...(activeLocatedResumeStore?.resumeStore.repoRoot
-              ? [
-                  resolveEnsemblePaths({
-                    repoRoot: activeLocatedResumeStore.resumeStore.repoRoot,
-                  }).piSessionsDir,
-                ]
-              : []),
-            resolveEnsemblePaths({
-              repoRoot: options.repoRoot,
-            }).legacyPiSessionsDirForCwd(conductorCwd),
-            ...(activeLocatedResumeStore?.resumeStore.conductorCwd
-              ? [
-                  resolveEnsemblePaths({
-                    repoRoot: options.repoRoot,
-                  }).legacyPiSessionsDirForCwd(
-                    activeLocatedResumeStore.resumeStore.conductorCwd,
-                  ),
-                ]
-              : []),
-            ...(activeLocatedResumeStore?.resumeStore.repoRoot
-              ? [
-                  resolveEnsemblePaths({
-                    repoRoot: options.repoRoot,
-                  }).legacyPiSessionsDirForCwd(
-                    activeLocatedResumeStore.resumeStore.repoRoot,
-                  ),
-                ]
-              : []),
-          ],
           ...(activeLocatedResumeStore
             ? {
                 resumeCwds: [
@@ -1584,83 +1497,29 @@ async function runConductorSessionWithStartupGuard(
       repoRoot: options.repoRoot,
       conductorAgentId: conductorAgent.agentId,
       issueUrl: options.issueUrl,
-      location: activeStoreLocation,
+      location: 'canonical-slug',
     });
-    let hasCanonicalState = false;
     try {
-      hasCanonicalState =
-        (await loadSessionStateStore(currentSessionStatePath)) !== undefined;
+      const currentState = await loadSessionStateStore(currentSessionStatePath);
+      if (
+        !currentState &&
+        activeLocatedResumeStore &&
+        resolvePath(activeLocatedResumeStore.resumeStore.repoRoot) !==
+          resolvePath(options.repoRoot)
+      ) {
+        reportResumeNotice(
+          '保存時 clone に残る legacy session-state YAML は通常読み取り対象ではありません。以前の statusLine と履歴を復元する必要がある場合は、migration tool で canonical slug へ移してください。',
+        );
+      }
     } catch (error) {
-      hasCanonicalState = true;
       const detail = error instanceof Error ? error.message : String(error);
       sessionLogger.emit({
         type: 'harness.warning',
-        message: `slug 保存先の session state を読み込めませんでした。legacy data は優先しません。 error=${detail}`,
+        message: `Issue 保存先の session state を読み込めませんでした。 error=${detail}`,
       });
       reportResumeNotice(
-        `slug 保存先の session-state YAML を読み込めず、優先順位に従って legacy data への切り替えは行いません。原因: ${detail}`,
+        `Issue 保存先の session-state YAML を読み込めませんでした。原因: ${detail}`,
       );
-    }
-    if (!hasCanonicalState) {
-      const fallbackStatePaths = activeLocatedResumeStore
-        ? sessionSnapshotPaths(
-            options.repoRoot,
-            activeLocatedResumeStore,
-            'session-state',
-          ).slice(1)
-        : [
-            sessionStateStorePath({
-              repoRoot: options.repoRoot,
-              conductorAgentId: conductorAgent.agentId,
-              location: 'user-path-hash',
-            }),
-            legacySessionStateStorePath({
-              repoRoot: options.repoRoot,
-              conductorAgentId: conductorAgent.agentId,
-            }),
-          ];
-      let restoredFallbackState = false;
-      for (const fallbackPath of fallbackStatePaths) {
-        let fallbackState;
-        try {
-          fallbackState = await loadSessionStateStore(fallbackPath);
-        } catch (error) {
-          const detail = error instanceof Error ? error.message : String(error);
-          sessionLogger.emit({
-            type: 'harness.warning',
-            message: `旧保存先の session state を読み込めませんでした。 fallback は保持します。 error=${detail}`,
-          });
-          reportResumeNotice(
-            `session-state fallback ${fallbackPath} を読み込めず、その保存状態は復元できません。原因: ${detail}`,
-          );
-          continue;
-        }
-        if (!fallbackState) continue;
-        restoredFallbackState = true;
-        try {
-          await copyFileIfMissing(fallbackPath, currentSessionStatePath);
-        } catch (error) {
-          const detail = error instanceof Error ? error.message : String(error);
-          sessionLogger.emit({
-            type: 'harness.warning',
-            message: `旧保存先の session state を slug 保存先へ移せませんでした。旧 YAML を読み込みます。 error=${detail}`,
-          });
-          reportResumeNotice(
-            `session-state fallback ${fallbackPath} は読み込みましたが slug 保存先へ移せませんでした。今回の実行では読み込んだ状態を使います。原因: ${detail}`,
-          );
-        }
-        break;
-      }
-      if (
-        activeLocatedResumeStore &&
-        resolvePath(activeLocatedResumeStore.resumeStore.repoRoot) !==
-          resolvePath(options.repoRoot) &&
-        !restoredFallbackState
-      ) {
-        reportResumeNotice(
-          '保存時 clone の fallback を含めても session-state YAML を読み込めませんでした。以前の statusLine と履歴は復元されていません。',
-        );
-      }
     }
   }
   const conductorHandle: ConductorAgentHandle = { conductor: conductorAgent };
@@ -1838,7 +1697,7 @@ async function runConductorSessionWithStartupGuard(
         repoRoot: options.repoRoot,
         conductorAgentId: conductorHandle.conductor.agentId,
         issueUrl: options.issueUrl,
-        location: activeStoreLocation,
+        location: 'canonical-slug',
       }),
       snapshot,
     );
@@ -2355,34 +2214,9 @@ async function runConductorSessionWithStartupGuard(
           repoRoot: options.repoRoot,
           conductorAgentId: conductorAgent.agentId,
           issueUrl: options.issueUrl,
-          location: activeStoreLocation,
+          location: 'canonical-slug',
         });
-        const fallbackStatePaths = activeLocatedResumeStore
-          ? sessionSnapshotPaths(
-              options.repoRoot,
-              activeLocatedResumeStore,
-              'session-state',
-            ).slice(1)
-          : [
-              ...(activeStoreLocation === 'canonical-slug'
-                ? [
-                    sessionStateStorePath({
-                      repoRoot: options.repoRoot,
-                      conductorAgentId: conductorAgent.agentId,
-                      location: 'user-path-hash',
-                    }),
-                  ]
-                : []),
-              legacySessionStateStorePath({
-                repoRoot: options.repoRoot,
-                conductorAgentId: conductorAgent.agentId,
-              }),
-            ];
-        let sessionState = await loadSessionStateStore(currentStatePath);
-        for (const fallbackPath of fallbackStatePaths) {
-          if (sessionState) break;
-          sessionState = await loadSessionStateStore(fallbackPath);
-        }
+        const sessionState = await loadSessionStateStore(currentStatePath);
         return {
           ...openQuestions.snapshot(),
           ...(sessionState ? { sessionState } : {}),

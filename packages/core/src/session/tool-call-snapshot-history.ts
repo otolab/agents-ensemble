@@ -17,7 +17,6 @@ import {
   type StoredToolCallSnapshot,
 } from '../runtime/tool-call-snapshot-registry.js';
 import { resolveEnsemblePaths } from '../ensemble-paths.js';
-import { writeFileIfMissing } from './persisted-file.js';
 
 const TOOL_CALL_SNAPSHOT_HISTORY_VERSION = 1;
 const TOOL_CALL_SNAPSHOT_HISTORY_SUFFIX = '.tool-calls';
@@ -46,28 +45,13 @@ export function toolCallSnapshotHistoryPath(input: {
   );
 }
 
-/** Canonical slug first, then current/saved clone fallbacks in one shared order. */
+/** Read tool-call history from the Issue-scoped canonical store only. */
 export function toolCallSnapshotHistoryReadPaths(input: {
   repoRoot: string;
   conductorAgentId: string;
   issueUrl: string;
-  fallbackRepoRoots?: readonly string[];
 }): string[] {
-  const paths = resolveEnsemblePaths({ repoRoot: input.repoRoot });
-  return [
-    ...new Set([
-      toolCallSnapshotHistoryPath(input),
-      paths.toolCallHistoryPath(input.conductorAgentId),
-      ...(input.fallbackRepoRoots ?? []).flatMap((repoRoot) => {
-        const fallback = resolveEnsemblePaths({ repoRoot });
-        return [
-          fallback.toolCallHistoryPath(input.conductorAgentId),
-          fallback.legacyToolCallHistoryPath(input.conductorAgentId),
-        ];
-      }),
-      paths.legacyToolCallHistoryPath(input.conductorAgentId),
-    ]),
-  ];
+  return [toolCallSnapshotHistoryPath(input)];
 }
 
 /**
@@ -78,45 +62,11 @@ export async function loadToolCallSnapshotHistory(input: {
   repoRoot: string;
   conductorAgentId: string;
   issueUrl: string;
-  fallbackRepoRoots?: readonly string[];
   now?: number;
 }): Promise<LoadToolCallSnapshotHistoryResult> {
-  const readPaths = toolCallSnapshotHistoryReadPaths(input);
-  const canonicalPath = readPaths[0]!;
-  const fallbackPaths = readPaths.slice(1);
+  const canonicalPath = toolCallSnapshotHistoryPath(input);
   const now = input.now ?? Date.now();
-  // A present slug file has precedence, even when malformed. Keep it intact
-  // and report the problem instead of deleting it or promoting legacy data.
-  const canonical = await readToolCallHistoryFile(canonicalPath, now);
-  if (canonical.found) return canonical.result;
-
-  for (const fallbackPath of new Set(fallbackPaths)) {
-    const fallback = await readToolCallHistoryFile(fallbackPath, now);
-    if (!fallback.found) continue;
-    if (fallback.result.entries.length > 0) {
-      try {
-        const created = await writeFileIfMissing(
-          canonicalPath,
-          serializeHistory(fallback.result.entries),
-        );
-        if (!created) {
-          // A slug file appeared after lookup; use it instead of merging the
-          // fallback into or replacing it.
-          const racedCanonical = await readToolCallHistoryFile(
-            canonicalPath,
-            now,
-          );
-          if (racedCanonical.found) return racedCanonical.result;
-        }
-      } catch {
-        // Tool-call history is optional; an unsuccessful migration must not
-        // make the session resume fail.
-      }
-    }
-    return fallback.result;
-  }
-
-  return { entries: [], needsRewrite: false };
+  return (await readToolCallHistoryFile(canonicalPath, now)).result;
 }
 
 async function readToolCallHistoryFile(

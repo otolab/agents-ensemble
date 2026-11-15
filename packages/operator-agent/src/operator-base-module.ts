@@ -50,7 +50,7 @@ export const operatorBaseModule: PromptModule<OperatorPromptContext> = {
       type: 'subsection',
       title: 'list_operator_sessions',
       items: [
-        '- user store の canonical slug group と、そこにまだ複製されていない Issue session の互換 read fallback を横断します。watch が直近に観測した live connectivity があれば添える読み取り専用ツールです。一覧取得のたびに UDS probe はしません',
+        '- user store の canonical slug group に保存された Issue session を横断します。旧 path-hash / project-local data は通常の一覧に含めません。watch が直近に観測した live connectivity があれば添える読み取り専用ツールです。一覧取得のたびに UDS probe はしません',
         '- Issue URL と参照、`conductorAgentId`、conductor backend、profile、保存 worker 名、profile 上の worker 構成、保存 session のない worker、open question の履歴、更新時刻、`dataAsOf` を返します。従来の `agentId` も互換のため残します',
         '- `issueUrl` と `conductorAgentId` はそれぞれ完全一致で絞り込めます。同じ Issue に複数 run がある場合は ID を見て選び、その ID を以後の session tool に渡してください',
         '- `statusLine` は conductor の最新報告（未報告・読み取り不可は `null`）、`reportedAt` は報告時刻です。`statusLineHistory` には直近の過去報告を古い順で返します（最大 50 件、状態ファイル全体で最大 16 KiB）',
@@ -58,7 +58,7 @@ export const operatorBaseModule: PromptModule<OperatorPromptContext> = {
         '- `live.connectivity` は `reachable` / `unreachable` / `unknown` です。`unknown` は未確認であり、停止中を意味しません。watch がない、または観測が古い場合は `unknown` になります',
         '- `posture` は `watch` / `interact` / `resume` / `purge` / `indeterminate`、`coherence` は保存値と live 観測の整合性です。`conflict` は観測の矛盾、`insufficient_data` は判断材料不足を示します。`indeterminate` を確定した作業指示として扱わないでください',
         '- 旧 `lifecycle` は後方互換のため残ります。`liveControlPathRecorded` は UDS path の記録有無だけを示し、稼働確認ではありません',
-        '- `openQuestionHistory` は全状態の質問を含み、回答本文や `answeredBy` などは保存 YAML から読みます。`openQuestionHistorySource` が `resume_store_compatibility` の場合は YAML が無く、ResumeStore の互換コピーを使っています。読み取り失敗は `unavailable` とし、空の履歴に見せかけません',
+        '- `openQuestionHistory` は全状態の質問を含み、回答本文や `answeredBy` などは canonical slug の YAML から読みます。`openQuestionHistorySource` が `resume_store_compatibility` の場合は YAML がなく、同じ canonical SessionResumeStore の snapshot を使っています。path-hash / project-local Store や YAML は読みません。読み取り失敗は `unavailable` とし、空の履歴に見せかけません',
         '- `workers` は session record がある名前、`configuredWorkers` は保存 profile の構成です。`workersWithoutSavedSession` は profile にある一方で ResumeStore に session record がない worker を示します。これは失敗の証拠ではありません',
         '- `limit` は返却する件数（1〜50、既定 20）です。結果が続くときは `nextCursor` を次回の `cursor` に渡してください。全件を黙って切り捨てません',
         '- profile include と `--repo-filter` がある場合は、両方の scope に含まれる repository だけが対象です。複数の `--repo-filter` は OR で照合されます',

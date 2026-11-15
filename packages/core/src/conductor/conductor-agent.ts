@@ -34,10 +34,6 @@ export interface ConductorAgentCreateOptions {
   pi?: ConductorPiResourceOptions;
   /** Pi-only session transcript directory resolved by the harness. */
   sessionDir?: string;
-  /** Pi-only legacy transcript directory used for resume migration. */
-  legacySessionDir?: string;
-  /** Additional legacy transcript directories, tried in order on resume. */
-  legacySessionDirs?: readonly string[];
   /** CWDs from the saved session whose Pi transcript may be resumed in this clone. */
   resumeCwds?: readonly string[];
   customTools?: ConductorToolSet;

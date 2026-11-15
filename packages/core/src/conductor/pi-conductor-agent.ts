@@ -41,7 +41,6 @@ import {
   type ToolDefinition,
 } from '@earendil-works/pi-coding-agent';
 import { resolveEnsemblePaths } from '../ensemble-paths.js';
-import { copyFileIfMissing } from '../session/persisted-file.js';
 import {
   createPiConductorAuthContext,
   hasPiConductorCommandCredential,
@@ -79,8 +78,6 @@ import {
 } from './pi-resource-loader.js';
 import type { McpServerConfigMap } from '../mcp/load-mcp-config.js';
 
-/** Project-local Pi transcript storage used by the conductor backend. */
-export const PI_SESSION_ROOT = '.ensemble/pi/sessions';
 export const PI_CONDUCTOR_MESSAGE_HISTORY_ENTRY_TYPE =
   'agents-ensemble/conductor-message-history/v1';
 
@@ -861,16 +858,6 @@ async function createPiConductorSession(
   const sessionDir =
     options.sessionDir ??
     resolveEnsemblePaths({ repoRoot: options.cwd }).piSessionsDir;
-  const legacySessionDirs = [
-    ...(options.legacySessionDirs ?? []),
-    ...(options.legacySessionDir
-      ? [options.legacySessionDir]
-      : options.legacySessionDirs
-        ? []
-        : [join(options.cwd, PI_SESSION_ROOT)]),
-  ].filter((directory, index, directories) =>
-    directory !== sessionDir && directories.indexOf(directory) === index,
-  );
   await mkdir(sessionDir, { recursive: true, mode: 0o700 });
   await chmod(sessionDir, 0o700);
   let sessionManager: SessionManager;
@@ -887,19 +874,6 @@ async function createPiConductorSession(
       return undefined;
     };
     previousSessionFile = findSessionFile(sessionDir);
-    if (!previousSessionFile) {
-      for (const legacySessionDir of legacySessionDirs) {
-        const legacyFile = findSessionFile(legacySessionDir);
-        if (!legacyFile) continue;
-        await mkdir(sessionDir, { recursive: true, mode: 0o700 });
-        const migratedFile = join(sessionDir, basename(legacyFile));
-        const copied = await copyFileIfMissing(legacyFile, migratedFile);
-        previousSessionFile = copied
-          ? migratedFile
-          : findSessionFile(sessionDir);
-        if (previousSessionFile) break;
-      }
-    }
     if (!previousSessionFile) {
       throw new Error(
         `Pi session not found for resume (sessionId=${agentId}, cwd=${options.cwd}, ` +

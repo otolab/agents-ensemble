@@ -697,7 +697,7 @@ describe('SessionResumeStore', () => {
     ).rejects.toThrow('issueUrl is required to resume a session.');
   });
 
-  it('prefers the canonical slug store over duplicate hash and project files and reports the selected paths', async () => {
+  it('reads the canonical slug store and ignores hash and project copies', async () => {
     tempDir = await createHome('ensemble-session-resume-store-');
     const agentId = 'duplicate-agent';
     const issueUrl = 'https://github.com/org/repo/issues/9';
@@ -749,30 +749,7 @@ describe('SessionResumeStore', () => {
       location: 'canonical-slug',
       resumeStore: { harnessSocketPath: '/tmp/ens-oq-live/s.sock' },
     });
-    expect(diagnostics).toMatchObject([
-      {
-        conductorAgentId: agentId,
-        selectedPath: slugPath,
-        selectedLocation: 'canonical-slug',
-        candidates: [
-          {
-            path: slugPath,
-            location: 'canonical-slug',
-            hasHarnessSocketPath: true,
-          },
-          {
-            path: hashPath,
-            location: 'user-path-hash',
-            hasHarnessSocketPath: false,
-          },
-          {
-            path: projectPath,
-            location: 'project-legacy',
-            hasHarnessSocketPath: false,
-          },
-        ],
-      },
-    ]);
+    expect(diagnostics).toEqual([]);
     await expect(
       findLatestSessionResumeStoreForIssue({
         repoRoot: tempDir,
@@ -800,12 +777,9 @@ describe('SessionResumeStore', () => {
     ).resolves.toBe(900);
   });
 
-  it.each([
-    { location: 'user-path-hash' as const, malformed: '{invalid json' },
-    { location: 'project-legacy' as const, malformed: '{invalid json' },
-  ])(
-    'keeps slug and other candidates discoverable when a $location store is malformed',
-    async ({ location, malformed }) => {
+  it.each(['user-path-hash', 'project-legacy'] as const)(
+    'does not read malformed %s data while listing canonical stores',
+    async (location) => {
       tempDir = await createHome('ensemble-session-resume-store-');
       const agentId = `malformed-${location}`;
       const peerAgentId = `valid-peer-${location}`;
@@ -816,20 +790,18 @@ describe('SessionResumeStore', () => {
         location === 'user-path-hash'
           ? paths.sessionResumeStorePath(agentId)
           : paths.legacySessionResumeStorePath(agentId);
-      const peerLocation =
-        location === 'user-path-hash' ? 'project-legacy' : 'user-path-hash';
-      const peerPath =
-        peerLocation === 'user-path-hash'
-          ? paths.sessionResumeStorePath(peerAgentId)
-          : paths.legacySessionResumeStorePath(peerAgentId);
       const slugPath = paths.canonicalSessionResumeStorePath(
         issueUrl,
         agentId,
       );
+      const peerPath = paths.canonicalSessionResumeStorePath(
+        peerIssueUrl,
+        peerAgentId,
+      );
       for (const path of [malformedPath, peerPath, slugPath]) {
         await mkdir(dirname(path), { recursive: true });
       }
-      await writeFile(malformedPath, `${malformed}\n`, 'utf8');
+      await writeFile(malformedPath, '{invalid json\n', 'utf8');
       await writeFile(
         peerPath,
         `${JSON.stringify(
@@ -863,7 +835,7 @@ describe('SessionResumeStore', () => {
             path: slugPath,
             location: 'canonical-slug',
           }),
-          expect.objectContaining({ path: peerPath, location: peerLocation }),
+          expect.objectContaining({ path: peerPath, location: 'canonical-slug' }),
         ]),
       );
       await expect(
@@ -880,10 +852,7 @@ describe('SessionResumeStore', () => {
         },
       });
       await expect(readFile(malformedPath, 'utf8')).resolves.toBe(
-        `${malformed}\n`,
-      );
-      await expect(loadSessionResumeStore(malformedPath)).rejects.toThrow(
-        /Invalid session resume store/,
+        '{invalid json\n',
       );
     },
   );
@@ -920,7 +889,7 @@ describe('SessionResumeStore', () => {
     },
   );
 
-  it('selects a canonical slug Store from another clone over an older hash copy without losing its live socket', async () => {
+  it('selects a canonical slug Store and ignores an older hash copy', async () => {
     tempDir = await createHome('ensemble-session-resume-store-');
     const currentRepoRoot = join(tempDir, 'current-clone');
     const originRepoRoot = join(tempDir, 'origin-clone');
@@ -970,13 +939,7 @@ describe('SessionResumeStore', () => {
         harnessSocketPath: '/tmp/ens-oq-live/cross-clone.sock',
       },
     });
-    expect(diagnostics[0]).toMatchObject({
-      selectedPath: slugPath,
-      candidates: [
-        { path: slugPath, hasHarnessSocketPath: true },
-        { path: hashPath, hasHarnessSocketPath: false },
-      ],
-    });
+    expect(diagnostics).toEqual([]);
     await expect(
       requireLocatedSessionResumeStoreForResume({
         repoRoot: currentRepoRoot,
@@ -1118,7 +1081,7 @@ describe('SessionResumeStore', () => {
     });
   });
 
-  it('lists all user slug and path-hash stores without reading project-local data', async () => {
+  it('lists only canonical user slug stores and ignores hash and project data', async () => {
     tempDir = await createHome('ensemble-session-resume-store-');
     const userEnsembleRoot = join(tempDir, '.ensemble');
     const oldCloneA = join(tempDir, 'checkout-a');
@@ -1185,34 +1148,22 @@ describe('SessionResumeStore', () => {
       { limit: 2 },
       { userEnsembleRoot },
     );
-    expect(firstPage.total).toBe(3);
+    expect(firstPage.total).toBe(1);
     expect(firstPage.sessions.map(({ resumeStore }) => resumeStore.conductorAgentId)).toEqual([
       'canonical-session',
-      'hash-session-a',
     ]);
-    expect(firstPage.nextCursor).toBeDefined();
-    const secondPage = await listUserLocatedSessionResumeStoresPage(
-      { limit: 2, cursor: firstPage.nextCursor },
-      { userEnsembleRoot },
-    );
-    expect(secondPage.sessions.map(({ resumeStore }) => resumeStore.conductorAgentId)).toEqual([
-      'hash-session-b',
-    ]);
-    expect(secondPage.nextCursor).toBeUndefined();
+    expect(firstPage.nextCursor).toBeUndefined();
     await expect(
       findUserSessionResumeStore('hash-session-b', { userEnsembleRoot }),
-    ).resolves.toMatchObject({
-      location: 'user-path-hash',
-      resumeStore: { repoRoot: oldCloneB },
-    });
+    ).resolves.toBeUndefined();
     await expect(
       listUserLocatedSessionResumeStoresPage(
         { githubRepo: 'ORG/TWO' },
         { userEnsembleRoot },
       ),
     ).resolves.toMatchObject({
-      total: 1,
-      sessions: [{ resumeStore: { conductorAgentId: 'hash-session-a' } }],
+      total: 0,
+      sessions: [],
     });
   });
 
@@ -1262,7 +1213,7 @@ describe('SessionResumeStore', () => {
   });
 
   it.each(['user-path-hash', 'project-legacy'] as const)(
-    'promotes a %s ResumeStore to slug without changing its legacy source',
+    'does not resume from %s ResumeStore data',
     async (location) => {
       tempDir = await createHome('ensemble-session-resume-store-');
       const repoRoot = join(tempDir, 'repo');
@@ -1273,10 +1224,6 @@ describe('SessionResumeStore', () => {
         location === 'user-path-hash'
           ? paths.sessionResumeStorePath(agentId)
           : paths.legacySessionResumeStorePath(agentId);
-      const slugPath = paths.canonicalSessionResumeStorePath(
-        issueUrl,
-        agentId,
-      );
       const sourceStore = baseResumeStore({
         conductorAgentId: agentId,
         repoRoot,
@@ -1287,31 +1234,26 @@ describe('SessionResumeStore', () => {
       await mkdir(dirname(sourcePath), { recursive: true });
       await writeFile(sourcePath, sourceText, 'utf8');
 
-      const located = await requireLocatedSessionResumeStoreForResume({
-        repoRoot,
-        issueUrl,
-        conductorAgentId: agentId,
-      });
-
-      expect(located).toMatchObject({
-        path: slugPath,
-        location: 'canonical-slug',
-        resumeStore: { updatedAt: 123, repoRoot },
-      });
+      await expect(
+        requireLocatedSessionResumeStoreForResume({
+          repoRoot,
+          issueUrl,
+          conductorAgentId: agentId,
+        }),
+      ).rejects.toThrow(SessionResumeStoreNotFoundError);
       await expect(readFile(sourcePath, 'utf8')).resolves.toBe(sourceText);
-      await expect(loadSessionResumeStore(slugPath)).resolves.toMatchObject({
-        conductorAgentId: agentId,
-        issueUrl,
-        updatedAt: 123,
-      });
+      await expect(
+        loadSessionResumeStore(
+          paths.canonicalSessionResumeStorePath(issueUrl, agentId),
+        ),
+      ).resolves.toBeUndefined();
     },
   );
 
   it('finds the latest session resume store for an issue by updatedAt', async () => {
     tempDir = await createHome('ensemble-session-resume-store-');
     const issueUrl = 'https://github.com/org/repo/issues/9';
-    const dir = sessionResumeStoreDir(tempDir);
-    await mkdir(dir, { recursive: true });
+    const paths = resolveEnsemblePaths({ repoRoot: tempDir });
 
     const write = async (
       agentId: string,
@@ -1324,11 +1266,9 @@ describe('SessionResumeStore', () => {
         issueUrl: url,
         updatedAt,
       });
-      await writeFile(
-        join(dir, `${agentId}.json`),
-        `${JSON.stringify(resumeStore)}\n`,
-        'utf8',
-      );
+      const path = paths.canonicalSessionResumeStorePath(url, agentId);
+      await mkdir(dirname(path), { recursive: true });
+      await writeFile(path, `${JSON.stringify(resumeStore)}\n`, 'utf8');
     };
 
     await write('agent-old', 100);
@@ -1381,8 +1321,7 @@ describe('SessionResumeStore', () => {
   it('prefers close or abort candidates and excludes exit for --continue', async () => {
     tempDir = await createHome('ensemble-session-resume-store-');
     const issueUrl = 'https://github.com/org/repo/issues/9';
-    const dir = sessionResumeStoreDir(tempDir);
-    await mkdir(dir, { recursive: true });
+    const paths = resolveEnsemblePaths({ repoRoot: tempDir });
     const write = async (
       agentId: string,
       updatedAt: number,
@@ -1395,8 +1334,10 @@ describe('SessionResumeStore', () => {
         issueUrl,
         updatedAt,
       });
+      const path = paths.canonicalSessionResumeStorePath(issueUrl, agentId);
+      await mkdir(dirname(path), { recursive: true });
       await writeFile(
-        join(dir, `${agentId}.json`),
+        path,
         `${JSON.stringify({
           ...resumeStore,
           harnessPhase: phase,
@@ -1427,7 +1368,7 @@ describe('SessionResumeStore', () => {
     ).resolves.toBeUndefined();
   });
 
-  it('reads a legacy project SessionResumeStore and copies it into the canonical slug directory', async () => {
+  it('does not list or resume a project-local SessionResumeStore', async () => {
     tempDir = await createHome('ensemble-session-resume-store-');
     const agentId = 'legacy-project-agent';
     const legacyPath = join(
@@ -1449,23 +1390,23 @@ describe('SessionResumeStore', () => {
         repoRoot: tempDir,
         issueUrl: 'https://github.com/org/repo/issues/1',
       }),
-    ).resolves.toMatchObject({ conductorAgentId: agentId });
+    ).resolves.toBeUndefined();
 
-    const migrated = await requireSessionResumeStoreForResume({
-      repoRoot: tempDir,
-      conductorAgentId: agentId,
-      issueUrl: 'https://github.com/org/repo/issues/1',
-    });
-    expect(migrated.updatedAt).toBe(123);
     await expect(
-      readFile(
+      requireSessionResumeStoreForResume({
+        repoRoot: tempDir,
+        conductorAgentId: agentId,
+        issueUrl: 'https://github.com/org/repo/issues/1',
+      }),
+    ).rejects.toThrow(SessionResumeStoreNotFoundError);
+    await expect(
+      loadSessionResumeStore(
         resolveEnsemblePaths({ repoRoot: tempDir }).canonicalSessionResumeStorePath(
           'https://github.com/org/repo/issues/1',
           agentId,
         ),
-        'utf8',
       ),
-    ).resolves.toContain(agentId);
+    ).resolves.toBeUndefined();
     await expect(readFile(legacyPath, 'utf8')).resolves.toBe(legacyText);
   });
 
@@ -1493,13 +1434,13 @@ describe('SessionResumeStore', () => {
       issueUrl: state.issueUrl,
       repoRoot: tempDir,
     });
-    await expect(listSessionSidecars(tempDir)).resolves.toHaveLength(1);
+    await expect(listSessionSidecars(tempDir)).resolves.toHaveLength(0);
     await expect(
       findLatestSessionSidecarForIssue({
         repoRoot: tempDir,
         issueUrl: state.issueUrl,
       }),
-    ).resolves.toMatchObject({ conductorAgentId: options.conductorAgentId });
+    ).resolves.toBeUndefined();
     await expect(
       requireSessionSidecarForResume({
         repoRoot: tempDir,

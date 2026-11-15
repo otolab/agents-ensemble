@@ -182,11 +182,10 @@ export async function readSavedSessionTimeline(input: {
         issueUrl: resumeStore.issueUrl,
         ...(backend === 'pi'
           ? {
-              fallbackCwds: [
+              resumeCwds: [
                 resumeStore.conductorCwd,
                 resumeStore.repoRoot,
               ].filter((cwd): cwd is string => Boolean(cwd)),
-              fallbackRepoRoots: [resumeStore.repoRoot],
             }
           : {}),
         ...(resumeStore.cursorBootstrapRunId
@@ -624,7 +623,7 @@ async function readProviderHistory(input: {
   cwd: string;
   repoRoot: string;
   issueUrl: string;
-  fallbackCwds?: readonly string[];
+  resumeCwds?: readonly string[];
   cursorBootstrapRunId?: string;
 }): Promise<
   | {
@@ -641,7 +640,7 @@ async function readProviderHistory(input: {
       cwd: input.cwd,
       repoRoot: input.repoRoot,
       issueUrl: input.issueUrl,
-      fallbackCwds: input.fallbackCwds,
+      resumeCwds: input.resumeCwds,
       ...(input.cursorBootstrapRunId
         ? { cursorBootstrapRunId: input.cursorBootstrapRunId }
         : {}),

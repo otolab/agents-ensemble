@@ -6,31 +6,23 @@ export interface PiConductorSessionFile {
   sessionDir: string;
 }
 
-/**
- * Find the Pi transcript in canonical slug storage before legacy locations.
- */
+/** Find the Pi transcript in Issue-scoped canonical storage. */
 export function findPiConductorSessionFile(input: {
   conductorAgentId: string;
   cwd: string;
   repoRoot?: string;
   issueUrl?: string;
-  fallbackRepoRoots?: readonly string[];
-  fallbackCwds?: readonly string[];
+  resumeCwds?: readonly string[];
 }): PiConductorSessionFile | undefined {
   const paths = resolveEnsemblePaths({
     repoRoot: input.repoRoot ?? input.cwd,
   });
-  const fallbackRepoHashDirs = (input.fallbackRepoRoots ?? []).map(
-    (repoRoot) => resolveEnsemblePaths({ repoRoot }).piSessionsDir,
-  );
-  const fallbackCwds = [...new Set([input.cwd, ...(input.fallbackCwds ?? [])])];
+  const candidateCwds = [...new Set([input.cwd, ...(input.resumeCwds ?? [])])];
   const sessionDirs = [
     ...(input.issueUrl ? [paths.canonicalPiSessionsDir(input.issueUrl)] : []),
-    paths.piSessionsDir,
-    ...fallbackRepoHashDirs,
   ];
   for (const sessionDir of new Set(sessionDirs)) {
-    for (const cwd of fallbackCwds) {
+    for (const cwd of candidateCwds) {
       const sessionFile = SessionManager.findById(
         cwd,
         input.conductorAgentId,
@@ -38,15 +30,6 @@ export function findPiConductorSessionFile(input: {
       );
       if (sessionFile) return { sessionFile, sessionDir };
     }
-  }
-  for (const cwd of fallbackCwds) {
-    const sessionDir = paths.legacyPiSessionsDirForCwd(cwd);
-    const sessionFile = SessionManager.findById(
-      cwd,
-      input.conductorAgentId,
-      sessionDir,
-    );
-    if (sessionFile) return { sessionFile, sessionDir };
   }
   return undefined;
 }
