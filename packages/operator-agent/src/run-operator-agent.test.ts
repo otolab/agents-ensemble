@@ -8,7 +8,10 @@ import {
   resolveEnsemblePaths,
   type SessionObservationSnapshot,
 } from '@agents-ensemble/core';
-import { listUserLocatedSessionResumeStoresPage } from '@agents-ensemble/core/operator-runtime';
+import {
+  MCP_CONFIG_FILE,
+  listUserLocatedSessionResumeStoresPage,
+} from '@agents-ensemble/core/operator-runtime';
 import type {
   ConductorAgent,
   ConductorAgentCreateOptions,
@@ -415,6 +418,137 @@ describe('runOperatorAgent', () => {
     expect(agentOptions?.modelId).toBe('second-model');
   });
 
+  it('passes only selected MCP servers to create while retaining operator restrictions and tools', async () => {
+    await writeOperatorSettings(repoRoot, 'pi', undefined, {
+      common: ['shared'],
+      profile: ['github-read-only'],
+    });
+    await writeUserMcpConfig(repoRoot, {
+      'github-read-only': {
+        type: 'stdio',
+        command: 'docker',
+        args: ['run', '-i'],
+        env: { GITHUB_PERSONAL_ACCESS_TOKEN: '${env:GITHUB_PERSONAL_ACCESS_TOKEN}' },
+      },
+      shared: { type: 'stdio', command: 'shared-server' },
+      unselected: { type: 'stdio', command: 'unselected-server' },
+    });
+
+    let agentOptions: ConductorAgentCreateOptions | undefined;
+    await runOperatorAgent(
+      { newSession: true },
+      {
+        stdin: createInput('/exit\n'),
+        stdout: createOutput(),
+        agentFactory: {
+          create: async (options) => {
+            agentOptions = options;
+            return createFakeAgent({
+              send: async () => ({
+                runId: 'unused',
+                status: 'completed',
+                result: '',
+              }),
+            });
+          },
+          resume: async () => {
+            throw new Error('not used');
+          },
+        },
+      },
+    );
+
+    expect(agentOptions?.mcpServers).toEqual({
+      'github-read-only': {
+        type: 'stdio',
+        command: 'docker',
+        args: ['run', '-i'],
+        env: { GITHUB_PERSONAL_ACCESS_TOKEN: '${env:GITHUB_PERSONAL_ACCESS_TOKEN}' },
+      },
+    });
+    expect(agentOptions).toMatchObject({
+      builtinTools: false,
+      piExtensions: false,
+    });
+    expect(agentOptions).not.toHaveProperty('disableCursorAmbientSettings');
+    expect(agentOptions?.customTools).toHaveProperty('read_operator_workspace_file');
+    expect(agentOptions?.customTools).toHaveProperty('write_operator_workspace_file');
+  });
+
+  it('disables Cursor ambient settings for operator-agent while passing selected MCP', async () => {
+    await writeOperatorSettings(repoRoot, 'cursor', undefined, {
+      profile: ['cursor-selected'],
+    });
+    await writeUserMcpConfig(repoRoot, {
+      'cursor-selected': { type: 'http', url: 'https://mcp.example.test/mcp' },
+      unselected: { type: 'stdio', command: 'unselected-server' },
+    });
+
+    let agentOptions: ConductorAgentCreateOptions | undefined;
+    await runOperatorAgent(
+      { newSession: true },
+      {
+        stdin: createInput('/exit\n'),
+        stdout: createOutput(),
+        agentFactory: {
+          create: async (options) => {
+            agentOptions = options;
+            return createFakeAgent({
+              send: async () => ({
+                runId: 'unused',
+                status: 'completed',
+                result: '',
+              }),
+            });
+          },
+          resume: async () => {
+            throw new Error('not used');
+          },
+        },
+      },
+    );
+
+    expect(agentOptions).toMatchObject({
+      builtinTools: false,
+      disableCursorAmbientSettings: true,
+      mcpServers: {
+        'cursor-selected': {
+          type: 'http',
+          url: 'https://mcp.example.test/mcp',
+        },
+      },
+    });
+  });
+
+  it('reports configured MCP server names and the cause when conductor startup fails', async () => {
+    await writeOperatorSettings(repoRoot, 'pi', undefined, {
+      profile: ['fixture-server'],
+    });
+    await writeUserMcpConfig(repoRoot, {
+      'fixture-server': { type: 'stdio', command: 'fixture-mcp' },
+    });
+
+    await expect(
+      runOperatorAgent(
+        { newSession: true },
+        {
+          stdin: createInput('/exit\n'),
+          stdout: createOutput(),
+          agentFactory: {
+            create: async () => {
+              throw new Error('fixture connection refused');
+            },
+            resume: async () => {
+              throw new Error('not used');
+            },
+          },
+        },
+      ),
+    ).rejects.toThrow(
+      'Operator-agent conductor startup failed with MCP server(s) [fixture-server]: fixture connection refused',
+    );
+  });
+
   it.each([
     {
       backend: 'pi' as const,
@@ -493,7 +627,12 @@ describe('runOperatorAgent', () => {
   ])(
     'passes the resolved $backend reasoning to the resume factory',
     async ({ backend, configReasoning, envReasoning, expectedReasoning }) => {
-      await writeOperatorSettings(repoRoot, backend, configReasoning);
+      await writeOperatorSettings(repoRoot, backend, configReasoning, {
+        profile: ['resume-server'],
+      });
+      await writeUserMcpConfig(repoRoot, {
+        'resume-server': { type: 'stdio', command: 'resume-mcp' },
+      });
       if (envReasoning !== undefined) {
         process.env.ENSEMBLE_OPERATOR_AGENT_REASONING = envReasoning;
       }
@@ -557,6 +696,9 @@ describe('runOperatorAgent', () => {
       expect(resumedOptions).toMatchObject({
         modelId: backend === 'pi' ? 'smoke-model' : 'cursor-model',
         reasoning: expectedReasoning,
+        mcpServers: {
+          'resume-server': { type: 'stdio', command: 'resume-mcp' },
+        },
       });
     },
   );
@@ -2272,6 +2414,12 @@ describe('runOperatorAgent', () => {
   });
 
   it('intercepts reconnect commands and reports each resume result without sending them', async () => {
+    await writeOperatorSettings(repoRoot, 'pi', undefined, {
+      profile: ['reconnect-server'],
+    });
+    await writeUserMcpConfig(repoRoot, {
+      'reconnect-server': { type: 'stdio', command: 'reconnect-mcp' },
+    });
     const stdout = createOutput();
     const stdin = new PassThrough() as PassThrough & OperatorAgentInput;
     stdin.isTTY = true;
@@ -2289,6 +2437,7 @@ describe('runOperatorAgent', () => {
       .fn()
       .mockResolvedValueOnce(resumedAgents[0])
       .mockRejectedValueOnce(new Error('resume unavailable'));
+    let createdOptions: ConductorAgentCreateOptions | undefined;
 
     const run = runOperatorAgent(
       { repoRoot },
@@ -2296,7 +2445,10 @@ describe('runOperatorAgent', () => {
         stdin,
         stdout,
         agentFactory: {
-          create: async () => initialAgent,
+          create: async (options) => {
+            createdOptions = options;
+            return initialAgent;
+          },
           resume,
         },
       },
@@ -2313,12 +2465,18 @@ describe('runOperatorAgent', () => {
     await run;
 
     expect(resume).toHaveBeenCalledTimes(2);
+    expect(createdOptions?.mcpServers).toEqual({
+      'reconnect-server': { type: 'stdio', command: 'reconnect-mcp' },
+    });
     expect(resume).toHaveBeenNthCalledWith(
       1,
       'operator-agent-id',
       expect.objectContaining({
         cwd: join(repoRoot, '.ensemble', 'operator-agents', 'smoke'),
         modelId: 'smoke-model',
+        mcpServers: {
+          'reconnect-server': { type: 'stdio', command: 'reconnect-mcp' },
+        },
       }),
     );
     expect(resume).toHaveBeenNthCalledWith(
@@ -2327,11 +2485,16 @@ describe('runOperatorAgent', () => {
       expect.objectContaining({
         cwd: join(repoRoot, '.ensemble', 'operator-agents', 'smoke'),
         modelId: 'smoke-model',
+        mcpServers: {
+          'reconnect-server': { type: 'stdio', command: 'reconnect-mcp' },
+        },
       }),
     );
     expect(send).not.toHaveBeenCalled();
     expect(stdout.capturedText()).toContain('conductor に再接続しました。');
     expect(stdout.capturedText()).toContain('conductor の再接続に失敗しました。');
+    expect(stdout.capturedText()).toContain('reconnect-server');
+    expect(stdout.capturedText()).toContain('resume unavailable');
   });
 
   it('does not replay a failed operator-agent prompt after manual reconnect', async () => {
@@ -2751,6 +2914,7 @@ async function writeOperatorSettings(
   repoRoot: string,
   backend: 'pi' | 'cursor',
   reasoning?: string,
+  mcp?: { common?: string[]; profile?: string[] },
 ): Promise<void> {
   const model = backend === 'pi' ? 'smoke-model' : 'cursor-model';
   await writeFile(
@@ -2765,6 +2929,17 @@ async function writeOperatorSettings(
       ...(reasoning ? [`    reasoning: ${reasoning}`] : []),
       '  pi:',
       '    agentDir: pi-user',
+      ...(mcp?.common !== undefined
+        ? [
+            '  mcp:',
+            ...(mcp.common.length > 0
+              ? [
+                  '    servers:',
+                  ...mcp.common.map((name) => `      - ${JSON.stringify(name)}`),
+                ]
+              : ['    servers: []']),
+          ]
+        : []),
       'profiles:',
       '  smoke:',
       '    prompt:',
@@ -2772,7 +2947,28 @@ async function writeOperatorSettings(
       '        - Profile operator guidance.',
       '    pi:',
       '      projectDir: pi-project',
+      ...(mcp?.profile !== undefined
+        ? [
+            '    mcp:',
+            ...(mcp.profile.length > 0
+              ? [
+                  '      servers:',
+                  ...mcp.profile.map((name) => `        - ${JSON.stringify(name)}`),
+                ]
+              : ['      servers: []']),
+          ]
+        : []),
       '',
     ].join('\n'),
+  );
+}
+
+async function writeUserMcpConfig(
+  repoRoot: string,
+  servers: Record<string, unknown>,
+): Promise<void> {
+  await writeFile(
+    join(repoRoot, '.ensemble', MCP_CONFIG_FILE),
+    JSON.stringify({ mcpServers: servers }),
   );
 }

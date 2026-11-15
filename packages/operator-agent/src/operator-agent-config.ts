@@ -26,11 +26,17 @@ export interface OperatorAgentPiProfileConfig {
   skills?: boolean;
 }
 
+export interface OperatorAgentMcpConfig {
+  /** Selected names from `~/.ensemble/mcp.json`; an empty list disables MCP. */
+  servers?: string[];
+}
+
 export interface OperatorAgentProfile {
   include?: string[];
   conductor?: OperatorAgentSettings;
   prompt?: { instructions?: string[] };
   pi?: OperatorAgentPiProfileConfig;
+  mcp?: OperatorAgentMcpConfig;
 }
 
 export interface OperatorAgentConfiguration {
@@ -39,6 +45,7 @@ export interface OperatorAgentConfiguration {
   common: {
     conductor?: OperatorAgentSettings;
     pi?: OperatorAgentPiCommonConfig;
+    mcp?: OperatorAgentMcpConfig;
   };
   profiles: Record<string, OperatorAgentProfile>;
 }
@@ -134,7 +141,7 @@ function parseCommon(
   source: string,
 ): OperatorAgentConfiguration['common'] {
   const record = asRecord(value, `${source}.common`);
-  assertOnlyKeys(record, ['conductor', 'pi'], `${source}.common`);
+  assertOnlyKeys(record, ['conductor', 'pi', 'mcp'], `${source}.common`);
   return {
     ...(record.conductor === undefined
       ? {}
@@ -142,12 +149,15 @@ function parseCommon(
     ...(record.pi === undefined
       ? {}
       : { pi: parseCommonPi(record.pi, `${source}.common.pi`) }),
+    ...(record.mcp === undefined
+      ? {}
+      : { mcp: parseMcp(record.mcp, `${source}.common.mcp`) }),
   };
 }
 
 function parseProfile(value: unknown, source: string): OperatorAgentProfile {
   const record = asRecord(value, source);
-  assertOnlyKeys(record, ['include', 'conductor', 'prompt', 'pi'], source);
+  assertOnlyKeys(record, ['include', 'conductor', 'prompt', 'pi', 'mcp'], source);
   const include =
     record.include === undefined
       ? undefined
@@ -163,7 +173,31 @@ function parseProfile(value: unknown, source: string): OperatorAgentProfile {
     ...(record.pi === undefined
       ? {}
       : { pi: parseProfilePi(record.pi, `${source}.pi`) }),
+    ...(record.mcp === undefined
+      ? {}
+      : { mcp: parseMcp(record.mcp, `${source}.mcp`) }),
   };
+}
+
+function parseMcp(value: unknown, source: string): OperatorAgentMcpConfig {
+  const record = asRecord(value, source);
+  assertOnlyKeys(record, ['servers'], source);
+  if (record.servers === undefined) return {};
+  if (
+    !Array.isArray(record.servers) ||
+    !record.servers.every(
+      (name) => typeof name === 'string' && name.trim().length > 0,
+    )
+  ) {
+    throw new Error(
+      `Invalid ${source}.servers: expected an array of non-empty MCP server names.`,
+    );
+  }
+  const servers = record.servers.map((name: string) => name.trim());
+  if (new Set(servers).size !== servers.length) {
+    throw new Error(`Invalid ${source}.servers: server names must be unique.`);
+  }
+  return { servers };
 }
 
 function parseSettings(value: unknown, source: string): OperatorAgentSettings {

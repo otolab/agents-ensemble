@@ -27,6 +27,7 @@ import { resolveConductorApiKey } from './conductor-auth.js';
 import { formatConductorToolName } from './conductor-tool-name.js';
 import { toSdkCustomTools } from './conductor-tool-sdk-adapter.js';
 import { resolveConductorModelId } from './resolve-conductor-model-id.js';
+import { resolveMcpServerConfigMapPlaceholders } from '../mcp/load-mcp-config.js';
 
 /** Cursor built-in tools that can directly inspect or modify a repository. */
 const CURSOR_CODING_TOOLS: ToolName[] = [
@@ -222,10 +223,18 @@ async function buildAgentOptions(
       ? { disallowedTools: CURSOR_CODING_TOOLS }
       : {}),
     ...(options.mcpServers !== undefined
-      ? { mcpServers: options.mcpServers as Record<string, McpServerConfig> }
+      ? {
+          mcpServers: resolveMcpServerConfigMapPlaceholders(
+            options.mcpServers,
+            { cwd: options.cwd },
+          ) as Record<string, McpServerConfig>,
+        }
       : {}),
     local: {
       cwd: options.cwd,
+      ...(options.disableCursorAmbientSettings
+        ? { settingSources: [] }
+        : {}),
       customTools: options.customTools
         ? toSdkCustomTools(options.customTools)
         : undefined,

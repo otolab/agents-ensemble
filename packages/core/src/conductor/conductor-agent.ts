@@ -40,6 +40,8 @@ export interface ConductorAgentCreateOptions {
   /** Resolved conductor reasoning / thinking level; each backend validates its own support. */
   reasoning?: string;
   mcpServers?: McpServerConfigMap;
+  /** Cursor SDK only: prevent loading ambient settings files and MCP servers. */
+  disableCursorAmbientSettings?: boolean;
   /** Pi-only resource root overrides; ignored by other backends. */
   pi?: ConductorPiResourceOptions;
   /** Pi-only Issue identity used to resolve the canonical transcript directory. */

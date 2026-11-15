@@ -7,8 +7,10 @@ import {
   loadMcpConfig,
   MCP_CONFIG_FILE,
   PROJECT_MCP_CONFIG_DIR,
+  resolveMcpServerConfigMapPlaceholders,
   resolveMcpServers,
   resolveMcpServersForSdk,
+  resolveUserMcpServers,
 } from './load-mcp-config.js';
 
 describe('loadMcpConfig', () => {
@@ -54,6 +56,27 @@ describe('loadMcpConfig', () => {
       mcpServers: {
         userOnly: { type: 'stdio', command: 'user-server' },
       },
+    });
+  });
+
+  it('resolves only user servers without requiring or reading a project root', async () => {
+    await writeUserConfig(
+      JSON.stringify({
+        mcpServers: {
+          selected: { type: 'stdio', command: 'user-server' },
+        },
+      }),
+    );
+    await writeProjectConfig(
+      JSON.stringify({
+        mcpServers: {
+          projectOnly: { type: 'stdio', command: 'project-server' },
+        },
+      }),
+    );
+
+    await expect(resolveUserMcpServers({ userEnsembleRoot })).resolves.toEqual({
+      selected: { type: 'stdio', command: 'user-server' },
     });
   });
 
@@ -180,5 +203,82 @@ describe('loadMcpConfig', () => {
     expect(first).toBe(reordered);
     expect(first).not.toBe(changed);
     expect(first).not.toContain('secret-token');
+  });
+
+  it('resolves selected MCP placeholders against the supplied workspace and environment', () => {
+    const servers = resolveMcpServerConfigMapPlaceholders(
+      {
+        selected: {
+          type: 'http',
+          url: 'https://mcp.example.test/${workspaceFolderBasename}',
+          headers: { Authorization: 'Bearer ${env:MCP_TOKEN}' },
+          auth: {
+            CLIENT_ID: '${env:CLIENT_ID}',
+            CLIENT_SECRET: '${env:CLIENT_SECRET}',
+            scopes: ['${env:MCP_SCOPE}'],
+          },
+        },
+        stdio: {
+          type: 'stdio',
+          command: '${workspaceFolder}/bin/server',
+          args: ['--root', '${workspaceFolder}', '--token', '${env:MCP_TOKEN}'],
+          cwd: '${workspaceFolder}/server',
+          env: { MCP_TOKEN: '${env:MCP_TOKEN}' },
+        },
+      },
+      {
+        cwd: '/operator/workspace',
+        env: {
+          MCP_TOKEN: 'secret-token',
+          CLIENT_ID: 'client-id',
+          CLIENT_SECRET: 'client-secret',
+          MCP_SCOPE: 'read',
+        },
+      },
+    );
+
+    expect(servers).toEqual({
+      selected: {
+        type: 'http',
+        url: 'https://mcp.example.test/workspace',
+        headers: { Authorization: 'Bearer secret-token' },
+        auth: {
+          CLIENT_ID: 'client-id',
+          CLIENT_SECRET: 'client-secret',
+          scopes: ['read'],
+        },
+      },
+      stdio: {
+        type: 'stdio',
+        command: '/operator/workspace/bin/server',
+        args: [
+          '--root',
+          '/operator/workspace',
+          '--token',
+          'secret-token',
+        ],
+        cwd: '/operator/workspace/server',
+        env: { MCP_TOKEN: 'secret-token' },
+      },
+    });
+    expect(JSON.stringify(servers)).not.toContain('${env:');
+    expect(JSON.stringify(servers)).not.toContain('${workspaceFolder');
+  });
+
+  it('reports a missing environment placeholder with its server and field', () => {
+    expect(() =>
+      resolveMcpServerConfigMapPlaceholders(
+        {
+          github: {
+            type: 'stdio',
+            command: 'docker',
+            env: { GITHUB_TOKEN: '${env:MISSING_GITHUB_TOKEN}' },
+          },
+        },
+        { cwd: '/workspace', env: {} },
+      ),
+    ).toThrow(
+      'MCP server "github" references missing environment variable "MISSING_GITHUB_TOKEN" in env.GITHUB_TOKEN.',
+    );
   });
 });

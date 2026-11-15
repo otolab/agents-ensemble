@@ -33,6 +33,9 @@ describe('operator-agent config', () => {
         '    model: common-model',
         '  pi:',
         '    agentDir: ~/.ensemble/pi',
+        '  mcp:',
+        '    servers:',
+        '      - shared',
         'profiles:',
         '  work:',
         '    include:',
@@ -45,6 +48,9 @@ describe('operator-agent config', () => {
         '    pi:',
         '      projectDir: pi',
         '      skills: false',
+        '    mcp:',
+        '      servers:',
+        '        - github',
         '',
       ].join('\n'),
     );
@@ -55,6 +61,7 @@ describe('operator-agent config', () => {
       common: {
         conductor: { backend: 'pi', model: 'common-model' },
         pi: { agentDir: '~/.ensemble/pi' },
+        mcp: { servers: ['shared'] },
       },
       profiles: {
         work: {
@@ -64,9 +71,29 @@ describe('operator-agent config', () => {
             instructions: ['Review saved sessions across selected repositories.'],
           },
           pi: { projectDir: 'pi', skills: false },
+          mcp: { servers: ['github'] },
         },
       },
     });
+  });
+
+  it('validates selected MCP server names', () => {
+    expect(() =>
+      parseOperatorAgentConfiguration({
+        version: 1,
+        profiles: {
+          work: { mcp: { servers: ['github', '  '] } },
+        },
+      }),
+    ).toThrow(/non-empty MCP server names/u);
+    expect(() =>
+      parseOperatorAgentConfiguration({
+        version: 1,
+        profiles: {
+          work: { mcp: { servers: ['github', 'github'] } },
+        },
+      }),
+    ).toThrow(/server names must be unique/u);
   });
 
   it('validates profile path segments and repository filters', () => {
