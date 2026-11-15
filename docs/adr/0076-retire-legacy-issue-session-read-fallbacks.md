@@ -9,7 +9,7 @@
 
 ADR 0061 は Phase 5 で legacy read fallback を外す前提として、実データの全件 inventory、checksum / disposition の照合、watch state の復元または archive acceptance、さらに全 checkout root の確認を求めていた。#699 の当初 handoff にもこの gate が引き継がれていた。
 
-operator は 2026-11-14 の判断でこの pre-release 実データ gate を置き換えた。必要なのは、既存 migration tool の使い方を利用者へ案内すること、移行後の read path と fallback retirement を fixture で確認すること、collision / corruption / ambiguous assignment を上書き・推測で解決しない契約を維持することである。この環境や全利用者の実データを release 前に移行・検証する必要はない。また `inq-4` への回答 `remove-project-legacy` により、user path-hash と独立して扱っていた project-local fallback も今回の release で廃止する。
+operator は 2026-11-15 の判断でこの pre-release 実データ gate を置き換えた。必要なのは、既存 migration tool の使い方を利用者へ案内すること、移行後の read path と fallback retirement を fixture で確認すること、collision / corruption / ambiguous assignment を上書き・推測で解決しない契約を維持することである。この環境や全利用者の実データを release 前に移行・検証する必要はない。また `inq-4` への回答 `remove-project-legacy` により、user path-hash と独立して扱っていた project-local fallback も今回の release で廃止する。
 
 旧データを自動で削除せず、起動時・継続実行の migration を加えない方針は維持する。旧データは disk 上に残る一方、通常の list / read / resume では見えなくなるため、その挙動と任意 migration の手順を文書化する必要がある。watch migration tool の外部 symlink escape は [#723](https://github.com/otolab/agents-ensemble/issues/723) / [PR #724](https://github.com/otolab/agents-ensemble/pull/724) で修正され、独立 review の後に merge された。migration 手順では root 境界の安全性と manifest の確認を引き続き示す。
 
