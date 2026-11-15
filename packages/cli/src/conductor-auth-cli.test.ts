@@ -297,5 +297,9 @@ describe('ensemble auth login CLI', () => {
         unrelated: 'keep-this-key',
       },
     });
-  });
+    // Seven real CLI subprocesses are needed to cover registration, status,
+    // model listing, user logout/clear, and project registration/clear. CI
+    // measured this full end-to-end case at about 16.5s, over Vitest's 10s
+    // default, so give only this scenario a 30s budget.
+  }, 30_000);
 });
