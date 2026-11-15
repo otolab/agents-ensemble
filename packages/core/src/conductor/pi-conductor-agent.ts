@@ -12,9 +12,13 @@ import {
   getProviders,
 } from '@earendil-works/pi-ai/compat';
 import {
+  createAssistantMessageEventStream,
   getSupportedThinkingLevels,
+  type AssistantMessageEvent,
   type AssistantMessage,
+  type Context,
   type Model,
+  type ModelsSimpleStreamOptions,
 } from '@earendil-works/pi-ai';
 import { ModelsError } from '@earendil-works/pi-ai/models';
 import {
@@ -23,6 +27,8 @@ import {
   createMcpExtension,
   createToolSearchExtension,
   DefaultResourceLoader,
+  ModelRuntime,
+  type ModelRuntimeAuthOverrides,
   SessionManager,
   SettingsManager,
   type AgentSession,
@@ -38,6 +44,8 @@ import { resolveEnsemblePaths } from '../ensemble-paths.js';
 import { copyFileIfMissing } from '../session/persisted-file.js';
 import {
   createPiConductorAuthContext,
+  hasPiConductorCommandCredential,
+  preparePiConductorCommandAuthForRequest,
   resolvePiConductorApiKey,
 } from './conductor-pi-auth.js';
 import type {
@@ -92,7 +100,13 @@ interface PiMcpLifecycleState {
   enabled: boolean;
 }
 
+interface PiCommandAuthRequestGate {
+  active: boolean;
+}
+
 const PI_MCP_STARTUP_OBSERVATION_MS = 2_000;
+const PI_COMMAND_RESOLUTION_ERROR_MESSAGE =
+  'API key auth failed for provider: failed to resolve API key for Pi provider from the configured command.';
 const PI_THINKING_LEVELS: readonly ThinkingLevel[] = [
   'off',
   'minimal',
@@ -130,6 +144,7 @@ async function resolvePiModelConfigFromResources(
   },
   resources: PiResources,
   authContext: Awaited<ReturnType<typeof createPiConductorAuthContext>>,
+  commandAuthRequestGate?: PiCommandAuthRequestGate,
 ): Promise<PiResolvedModel> {
   const env = options.env ?? process.env;
   const settings = resources.settings;
@@ -142,13 +157,18 @@ async function resolvePiModelConfigFromResources(
   const registryModel = projectDefinesModel
     ? undefined
     : authContext.modelRegistry.find(selection.provider, selection.modelId);
-  const apiKey = await resolvePiConductorApiKey({
-    modelRuntime: authContext.modelRuntime,
-    resources,
-    provider: selection.provider,
-    explicitApiKey: options.apiKey,
-    env,
-  });
+  const commandAuthConfigured =
+    options.apiKey === undefined &&
+    hasPiConductorCommandCredential(resources, selection.provider, env);
+  const apiKey = commandAuthConfigured
+    ? undefined
+    : await resolvePiConductorApiKey({
+        modelRuntime: authContext.modelRuntime,
+        resources,
+        provider: selection.provider,
+        explicitApiKey: options.apiKey,
+        env,
+      });
 
   const builtInModel = getModel(
     selection.provider as never,
@@ -167,6 +187,20 @@ async function resolvePiModelConfigFromResources(
       `Pi conductor model "${selection.provider}/${selection.modelId}" was not found in pi-ai or models.json. ` +
         'Set defaultProvider/defaultModel in Pi settings.json or pass a built-in provider/model id.',
     );
+  }
+
+  if (commandAuthConfigured) {
+    // Pi calls hasConfiguredAuth() during prompt setup and getAuth() just
+    // before sending a provider request. Keep the command out of setup and
+    // defer registration/resolution until the latter, while preserving Pi's
+    // own auth resolver and precedence.
+    installPiCommandAuthRequestGate({
+      modelRuntime: authContext.modelRuntime,
+      resources,
+      provider: selection.provider,
+      env,
+      gate: commandAuthRequestGate ?? { active: false },
+    });
   }
 
   return {
@@ -195,6 +229,7 @@ export class PiConductorAgent implements ConductorAgent {
     private readonly modelId: string,
     private readonly mcpStartupState: PiMcpStartupState,
     private readonly mcpLifecycleState: PiMcpLifecycleState,
+    private readonly commandAuthRequestGate: PiCommandAuthRequestGate,
     private readonly piSkills: boolean,
     private readonly onStreamText?: (text: string) => void,
     private readonly onContextCompaction?: () => void,
@@ -252,6 +287,7 @@ export class PiConductorAgent implements ConductorAgent {
       ...(callbacks?.history ? { history: callbacks.history } : {}),
     };
     this.activeSend = state;
+    this.commandAuthRequestGate.active = true;
     try {
       await this.session.prompt(
         expandPiResourcePrompt(prompt, this.resources, {
@@ -273,6 +309,7 @@ export class PiConductorAgent implements ConductorAgent {
         modelId: this.modelId,
       };
     } finally {
+      this.commandAuthRequestGate.active = false;
       this.activeSend = undefined;
     }
 
@@ -286,6 +323,7 @@ export class PiConductorAgent implements ConductorAgent {
       };
     }
 
+    sanitizePiAssistantMessageInPlace(finalMessage);
     const status = statusFromStopReason(finalMessage.stopReason);
     const result = assistantText(finalMessage) || undefined;
     if (
@@ -447,6 +485,18 @@ export class PiConductorAgent implements ConductorAgent {
   private handleEvent(event: AgentSessionEvent): void {
     const activeSend = this.activeSend;
     if (
+      (event.type === 'message_start' ||
+        event.type === 'message_update' ||
+        event.type === 'message_end') &&
+      event.message.role === 'assistant'
+    ) {
+      // AgentSession emits public listeners before appending message_end to the
+      // Pi transcript. Mutating this message keeps the event and persisted entry
+      // safe if a failure came from a nonstandard Pi stream path.
+      sanitizePiAssistantMessageInPlace(event.message);
+    }
+
+    if (
       event.type === 'compaction_end' &&
       event.result != null &&
       !event.aborted &&
@@ -472,6 +522,12 @@ export class PiConductorAgent implements ConductorAgent {
       return;
     }
 
+    if (event.type === 'agent_end') {
+      for (const message of event.messages) {
+        if (message.role === 'assistant') sanitizePiAssistantMessageInPlace(message);
+      }
+    }
+
     if (event.type === 'agent_end' && activeSend) {
       activeSend.finalMessage = lastAssistantMessage(event.messages);
       for (const message of event.messages) {
@@ -484,6 +540,166 @@ export class PiConductorAgent implements ConductorAgent {
       }
     }
   }
+}
+
+function installPiCommandAuthRequestGate(input: {
+  modelRuntime: ModelRuntime;
+  resources: PiResources;
+  provider: string;
+  env: NodeJS.ProcessEnv;
+  gate: PiCommandAuthRequestGate;
+}): void {
+  const originalHasConfiguredAuth =
+    input.modelRuntime.hasConfiguredAuth.bind(input.modelRuntime);
+  input.modelRuntime.hasConfiguredAuth = (provider: string) =>
+    provider === input.provider || originalHasConfiguredAuth(provider);
+
+  const originalGetAuth = input.modelRuntime.getAuth.bind(input.modelRuntime);
+  input.modelRuntime.getAuth = (async (
+    providerOrModel: string | Model<any>,
+    overrides?: ModelRuntimeAuthOverrides,
+  ) => {
+    const provider =
+      typeof providerOrModel === 'string'
+        ? providerOrModel
+        : providerOrModel.provider;
+    if (
+      provider !== input.provider ||
+      !input.gate.active ||
+      overrides?.apiKey !== undefined
+    ) {
+      return originalGetAuth(providerOrModel as never, overrides);
+    }
+
+    await preparePiConductorCommandAuthForRequest({
+      modelRuntime: input.modelRuntime,
+      resources: input.resources,
+      provider: input.provider,
+      env: input.env,
+    });
+    try {
+      return await originalGetAuth(providerOrModel as never, overrides);
+    } catch (error) {
+      if (isPiCommandResolutionError(error)) {
+        throw new Error(PI_COMMAND_RESOLUTION_ERROR_MESSAGE);
+      }
+      throw error;
+    }
+  }) as ModelRuntime['getAuth'];
+
+  const originalStreamSimple = input.modelRuntime.streamSimple.bind(
+    input.modelRuntime,
+  );
+  input.modelRuntime.streamSimple = ((
+    model: Model<any>,
+    context: Context,
+    options?: ModelsSimpleStreamOptions,
+  ) => {
+    if (model.provider !== input.provider) {
+      return originalStreamSimple(model, context, options);
+    }
+
+    // Request credentials have already been resolved by AgentSession through
+    // ModelRuntime.getAuth(). Sanitize Pi's terminal/partial messages here so
+    // an errorMessage cannot enter the transcript before outward event
+    // listeners have a chance to inspect it.
+    const output = createAssistantMessageEventStream();
+    void (async () => {
+      try {
+        const response = originalStreamSimple(model, context, options);
+        let terminalEventSeen = false;
+        for await (const event of response) {
+          if (event.type === 'done' || event.type === 'error') {
+            terminalEventSeen = true;
+          }
+          output.push(sanitizePiAssistantEvent(event));
+        }
+        if (!terminalEventSeen) {
+          output.end(sanitizePiAssistantMessage(await response.result()));
+        }
+      } catch (error) {
+        output.push({
+          type: 'error',
+          reason: 'error',
+          error: createPiRequestFailureMessage(
+            model,
+            piConductorErrorMessage(error),
+          ),
+        });
+      }
+    })();
+    return output;
+  }) as ModelRuntime['streamSimple'];
+}
+
+function sanitizePiAssistantEvent(
+  event: AssistantMessageEvent,
+): AssistantMessageEvent {
+  if (event.type === 'done') {
+    return { ...event, message: sanitizePiAssistantMessage(event.message) };
+  }
+  if (event.type === 'error') {
+    return { ...event, error: sanitizePiAssistantMessage(event.error) };
+  }
+  if ('partial' in event) {
+    return { ...event, partial: sanitizePiAssistantMessage(event.partial) };
+  }
+  return event;
+}
+
+function sanitizePiAssistantMessage(
+  message: AssistantMessage,
+): AssistantMessage {
+  if (!message.errorMessage) return message;
+  const safeErrorMessage = sanitizePiCommandResolutionMessage(
+    message.errorMessage,
+  );
+  return safeErrorMessage === message.errorMessage
+    ? message
+    : { ...message, errorMessage: safeErrorMessage };
+}
+
+function sanitizePiAssistantMessageInPlace(message: AssistantMessage): void {
+  if (!message.errorMessage) return;
+  message.errorMessage = sanitizePiCommandResolutionMessage(
+    message.errorMessage,
+  );
+}
+
+function sanitizePiCommandResolutionMessage(message: string): string {
+  return isPiCommandResolutionError(message)
+    ? PI_COMMAND_RESOLUTION_ERROR_MESSAGE
+    : message;
+}
+
+function createPiRequestFailureMessage(
+  model: Model<any>,
+  errorMessage: string,
+): AssistantMessage {
+  return {
+    role: 'assistant',
+    content: [],
+    api: model.api,
+    provider: model.provider,
+    model: model.id,
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        total: 0,
+      },
+    },
+    stopReason: 'error',
+    errorMessage: sanitizePiCommandResolutionMessage(errorMessage),
+    timestamp: Date.now(),
+  };
 }
 
 function appendPiConductorMessageHistory(
@@ -616,7 +832,13 @@ async function createPiConductorSession(
   });
   const headlessSettingsOverrides = getPiHeadlessSettingsManagerOverrides(resources.settings);
   const authContext = await createPiConductorAuthContext(options, resources);
-  const resolved = await resolvePiModelConfigFromResources(options, resources, authContext);
+  const commandAuthRequestGate: PiCommandAuthRequestGate = { active: false };
+  const resolved = await resolvePiModelConfigFromResources(
+    options,
+    resources,
+    authContext,
+    commandAuthRequestGate,
+  );
   const thinkingLevel =
     options.reasoning !== undefined
       ? resolvePiConductorThinkingLevel(
@@ -773,6 +995,7 @@ async function createPiConductorSession(
       resolved.modelId,
       mcpStartupState,
       mcpLifecycleState,
+      commandAuthRequestGate,
       piSkills,
       options.onStreamText,
       options.onContextCompaction,
@@ -1340,12 +1563,18 @@ function isRecord(value: unknown): value is Record<string, any> {
 
 function piConductorErrorMessage(error: unknown): string {
   if (isPiCommandResolutionError(error)) {
-    return 'API key auth failed for provider: failed to resolve API key for Pi provider from the configured command.';
+    return PI_COMMAND_RESOLUTION_ERROR_MESSAGE;
   }
   return error instanceof Error ? error.message : String(error);
 }
 
 function isPiCommandResolutionError(error: unknown): boolean {
+  if (
+    typeof error === 'string' &&
+    /failed to resolve api key|from shell command/i.test(error)
+  ) {
+    return true;
+  }
   if (!error || typeof error !== 'object') return false;
   if (error instanceof ModelsError && error.code !== 'auth') return false;
   const isAuthModelsError = error instanceof ModelsError && error.code === 'auth';

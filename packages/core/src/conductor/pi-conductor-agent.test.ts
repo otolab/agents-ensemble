@@ -62,6 +62,8 @@ import {
   PiConductorAgent,
   resolvePiModelConfig,
 } from './pi-conductor-agent.js';
+import { resolvePiConductorApiKey } from './conductor-pi-auth.js';
+import { loadPiResources } from './pi-resource-loader.js';
 import { isConductorAgentFactoryCleanupIncomplete } from './conductor-agent-factory-cleanup.js';
 import { runConductorSession } from './conductor-session.js';
 import { SessionLogger } from './session/session-logger.js';
@@ -341,6 +343,7 @@ describe('PiConductorAgent', () => {
       });
       sessionListener?.({
         type: 'message_update',
+        message: finalMessage,
         assistantMessageEvent: { type: 'text_delta', delta: 'started' },
       });
       sessionListener?.({
@@ -1721,6 +1724,7 @@ describe('PiConductorAgent', () => {
       },
     });
 
+    const markerPath = join(cwd, 'models-command-ran');
     await writeFile(
       join(projectDir, 'models.json'),
       JSON.stringify({
@@ -1728,7 +1732,7 @@ describe('PiConductorAgent', () => {
           local: {
             api: 'openai-completions',
             baseUrl: 'http://127.0.0.1:11434/v1',
-            apiKey: '!printf conductor-command-key',
+            apiKey: `!printf conductor-command-key; touch ${markerPath}`,
             authHeader: true,
             models: [{ id: 'review-model', name: 'Review model' }],
           },
@@ -1736,25 +1740,26 @@ describe('PiConductorAgent', () => {
       }),
     );
 
-    await expect(
-      resolvePiModelConfig({
-        cwd,
-        pi: { agentDir, projectDir },
-        env: {},
-      }),
-    ).resolves.toMatchObject({
+    const commandModelConfig = await resolvePiModelConfig({
+      cwd,
+      pi: { agentDir, projectDir },
+      env: {},
+    });
+    expect(commandModelConfig).toMatchObject({
       provider: 'local',
       modelId: 'review-model',
-      apiKey: 'conductor-command-key',
       model: {
-        headers: { Authorization: 'Bearer conductor-command-key' },
+        headers: {},
       },
     });
+    expect(commandModelConfig).not.toHaveProperty('apiKey');
+    expect(existsSync(markerPath)).toBe(false);
   });
 
-  it('passes a custom models.json !command credential through create into a Pi request', async () => {
+  it('defers a custom models.json !command credential until request auth resolution', async () => {
     const projectDir = join(cwd, '.ensemble', 'pi');
     await mkdir(projectDir, { recursive: true });
+    const markerPath = join(cwd, 'models-command-ran');
     await writeFile(
       join(projectDir, 'models.json'),
       JSON.stringify({
@@ -1762,7 +1767,7 @@ describe('PiConductorAgent', () => {
           local: {
             api: 'openai-completions',
             baseUrl: 'http://127.0.0.1:11434/v1',
-            apiKey: '!printf command-key',
+            apiKey: `!printf command-key; touch ${markerPath}`,
             authHeader: true,
             models: [{ id: 'review-model', name: 'Review model' }],
           },
@@ -1777,34 +1782,36 @@ describe('PiConductorAgent', () => {
       modelId: 'local/review-model',
       systemPrompt: 'system',
     });
+    expect(existsSync(markerPath)).toBe(false);
+
     const sessionOptions = mockCreateAgentSession.mock.calls[0]![0];
     let requestAuth: unknown;
     fakeSession.prompt.mockImplementation(async () => {
-      requestAuth = await sessionOptions.modelRuntime.getAuth(sessionOptions.model);
+      const resources = await loadPiResources({
+        cwd,
+        pi: { agentDir, projectDir },
+      });
+      requestAuth = await resolvePiConductorApiKey({
+        modelRuntime: sessionOptions.modelRuntime,
+        resources,
+        provider: 'local',
+      });
     });
 
     await expect(conductor.send('request')).resolves.toMatchObject({
       status: 'finished',
       modelId: 'review-model',
     });
-    expect(sessionOptions.model).toMatchObject({
-      provider: 'local',
-      id: 'review-model',
-      headers: { Authorization: 'Bearer command-key' },
-    });
-    expect(requestAuth).toMatchObject({
-      auth: {
-        apiKey: 'command-key',
-        headers: { Authorization: 'Bearer command-key' },
-      },
-    });
+    expect(requestAuth).toBe('command-key');
+    expect(existsSync(markerPath)).toBe(true);
     await conductor.close();
   });
 
-  it('resumes after a Pi !command credential 401 without replaying the same prompt', async () => {
+  it('resumes after a Pi !command credential 401 without preflighting at startup or replaying the prompt', async () => {
     const projectDir = join(cwd, '.ensemble', 'pi');
     await mkdir(projectDir, { recursive: true });
     const keyFile = join(cwd, 'dynamic-key.txt');
+    const markerPath = join(cwd, 'dynamic-command-ran');
     await writeFile(keyFile, 'expired-key');
     await writeFile(
       join(projectDir, 'models.json'),
@@ -1813,7 +1820,7 @@ describe('PiConductorAgent', () => {
           local: {
             api: 'openai-completions',
             baseUrl: 'http://127.0.0.1:11434/v1',
-            apiKey: `!cat ${keyFile}`,
+            apiKey: `!cat ${keyFile}; touch ${markerPath}`,
             authHeader: true,
             models: [{ id: 'review-model', name: 'Review model' }],
           },
@@ -1827,6 +1834,16 @@ describe('PiConductorAgent', () => {
     fakeSession.prompt.mockImplementation(async (prompt: string) => {
       prompts.push(prompt);
       const sessionOptions = mockCreateAgentSession.mock.calls.at(-1)![0];
+      const resources = await loadPiResources({
+        cwd,
+        pi: { agentDir, projectDir },
+      });
+      const apiKey = await resolvePiConductorApiKey({
+        modelRuntime: sessionOptions.modelRuntime,
+        resources,
+        provider: 'local',
+      });
+      sessionOptions.model.headers.Authorization = `Bearer ${apiKey}`;
       const authorization = sessionOptions.model.headers.Authorization;
       if (authorization === 'Bearer expired-key') {
         await writeFile(keyFile, 'fresh-key');
@@ -1868,6 +1885,10 @@ describe('PiConductorAgent', () => {
     const handle = {
       conductor: await factory.create(conductorOptions),
     };
+    expect(existsSync(markerPath)).toBe(false);
+    const firstSessionOptions = mockCreateAgentSession.mock.calls[0]![0];
+    expect(firstSessionOptions.model.headers).toEqual({});
+
     const result = await sendConductorWithReconnect(
       handle,
       'same prompt after expired credential',
@@ -1885,18 +1906,13 @@ describe('PiConductorAgent', () => {
     });
     expect(prompts).toEqual(['same prompt after expired credential']);
     expect(mockCreateAgentSession).toHaveBeenCalledTimes(2);
-    expect(mockCreateAgentSession.mock.calls[0]![0].model.headers).toEqual({
-      Authorization: 'Bearer expired-key',
-    });
-    expect(mockCreateAgentSession.mock.calls[1]![0].model.headers).toEqual({
-      Authorization: 'Bearer fresh-key',
-    });
     await handle.conductor.close();
   });
 
-  it('reports a failed custom models.json !command through create', async () => {
+  it('reports a failed custom models.json !command only when request auth is resolved', async () => {
     const projectDir = join(cwd, '.ensemble', 'pi');
     await mkdir(projectDir, { recursive: true });
+    const markerPath = join(cwd, 'failed-command-ran');
     await writeFile(
       join(projectDir, 'models.json'),
       JSON.stringify({
@@ -1904,7 +1920,73 @@ describe('PiConductorAgent', () => {
           local: {
             api: 'openai-completions',
             baseUrl: 'http://127.0.0.1:11434/v1',
-            apiKey: "!sh -c 'exit 7'",
+            apiKey: `!touch ${markerPath}; printf 'COMMAND_CAUSE_SENTINEL' >&2; exit 7`,
+            models: [{ id: 'review-model', name: 'Review model' }],
+          },
+        },
+      }),
+    );
+    mockGetModel.mockReturnValue(undefined);
+
+    const conductor = await PiConductorAgent.create({
+      cwd,
+      pi: { agentDir, projectDir },
+      modelId: 'local/review-model',
+      systemPrompt: 'system',
+    });
+    expect(mockCreateAgentSession).toHaveBeenCalledOnce();
+    expect(existsSync(markerPath)).toBe(false);
+
+    const sessionOptions = mockCreateAgentSession.mock.calls[0]![0];
+    fakeSession.prompt.mockImplementation(async () => {
+      const resources = await loadPiResources({
+        cwd,
+        pi: { agentDir, projectDir },
+      });
+      await resolvePiConductorApiKey({
+        modelRuntime: sessionOptions.modelRuntime,
+        resources,
+        provider: 'local',
+      });
+    });
+
+    await expect(conductor.send('request')).resolves.toMatchObject({
+      status: 'error',
+      error: {
+        message:
+          'API key auth failed for provider: failed to resolve API key for Pi provider from the configured command.',
+      },
+    });
+    expect(existsSync(markerPath)).toBe(true);
+    await conductor.close();
+  });
+
+  it('keeps project auth above a lower-precedence settings command during model resolution', async () => {
+    const projectDir = join(cwd, '.ensemble', 'pi');
+    await mkdir(projectDir, { recursive: true });
+    const markerPath = join(cwd, 'lower-precedence-command-ran');
+    await writeFile(
+      join(agentDir, 'settings.json'),
+      JSON.stringify({
+        apiKeys: {
+          local: `!touch ${markerPath}; printf lower-precedence-key`,
+        },
+      }),
+    );
+    await writeFile(
+      join(projectDir, 'auth.json'),
+      JSON.stringify({
+        local: { type: 'api_key', key: 'project-key' },
+      }),
+    );
+    await writeFile(
+      join(projectDir, 'models.json'),
+      JSON.stringify({
+        providers: {
+          local: {
+            api: 'openai-completions',
+            baseUrl: 'http://127.0.0.1:11434/v1',
+            authHeader: true,
             models: [{ id: 'review-model', name: 'Review model' }],
           },
         },
@@ -1913,16 +1995,20 @@ describe('PiConductorAgent', () => {
     mockGetModel.mockReturnValue(undefined);
 
     await expect(
-      PiConductorAgent.create({
+      resolvePiModelConfig({
         cwd,
         pi: { agentDir, projectDir },
         modelId: 'local/review-model',
-        systemPrompt: 'system',
+        env: {},
       }),
-    ).rejects.toThrow(
-      'API key auth failed for provider: failed to resolve API key for Pi provider from the configured command.',
-    );
-    expect(mockCreateAgentSession).not.toHaveBeenCalled();
+    ).resolves.toMatchObject({
+      provider: 'local',
+      apiKey: 'project-key',
+      model: {
+        headers: { Authorization: 'Bearer project-key' },
+      },
+    });
+    expect(existsSync(markerPath)).toBe(false);
   });
 
   it('passes project !command auth over the user credential through create into a Pi request', async () => {
@@ -1962,25 +2048,22 @@ describe('PiConductorAgent', () => {
     const sessionOptions = mockCreateAgentSession.mock.calls[0]![0];
     let requestAuth: unknown;
     fakeSession.prompt.mockImplementation(async () => {
-      requestAuth = await sessionOptions.modelRuntime.getAuth(sessionOptions.model);
+      const resources = await loadPiResources({
+        cwd,
+        pi: { agentDir, projectDir },
+      });
+      requestAuth = await resolvePiConductorApiKey({
+        modelRuntime: sessionOptions.modelRuntime,
+        resources,
+        provider: 'local',
+      });
     });
 
     await expect(conductor.send('request')).resolves.toMatchObject({
       status: 'finished',
       modelId: 'review-model',
     });
-    expect(sessionOptions.model).toMatchObject({
-      provider: 'local',
-      id: 'review-model',
-      headers: { Authorization: 'Bearer project-command-key' },
-    });
-    expect(requestAuth).toMatchObject({
-      auth: {
-        apiKey: 'project-command-key',
-        headers: { Authorization: 'Bearer project-command-key' },
-      },
-    });
-    expect(requestAuth).not.toMatchObject({ auth: { apiKey: 'user-key' } });
+    expect(requestAuth).toBe('project-command-key');
     await conductor.close();
   });
 });

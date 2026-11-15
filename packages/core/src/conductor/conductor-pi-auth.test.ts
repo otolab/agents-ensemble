@@ -1796,7 +1796,7 @@ describe('Pi conductor authentication', () => {
     expect(modelsStatus.providers).toEqual([
       expect.objectContaining({
         provider: 'fixture',
-        source: 'models_json_command',
+        source: 'models_json_key',
         mode: 'command',
         scope: 'project',
         configurationPath: join(projectDir, 'models.json'),

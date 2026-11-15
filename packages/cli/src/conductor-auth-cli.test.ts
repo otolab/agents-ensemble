@@ -218,11 +218,13 @@ describe('ensemble auth login CLI', () => {
       apiKeys: { unrelated: 'plain-key-sentinel' },
     });
 
+    const logoutCommand = `!printf logout-command-key; touch ${markerPath}`;
     await writeFile(
       settingsPath,
       JSON.stringify({
         apiKeys: {
-          fixture: 'plain-key-sentinel',
+          fixture: logoutCommand,
+          plain: 'plain-key-sentinel',
           unrelated: 'keep-this-key',
         },
       }),
@@ -242,10 +244,12 @@ describe('ensemble auth login CLI', () => {
     expect(logout.status).toBe(0);
     expect(JSON.parse(await readFile(settingsPath, 'utf8'))).toEqual({
       apiKeys: {
-        fixture: 'plain-key-sentinel',
+        fixture: logoutCommand,
+        plain: 'plain-key-sentinel',
         unrelated: 'keep-this-key',
       },
     });
+    expect(existsSync(markerPath)).toBe(false);
 
     const setProject = runCli([
       'auth',
@@ -288,7 +292,8 @@ describe('ensemble auth login CLI', () => {
     });
     expect(JSON.parse(await readFile(settingsPath, 'utf8'))).toEqual({
       apiKeys: {
-        fixture: 'plain-key-sentinel',
+        fixture: logoutCommand,
+        plain: 'plain-key-sentinel',
         unrelated: 'keep-this-key',
       },
     });

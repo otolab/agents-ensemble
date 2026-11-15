@@ -590,6 +590,12 @@ export async function resolvePiConductorApiKey(options: {
   // its higher precedence over settings and models.
   if (settingsKey !== undefined && isPiCommandConfigValue(settingsKey)) {
     options.modelRuntime.registerProvider(options.provider, { apiKey: settingsKey });
+  } else if (modelsKey !== undefined && isPiCommandConfigValue(modelsKey)) {
+    // models.json command providers are deliberately not registered while a
+    // conductor session is being assembled: ModelRuntime.refresh() checks
+    // provider auth and can execute their command. Register the selected value
+    // only when the request path asks for its credential.
+    options.modelRuntime.registerProvider(options.provider, { apiKey: modelsKey });
   }
   // ModelRuntime owns the Pi 1.x credential store, OAuth refresh, and locking.
   // Resolve it on every request instead of capturing the key at construction.
@@ -613,6 +619,80 @@ export async function resolvePiConductorApiKey(options: {
   if (modelsKey !== undefined) return modelsKey;
 
   return getEnvApiKey(options.provider, toProviderEnv(env));
+}
+
+/** Prepare configured Pi commands when a provider request asks ModelRuntime for auth. */
+export async function preparePiConductorCommandAuthForRequest(options: {
+  modelRuntime: ModelRuntime;
+  resources: Pick<PiResources, 'roots' | 'authLayers' | 'settings' | 'models'>;
+  provider: string;
+  env?: NodeJS.ProcessEnv;
+}): Promise<void> {
+  const env = options.env ?? process.env;
+  const projectEntry = options.resources.authLayers.at(-1)?.[options.provider];
+  const projectKey =
+    options.resources.roots.agentDir !== options.resources.roots.projectDir
+      ? resolvePiAuthEntry(projectEntry, env)
+      : undefined;
+
+  if (options.resources.roots.agentDir !== options.resources.roots.projectDir) {
+    if (isPiOAuthAuthEntry(projectEntry)) {
+      throw new Error(formatProjectOAuthAuthError(options.provider));
+    }
+    if (projectKey !== undefined) {
+      if (isPiCommandConfigValue(projectKey)) {
+        await resolvePiProjectCommandApiKey(
+          options.modelRuntime,
+          options.provider,
+          projectKey,
+        );
+      }
+      // Any project auth entry remains above user/settings/model credentials.
+      return;
+    }
+  }
+
+  const settingsKey = resolvePiSettingsApiKey(
+    options.resources.settings,
+    options.provider,
+    env,
+  );
+  const modelsKey = resolvePiModelsApiKey(
+    options.resources.models.providers[options.provider],
+    env,
+  );
+  if (settingsKey !== undefined && isPiCommandConfigValue(settingsKey)) {
+    options.modelRuntime.registerProvider(options.provider, {
+      apiKey: settingsKey,
+    });
+  } else if (modelsKey !== undefined && isPiCommandConfigValue(modelsKey)) {
+    options.modelRuntime.registerProvider(options.provider, {
+      apiKey: modelsKey,
+    });
+  }
+}
+
+/** Whether resolving this provider's configured Pi credential can run a command. */
+export function hasPiConductorCommandCredential(
+  resources: Pick<
+    PiResources,
+    'roots' | 'authLayers' | 'settings' | 'models'
+  >,
+  provider: string,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  if (resources.roots.agentDir !== resources.roots.projectDir) {
+    const projectEntry = resources.authLayers.at(-1)?.[provider];
+    if (isPiOAuthAuthEntry(projectEntry)) return false;
+    const projectKey = resolvePiAuthEntry(projectEntry, env);
+    if (projectKey !== undefined) return isPiCommandConfigValue(projectKey);
+  }
+
+  const settingsKey = resolvePiSettingsApiKey(resources.settings, provider, env);
+  if (settingsKey !== undefined) return isPiCommandConfigValue(settingsKey);
+
+  const modelsKey = resolvePiModelsApiKey(resources.models.providers[provider], env);
+  return modelsKey !== undefined && isPiCommandConfigValue(modelsKey);
 }
 
 /** Return whether a provider has configured auth without exposing its value. */
@@ -1487,7 +1567,16 @@ async function createPiModelRuntime(
 
   const env = options.env ?? process.env;
   for (const [provider, config] of Object.entries(resources.models.providers)) {
-    runtime.registerProvider(provider, toPiRuntimeProviderConfig(config, env));
+    const runtimeConfig = toPiRuntimeProviderConfig(config, env);
+    const modelApiKey = resolvePiModelsApiKey(config, env);
+    if (modelApiKey !== undefined && isPiCommandConfigValue(modelApiKey)) {
+      // registerProvider() starts a ModelRuntime availability refresh. Keep a
+      // models.json command out of that startup refresh and register it later,
+      // when the selected provider request resolves its auth.
+      runtime.registerProvider(provider, { ...runtimeConfig, apiKey: undefined });
+    } else {
+      runtime.registerProvider(provider, runtimeConfig);
+    }
   }
 
   if (roots.agentDir !== roots.projectDir) {
