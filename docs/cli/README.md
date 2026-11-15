@@ -142,9 +142,11 @@ session list は user store 内の全 canonical GitHub slug group を既定 scop
 
 #### profile workspace のファイル操作
 
-operator-agent は `read_operator_workspace_file` / `write_operator_workspace_file` custom tool で、選択中 profile の workspace（`~/.ensemble/operator-agents/<profile>/`）内にある UTF-8 file を読み書きできます。path は workspace からの相対 path に限られ、絶対 path、`..`、symlink の解決先が workspace 外になる path は拒否されます。write は workspace 内に必要な親 directory を作成し、既存 file を置き換えます。read / write とも 1 file あたりの上限は 1 MiB です。directory の一覧取得 tool はありません。
+operator-agent は `read_operator_workspace_file` / `write_operator_workspace_file` custom tool で、選択中 profile の workspace（`~/.ensemble/operator-agents/<profile>/`）内にある UTF-8 file を読み書きできます。path は workspace からの相対 path に限られ、directory 構造が操作中に変わらない通常の状態では、絶対 path、`..`、symlink の解決先が workspace 外になる path は拒否されます。write は workspace 内に必要な親 directory を作成し、既存 file を置き換えます。read / write とも 1 file あたりの上限は 1 MiB です。directory の一覧取得 tool はありません。
 
-file tool は Issue worktree、別 profile、`~/.ensemble/sessions/` を読まず、そこへ書き込みません。operator-agent は backend の built-in coding tools を無効にし、Pi extension を読み込みません。また MCP server を起動 options に渡さないため、workspace file tool の外から file system に触れる MCP tool はありません。
+各 file 操作は realpath などで path を検査してから、path-based `open()` を行います。その間に同一ユーザーの別 process が workspace root や親 directory を差し替える競合（TOCTOU）は防止できず、競合時に workspace 外へのアクセスを防ぐ保証はありません。この機能は OS-level sandbox ではなく、同一ユーザーで動く任意 process を保護対象にしていません。信頼できない同一ユーザー process と profile workspace を共有しないでください。Pi sandbox plugin が利用可能になった段階で適用を検討する方針ですが、現時点では適用していません。
+
+directory 構造が変わらない通常の状態では、path 検査により Issue worktree、別 profile、`~/.ensemble/sessions/` へのアクセスを拒否します。operator-agent は backend の built-in coding tools を無効にし、Pi extension を読み込みません。また MCP server を起動 options に渡さないため、file tool の迂回経路となる MCP tool はありません。
 
 file の内容は redaction されず、読み出した内容はそのまま選択中 backend に渡ります。API key、token、password、credential などを workspace file に保存したり、秘密情報を含む file を agent に読ませたりしないでください。
 

@@ -726,6 +726,15 @@ describe('runOperatorAgent', () => {
     expect(agentOptions?.systemPrompt).toContain('openQuestionHistory');
     expect(agentOptions?.systemPrompt).toContain('register_conductor_message_listen');
     expect(agentOptions?.systemPrompt).toContain('shutdown_issue_session');
+    expect(agentOptions?.systemPrompt).toContain(
+      '検査と open の間に workspace root や親 directory を差し替える TOCTOU は防げず',
+    );
+    expect(agentOptions?.systemPrompt).toContain(
+      '信頼できない同一ユーザー process と workspace を共有しないでください',
+    );
+    expect(agentOptions?.systemPrompt).toContain(
+      'workspace file tool は内容をそのまま読み書きし、秘密情報を redaction しません',
+    );
     expect(agentOptions?.customTools).not.toHaveProperty('prompt_worker');
     expect(
       Object.keys(agentOptions?.customTools ?? {}).filter(

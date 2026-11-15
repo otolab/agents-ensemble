@@ -60,6 +60,18 @@ describe('operator profile workspace file tools', () => {
     });
   });
 
+  it('documents the same-user TOCTOU limitation in both tool descriptions', () => {
+    for (const tool of [
+      tools[READ_OPERATOR_WORKSPACE_FILE_TOOL]!,
+      tools[WRITE_OPERATOR_WORKSPACE_FILE_TOOL]!,
+    ]) {
+      expect(tool.description).toContain(
+        'do not prevent same-user TOCTOU changes between validation and path-based open',
+      );
+      expect(tool.description).toContain('not an OS sandbox');
+    }
+  });
+
   it('rejects parent traversal and absolute paths for both operations', async () => {
     const outsideFile = join(outside, 'private.txt');
     await writeFile(outsideFile, 'outside');

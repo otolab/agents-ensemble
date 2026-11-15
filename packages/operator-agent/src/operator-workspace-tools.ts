@@ -65,7 +65,7 @@ export function createOperatorWorkspaceFileTools(
     [READ_OPERATOR_WORKSPACE_FILE_TOOL]: {
       name: READ_OPERATOR_WORKSPACE_FILE_TOOL,
       description:
-        'Read a UTF-8 file inside the active operator profile workspace. The path must be relative to that workspace; paths outside it are rejected. Files larger than 1 MiB are rejected.',
+        'Read a UTF-8 file in the active operator profile workspace. The path must be relative to that workspace. During ordinary operation without concurrent directory changes, path checks reject absolute paths, parent traversal, and symlinks that resolve outside the workspace. These checks are not an OS sandbox and do not prevent same-user TOCTOU changes between validation and path-based open. Files larger than 1 MiB are rejected.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -123,7 +123,7 @@ export function createOperatorWorkspaceFileTools(
     [WRITE_OPERATOR_WORKSPACE_FILE_TOOL]: {
       name: WRITE_OPERATOR_WORKSPACE_FILE_TOOL,
       description:
-        'Create or replace a UTF-8 file inside the active operator profile workspace. Parent directories are created inside that workspace as needed. The path must be relative; paths outside the workspace are rejected. Content larger than 1 MiB is rejected.',
+        'Create or replace a UTF-8 file in the active operator profile workspace. Parent directories are created inside that workspace as needed. The path must be relative. During ordinary operation without concurrent directory changes, path checks reject absolute paths, parent traversal, and symlinks that resolve outside the workspace. These checks are not an OS sandbox and do not prevent same-user TOCTOU changes between validation and path-based open. Content larger than 1 MiB is rejected.',
       inputSchema: {
         type: 'object',
         properties: {
