@@ -19,6 +19,11 @@ export interface ConductorAgentCreateOptions {
   piSkills?: boolean;
   /** Pi backend only: load configured extension modules and tools; omitted means enabled. */
   piExtensions?: boolean;
+  /**
+   * Pi backend only: register Pi's built-in MCP, Codemode, and Tool Search
+   * extensions; omitted means enabled.
+   */
+  piInternalExtensions?: boolean;
   /** Pi backend only: called when `compaction_end` reports a successful compaction. */
   onContextCompaction?: () => void;
   apiKey?: string;

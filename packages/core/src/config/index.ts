@@ -9,6 +9,24 @@ export {
   loadEnsembleConfig,
 } from './load-ensemble-config.js';
 export type { LoadEnsembleConfigOptions } from './load-ensemble-config.js';
+export {
+  DOCTOR_CONFIG_SETTING_PATHS,
+  readDoctorConfigSettings,
+  writeDoctorConfigSetting,
+} from './doctor-settings.js';
+export type {
+  DoctorConfigLayer,
+  DoctorConfigSettingKey,
+  DoctorConfigSettingSnapshot,
+  DoctorConfigSettingSource,
+  DoctorConfigSettingValue,
+  DoctorConfigSettingValues,
+  DoctorConfigSnapshot,
+  DoctorConfigWriteProposal,
+  ReadDoctorConfigOptions,
+  WriteDoctorConfigOptions,
+  WriteDoctorConfigResult,
+} from './doctor-settings.js';
 export { parseEnsembleConfig } from './parse-config.js';
 export {
   resolveBooleanSetting,

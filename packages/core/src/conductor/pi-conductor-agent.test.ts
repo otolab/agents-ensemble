@@ -134,6 +134,7 @@ describe('PiConductorAgent', () => {
       session: fakeSession,
       extensionsResult: { errors: [] },
     });
+    mcpLoadConfig = undefined;
     mockCreateMcpExtension.mockReset();
     mockCreateMcpExtension.mockImplementation((options: { loadConfig: () => unknown }) => {
       mcpLoadConfig = options.loadConfig;
@@ -822,6 +823,66 @@ describe('PiConductorAgent', () => {
     });
 
     expect(mockCreateAgentSession.mock.calls[0]![0].noTools).toBe('builtin');
+    await conductor.close();
+  });
+
+  it('registers the existing internal Pi extensions by default', async () => {
+    const conductor = await PiConductorAgent.create({
+      cwd,
+      pi: { agentDir },
+      modelId: 'anthropic/model-1',
+      systemPrompt: 'system',
+    });
+
+    expect(mockCreateMcpExtension).toHaveBeenCalledOnce();
+    expect(mockCreateExtension).toHaveBeenCalledTimes(2);
+    await conductor.close();
+  });
+
+  it('opts out of internal Pi extensions and keeps only explicitly supplied tools', async () => {
+    const conductor = await PiConductorAgent.create({
+      cwd,
+      pi: { agentDir },
+      modelId: 'anthropic/model-1',
+      systemPrompt: 'doctor system',
+      builtinTools: false,
+      piSkills: false,
+      piExtensions: false,
+      piInternalExtensions: false,
+      mcpServers: {
+        ignored: {
+          type: 'sse',
+          url: 'https://example.invalid/mcp',
+        },
+      },
+      customTools: {
+        doctor_read_config: {
+          name: 'doctor_read_config',
+          description: 'Read allowlisted non-secret settings',
+          inputSchema: { type: 'object', properties: {} },
+          execute: async () => ({
+            content: [{ type: 'text' as const, text: 'settings' }],
+          }),
+        },
+        doctor_write_config: {
+          name: 'doctor_write_config',
+          description: 'Write one approved setting',
+          inputSchema: { type: 'object', properties: {} },
+          execute: async () => ({
+            content: [{ type: 'text' as const, text: 'written' }],
+          }),
+        },
+      },
+    });
+
+    const sessionOptions = mockCreateAgentSession.mock.calls[0]![0];
+    expect(sessionOptions.noTools).toBe('builtin');
+    expect(
+      sessionOptions.customTools?.map((tool: { name: string }) => tool.name),
+    ).toEqual(['doctor_read_config', 'doctor_write_config']);
+    expect(mockCreateMcpExtension).not.toHaveBeenCalled();
+    expect(mockCreateExtension).not.toHaveBeenCalled();
+    expect(mcpLoadConfig).toBeUndefined();
     await conductor.close();
   });
 

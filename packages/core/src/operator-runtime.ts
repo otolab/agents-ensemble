@@ -4,6 +4,24 @@
  */
 export { loadEnsembleConfig } from './config/load-ensemble-config.js';
 export {
+  DOCTOR_CONFIG_SETTING_PATHS,
+  readDoctorConfigSettings,
+  writeDoctorConfigSetting,
+} from './config/doctor-settings.js';
+export type {
+  DoctorConfigLayer,
+  DoctorConfigSettingKey,
+  DoctorConfigSettingSnapshot,
+  DoctorConfigSettingSource,
+  DoctorConfigSettingValue,
+  DoctorConfigSettingValues,
+  DoctorConfigSnapshot,
+  DoctorConfigWriteProposal,
+  ReadDoctorConfigOptions,
+  WriteDoctorConfigOptions,
+  WriteDoctorConfigResult,
+} from './config/doctor-settings.js';
+export {
   resolveEnsemblePaths,
   type EnsemblePaths,
   type ResolveEnsemblePathsOptions,

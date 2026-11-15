@@ -823,13 +823,17 @@ async function createPiConductorSession(
   options: ConductorAgentCreateOptions,
   reason: PiSessionStartReason,
 ): Promise<PiConductorAgent> {
+  const piInternalExtensions = options.piInternalExtensions !== false;
   const piMcpResolution = { cwd: options.cwd };
   const mcpLifecycleState: PiMcpLifecycleState = {
-    enabled: Object.keys(options.mcpServers ?? {}).length > 0,
+    enabled:
+      piInternalExtensions && Object.keys(options.mcpServers ?? {}).length > 0,
   };
   // Validate the harness-resolved map before creating the SDK session so an
   // unsupported transport fails with an actionable Pi-specific error.
-  if (options.mcpServers) loadPiMcpConfig(options.mcpServers, piMcpResolution);
+  if (piInternalExtensions && options.mcpServers) {
+    loadPiMcpConfig(options.mcpServers, piMcpResolution);
+  }
   const piSkills = options.piSkills !== false;
   const resources = await loadPiResources({
     ...options,
@@ -942,15 +946,19 @@ async function createPiConductorSession(
     noContextFiles: true,
     systemPrompt: systemPromptRef.value,
     extensionFactories: [
-      createMcpExtension({
-        loadConfig: () =>
-          loadPiMcpConfig(
-            mcpLifecycleState.enabled ? options.mcpServers : undefined,
-            piMcpResolution,
-          ),
-      }),
-      createCodemodeExtension({ mode: 'on' }),
-      createToolSearchExtension(),
+      ...(piInternalExtensions
+        ? [
+            createMcpExtension({
+              loadConfig: () =>
+                loadPiMcpConfig(
+                  mcpLifecycleState.enabled ? options.mcpServers : undefined,
+                  piMcpResolution,
+                ),
+            }),
+            createCodemodeExtension({ mode: 'on' }),
+            createToolSearchExtension(),
+          ]
+        : []),
       createPiSystemPromptExtension(systemPromptRef),
     ],
   });
@@ -993,7 +1001,11 @@ async function createPiConductorSession(
         }
       },
     });
-    await observePiMcpStartup(session, options.mcpServers, mcpStartupState);
+    await observePiMcpStartup(
+      session,
+      piInternalExtensions ? options.mcpServers : undefined,
+      mcpStartupState,
+    );
     if (mcpStartupState.error) {
       throw new Error(mcpStartupState.error);
     }
