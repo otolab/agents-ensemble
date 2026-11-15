@@ -1,0 +1,140 @@
+import { createHash } from 'node:crypto';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { DatabaseSync } from 'node:sqlite';
+import { join } from 'node:path';
+
+const SESSION_ID = 'cursor-acp-worker-fixture-session';
+const ROOT_BLOB_ID = makeBlobId('root');
+
+export const CURSOR_ACP_FIXTURE_SESSION_ID = SESSION_ID;
+export const CURSOR_ACP_FIXTURE_CWD = '/tmp/cursor-acp-worker-fixture';
+
+export async function writeCursorAcpWorkerSessionFixture(
+  sessionDirectory: string,
+  options: {
+    cwd?: string;
+    storeSessionId?: string;
+  } = {},
+): Promise<void> {
+  const cwd = options.cwd ?? CURSOR_ACP_FIXTURE_CWD;
+  await mkdir(sessionDirectory, { recursive: true });
+  const storePath = join(sessionDirectory, 'store.db');
+  const database = new DatabaseSync(storePath);
+  try {
+    database.exec(`
+      CREATE TABLE blobs (id TEXT PRIMARY KEY, data BLOB);
+      CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);
+    `);
+
+    const blobs = createFixtureBlobs();
+    const insertBlob = database.prepare(
+      'INSERT INTO blobs (id, data) VALUES (?, ?)',
+    );
+    for (const [blobId, data] of blobs) {
+      insertBlob.run(`agentKv:blob:${blobId}`, data);
+    }
+
+    const metadata = {
+      agentId: options.storeSessionId ?? SESSION_ID,
+      latestRootBlobId: ROOT_BLOB_ID,
+    };
+    database
+      .prepare('INSERT INTO meta (key, value) VALUES (?, ?)')
+      .run('0', Buffer.from(JSON.stringify(metadata), 'utf8').toString('hex'));
+  } finally {
+    database.close();
+  }
+
+  await writeFile(
+    join(sessionDirectory, 'meta.json'),
+    `${JSON.stringify({ schemaVersion: 1, cwd })}\n`,
+    'utf8',
+  );
+}
+
+function createFixtureBlobs(): Array<[string, Uint8Array]> {
+  const blobs: Array<[string, Uint8Array]> = [];
+  const addBlob = (name: string, data: Uint8Array): Uint8Array => {
+    const id = makeBlobId(name);
+    blobs.push([id, data]);
+    return Buffer.from(id, 'hex');
+  };
+
+  const userMessage = protobufConcat(
+    protobufString(1, 'Cursor ACP fixture user message.'),
+    protobufString(2, 'cursor-user-message-fixture'),
+    protobufVarint(25, Date.parse('2026-11-11T10:00:01.000Z')),
+  );
+  const userMessageRef = addBlob('user-message', userMessage);
+
+  const toolStep = protobufConcat(
+    protobufMessage(2, protobufString(1, 'TOOL_SECRET')),
+  );
+  const toolStepRef = addBlob('tool-step', toolStep);
+
+  const thinkingStep = protobufConcat(
+    protobufMessage(3, protobufString(1, 'THINKING_SECRET')),
+  );
+  const thinkingStepRef = addBlob('thinking-step', thinkingStep);
+
+  const assistantMessage = protobufConcat(
+    protobufString(1, 'Cursor ACP fixture assistant reply.'),
+    protobufVarint(2, Date.parse('2026-11-11T10:00:02.000Z')),
+  );
+  const assistantStep = protobufMessage(1, assistantMessage);
+  const assistantStepRef = addBlob('assistant-step', assistantStep);
+
+  const agentTurn = protobufConcat(
+    protobufMessage(1, userMessageRef),
+    protobufMessage(2, toolStepRef),
+    protobufMessage(2, thinkingStepRef),
+    protobufMessage(2, assistantStepRef),
+  );
+  const turn = protobufMessage(1, agentTurn);
+  const turnRef = addBlob('turn', turn);
+
+  const root = protobufMessage(8, turnRef);
+  blobs.push([ROOT_BLOB_ID, root]);
+  return blobs;
+}
+
+function makeBlobId(name: string): string {
+  return createHash('sha256').update(`cursor-acp-fixture:${name}`).digest('hex');
+}
+
+function protobufString(fieldNumber: number, text: string): Uint8Array {
+  return protobufMessage(fieldNumber, Buffer.from(text, 'utf8'));
+}
+
+function protobufMessage(
+  fieldNumber: number,
+  payload: Uint8Array,
+): Uint8Array {
+  return protobufConcat(
+    encodeVarint(BigInt((fieldNumber << 3) | 2)),
+    encodeVarint(BigInt(payload.byteLength)),
+    payload,
+  );
+}
+
+function protobufVarint(fieldNumber: number, value: number): Uint8Array {
+  return protobufConcat(
+    encodeVarint(BigInt(fieldNumber << 3)),
+    encodeVarint(BigInt(value)),
+  );
+}
+
+function encodeVarint(input: bigint): Uint8Array {
+  let value = input;
+  const bytes: number[] = [];
+  while (value > 0x7fn) {
+    bytes.push(Number(value & 0x7fn) | 0x80);
+    value >>= 7n;
+  }
+  bytes.push(Number(value));
+  return Uint8Array.from(bytes);
+}
+
+function protobufConcat(...parts: Uint8Array[]): Uint8Array {
+  return Buffer.concat(parts);
+}

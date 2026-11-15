@@ -23,6 +23,11 @@ import {
   type SessionResumeStore,
 } from './session-resume-store.js';
 import {
+  CURSOR_ACP_FIXTURE_CWD,
+  CURSOR_ACP_FIXTURE_SESSION_ID,
+  writeCursorAcpWorkerSessionFixture,
+} from '../../test/fixtures/cursor-acp-worker-session.js';
+import {
   getWorkerSessionHistoryReaderSupport,
   readWorkerSessionHistory,
 } from './worker-session-history.js';
@@ -58,6 +63,8 @@ describe('worker session history', () => {
     vi.stubEnv('HOME', homeRoot);
     vi.stubEnv('ENSEMBLE_USER_ROOT', userRoot);
     vi.stubEnv('CODEX_HOME', '');
+    vi.stubEnv('CURSOR_CONFIG_DIR', '');
+    vi.stubEnv('XDG_CONFIG_HOME', '');
     await writeResumeStore('pi');
   });
 
@@ -70,7 +77,7 @@ describe('worker session history', () => {
     userRoot = '';
   });
 
-  it('registers Pi as supported and reports other or missing presets', () => {
+  it('registers the Pi, Codex, and Cursor readers and reports other presets', () => {
     expect(getWorkerSessionHistoryReaderSupport('pi')).toEqual({
       preset: 'pi',
       status: 'supported',
@@ -80,6 +87,11 @@ describe('worker session history', () => {
       preset: 'codex',
       status: 'supported',
       reader: 'codex-cli-rollout-jsonl',
+    });
+    expect(getWorkerSessionHistoryReaderSupport('cursor')).toEqual({
+      preset: 'cursor',
+      status: 'supported',
+      reader: 'cursor-acp-sqlite',
     });
     expect(getWorkerSessionHistoryReaderSupport(undefined)).toMatchObject({
       preset: null,
@@ -129,6 +141,150 @@ describe('worker session history', () => {
     ]) {
       expect(JSON.stringify(result)).not.toContain(hiddenContent);
     }
+  });
+
+  it('reads Cursor ACP user and assistant text while excluding tool and thinking steps', async () => {
+    await writeResumeStore('cursor', {
+      acpSessionId: CURSOR_ACP_FIXTURE_SESSION_ID,
+      acpCwd: CURSOR_ACP_FIXTURE_CWD,
+    });
+    const sessionDirectory = join(
+      homeRoot,
+      '.cursor',
+      'acp-sessions',
+      CURSOR_ACP_FIXTURE_SESSION_ID,
+    );
+    await writeCursorAcpWorkerSessionFixture(sessionDirectory);
+
+    const result = await readHistory({ includeSourceFiles: true });
+
+    expect(result).toMatchObject({
+      conductorAgentId: CONDUCTOR_AGENT_ID,
+      worker: WORKER_NAME,
+      preset: 'cursor',
+      status: 'supported',
+      reader: 'cursor-acp-sqlite',
+      sourceFiles: [
+        join(sessionDirectory, 'meta.json'),
+        join(sessionDirectory, 'store.db'),
+      ],
+      messages: [
+        {
+          source: 'worker:implementer',
+          providerId: 'cursor:0:user',
+          role: 'user',
+          at: Date.parse('2026-11-11T10:00:01.000Z'),
+          text: 'Cursor ACP fixture user message.',
+        },
+        {
+          source: 'worker:implementer',
+          providerId: 'cursor:0:assistant:2',
+          role: 'assistant',
+          at: Date.parse('2026-11-11T10:00:02.000Z'),
+          text: 'Cursor ACP fixture assistant reply.',
+        },
+      ],
+    });
+    expect(JSON.stringify(result)).not.toContain('TOOL_SECRET');
+    expect(JSON.stringify(result)).not.toContain('THINKING_SECRET');
+  });
+
+  it('returns unavailable when the Cursor ACP store is missing', async () => {
+    await writeResumeStore('cursor', {
+      acpSessionId: CURSOR_ACP_FIXTURE_SESSION_ID,
+      acpCwd: CURSOR_ACP_FIXTURE_CWD,
+    });
+    const sessionDirectory = join(
+      homeRoot,
+      '.cursor',
+      'acp-sessions',
+      CURSOR_ACP_FIXTURE_SESSION_ID,
+    );
+    await writeCursorAcpWorkerSessionFixture(sessionDirectory);
+    await rm(join(sessionDirectory, 'store.db'));
+
+    const result = await readHistory();
+
+    expect(result).toMatchObject({
+      preset: 'cursor',
+      status: 'unavailable',
+      reason: expect.stringContaining('store.db が見つかりません'),
+      messages: [],
+    });
+  });
+
+  it('returns unavailable when the Cursor ACP session metadata is missing', async () => {
+    await writeResumeStore('cursor', {
+      acpSessionId: CURSOR_ACP_FIXTURE_SESSION_ID,
+      acpCwd: CURSOR_ACP_FIXTURE_CWD,
+    });
+    const sessionDirectory = join(
+      homeRoot,
+      '.cursor',
+      'acp-sessions',
+      CURSOR_ACP_FIXTURE_SESSION_ID,
+    );
+    await writeCursorAcpWorkerSessionFixture(sessionDirectory);
+    await rm(join(sessionDirectory, 'meta.json'));
+
+    const result = await readHistory();
+
+    expect(result).toMatchObject({
+      preset: 'cursor',
+      status: 'unavailable',
+      reason: expect.stringContaining('meta.json が見つかりません'),
+      messages: [],
+    });
+  });
+
+  it('returns unavailable when the Cursor ACP store session ID differs', async () => {
+    await writeResumeStore('cursor', {
+      acpSessionId: CURSOR_ACP_FIXTURE_SESSION_ID,
+      acpCwd: CURSOR_ACP_FIXTURE_CWD,
+    });
+    const sessionDirectory = join(
+      homeRoot,
+      '.cursor',
+      'acp-sessions',
+      CURSOR_ACP_FIXTURE_SESSION_ID,
+    );
+    await writeCursorAcpWorkerSessionFixture(sessionDirectory, {
+      storeSessionId: 'another-cursor-session',
+    });
+
+    const result = await readHistory();
+
+    expect(result).toMatchObject({
+      preset: 'cursor',
+      status: 'unavailable',
+      reason: expect.stringContaining('session ID が SessionResumeStore と一致しません'),
+      messages: [],
+    });
+  });
+
+  it('returns unavailable when the Cursor ACP metadata cwd differs', async () => {
+    await writeResumeStore('cursor', {
+      acpSessionId: CURSOR_ACP_FIXTURE_SESSION_ID,
+      acpCwd: CURSOR_ACP_FIXTURE_CWD,
+    });
+    const sessionDirectory = join(
+      homeRoot,
+      '.cursor',
+      'acp-sessions',
+      CURSOR_ACP_FIXTURE_SESSION_ID,
+    );
+    await writeCursorAcpWorkerSessionFixture(sessionDirectory, {
+      cwd: '/tmp/another-cursor-worker',
+    });
+
+    const result = await readHistory();
+
+    expect(result).toMatchObject({
+      preset: 'cursor',
+      status: 'unavailable',
+      reason: expect.stringContaining('metadata の cwd'),
+      messages: [],
+    });
   });
 
   it('returns unavailable when the Codex rollout is missing', async () => {
@@ -795,7 +951,7 @@ describe('worker session history', () => {
   }
 
   async function writeResumeStore(
-    preset: 'pi' | 'codex' | 'custom' | undefined,
+    preset: 'pi' | 'codex' | 'cursor' | 'custom' | undefined,
     workerSession: {
       acpSessionId?: string;
       acpCwd?: string;
@@ -833,7 +989,9 @@ describe('worker session history', () => {
                       ? 'pi-acp'
                       : preset === 'codex'
                         ? 'codex-acp'
-                        : 'fixture-acp',
+                        : preset === 'cursor'
+                          ? 'agent'
+                          : 'fixture-acp',
                   args: [],
                   ...(workerSession.piRuntime
                     ? { piRuntime: workerSession.piRuntime }
