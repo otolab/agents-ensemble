@@ -1592,6 +1592,18 @@ test('persistence docs use canonical slug writes and separate legacy fallback fr
     documents[1],
     /Issue URL がある Pi session は canonical slug の user transcript、現在 clone の `repoRoot` 由来 path-hash、指定された saved-root path-hash の順に探し、その後で現在・保存済み `conductorCwd` の project `\.ensemble\/pi\/sessions\/` を調べます/u,
   );
+  assert.match(
+    documents[1],
+    /旧 user path-hash と slug-keyed `~\/\.ensemble\/operator-agent\/github\.com\/<owner>\/<repo>\/watch-state\.json` は、Issue URL で対応を確認できる bundle に限り read fallback/u,
+  );
+  assert.match(
+    documents[1],
+    /これは既存 session の互換読み込みであり、未参照の session や別 checkout を含む旧データ全体の inventory ではありません。全体の棚卸しと根拠を確認した copy は #698 の migration tool/u,
+  );
+  assert.match(
+    documents[1],
+    /#699 の fallback gate も通過扱いにはなりません/u,
+  );
   assert.doesNotMatch(
     documents[1],
     /Pi は `repoRoot` 基準の user 層 transcript を優先/u,
