@@ -1,5 +1,31 @@
 # @agents-ensemble/core
 
+## 0.22.0
+
+### Minor Changes
+
+- 30a07c0: operator-agent を専用 profile と global conversation に分離し、user session の repository scope とページングを追加します。Issue session data と旧 watch state は保全を確認できる read fallback と copy-only migration を使います。
+- a161f16: Use separate upstream pi-acp versions for BYO compatibility and the builtin Pi worker runtime, with configured Pi resources, worker-scoped session storage, preserved shell home settings, and fail-closed resume behavior.
+- 2b1a160: Add an interactive `ensemble setup` wizard for the conductor, with Pi/OpenAI or Cursor selection and existing authentication flows.
+- 10a39b6: Make Pi the default conductor backend and resolve its default model from Pi resource settings.
+- feac6a4: worker ACP modelTag に任意 tag と warning 付き default fallback を追加し、組み込み tier の fast を lite に変更します。
+- 5f7d35c: Add Pi command credential registration through `settings.json.apiKeys`.
+- c2e039e: Improve Pi OAuth terminal login with copyable URLs, cancellable hidden-code prompts, and provider method selection.
+- 1d92b67: Conductor send の失敗後に operator-authored input を TTY で確認できるようにし、両 workflow の dispatch lifecycle と再送境界を共通化します。
+- b86cabc: Add explicit API-key login modes for Pi, including secure stdin input, and expose known auth modes in status.
+- 9acad5f: Retire legacy Issue-session read fallbacks and stale repoKey-based operator-agent path helpers, keep public session path helpers canonical-only, and document the explicit copy-only migration workflow.
+- 9813d57: Discover and resume saved Issue sessions by canonical GitHub repository slug across clones.
+- 876e215: Add live remote close and exit controls for Issue sessions through the operator-agent.
+- 568746a: Export saved sessions as raw offline-analysis bundles with a manifest and SHA-256 file inventory.
+- 28b94c9: 認証済み conductor を使う TTY 対話 configurator `ensemble doctor` を追加する。secret を含まない allowlist の設定確認と、同意後の user config / 明示 opt-in による project config への書き込みに対応する。
+
+### Patch Changes
+
+- b3b7f40: Recover workers onto a fresh ACP session when a resumed thread's encrypted history is unreadable.
+- 22d4f2f: Store Issue session state under canonical GitHub slugs and preserve legacy data as read-only resume fallbacks.
+- 0d8f7f5: Expose saved Issue run history and worker transcripts in operator-agent with explicit run selection.
+- b54a7e7: Resolve Pi conductor history from the repository-scoped user session directory while preserving the conductor cwd and legacy fallback.
+
 ## 0.21.0
 
 ### Minor Changes

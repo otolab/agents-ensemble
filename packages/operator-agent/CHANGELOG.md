@@ -1,5 +1,40 @@
 # @agents-ensemble/operator-agent
 
+## 0.5.0
+
+### Minor Changes
+
+- 30a07c0: operator-agent を専用 profile と global conversation に分離し、user session の repository scope とページングを追加します。Issue session data と旧 watch state は保全を確認できる read fallback と copy-only migration を使います。
+- 9acad5f: Retire legacy Issue-session read fallbacks and stale repoKey-based operator-agent path helpers, keep public session path helpers canonical-only, and document the explicit copy-only migration workflow.
+- 876e215: Add live remote close and exit controls for Issue sessions through the operator-agent.
+
+### Patch Changes
+
+- 9f5864d: Add profile-scoped workspace file tools with path containment and size limits.
+- 1d92b67: Conductor send の失敗後に operator-authored input を TTY で確認できるようにし、両 workflow の dispatch lifecycle と再送境界を共通化します。
+- 22d4f2f: Store Issue session state under canonical GitHub slugs and preserve legacy data as read-only resume fallbacks.
+- 0d8f7f5: Expose saved Issue run history and worker transcripts in operator-agent with explicit run selection.
+- b54a7e7: Resolve Pi conductor history from the repository-scoped user session directory while preserving the conductor cwd and legacy fallback.
+- Updated dependencies [30a07c0]
+- Updated dependencies [a161f16]
+- Updated dependencies [2b1a160]
+- Updated dependencies [10a39b6]
+- Updated dependencies [feac6a4]
+- Updated dependencies [5f7d35c]
+- Updated dependencies [b3b7f40]
+- Updated dependencies [c2e039e]
+- Updated dependencies [1d92b67]
+- Updated dependencies [b86cabc]
+- Updated dependencies [9acad5f]
+- Updated dependencies [9813d57]
+- Updated dependencies [876e215]
+- Updated dependencies [568746a]
+- Updated dependencies [28b94c9]
+- Updated dependencies [22d4f2f]
+- Updated dependencies [0d8f7f5]
+- Updated dependencies [b54a7e7]
+  - @agents-ensemble/core@0.22.0
+
 ## 0.4.7
 
 ### Patch Changes
