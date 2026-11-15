@@ -287,7 +287,6 @@ export class PiConductorAgent implements ConductorAgent {
       ...(callbacks?.history ? { history: callbacks.history } : {}),
     };
     this.activeSend = state;
-    this.commandAuthRequestGate.active = true;
     try {
       await this.session.prompt(
         expandPiResourcePrompt(prompt, this.resources, {
@@ -309,7 +308,6 @@ export class PiConductorAgent implements ConductorAgent {
         modelId: this.modelId,
       };
     } finally {
-      this.commandAuthRequestGate.active = false;
       this.activeSend = undefined;
     }
 
@@ -599,14 +597,22 @@ function installPiCommandAuthRequestGate(input: {
       return originalStreamSimple(model, context, options);
     }
 
-    // Request credentials have already been resolved by AgentSession through
-    // ModelRuntime.getAuth(). Sanitize Pi's terminal/partial messages here so
-    // an errorMessage cannot enter the transcript before outward event
-    // listeners have a chance to inspect it.
+    // Pi 1.2.0's lazy stream starts its setup synchronously. That setup calls
+    // prepareRequest(), which starts getAuth() before streamSimple() returns.
+    // Keep the command gate active only for that setup call: prompt hooks and
+    // the provider response stream itself must not trigger command resolution
+    // through an unrelated getAuth() lookup.
     const output = createAssistantMessageEventStream();
     void (async () => {
       try {
-        const response = originalStreamSimple(model, context, options);
+        const wasActive = input.gate.active;
+        let response: ReturnType<ModelRuntime['streamSimple']>;
+        input.gate.active = true;
+        try {
+          response = originalStreamSimple(model, context, options);
+        } finally {
+          input.gate.active = wasActive;
+        }
         let terminalEventSeen = false;
         for await (const event of response) {
           if (event.type === 'done' || event.type === 'error') {

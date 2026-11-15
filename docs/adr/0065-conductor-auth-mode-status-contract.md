@@ -55,7 +55,7 @@ taxonomy ID と status の `source` / `mode` は別の軸である。`api_key_st
 |---------------|--------|----------------|
 | `runtime` | Pi 1.2.0 | Pi runtime override の登録を示す。headless path では通常、非 command の `settings.json.apiKeys[provider]`。非空なら user `auth.json` より先だが、user / project settings のどちらから来たかは分からない |
 | `stored` | Pi 1.2.0 | user `auth.json` の credential。API key / OAuth の種類は区別しない |
-| `project_stored` | Ensemble | project `auth.json` の API key / command entry。entry の種類は区別しない |
+| `project_stored` | Ensemble | project `auth.json` entry の粗い出所ラベル。source 単独では API key / command を区別しないが、型を判別できる entry は `mode` に示す |
 | `fallback` | Pi 1.2.0 | 現行 headless loader が `ModelRuntime.registerProvider()` に渡した `models.json` provider の通常 key。環境変数参照も登録前に展開するため、ここに含まれ得る |
 | `models_json_command` | Pi 1.2.0 | Pi provider 設定として登録した `models.json` command |
 | `environment` | Pi 1.2.0 / Ensemble | Pi の provider auth check、または Ensemble provider-env fallback。Pi の label は AWS profile / ADC など ambient auth を示す場合もある |
