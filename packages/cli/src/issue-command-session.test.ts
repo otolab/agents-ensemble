@@ -562,7 +562,7 @@ describe('executeIssueCommand with the core session', () => {
     const closeResumeStore = JSON.parse(await readFile(resumeStorePath, 'utf8'));
     expect(closeResumeStore.githubMonitor.pendingUpdates).toEqual([pendingUpdate]);
     await expect(
-      access(paths.sessionResumeStorePath('agent-test')),
+      access(paths.legacyHashSessionResumeStorePath('agent-test')),
     ).rejects.toMatchObject({ code: 'ENOENT' });
     expect(closeAcknowledge).not.toHaveBeenCalled();
     await saveOpenQuestionsStore(
@@ -630,7 +630,7 @@ describe('executeIssueCommand with the core session', () => {
     );
     expect(continuedResumeStore.githubMonitor.pendingUpdates).toBeUndefined();
     await expect(
-      access(paths.sessionResumeStorePath('agent-test')),
+      access(paths.legacyHashSessionResumeStorePath('agent-test')),
     ).rejects.toMatchObject({ code: 'ENOENT' });
     await rm(repoRoot, { recursive: true, force: true });
   });
@@ -730,7 +730,7 @@ describe('executeIssueCommand with the core session', () => {
         },
       });
       await expect(
-        access(sessionPaths.sessionResumeStorePath('agent-test')),
+        access(sessionPaths.legacyHashSessionResumeStorePath('agent-test')),
       ).rejects.toMatchObject({ code: 'ENOENT' });
 
       firstPrompt.resolve({ stopReason: 'cancelled', responseText: '' });

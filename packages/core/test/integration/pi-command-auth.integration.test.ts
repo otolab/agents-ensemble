@@ -519,6 +519,7 @@ describe('Pi command auth through the real conductor session', () => {
     vi.stubGlobal('fetch', fetch);
     const agent = await createPiConductorAgentFactory().create({
       cwd: repoRoot,
+      issueUrl: TEST_ISSUE.url,
       pi: { agentDir: fixture.agentDir, projectDir: fixture.projectDir },
       modelId: `${FIXTURE_PROVIDER}/${FIXTURE_MODEL}`,
       systemPrompt: 'fixture system prompt',
@@ -571,6 +572,7 @@ describe('Pi command auth through the real conductor session', () => {
 
     const agent = await createPiConductorAgentFactory().create({
       cwd: repoRoot,
+      issueUrl: TEST_ISSUE.url,
       pi: { agentDir: fixture.agentDir, projectDir: fixture.projectDir },
       modelId: `${FIXTURE_PROVIDER}/${FIXTURE_MODEL}`,
       systemPrompt: 'fixture system prompt',

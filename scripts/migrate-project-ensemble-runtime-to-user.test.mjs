@@ -1535,7 +1535,7 @@ test('unreadable slug-keyed watch sources stay unresolved and corrupt sources ar
   assert.equal(await readFile(corruptPath, 'utf8'), corruptText);
 });
 
-test('user docs distinguish bulk inventory from resume-time lazy promotion', async () => {
+test('user docs describe migration as explicit inventory and copy', async () => {
   const repositoryRoot = resolve(dirname(scriptPath), '..');
   const sessionLogging = await readFile(
     join(repositoryRoot, 'docs', 'session-logging.md'),
@@ -1546,14 +1546,13 @@ test('user docs distinguish bulk inventory from resume-time lazy promotion', asy
     'utf8',
   );
 
-  assert.match(sessionLogging, /resume 時の \*\*lazy promotion\*\*/u);
   assert.match(
     sessionLogging,
-    /user path-hash に残る Issue session data.*operator が列挙した全 checkout/u,
+    /user path-hash に残る Issue session data.*operator が指定した checkout/u,
   );
   assert.match(
     sessionLogging,
-    /operator watch state の profile \/ slug 移行も担いません/u,
+    /必要な場合に利用者が明示的な migration tool で調べる source/u,
   );
   assert.match(
     sessionLogging,
@@ -1583,11 +1582,11 @@ test('user docs distinguish bulk inventory from resume-time lazy promotion', asy
   );
   assert.match(
     liveControl,
-    /この lazy promotion を置き換えるものではなく/u,
+    /runtime fallback ではなく、残る old data を利用者が明示的に inventory \/ copy/u,
   );
   assert.match(
     liveControl,
-    /旧 slug-keyed `~\/\.ensemble\/operator-agent\/github\.com\/<owner>\/<repo>\/watch-state\.json`/u,
+    /旧 slug-keyed source では source path の slug も Store の Issue URL と一致/u,
   );
   assert.match(
     liveControl,
@@ -1621,7 +1620,7 @@ test('user docs distinguish bulk inventory from resume-time lazy promotion', asy
   );
   assert.ok(
     liveControl.includes(
-      '`~/.ensemble/sessions/<repoKey>/` は互換読取用の fallback に限り',
+      '`~/.ensemble/sessions/<repoKey>/` は migration source であり、runtime は読みません。',
     ),
   );
   assert.ok(
@@ -1651,7 +1650,7 @@ test('user docs distinguish bulk inventory from resume-time lazy promotion', asy
   }
 });
 
-test('persistence docs use canonical slug writes and separate legacy fallback from bulk migration', async () => {
+test('persistence docs use canonical slug paths and identify legacy migration sources', async () => {
   const repositoryRoot = resolve(dirname(scriptPath), '..');
   const documentPaths = [
     'docs/settings.md',
@@ -1673,7 +1672,7 @@ test('persistence docs use canonical slug writes and separate legacy fallback fr
     );
     assert.doesNotMatch(
       document,
-      /~\/\.ensemble\/sessions\/<repoKey>/u,
+      /新規 session の通常保存先は引き続き path-hash/u,
       `${documentPaths[index]} must not describe path-hash as the current Issue-session destination`,
     );
     assert.doesNotMatch(
@@ -1692,43 +1691,15 @@ test('persistence docs use canonical slug writes and separate legacy fallback fr
 
   assert.match(
     documents[1],
-    /Issue URL がある Pi session は canonical slug の user transcript、現在 clone の `repoRoot` 由来 path-hash、指定された saved-root path-hash の順に探し、その後で現在・保存済み `conductorCwd` の project `\.ensemble\/pi\/sessions\/` を調べます/u,
-  );
-  assert.match(
-    documents[1],
-    /旧 user path-hash と slug-keyed `~\/\.ensemble\/operator-agent\/github\.com\/<owner>\/<repo>\/watch-state\.json` は、Issue URL で対応を確認できる bundle に限り read fallback/u,
-  );
-  assert.match(
-    documents[1],
-    /これは既存 session の互換読み込みであり、未参照の session や別 checkout を含む旧データ全体の inventory ではありません。全体の棚卸しと根拠を確認した copy は #698 の migration tool/u,
-  );
-  assert.match(
-    documents[1],
-    /#699 の fallback gate も通過扱いにはなりません/u,
+    /Pi transcript は canonical slug のみから読み取り、legacy path-hash \/ project transcript は明示 migration の source です/u,
   );
   assert.doesNotMatch(
     documents[1],
     /Pi は `repoRoot` 基準の user 層 transcript を優先/u,
   );
   assert.match(
-    documents[0],
-    /lazy promotion は選択した session に限られます.*#698 migration tool/u,
-  );
-  assert.match(
     documents[1],
-    /全 path-hash と operator が列挙した checkout の session \/ watch data は #698 の一括 inventory \/ copy tool/u,
-  );
-  assert.match(
-    documents[2],
-    /resume 時は不足 file だけを slug 側へ copy.*#698 migration tool の範囲/u,
-  );
-  assert.match(
-    documents[3],
-    /閲覧時の fallback は read-only.*resume 時の lazy promotion.*inventory と copy は #698 migration tool/u,
-  );
-  assert.match(
-    documents[4],
-    /resume 時は slug 側にない対象 file だけを copy.*inventory \/ copy は #698 migration tool/u,
+    /path-hash \/ project-local legacy は通常読まず、自動 promotion もしません/u,
   );
 });
 

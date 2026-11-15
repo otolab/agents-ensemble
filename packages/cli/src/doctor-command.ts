@@ -117,7 +117,6 @@ export async function runDoctorCommand(
             piExtensions: false,
             piInternalExtensions: false,
             sessionDir: temporarySessionDir!,
-            legacySessionDirs: [],
           }
         : {}),
       customTools,

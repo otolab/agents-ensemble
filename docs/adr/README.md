@@ -96,7 +96,7 @@ ADR は**合意された設計判断の履歴**を残すもの。一度 `accepte
 | [0022](0022-tui-resize-workaround.md) | TUI resize workaround と Ink 回帰監視 | superseded → [0024](0024-tui-shrink-coalesce.md) |
 | [0023](0023-tty-initial-message-post-loop.md) | TTY 初回メッセージの post-loop ライフサイクル | accepted |
 | [0024](0024-tui-shrink-coalesce.md) | TUI columns 縮小時の live frame coalesce | accepted |
-| [0025](0025-conductor-agent-backend-sdk-and-pi.md) | conductor LLM backend（Cursor SDK と Pi）の併存 | proposed |
+| [0025](0025-conductor-agent-backend-sdk-and-pi.md) | conductor LLM backend（Cursor SDK と Pi）の併存 | proposed（Pi conductor transcript の project-local runtime path は一部 [0076](0076-retire-legacy-issue-session-read-fallbacks.md) で supersede） |
 | [0026](0026-tui-stream-shrink-recovery.md) | stream 縮小時 scrollback 再同期 | accepted |
 | [0027](0027-permission-stall-notification.md) | permission 停滞通知の低優先度 dispatch | superseded in part → [0056](0056-permission-stall-dispatch-hold.md)（dispatch hold） / [0057](0057-permission-stall-idle-detection.md)（activity gate） |
 | [0028](0028-authentication-delegation-and-ensemble-auth.md) | 認証の管理方針（worker 移譲・conductor と ensemble auth） | accepted |
@@ -132,7 +132,7 @@ ADR は**合意された設計判断の履歴**を残すもの。一度 `accepte
 | [0058](0058-pi-send-recovery-replay-boundary.md) | Pi send recovery の再送境界 | superseded → [0059](0059-pi-recovery-report-after-manual-reconnect.md) |
 | [0059](0059-pi-recovery-report-after-manual-reconnect.md) | Pi 手動再接続後の recovery report | superseded → [0072](0072-conductor-dispatch-lifecycle-and-recovery-boundary.md) |
 | [0060](0060-pi-recovery-operator-inbox.md) | Pi 失敗 dispatch の operator 専用 inbox | superseded → [0072](0072-conductor-dispatch-lifecycle-and-recovery-boundary.md) |
-| [0061](0061-github-slug-session-persistence.md) | Issue session の slug 正本と operator-agent の user profile | proposed |
+| [0061](0061-github-slug-session-persistence.md) | Issue session の slug 正本と operator-agent の user profile | proposed（Phase 5 の gate 方針は一部 [0076](0076-retire-legacy-issue-session-read-fallbacks.md) で supersede） |
 | [0062](0062-worker-acp-model-tags.md) | worker ACP modelTag の語彙と未登録時の解決 | superseded in part → [0063](0063-explicit-default-model-tag-warning.md)（明示 `default` と省略時の warning 区別） / [0064](0064-worker-model-tags-allow-empty-strings.md)（空文字・空白のみを含む任意文字列） |
 | [0063](0063-explicit-default-model-tag-warning.md) | 明示された default modelTag の未登録 warning | accepted |
 | [0064](0064-worker-model-tags-allow-empty-strings.md) | worker modelTag に空文字・空白のみの tag を許可 | accepted |
@@ -147,6 +147,7 @@ ADR は**合意された設計判断の履歴**を残すもの。一度 `accepte
 | [0073](0073-legacy-cursor-bootstrap-unknown.md) | 旧 Cursor bootstrap 状態を unknown として再開する | accepted |
 | [0074](0074-manual-resume-after-close-failure.md) | close failure 後の明示 reconnect | accepted |
 | [0075](0075-pi-conductor-default-and-model-selection.md) | Pi conductor の既定化と model 選択 | accepted |
+| [0076](0076-retire-legacy-issue-session-read-fallbacks.md) | Issue session の legacy read fallback 廃止と migration 手順 | accepted |
 
 ## 追加するとき
 

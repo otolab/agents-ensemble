@@ -13,7 +13,7 @@ export const SESSION_STATE_STORE_MAX_BYTES = 16 * 1024;
 export interface SessionStatePathOptions {
   repoRoot: string;
   conductorAgentId: string;
-  issueUrl?: string;
+  issueUrl: string;
   location?: SessionResumeStoreLocation;
 }
 
@@ -32,15 +32,10 @@ export function sessionStateStorePath(
   options: SessionStatePathOptions,
 ): string {
   const paths = resolveEnsemblePaths({ repoRoot: options.repoRoot });
-  if (options.location === 'canonical-slug') {
-    if (!options.issueUrl) {
-      throw new Error(
-        'issueUrl is required for a canonical-slug session state path.',
-      );
-    }
-    return paths.canonicalSessionStatePath(options.issueUrl, options.conductorAgentId);
+  if (!options.issueUrl) {
+    throw new Error('issueUrl is required for a canonical session state path.');
   }
-  return paths.sessionStatePath(options.conductorAgentId);
+  return paths.canonicalSessionStatePath(options.issueUrl, options.conductorAgentId);
 }
 
 export function legacySessionStateStorePath(
@@ -72,17 +67,9 @@ export async function saveSessionStatusLine(
   path: string,
   statusLine: string,
   reportedAt = Date.now(),
-  fallbackPaths?: string | readonly string[],
 ): Promise<void> {
   const current = parseSessionStatusLine({ statusLine, reportedAt });
-  let existing = await loadSessionStateStore(path);
-  const paths = typeof fallbackPaths === 'string'
-    ? [fallbackPaths]
-    : (fallbackPaths ?? []);
-  for (const fallbackPath of paths) {
-    if (existing) break;
-    existing = await loadSessionStateStore(fallbackPath);
-  }
+  const existing = await loadSessionStateStore(path);
   const next = {
     current,
     history: boundHistory(

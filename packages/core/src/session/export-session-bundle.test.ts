@@ -86,7 +86,10 @@ describe('exportSessionBundle', () => {
     vi.stubEnv(ENSEMBLE_USER_ROOT_ENV, userRoot);
     vi.stubEnv('CODEX_HOME', codexHome);
     paths = resolveEnsemblePaths({ repoRoot, userEnsembleRoot: userRoot });
-    resumeStorePath = paths.sessionResumeStorePath(SESSION_ID);
+    resumeStorePath = paths.canonicalSessionResumeStorePath(
+      ISSUE_URL,
+      SESSION_ID,
+    );
     await writeResumeStore();
     await writeCodexWorkerRollout();
     await writeSessionSnapshots();
@@ -106,7 +109,10 @@ describe('exportSessionBundle', () => {
     await writeCodexWorkerRollout(101);
     await writeFile(summaryPath, '{"lastError":{"message":"SUMMARY_RAW"}}\n');
     await writeFile(harnessLogPath, '[harness] raw stderr\n');
-    const toolCallsPath = paths.toolCallHistoryPath(SESSION_ID);
+    const toolCallsPath = paths.canonicalToolCallHistoryPath(
+      ISSUE_URL,
+      SESSION_ID,
+    );
     await mkdir(dirname(toolCallsPath), { recursive: true });
     await writeFile(toolCallsPath, '{"workerName":"implementer"}\n');
 
@@ -169,6 +175,7 @@ describe('exportSessionBundle', () => {
       conductorAgentId: SESSION_ID,
       cwd: conductorCwd,
       repoRoot,
+      issueUrl: ISSUE_URL,
       query: { limit: 100, order: 'asc' },
     });
     expect(providerHistory.messages).toHaveLength(100);
@@ -201,8 +208,14 @@ describe('exportSessionBundle', () => {
     });
 
     const expectedRawFiles = [
-      ['harness/session-state.yaml', paths.sessionStatePath(SESSION_ID)],
-      ['harness/open-questions.yaml', paths.openQuestionsPath(SESSION_ID)],
+      [
+        'harness/session-state.yaml',
+        paths.canonicalSessionStatePath(ISSUE_URL, SESSION_ID),
+      ],
+      [
+        'harness/open-questions.yaml',
+        paths.canonicalOpenQuestionsPath(ISSUE_URL, SESSION_ID),
+      ],
       ['harness/session.tool-calls', toolCallsPath],
       ['inputs/session-summary.json', summaryPath],
       ['inputs/harness.log', harnessLogPath],
@@ -375,7 +388,7 @@ describe('exportSessionBundle', () => {
     expect(result.manifest.warnings).toContain(warning);
   });
 
-  it('exports the saved clone project legacy tool-call history before the current clone fallback', async () => {
+  it('does not export project-local tool-call history', async () => {
     const savedRepoRoot = join(tempRoot, 'saved-repository');
     const savedPaths = resolveEnsemblePaths({
       repoRoot: savedRepoRoot,
@@ -411,18 +424,20 @@ describe('exportSessionBundle', () => {
         (source) => source.id === 'harness.toolCallSnapshots',
       ),
     ).toMatchObject({
-      status: 'copied',
-      sourcePaths: [savedLegacyPath],
+      status: 'unavailable',
+      sourcePaths: [
+        paths.canonicalToolCallHistoryPath(ISSUE_URL, SESSION_ID),
+      ],
     });
     await expect(
       readFile(join(outputDirectory, 'harness/session.tool-calls'), 'utf8'),
-    ).resolves.toBe('{"source":"saved clone"}\n');
+    ).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('records missing supplemental data and a running-session best-effort warning', async () => {
     await writeResumeStore({ harnessPhase: 'running' });
-    await rm(paths.sessionStatePath(SESSION_ID));
-    await rm(paths.openQuestionsPath(SESSION_ID));
+    await rm(paths.canonicalSessionStatePath(ISSUE_URL, SESSION_ID));
+    await rm(paths.canonicalOpenQuestionsPath(ISSUE_URL, SESSION_ID));
     await rm(piTranscriptPath);
     await rm(paths.legacyPiSessionsDirForCwd(conductorCwd), {
       recursive: true,
@@ -631,9 +646,18 @@ describe('exportSessionBundle', () => {
   }
 
   async function writeSessionSnapshots(): Promise<void> {
-    const sessionStatePath = paths.sessionStatePath(SESSION_ID);
-    const openQuestionsPath = paths.openQuestionsPath(SESSION_ID);
-    const toolCallsPath = paths.toolCallHistoryPath(SESSION_ID);
+    const sessionStatePath = paths.canonicalSessionStatePath(
+      ISSUE_URL,
+      SESSION_ID,
+    );
+    const openQuestionsPath = paths.canonicalOpenQuestionsPath(
+      ISSUE_URL,
+      SESSION_ID,
+    );
+    const toolCallsPath = paths.canonicalToolCallHistoryPath(
+      ISSUE_URL,
+      SESSION_ID,
+    );
     await Promise.all([
       mkdir(dirname(sessionStatePath), { recursive: true }),
       mkdir(dirname(openQuestionsPath), { recursive: true }),
@@ -646,7 +670,7 @@ describe('exportSessionBundle', () => {
   function writePiConductorHistory(): string {
     const manager = SessionManager.create(
       conductorCwd,
-      paths.piSessionsDir,
+      paths.canonicalPiSessionsDir(ISSUE_URL),
       { id: SESSION_ID },
     );
     for (let index = 0; index <= 100; index += 1) {

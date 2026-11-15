@@ -191,7 +191,7 @@ try {
     'close-process-agent',
   );
   const resumeStore = JSON.parse(await readFile(resumeStorePath, 'utf8'));
-  if (existsSync(paths.sessionResumeStorePath('close-process-agent'))) {
+  if (existsSync(paths.legacyHashSessionResumeStorePath('close-process-agent'))) {
     throw new Error('TTY /close wrote a new path-hash SessionResumeStore');
   }
   if (

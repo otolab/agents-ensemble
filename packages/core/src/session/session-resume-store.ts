@@ -144,13 +144,16 @@ export type FindLatestSessionSidecarInput = FindLatestSessionResumeStoreInput;
 
 export interface SessionResumeStorePathOptions {
   repoRoot: string;
+  issueUrl: string;
   conductorAgentId: string;
 }
 
-export type SessionResumeStoreLocation =
-  | 'canonical-slug'
-  | 'user-path-hash'
-  | 'project-legacy';
+export interface SessionResumeStoreDirOptions {
+  repoRoot: string;
+  issueUrl: string;
+}
+
+export type SessionResumeStoreLocation = 'canonical-slug';
 
 export interface LocatedSessionResumeStore {
   resumeStore: SessionResumeStore;
@@ -196,8 +199,12 @@ const SESSION_RESUME_STORE_PAGE_CURSOR_VERSION = 1;
 /** @deprecated Use SessionResumeStorePathOptions; supported for one release only. */
 export type SessionSidecarPathOptions = SessionResumeStorePathOptions;
 
-export function sessionResumeStoreDir(repoRoot: string): string {
-  return resolveEnsemblePaths({ repoRoot }).sessionsDir;
+/** Return the canonical user-store directory for an Issue repository. */
+export function sessionResumeStoreDir(
+  input: SessionResumeStoreDirOptions,
+): string {
+  return resolveEnsemblePaths({ repoRoot: input.repoRoot })
+    .canonicalRepoSessionsDir(input.issueUrl);
 }
 
 export function legacySessionResumeStoreDir(repoRoot: string): string {
@@ -205,17 +212,18 @@ export function legacySessionResumeStoreDir(repoRoot: string): string {
 }
 
 export function legacySessionResumeStorePath(
-  options: SessionResumeStorePathOptions,
+  options: Pick<SessionResumeStorePathOptions, 'repoRoot' | 'conductorAgentId'>,
 ): string {
   return resolveEnsemblePaths({
     repoRoot: options.repoRoot,
   }).legacySessionResumeStorePath(options.conductorAgentId);
 }
 
-export function sessionResumeStorePath(options: SessionResumeStorePathOptions): string {
-  return resolveEnsemblePaths({
-    repoRoot: options.repoRoot,
-  }).sessionResumeStorePath(options.conductorAgentId);
+/** Return the canonical user-store path; an Issue URL is required for identity. */
+export function sessionResumeStorePath(
+  options: SessionResumeStorePathOptions,
+): string {
+  return canonicalSessionResumeStorePath(options);
 }
 
 export function canonicalSessionResumeStorePath(input: {
@@ -319,48 +327,14 @@ export async function requireLocatedSessionResumeStoreForResume(input: {
     ? redactLegacyAcpSpawnEnv(loaded.rawValue, loaded.resumeStore)
     : loaded.resumeStore;
   const resumeStore = parseSessionResumeStore(persistedValue);
-  if (located.location === 'canonical-slug') {
-    if (loaded.hasLegacyAcpSpawnEnv) {
-      // Scrub canonical data before resume validation can reject the session
-      // and bypass its normal first write.
-      await writeSessionResumeStoreFile(located.path, persistedValue);
-    }
-    return {
-      ...located,
-      resumeStore,
-    };
-  }
-
-  // Promote one legacy Store to its canonical destination. Never update the
-  // source, and never replace a slug file created by another session/process.
-  const migratedPath = canonicalSessionResumeStorePath({
-    repoRoot: input.repoRoot,
-    issueUrl: resumeStore.issueUrl,
-    conductorAgentId: input.conductorAgentId,
-  });
-  await writeFileIfMissing(
-    migratedPath,
-    `${JSON.stringify(resumeStore, null, 2)}\n`,
-  );
-  const migrated = await readSessionResumeStore(migratedPath);
-  if (!migrated) {
-    throw new SessionResumeStoreNotFoundError(
-      input.conductorAgentId,
-      migratedPath,
-    );
-  }
-  if (
-    migrated.resumeStore.conductorAgentId !== input.conductorAgentId ||
-    migrated.resumeStore.issueUrl !== resumeStore.issueUrl
-  ) {
-    throw new Error(
-      `Canonical session resume store collision at ${migratedPath}; the existing slug file belongs to a different session.`,
-    );
+  if (loaded.hasLegacyAcpSpawnEnv) {
+    // Scrub canonical data before resume validation can reject the session
+    // and bypass its normal first write.
+    await writeSessionResumeStoreFile(located.path, persistedValue);
   }
   return {
-    resumeStore: migrated.resumeStore,
-    path: migratedPath,
-    location: 'canonical-slug',
+    ...located,
+    resumeStore,
   };
 }
 
@@ -519,10 +493,10 @@ export async function listLocatedSessionResumeStoresPage(
 }
 
 /**
- * List user-scoped canonical slug stores and every user path-hash store.
+ * List user-scoped canonical slug stores.
  *
  * This is intended for repository-independent operator tools. It does not
- * inspect a checkout's `.ensemble/sessions` directory or call GitHub.
+ * inspect path-hash or checkout-local session data, or call GitHub.
  */
 export async function listUserLocatedSessionResumeStoresPage(
   query: SessionResumeStoreQuery = {},
@@ -537,8 +511,6 @@ export async function listUserLocatedSessionResumeStoresPage(
     await listSessionResumeStoreLocations(userRoot, {
       onDuplicate: options.onDuplicate,
       userEnsembleRoot: userRoot,
-      includeAllUserPathHashes: true,
-      includeProjectLegacy: false,
     })
   )
     .filter(({ resumeStore }) => {
@@ -665,8 +637,6 @@ async function listSessionResumeStoreLocations(
   options: {
     userEnsembleRoot?: string;
     onDuplicate?: (diagnostic: SessionResumeStoreDuplicateDiagnostic) => void;
-    includeAllUserPathHashes?: boolean;
-    includeProjectLegacy?: boolean;
   } = {},
 ): Promise<LocatedSessionResumeStore[]> {
   const paths = resolveEnsemblePaths({
@@ -776,38 +746,6 @@ async function listSessionResumeStoreLocations(
     }
   }
 
-  // Inspect canonical data before the legacy fallbacks. Malformed legacy JSON
-  // or schema data is unavailable for resume, but must not hide a usable slug
-  // store or another candidate. Keep the source untouched; direct reads still
-  // surface InvalidSessionResumeStoreDataError. Filesystem errors are not
-  // treated as malformed data and continue to propagate.
-  if (options.includeAllUserPathHashes) {
-    let sessionRoots: Dirent[];
-    try {
-      sessionRoots = await readdir(paths.sessionsRoot, { withFileTypes: true });
-    } catch (error) {
-      if (!isEnoent(error)) throw error;
-      sessionRoots = [];
-    }
-    for (const entry of sessionRoots) {
-      if (!entry.isDirectory() || !/^[a-f0-9]{64}$/u.test(entry.name)) {
-        continue;
-      }
-      await readDirectory(join(paths.sessionsRoot, entry.name), 'user-path-hash', {
-        skipMalformedStoreData: true,
-      });
-    }
-  } else {
-    await readDirectory(paths.sessionsDir, 'user-path-hash', {
-      skipMalformedStoreData: true,
-    });
-  }
-  if (options.includeProjectLegacy !== false) {
-    await readDirectory(paths.legacySessionsDir, 'project-legacy', {
-      skipMalformedStoreData: true,
-    });
-  }
-
   const bySession = new Map<string, LocatedSessionResumeStore[]>();
   for (const candidate of candidates) {
     const sessionKey = JSON.stringify([
@@ -819,17 +757,10 @@ async function listSessionResumeStoreLocations(
     bySession.set(sessionKey, matching);
   }
 
-  const locationPriority: Record<SessionResumeStoreLocation, number> = {
-    'canonical-slug': 0,
-    'user-path-hash': 1,
-    'project-legacy': 2,
-  };
   const selected: LocatedSessionResumeStore[] = [];
   for (const matches of bySession.values()) {
     matches.sort(
-      (left, right) =>
-        locationPriority[left.location] - locationPriority[right.location] ||
-        right.resumeStore.updatedAt - left.resumeStore.updatedAt,
+      (left, right) => right.resumeStore.updatedAt - left.resumeStore.updatedAt,
     );
     const chosen = matches[0]!;
     selected.push(chosen);

@@ -3,12 +3,15 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { OpenQuestionRegistry } from '../escalation/open-question.js';
+import { resolveEnsemblePaths } from '../ensemble-paths.js';
 import {
   loadOpenQuestionsStore,
   OPEN_QUESTIONS_STORE_VERSION,
   openQuestionsStorePath,
   saveOpenQuestionsStore,
 } from './open-questions-store.js';
+
+const ISSUE_URL = 'https://github.com/org/repo/issues/1';
 
 describe('open questions store', () => {
   let tempDir = '';
@@ -32,6 +35,7 @@ describe('open questions store', () => {
     const path = openQuestionsStorePath({
       repoRoot: tempDir,
       conductorAgentId: 'agent-1',
+      issueUrl: ISSUE_URL,
     });
     const snapshot = {
       sequence: 4,
@@ -70,6 +74,20 @@ describe('open questions store', () => {
     ]);
     expect(fileInfo.mode & 0o777).toBe(0o600);
     expect(directoryInfo.mode & 0o777).toBe(0o700);
+    await expect(
+      readFile(
+        resolveEnsemblePaths({ repoRoot: tempDir })
+          .legacyHashOpenQuestionsPath('agent-1'),
+        'utf8',
+      ),
+    ).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(
+      readFile(
+        resolveEnsemblePaths({ repoRoot: tempDir })
+          .legacyOpenQuestionsPath('agent-1'),
+        'utf8',
+      ),
+    ).rejects.toMatchObject({ code: 'ENOENT' });
 
     const restored = new OpenQuestionRegistry();
     restored.restore((await loadOpenQuestionsStore(path))!);
@@ -86,6 +104,7 @@ describe('open questions store', () => {
     const path = openQuestionsStorePath({
       repoRoot: tempDir,
       conductorAgentId: 'agent-custom-id',
+      issueUrl: ISSUE_URL,
     });
     const snapshot = {
       sequence: 8,
@@ -114,6 +133,7 @@ describe('open questions store', () => {
         openQuestionsStorePath({
           repoRoot: tempDir,
           conductorAgentId: 'missing-agent',
+          issueUrl: ISSUE_URL,
         }),
       ),
     ).resolves.toBeUndefined();
@@ -124,6 +144,7 @@ describe('open questions store', () => {
     const path = openQuestionsStorePath({
       repoRoot: tempDir,
       conductorAgentId: 'agent-invalid',
+      issueUrl: ISSUE_URL,
     });
     await mkdir(dirname(path), { recursive: true });
 
@@ -151,6 +172,7 @@ describe('open questions store', () => {
     const path = openQuestionsStorePath({
       repoRoot: tempDir,
       conductorAgentId: 'agent-sequence-mismatch',
+      issueUrl: ISSUE_URL,
     });
     await mkdir(dirname(path), { recursive: true });
     await writeFile(
@@ -179,6 +201,7 @@ describe('open questions store', () => {
     const path = openQuestionsStorePath({
       repoRoot: tempDir,
       conductorAgentId: 'agent-duplicate-id',
+      issueUrl: ISSUE_URL,
     });
     await mkdir(dirname(path), { recursive: true });
     await writeFile(

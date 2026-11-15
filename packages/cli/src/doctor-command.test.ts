@@ -215,7 +215,6 @@ describe('runDoctorCommand', () => {
       piSkills: false,
       piExtensions: false,
       piInternalExtensions: false,
-      legacySessionDirs: [],
     });
     expect(result.optionsUsed).not.toHaveProperty('mcpServers');
     expect(result.optionsUsed.sessionDir).toContain('ensemble-doctor-pi-session-');

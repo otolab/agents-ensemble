@@ -265,7 +265,6 @@ export async function runOperatorAgent(
             runtime.userEnsembleRoot,
             operatorAgentId,
           ),
-          legacySessionDirs: [],
           piSkills: runtime.profile.pi?.skills !== false,
           piExtensions: false,
         }

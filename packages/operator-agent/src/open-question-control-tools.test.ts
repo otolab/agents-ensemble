@@ -19,7 +19,6 @@ import {
 } from '../../core/src/session/open-question-control.js';
 import {
   saveSessionResumeStore,
-  sessionResumeStorePath,
   SESSION_RESUME_STORE_VERSION,
 } from '../../core/src/session/session-resume-store.js';
 import {
@@ -87,10 +86,7 @@ describe('operator-agent live Open Question tools', () => {
       },
     });
     await saveSessionResumeStore(
-      sessionResumeStorePath({
-        repoRoot,
-        conductorAgentId: 'agent-live',
-      }),
+      canonicalResumeStorePath(repoRoot, issueUrl, 'agent-live'),
       {
         version: SESSION_RESUME_STORE_VERSION,
         conductorAgentId: 'agent-live',
@@ -206,10 +202,7 @@ describe('operator-agent live Open Question tools', () => {
       hasMore: false,
     });
     await saveSessionResumeStore(
-      sessionResumeStorePath({
-        repoRoot,
-        conductorAgentId: 'agent-offline',
-      }),
+      canonicalResumeStorePath(repoRoot, issueUrl, 'agent-offline'),
       {
         version: SESSION_RESUME_STORE_VERSION,
         conductorAgentId: 'agent-offline',
@@ -288,10 +281,8 @@ describe('operator-agent live Open Question tools', () => {
     });
     const agentId = 'agent-duplicate';
     const issueUrl = 'https://github.com/org/repo/issues/4';
-    const hashPath = sessionResumeStorePath({
-      repoRoot,
-      conductorAgentId: agentId,
-    });
+    const hashPath = resolveEnsemblePaths({ repoRoot })
+      .legacyHashSessionResumeStorePath(agentId);
     await saveSessionResumeStore(hashPath, {
       version: SESSION_RESUME_STORE_VERSION,
       conductorAgentId: agentId,
@@ -321,23 +312,9 @@ describe('operator-agent live Open Question tools', () => {
       'utf8',
     );
 
-    const diagnostics: unknown[] = [];
-    const listed = await createListLiveOpenQuestionsTool(
-      repoRoot,
-      (diagnostic) => diagnostics.push(diagnostic),
-    ).execute({
+    const listed = await createListLiveOpenQuestionsTool(repoRoot).execute({
       conductorAgentId: agentId,
     });
-    expect(diagnostics).toMatchObject([
-      {
-        selectedPath: slugPath,
-        selectedLocation: 'canonical-slug',
-        candidates: [
-          { path: slugPath, hasHarnessSocketPath: true },
-          { path: hashPath, hasHarnessSocketPath: false },
-        ],
-      },
-    ]);
     expect(listed.structuredContent).toMatchObject({
       questions: [expect.objectContaining({ id: question.id })],
     });
@@ -400,10 +377,11 @@ describe('operator-agent live Open Question tools', () => {
       sendOperatorMessage,
     });
     await saveSessionResumeStore(
-      sessionResumeStorePath({
+      canonicalResumeStorePath(
         repoRoot,
-        conductorAgentId: 'agent-send',
-      }),
+        'https://github.com/org/repo/issues/3',
+        'agent-send',
+      ),
       {
         version: SESSION_RESUME_STORE_VERSION,
         conductorAgentId: 'agent-send',
@@ -459,7 +437,11 @@ describe('operator-agent live Open Question tools', () => {
       requestOperatorShutdown,
     });
     await saveSessionResumeStore(
-      sessionResumeStorePath({ repoRoot, conductorAgentId: 'agent-shutdown' }),
+      canonicalResumeStorePath(
+        repoRoot,
+        'https://github.com/org/repo/issues/704',
+        'agent-shutdown',
+      ),
       {
         version: SESSION_RESUME_STORE_VERSION,
         conductorAgentId: 'agent-shutdown',
@@ -508,3 +490,14 @@ describe('operator-agent live Open Question tools', () => {
     });
   });
 });
+
+function canonicalResumeStorePath(
+  repoRoot: string,
+  issueUrl: string,
+  conductorAgentId: string,
+): string {
+  return resolveEnsemblePaths({ repoRoot }).canonicalSessionResumeStorePath(
+    issueUrl,
+    conductorAgentId,
+  );
+}

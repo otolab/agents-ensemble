@@ -9,6 +9,7 @@ import {
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { resolveEnsemblePaths } from '../ensemble-paths.js';
 import {
   loadSessionStateStore,
   legacySessionStateStorePath,
@@ -18,6 +19,8 @@ import {
   SESSION_STATUS_HISTORY_MAX_ENTRIES,
   SESSION_STATE_STORE_VERSION,
 } from './session-state-store.js';
+
+const ISSUE_URL = 'https://github.com/org/repo/issues/607';
 
 describe('session state store', () => {
   let repoRoot = '';
@@ -39,6 +42,7 @@ describe('session state store', () => {
     const path = sessionStateStorePath({
       repoRoot,
       conductorAgentId: 'agent-1',
+      issueUrl: ISSUE_URL,
     });
 
     await saveSessionStatusLine(path, '  実装中：型チェック待ち  ', 1_739_000_000_000);
@@ -57,6 +61,22 @@ describe('session state store', () => {
     await expect(
       readdir(dirname(path)),
     ).resolves.toEqual(['session-state.yaml']);
+    await expect(
+      readFile(
+        resolveEnsemblePaths({ repoRoot })
+          .legacyHashSessionStatePath('agent-1'),
+        'utf8',
+      ),
+    ).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(
+      readFile(
+        legacySessionStateStorePath({
+          repoRoot,
+          conductorAgentId: 'agent-1',
+        }),
+        'utf8',
+      ),
+    ).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('keeps status state isolated by conductorAgentId', async () => {
@@ -64,10 +84,12 @@ describe('session state store', () => {
     const first = sessionStateStorePath({
       repoRoot,
       conductorAgentId: 'agent-first',
+      issueUrl: ISSUE_URL,
     });
     const second = sessionStateStorePath({
       repoRoot,
       conductorAgentId: 'agent-second',
+      issueUrl: ISSUE_URL,
     });
     await Promise.all([
       saveSessionStatusLine(first, 'first', 1),
@@ -89,6 +111,7 @@ describe('session state store', () => {
     const path = sessionStateStorePath({
       repoRoot,
       conductorAgentId: 'agent-1',
+      issueUrl: ISSUE_URL,
     });
 
     await expect(loadSessionStateStore(path)).resolves.toBeUndefined();
@@ -108,6 +131,7 @@ describe('session state store', () => {
     const path = sessionStateStorePath({
       repoRoot,
       conductorAgentId: 'agent-legacy',
+      issueUrl: ISSUE_URL,
     });
     await mkdir(dirname(path), { recursive: true });
     await writeFile(
@@ -127,13 +151,17 @@ describe('session state store', () => {
     });
   });
 
-  it('moves legacy project status into the user store without losing history on the next report', async () => {
+  it('does not carry project-local status into a new Issue-scoped report', async () => {
     repoRoot = await createHome('ensemble-session-state-');
     const options = {
       repoRoot,
       conductorAgentId: 'agent-project-legacy',
     };
-    const path = sessionStateStorePath(options);
+    const path = sessionStateStorePath({
+      ...options,
+      issueUrl: ISSUE_URL,
+      location: 'canonical-slug',
+    });
     const legacyPath = legacySessionStateStorePath(options);
     await mkdir(dirname(legacyPath), { recursive: true });
     await writeFile(
@@ -151,28 +179,26 @@ describe('session state store', () => {
       'utf8',
     );
 
-    await saveSessionStatusLine(path, 'new report', 20, legacyPath);
+    await saveSessionStatusLine(path, 'new report', 20);
 
     await expect(loadSessionStateStore(path)).resolves.toEqual({
       current: { statusLine: 'new report', reportedAt: 20 },
-      history: [
-        { statusLine: 'older report', reportedAt: 5 },
-        { statusLine: 'legacy report', reportedAt: 10 },
-      ],
+      history: [],
     });
     await expect(loadSessionStateStore(legacyPath)).resolves.toMatchObject({
       current: { statusLine: 'legacy report', reportedAt: 10 },
     });
   });
 
-  it('writes slug-keyed session state while carrying forward a path-hash snapshot', async () => {
+  it('writes Issue-scoped session state without carrying forward a path-hash snapshot', async () => {
     repoRoot = await createHome('ensemble-session-state-slug-');
     const options = {
       repoRoot,
       conductorAgentId: 'agent-slug',
-      issueUrl: 'https://github.com/org/repo/issues/607',
+      issueUrl: ISSUE_URL,
     };
-    const hashPath = sessionStateStorePath(options);
+    const hashPath = resolveEnsemblePaths({ repoRoot })
+      .legacyHashSessionStatePath(options.conductorAgentId);
     const slugPath = sessionStateStorePath({
       ...options,
       location: 'canonical-slug',
@@ -184,11 +210,11 @@ describe('session state store', () => {
       'utf8',
     );
 
-    await saveSessionStatusLine(slugPath, 'slug report', 20, [hashPath]);
+    await saveSessionStatusLine(slugPath, 'slug report', 20);
 
     await expect(loadSessionStateStore(slugPath)).resolves.toEqual({
       current: { statusLine: 'slug report', reportedAt: 20 },
-      history: [{ statusLine: 'hash report', reportedAt: 10 }],
+      history: [],
     });
     await expect(loadSessionStateStore(hashPath)).resolves.toMatchObject({
       current: { statusLine: 'hash report', reportedAt: 10 },
@@ -200,6 +226,7 @@ describe('session state store', () => {
     const path = sessionStateStorePath({
       repoRoot,
       conductorAgentId: 'agent-bounded',
+      issueUrl: ISSUE_URL,
     });
 
     for (let index = 0; index < 65; index += 1) {

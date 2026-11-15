@@ -4,8 +4,6 @@ import { tmpdir } from 'node:os';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   resolveEnsemblePaths,
-  sessionResumeStorePath,
-  sessionStateStorePath,
 } from '@agents-ensemble/core';
 import { createListOperatorSessionsTool } from './list-operator-sessions-tool.js';
 
@@ -16,7 +14,6 @@ describe('list_operator_sessions', () => {
     repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-sessions-'));
     vi.stubEnv('HOME', repoRoot);
     vi.stubEnv('ENSEMBLE_USER_ROOT', join(repoRoot, '.user-ensemble'));
-    await mkdir(join(repoRoot, '.ensemble', 'sessions'), { recursive: true });
   });
 
   afterEach(async () => {
@@ -35,7 +32,6 @@ describe('list_operator_sessions', () => {
 
     const result = await tool.execute({ limit: 1 });
     const summary = JSON.parse(result.content[0]!.text) as {
-      repoRoot: string;
       total: number;
       returned: number;
       sessions: Array<{
@@ -64,7 +60,6 @@ describe('list_operator_sessions', () => {
     };
 
     expect(summary).toMatchObject({
-      repoRoot,
       total: 2,
       returned: 1,
       dataAsOf: expect.any(String),
@@ -109,7 +104,7 @@ describe('list_operator_sessions', () => {
     });
   });
 
-  it('filters per conductor instance by statusLine and lifecycle and keeps legacy sessions unknown', async () => {
+  it('filters by statusLine and lifecycle; older Issue records without lifecycle are unknown', async () => {
     const issueUrl = 'https://github.com/example/project/issues/1';
     await writeResumeStore('legacy', 10, issueUrl);
     await writeResumeStore('closed', 20, issueUrl, {
@@ -262,10 +257,7 @@ describe('list_operator_sessions', () => {
       statusLine: '最新の報告',
     });
     await writeFile(
-      sessionStateStorePath({
-        repoRoot,
-        conductorAgentId: 'history',
-      }),
+      resolveEnsemblePaths({ repoRoot }).canonicalSessionStatePath(issueUrl, 'history'),
       [
         'version: 2',
         'current:',
@@ -303,12 +295,11 @@ describe('list_operator_sessions', () => {
     );
   });
 
-  it('loads status YAML from the canonical slug before hash fallbacks', async () => {
+  it('ignores path-hash status YAML for listed Issue sessions', async () => {
     const paths = resolveEnsemblePaths({ repoRoot });
     const hashIssueUrl = 'https://github.com/example/hash-list/issues/607';
     const slugIssueUrl = 'https://github.com/example/slug-list/issues/607';
     await writeResumeStore('hash-selected', 10, hashIssueUrl, {
-      statusLine: 'hash snapshot',
     });
     const hashSlugYaml = paths.canonicalSessionStatePath(
       hashIssueUrl,
@@ -321,21 +312,12 @@ describe('list_operator_sessions', () => {
       'utf8',
     );
 
-    await writeResumeStore('slug-selected', 20, slugIssueUrl, {
-      statusLine: 'hash fallback snapshot',
-    });
-    const hashStorePath = sessionResumeStorePath({
-      repoRoot,
-      conductorAgentId: 'slug-selected',
-    });
-    const slugStorePath = paths.canonicalSessionResumeStorePath(
-      slugIssueUrl,
-      'slug-selected',
-    );
-    await mkdir(dirname(slugStorePath), { recursive: true });
+    await writeResumeStore('slug-selected', 20, slugIssueUrl);
+    const hashStatePath = paths.legacyHashSessionStatePath('slug-selected');
+    await mkdir(dirname(hashStatePath), { recursive: true });
     await writeFile(
-      slugStorePath,
-      await readFile(hashStorePath, 'utf8'),
+      hashStatePath,
+      'version: 1\nstatusLine: "hash fallback snapshot"\nreportedAt: 21\n',
       'utf8',
     );
 
@@ -353,7 +335,7 @@ describe('list_operator_sessions', () => {
         }),
         expect.objectContaining({
           conductorAgentId: 'slug-selected',
-          statusLine: 'hash fallback snapshot',
+          statusLine: null,
         }),
       ]),
     );
@@ -651,10 +633,9 @@ describe('list_operator_sessions', () => {
       statusLine?: string;
     } = {},
   ): Promise<void> {
-    const path = sessionResumeStorePath({
+    const path = resolveEnsemblePaths({
       repoRoot,
-      conductorAgentId: agentId,
-    });
+    }).canonicalSessionResumeStorePath(issueUrl, agentId);
     await mkdir(dirname(path), { recursive: true });
     await writeFile(
       path,
@@ -702,10 +683,9 @@ describe('list_operator_sessions', () => {
       }),
     );
     if (options.statusLine) {
-      const statePath = sessionStateStorePath({
+      const statePath = resolveEnsemblePaths({
         repoRoot,
-        conductorAgentId: agentId,
-      });
+      }).canonicalSessionStatePath(issueUrl, agentId);
       await mkdir(dirname(statePath), { recursive: true });
       await writeFile(
         statePath,

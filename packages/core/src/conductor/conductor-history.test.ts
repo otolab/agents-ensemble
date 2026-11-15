@@ -22,8 +22,9 @@ import {
 } from './conductor-history.js';
 import {
   PI_CONDUCTOR_MESSAGE_HISTORY_ENTRY_TYPE,
-  PI_SESSION_ROOT,
 } from './pi-conductor-agent.js';
+
+const ISSUE_URL = 'https://github.com/example/repo/issues/1';
 
 describe('listConductorProviderHistory', () => {
   let tempDir = '';
@@ -57,7 +58,9 @@ describe('listConductorProviderHistory', () => {
   it('reads only active Pi branch user/final-response entries after restart', async () => {
     tempDir = await mkdtemp(join(tmpdir(), 'ensemble-pi-history-'));
     setUserRoot(join(tempDir, 'user-ensemble'));
-    const sessionDir = resolveEnsemblePaths({ repoRoot: tempDir }).piSessionsDir;
+    const sessionDir = resolveEnsemblePaths({
+      repoRoot: tempDir,
+    }).canonicalPiSessionsDir(ISSUE_URL);
     const manager = SessionManager.create(tempDir, sessionDir, {
       id: 'pi-history-agent',
     });
@@ -84,6 +87,7 @@ describe('listConductorProviderHistory', () => {
       conductorAgentId: 'pi-history-agent',
       cwd: tempDir,
       repoRoot: tempDir,
+      issueUrl: ISSUE_URL,
       query: { limit: 20, order: 'desc' },
     });
 
@@ -142,7 +146,7 @@ describe('listConductorProviderHistory', () => {
     ).toBe(false);
   });
 
-  it('prefers repoRoot user sessions for worktree cwd and opens them with that cwd', async () => {
+  it('reads canonical Issue transcripts for worktree cwd and ignores project transcripts', async () => {
     tempDir = await mkdtemp(join(tmpdir(), 'ensemble-pi-history-worktree-'));
     const repoRoot = join(tempDir, 'repository');
     const conductorCwd = join(
@@ -155,7 +159,7 @@ describe('listConductorProviderHistory', () => {
     const paths = resolveEnsemblePaths({ repoRoot });
     const userManager = SessionManager.create(
       conductorCwd,
-      paths.piSessionsDir,
+      paths.canonicalPiSessionsDir(ISSUE_URL),
       { id: 'pi-worktree-history-agent' },
     );
     const userTurn = appendPiTurn(userManager, {
@@ -184,6 +188,7 @@ describe('listConductorProviderHistory', () => {
       conductorAgentId: 'pi-worktree-history-agent',
       cwd: conductorCwd,
       repoRoot,
+      issueUrl: ISSUE_URL,
       query: { limit: 20, order: 'desc' },
     });
 
@@ -196,22 +201,22 @@ describe('listConductorProviderHistory', () => {
     ]);
     expect(openSpy).toHaveBeenCalledWith(
       userManager.getSessionFile(),
-      paths.piSessionsDir,
+      paths.canonicalPiSessionsDir(ISSUE_URL),
       conductorCwd,
     );
     expect(JSON.stringify(result)).not.toContain('legacy transcript');
   });
 
-  it('finds a Pi transcript in the saved clone path-hash from another clone', async () => {
+  it('uses saved CWD metadata to open a canonical Issue transcript', async () => {
     tempDir = await mkdtemp(join(tmpdir(), 'ensemble-pi-history-cross-clone-'));
     const currentRepoRoot = join(tempDir, 'current-clone');
     const savedRepoRoot = join(tempDir, 'saved-clone');
     const savedCwd = join(savedRepoRoot, '.ensemble', 'worktrees', 'issue-696');
     setUserRoot(join(tempDir, 'user-ensemble'));
-    const savedPaths = resolveEnsemblePaths({ repoRoot: savedRepoRoot });
+    const savedPaths = resolveEnsemblePaths({ repoRoot: currentRepoRoot });
     const savedManager = SessionManager.create(
       savedCwd,
-      savedPaths.piSessionsDir,
+      savedPaths.canonicalPiSessionsDir(ISSUE_URL),
       { id: 'pi-cross-clone-agent' },
     );
     const turn = appendPiTurn(savedManager, {
@@ -227,8 +232,8 @@ describe('listConductorProviderHistory', () => {
       conductorAgentId: 'pi-cross-clone-agent',
       cwd: join(currentRepoRoot, '.ensemble', 'worktrees', 'issue-696'),
       repoRoot: currentRepoRoot,
-      fallbackRepoRoots: [savedRepoRoot],
-      fallbackCwds: [savedCwd],
+      issueUrl: ISSUE_URL,
+      resumeCwds: [savedCwd],
       query: { limit: 20, order: 'desc' },
     });
 
@@ -242,7 +247,7 @@ describe('listConductorProviderHistory', () => {
     expect(JSON.stringify(result)).not.toContain('SAVED_CLONE_TOOL_SECRET');
   });
 
-  it('falls back to the legacy project session directory under conductor cwd', async () => {
+  it('does not read transcripts from the legacy project session directory', async () => {
     tempDir = await mkdtemp(
       join(tmpdir(), 'ensemble-pi-history-legacy-fallback-'),
     );
@@ -268,25 +273,22 @@ describe('listConductorProviderHistory', () => {
       dispatchSource: 'operator',
     });
 
-    const result = await listConductorProviderHistory({
+    await expect(listConductorProviderHistory({
       backend: 'pi',
       conductorAgentId: 'pi-legacy-fallback-agent',
       cwd: conductorCwd,
       repoRoot,
+      issueUrl: ISSUE_URL,
       query: { limit: 20, order: 'desc' },
-    });
-
-    expect(result.messages).toMatchObject([
-      {
-        inbound: 'legacy project transcript',
-        text: 'legacy project response',
-      },
-    ]);
+    })).rejects.toThrow('Provider history is unavailable');
   });
 
   it('keeps the default result raw and sanitizes only returned text fields when requested', async () => {
     tempDir = await mkdtemp(join(tmpdir(), 'ensemble-pi-history-sanitizer-'));
-    const sessionDir = join(tempDir, PI_SESSION_ROOT);
+    setUserRoot(join(tempDir, 'user-ensemble'));
+    const sessionDir = resolveEnsemblePaths({
+      repoRoot: tempDir,
+    }).canonicalPiSessionsDir(ISSUE_URL);
     const manager = SessionManager.create(tempDir, sessionDir, {
       id: 'pi-history-sanitizer-agent',
     });
@@ -309,6 +311,8 @@ describe('listConductorProviderHistory', () => {
       backend: 'pi' as const,
       conductorAgentId: 'pi-history-sanitizer-agent',
       cwd: tempDir,
+      repoRoot: tempDir,
+      issueUrl: ISSUE_URL,
       query: { limit: 1, order: 'desc' as const },
     };
     const raw = await listConductorProviderHistory(input);
@@ -355,9 +359,12 @@ describe('listConductorProviderHistory', () => {
     tempDir = await mkdtemp(
       join(tmpdir(), 'ensemble-pi-history-sanitizer-error-'),
     );
+    setUserRoot(join(tempDir, 'user-ensemble'));
     const manager = SessionManager.create(
       tempDir,
-      join(tempDir, PI_SESSION_ROOT),
+      resolveEnsemblePaths({
+        repoRoot: tempDir,
+      }).canonicalPiSessionsDir(ISSUE_URL),
       { id: 'pi-history-sanitizer-error-agent' },
     );
     appendPiTurn(manager, {
@@ -372,6 +379,8 @@ describe('listConductorProviderHistory', () => {
       backend: 'pi',
       conductorAgentId: 'pi-history-sanitizer-error-agent',
       cwd: tempDir,
+      repoRoot: tempDir,
+      issueUrl: ISSUE_URL,
       query: { limit: 20, order: 'desc' },
       sanitizer: async () => {
         throw new Error('SANITIZER_SECRET');
@@ -389,6 +398,8 @@ describe('listConductorProviderHistory', () => {
       backend: 'pi',
       conductorAgentId: 'pi-history-sanitizer-error-agent',
       cwd: tempDir,
+      repoRoot: tempDir,
+      issueUrl: ISSUE_URL,
       query: { limit: 20, order: 'desc' },
       sanitizer: (() => 42) as unknown as ConductorProviderHistorySanitizer,
     }).catch((caught: unknown) => caught);
@@ -401,7 +412,10 @@ describe('listConductorProviderHistory', () => {
 
   it('does not backfill pre-feature Pi transcripts without history markers', async () => {
     tempDir = await mkdtemp(join(tmpdir(), 'ensemble-pi-history-legacy-'));
-    const sessionDir = join(tempDir, PI_SESSION_ROOT);
+    setUserRoot(join(tempDir, 'user-ensemble'));
+    const sessionDir = resolveEnsemblePaths({
+      repoRoot: tempDir,
+    }).canonicalPiSessionsDir(ISSUE_URL);
     const manager = SessionManager.create(tempDir, sessionDir, {
       id: 'legacy-pi-history-agent',
     });
@@ -431,6 +445,8 @@ describe('listConductorProviderHistory', () => {
         backend: 'pi',
         conductorAgentId: 'legacy-pi-history-agent',
         cwd: tempDir,
+        repoRoot: tempDir,
+        issueUrl: ISSUE_URL,
         query: { limit: 20, order: 'desc' },
       }),
     ).resolves.toEqual({ messages: [], hasMore: false });
@@ -446,6 +462,8 @@ describe('listConductorProviderHistory', () => {
       backend: 'pi',
       conductorAgentId: 'legacy-pi-history-agent',
       cwd: tempDir,
+      repoRoot: tempDir,
+      issueUrl: ISSUE_URL,
       query: { limit: 20, order: 'desc' },
     });
 
@@ -717,11 +735,14 @@ describe('listConductorProviderHistory', () => {
 
   it('reports missing Pi sessions, damaged transcripts, and Cursor store failures as errors', async () => {
     tempDir = await mkdtemp(join(tmpdir(), 'ensemble-history-failure-'));
+    setUserRoot(join(tempDir, 'user-ensemble'));
     await expect(
       listConductorProviderHistory({
         backend: 'pi',
         conductorAgentId: 'missing-pi-agent',
         cwd: tempDir,
+        repoRoot: tempDir,
+        issueUrl: ISSUE_URL,
         query: { limit: 20, order: 'desc' },
       }),
     ).rejects.toThrow(
@@ -730,7 +751,9 @@ describe('listConductorProviderHistory', () => {
 
     const manager = SessionManager.create(
       tempDir,
-      join(tempDir, PI_SESSION_ROOT),
+      resolveEnsemblePaths({
+        repoRoot: tempDir,
+      }).canonicalPiSessionsDir(ISSUE_URL),
       { id: 'damaged-pi-agent' },
     );
     manager.appendMessage({
@@ -745,6 +768,8 @@ describe('listConductorProviderHistory', () => {
         backend: 'pi',
         conductorAgentId: 'damaged-pi-agent',
         cwd: tempDir,
+        repoRoot: tempDir,
+        issueUrl: ISSUE_URL,
         query: { limit: 20, order: 'desc' },
       }),
     ).rejects.toThrow(

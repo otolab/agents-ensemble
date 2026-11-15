@@ -137,10 +137,9 @@ operatorSummary: <short operator-facing summary>
 `tool_call` と `tool_call_update` は `(workerId, ACP sessionId, toolCallId)` ごとに累積する。
 ID は ACP session をまたいで一意とは限らない。累積した履歴は、resume SessionResumeStore 本体とは別の
 `~/.ensemble/sessions/github.com/<owner>/<repo>/{conductorAgentId}.tool-calls` に JSON で原子的に保存する。
-新規作成と通常 flush は canonical slug 側だけに行う。resume 時は slug に file がない場合に限って、
-現在 clone の user path-hash、保存時 clone の user path-hash、保存時 clone の project-local history、
-現在 clone の project-local history の順で read fallback し、slug へ copy する。
-slug file があればその内容を優先し、legacy 側との統合・上書き・削除はしない。
+新規作成・通常 flush・resume read は canonical slug 側だけに行う。
+path-hash / project-local legacy history は通常読まず、runtime resume 時にも copy しない。
+移行が必要な旧履歴は [一括 inventory / copy tool](session-logging.md#legacy-data-の一括-inventory-copy) で明示的に扱う。
 SessionResumeStore と別にすることで、履歴ファイルの欠損や破損が conductor / worker session の resume を妨げない。
 この file は ACP tool-call snapshot 専用で、すべての `SessionLogEvent` の永続化先ではない。
 
@@ -149,7 +148,7 @@ SessionResumeStore と別にすることで、履歴ファイルの欠損や破�
 更新時の flush は 100 ms でまとめ、終了時にも最後の flush を行う。予期しないプロセス終了では、
 直近の flush 以降の更新が失われることがある。canonical slug 側の古い履歴 file は session 起動時に削除し、
 snapshot がすべて期限切れになった file や、30 日以上残った atomic write 用一時 file も削除する。
-legacy fallback source はこの cleanup の対象にせず、変更・削除しない。
+legacy migration source はこの cleanup の対象にせず、変更・削除しない。
 
 `workerId` は harness の起動ごとに変わるため、履歴には worker 名も記録する。resume 時は worker 名から
 現在の `workerId` に結び直し、保存時の ACP `sessionId` は維持する。これにより

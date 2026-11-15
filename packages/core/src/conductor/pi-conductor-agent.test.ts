@@ -76,13 +76,31 @@ import {
   loadSessionResumeStore,
   saveSessionResumeStore,
   SESSION_RESUME_STORE_VERSION,
-  sessionResumeStorePath,
 } from '../session/session-resume-store.js';
 import * as issueContextModule from '../github/issue-context.js';
 import * as resolveGitHubAuthTokenModule from '../github/resolve-github-auth-token.js';
 import { sendConductorWithReconnect } from './conductor-send-reconnect.js';
 
 const PI_TEST_ISSUE_URL = 'https://github.com/org/repo/issues/1';
+
+function createPiAgent(
+  options: Parameters<typeof PiConductorAgent.create>[0],
+) {
+  return PiConductorAgent.create({
+    ...options,
+    issueUrl: options.issueUrl ?? PI_TEST_ISSUE_URL,
+  });
+}
+
+function resumePiAgent(
+  agentId: string,
+  options: Parameters<typeof PiConductorAgent.resume>[1],
+) {
+  return PiConductorAgent.resume(agentId, {
+    ...options,
+    issueUrl: options.issueUrl ?? PI_TEST_ISSUE_URL,
+  });
+}
 
 function sha256(value: Buffer | string): string {
   return createHash('sha256').update(value).digest('hex');
@@ -169,7 +187,7 @@ describe('PiConductorAgent', () => {
 
   it('reports the selected model when a prompt fails before a response', async () => {
     fakeSession.prompt.mockRejectedValueOnce(new Error('fixture failure'));
-    const conductor = await PiConductorAgent.create({
+    const conductor = await createPiAgent({
       cwd,
       pi: { agentDir },
       modelId: 'anthropic/model-1',
@@ -212,7 +230,7 @@ describe('PiConductorAgent', () => {
         { cause: rawCause },
       ),
     );
-    const conductor = await PiConductorAgent.create({
+    const conductor = await createPiAgent({
       cwd,
       pi: { agentDir },
       modelId: 'anthropic/model-1',
@@ -250,8 +268,8 @@ describe('PiConductorAgent', () => {
       };
       const conductor =
         operation === 'create'
-          ? await PiConductorAgent.create(options)
-          : await PiConductorAgent.resume('pi-default-session', options);
+          ? await createPiAgent(options)
+          : await resumePiAgent('pi-default-session', options);
 
       expect(mockCreateAgentSession.mock.calls[0]?.[0].model).toMatchObject({
         provider: 'anthropic',
@@ -270,7 +288,7 @@ describe('PiConductorAgent', () => {
       },
     };
     const onContextCompaction = vi.fn();
-    const conductor = await PiConductorAgent.create({
+    const conductor = await createPiAgent({
       cwd,
       pi: { agentDir },
       modelId: 'anthropic/model-1',
@@ -410,7 +428,7 @@ describe('PiConductorAgent', () => {
   });
 
   it('sums usage across agent_end events and resets it between sends', async () => {
-    const conductor = await PiConductorAgent.create({
+    const conductor = await createPiAgent({
       cwd,
       pi: { agentDir },
       modelId: 'anthropic/model-1',
@@ -532,7 +550,7 @@ describe('PiConductorAgent', () => {
   });
 
   it('records only successful non-bootstrap final responses as ID-only custom metadata', async () => {
-    const conductor = await PiConductorAgent.create({
+    const conductor = await createPiAgent({
       cwd,
       pi: { agentDir },
       modelId: 'anthropic/model-1',
@@ -615,7 +633,7 @@ describe('PiConductorAgent', () => {
         finishPrompt = resolve;
       }),
     );
-    const conductor = await PiConductorAgent.create({
+    const conductor = await createPiAgent({
       cwd,
       pi: { agentDir },
       modelId: 'anthropic/model-1',
@@ -667,7 +685,7 @@ describe('PiConductorAgent', () => {
   ] as const)(
     'does not persist %s responses in the durable list',
     async (caseName, stopReason, responseText) => {
-      const conductor = await PiConductorAgent.create({
+      const conductor = await createPiAgent({
         cwd,
         pi: { agentDir },
         modelId: 'anthropic/model-1',
@@ -702,7 +720,7 @@ describe('PiConductorAgent', () => {
 
   it('counts only successful compaction_end events and ignores missing, failed, or aborted results', async () => {
     const onContextCompaction = vi.fn();
-    const conductor = await PiConductorAgent.create({
+    const conductor = await createPiAgent({
       cwd,
       pi: { agentDir },
       modelId: 'anthropic/model-1',
@@ -760,7 +778,7 @@ describe('PiConductorAgent', () => {
         resolvePrompt = resolve;
       }),
     );
-    const conductor = await PiConductorAgent.create({
+    const conductor = await createPiAgent({
       cwd,
       pi: { agentDir },
       modelId: 'anthropic/model-1',
@@ -792,7 +810,7 @@ describe('PiConductorAgent', () => {
   });
 
   it('closes MCP during session shutdown without launching replacement servers', async () => {
-    const conductor = await PiConductorAgent.create({
+    const conductor = await createPiAgent({
       cwd,
       pi: { agentDir },
       modelId: 'anthropic/model-1',
@@ -814,7 +832,7 @@ describe('PiConductorAgent', () => {
   });
 
   it('disables Pi built-in tools only when builtinTools is false', async () => {
-    const conductor = await PiConductorAgent.create({
+    const conductor = await createPiAgent({
       cwd,
       pi: { agentDir },
       modelId: 'anthropic/model-1',
@@ -827,7 +845,7 @@ describe('PiConductorAgent', () => {
   });
 
   it('registers the existing internal Pi extensions by default', async () => {
-    const conductor = await PiConductorAgent.create({
+    const conductor = await createPiAgent({
       cwd,
       pi: { agentDir },
       modelId: 'anthropic/model-1',
@@ -852,7 +870,7 @@ describe('PiConductorAgent', () => {
       '---\ndescription: review skill\n---\nreview skill body',
     );
 
-    const conductor = await PiConductorAgent.create({
+    const conductor = await createPiAgent({
       cwd,
       pi: { agentDir, projectDir },
       modelId: 'anthropic/model-1',
@@ -876,7 +894,7 @@ describe('PiConductorAgent', () => {
   });
 
   it('opts out of internal Pi extensions and keeps only explicitly supplied tools', async () => {
-    const conductor = await PiConductorAgent.create({
+    const conductor = await createPiAgent({
       cwd,
       pi: { agentDir },
       modelId: 'anthropic/model-1',
@@ -938,7 +956,7 @@ describe('PiConductorAgent', () => {
     );
     const systemPrompt = 'explicit doctor role and materials';
 
-    const conductor = await PiConductorAgent.create({
+    const conductor = await createPiAgent({
       cwd,
       pi: { agentDir, projectDir },
       modelId: 'anthropic/model-1',
@@ -1010,7 +1028,7 @@ describe('PiConductorAgent', () => {
       extensionSource(discoveredImportMarker, discoveredFactoryMarker),
     );
 
-    const operator = await PiConductorAgent.create({
+    const operator = await createPiAgent({
       cwd,
       pi: { agentDir, projectDir },
       modelId: 'anthropic/model-1',
@@ -1048,7 +1066,7 @@ describe('PiConductorAgent', () => {
   });
 
   it('shuts down Pi MCP children when closing a resumable session', async () => {
-    const conductor = await PiConductorAgent.create({
+    const conductor = await createPiAgent({
       cwd,
       pi: { agentDir },
       modelId: 'anthropic/model-1',
@@ -1071,7 +1089,7 @@ describe('PiConductorAgent', () => {
   });
 
   it('keeps Pi closed and disposes the session when close rejects', async () => {
-    const conductor = await PiConductorAgent.create({
+    const conductor = await createPiAgent({
       cwd,
       pi: { agentDir },
       modelId: 'anthropic/model-1',
@@ -1095,7 +1113,7 @@ describe('PiConductorAgent', () => {
   });
 
   it('rejects SSE before the Pi extension is started', async () => {
-    const conductorPromise = PiConductorAgent.create({
+    const conductorPromise = createPiAgent({
       cwd,
       pi: { agentDir },
       modelId: 'anthropic/model-1',
@@ -1122,7 +1140,7 @@ describe('PiConductorAgent', () => {
       maxTokens: 4096,
     });
 
-    const conductor = await PiConductorAgent.create({
+    const conductor = await createPiAgent({
       cwd,
       pi: { agentDir },
       modelId: 'anthropic/model-1',
@@ -1149,7 +1167,7 @@ describe('PiConductorAgent', () => {
       maxTokens: 4096,
     });
 
-    const conductor = await PiConductorAgent.create({
+    const conductor = await createPiAgent({
       cwd,
       pi: { agentDir },
       modelId: 'anthropic/model-1',
@@ -1163,7 +1181,7 @@ describe('PiConductorAgent', () => {
 
   it('rejects an unknown Pi reasoning value before creating the transcript session', async () => {
     await expect(
-      PiConductorAgent.create({
+      createPiAgent({
         cwd,
         pi: { agentDir },
         modelId: 'anthropic/model-1',
@@ -1178,7 +1196,7 @@ describe('PiConductorAgent', () => {
 
   it('rejects a Pi reasoning value the selected model cannot represent', async () => {
     await expect(
-      PiConductorAgent.create({
+      createPiAgent({
         cwd,
         pi: { agentDir },
         modelId: 'anthropic/model-1',
@@ -1212,7 +1230,7 @@ describe('PiConductorAgent', () => {
       });
 
       await expect(
-        PiConductorAgent.create({
+        createPiAgent({
           cwd,
           pi: { agentDir },
           modelId: `${provider}/gemini-4-argon`,
@@ -1226,7 +1244,7 @@ describe('PiConductorAgent', () => {
     },
   );
 
-  it('resumes through SessionManager with the same conductor id and refreshes the prompt path', async () => {
+  it('resumes from the canonical Issue slug by default with the same conductor id', async () => {
     mockSessionManagerFindById.mockReturnValue('/tmp/pi-session.jsonl');
     mockGetModel.mockReturnValue({
       id: 'model-1',
@@ -1241,7 +1259,8 @@ describe('PiConductorAgent', () => {
       maxTokens: 4096,
     });
     const projectDir = join(cwd, '.ensemble', 'pi');
-    const sessionDir = resolveEnsemblePaths({ repoRoot: cwd }).piSessionsDir;
+    const sessionDir = resolveEnsemblePaths({ repoRoot: cwd })
+      .canonicalPiSessionsDir(PI_TEST_ISSUE_URL);
     await mkdir(projectDir, { recursive: true });
     await writeFile(
       join(projectDir, 'settings.json'),
@@ -1250,7 +1269,7 @@ describe('PiConductorAgent', () => {
         sessionDir: '/tmp/must-not-be-used',
       }),
     );
-    const conductor = await PiConductorAgent.resume('session-392', {
+    const conductor = await resumePiAgent('session-392', {
       cwd,
       pi: { agentDir, projectDir },
       modelId: 'anthropic/model-1',
@@ -1283,12 +1302,40 @@ describe('PiConductorAgent', () => {
     await conductor.close();
   });
 
+  it('fails closed when Pi session identity and explicit directory are both missing', async () => {
+    const paths = resolveEnsemblePaths({ repoRoot: cwd });
+
+    await expect(
+      PiConductorAgent.create({
+        cwd,
+        pi: { agentDir },
+        modelId: 'anthropic/model-1',
+        systemPrompt: 'system',
+      }),
+    ).rejects.toThrow(/requires issueUrl or an explicit sessionDir/);
+    await expect(
+      PiConductorAgent.resume('missing-identity-session', {
+        cwd,
+        pi: { agentDir },
+        modelId: 'anthropic/model-1',
+        systemPrompt: 'system',
+      }),
+    ).rejects.toThrow(/requires issueUrl or an explicit sessionDir/);
+
+    expect(mockSessionManagerCreate).not.toHaveBeenCalled();
+    expect(mockSessionManagerFindById).not.toHaveBeenCalled();
+    expect(mockSessionManagerOpen).not.toHaveBeenCalled();
+    expect(mockCreateAgentSession).not.toHaveBeenCalled();
+    expect(existsSync(paths.legacyHashPiSessionsDir)).toBe(false);
+    expect(existsSync(join(cwd, '.ensemble', 'pi', 'sessions'))).toBe(false);
+  });
+
   it.each(['user-path-hash', 'project-legacy'] as const)(
-    'copies a legacy %s Pi transcript into the canonical slug directory without changing its source',
+    'does not resume from a %s Pi transcript',
     async (location) => {
       const paths = resolveEnsemblePaths({ repoRoot: cwd });
       const slugSessionDir = paths.canonicalPiSessionsDir(PI_TEST_ISSUE_URL);
-      const hashSessionDir = paths.piSessionsDir;
+      const hashSessionDir = paths.legacyHashPiSessionsDir;
       const projectSessionDir = join(cwd, '.ensemble', 'pi', 'sessions');
       const legacySessionDir =
         location === 'user-path-hash' ? hashSessionDir : projectSessionDir;
@@ -1304,47 +1351,26 @@ describe('PiConductorAgent', () => {
           sessionDir === legacySessionDir ? legacySessionFile : undefined,
       );
 
-      const conductor = await PiConductorAgent.resume('legacy-session', {
-        cwd,
-        pi: { agentDir },
-        modelId: 'anthropic/model-1',
-        sessionDir: slugSessionDir,
-        legacySessionDirs: [hashSessionDir, projectSessionDir],
-        systemPrompt: 'recompiled system prompt',
-      });
-
-      const migratedFile = join(slugSessionDir, 'legacy-session.jsonl');
-      const sourceAfter = await readFile(legacySessionFile);
-      const destination = await readFile(migratedFile);
-      expect(sha256(destination)).toBe(sha256(transcript));
-      expect(sourceAfter).toEqual(transcript);
-      expect(sha256(sourceAfter)).toBe(sha256(transcript));
-      expect(mockSessionManagerFindById).toHaveBeenNthCalledWith(
-        1,
-        cwd,
-        'legacy-session',
-        slugSessionDir,
-      );
-      expect(mockSessionManagerFindById).toHaveBeenNthCalledWith(
-        2,
-        cwd,
-        'legacy-session',
-        hashSessionDir,
-      );
-      if (location === 'project-legacy') {
-        expect(mockSessionManagerFindById).toHaveBeenNthCalledWith(
-          3,
+      await expect(
+        resumePiAgent('legacy-session', {
           cwd,
-          'legacy-session',
-          projectSessionDir,
-        );
-      }
-      expect(mockSessionManagerOpen).toHaveBeenCalledWith(
-        migratedFile,
-        slugSessionDir,
+          pi: { agentDir },
+          modelId: 'anthropic/model-1',
+          systemPrompt: 'recompiled system prompt',
+        }),
+      ).rejects.toThrow('Pi session not found for resume');
+
+      expect(mockSessionManagerFindById).toHaveBeenCalledTimes(1);
+      expect(mockSessionManagerFindById).toHaveBeenCalledWith(
         cwd,
+        'legacy-session',
+        slugSessionDir,
       );
-      await conductor.close();
+      expect(mockSessionManagerOpen).not.toHaveBeenCalled();
+      expect(await readFile(legacySessionFile)).toEqual(transcript);
+      await expect(
+        readFile(join(slugSessionDir, 'legacy-session.jsonl')),
+      ).rejects.toMatchObject({ code: 'ENOENT' });
     },
   );
 
@@ -1371,12 +1397,11 @@ describe('PiConductorAgent', () => {
           : undefined,
     );
 
-    const conductor = await PiConductorAgent.resume('cross-clone-session', {
+    const conductor = await resumePiAgent('cross-clone-session', {
       cwd,
       resumeCwds: [savedCwd],
       pi: { agentDir },
       modelId: 'anthropic/model-1',
-      sessionDir,
       systemPrompt: 'recompiled system prompt',
     });
 
@@ -1403,7 +1428,7 @@ describe('PiConductorAgent', () => {
   it('keeps an existing canonical Pi transcript ahead of a different legacy copy', async () => {
     const paths = resolveEnsemblePaths({ repoRoot: cwd });
     const slugSessionDir = paths.canonicalPiSessionsDir(PI_TEST_ISSUE_URL);
-    const hashSessionDir = paths.piSessionsDir;
+    const hashSessionDir = paths.legacyHashPiSessionsDir;
     const slugFile = join(slugSessionDir, 'resume-existing.jsonl');
     const hashFile = join(hashSessionDir, 'resume-existing.jsonl');
     const slugBytes = Buffer.from('{"type":"slug-session"}\n', 'utf8');
@@ -1421,12 +1446,10 @@ describe('PiConductorAgent', () => {
             : undefined,
     );
 
-    const conductor = await PiConductorAgent.resume('resume-existing', {
+    const conductor = await resumePiAgent('resume-existing', {
       cwd,
       pi: { agentDir },
       modelId: 'anthropic/model-1',
-      sessionDir: slugSessionDir,
-      legacySessionDirs: [hashSessionDir],
       systemPrompt: 'recompiled system prompt',
     });
 
@@ -1441,7 +1464,7 @@ describe('PiConductorAgent', () => {
     await conductor.close();
   });
 
-  it('applies merged ensemble compaction settings without overriding the harness session directory', async () => {
+  it('creates in canonical Issue storage by default and applies merged compaction settings', async () => {
     const projectDir = join(cwd, '.ensemble', 'pi');
     const piProjectDir = join(cwd, '.pi');
     await mkdir(projectDir, { recursive: true });
@@ -1488,7 +1511,7 @@ describe('PiConductorAgent', () => {
       }),
     );
 
-    const conductor = await PiConductorAgent.create({
+    const conductor = await createPiAgent({
       cwd,
       pi: { agentDir, projectDir },
       modelId: 'anthropic/model-1',
@@ -1524,7 +1547,8 @@ describe('PiConductorAgent', () => {
     expect(settingsManager.getSettings()).not.toHaveProperty('sessionDir');
     expect(mockSessionManagerCreate).toHaveBeenCalledWith(
       cwd,
-      resolveEnsemblePaths({ repoRoot: cwd }).piSessionsDir,
+      resolveEnsemblePaths({ repoRoot: cwd })
+        .canonicalPiSessionsDir(PI_TEST_ISSUE_URL),
       expect.objectContaining({ id: expect.any(String) }),
     );
 
@@ -1542,7 +1566,7 @@ describe('PiConductorAgent', () => {
       }),
     );
 
-    const conductor = await PiConductorAgent.create({
+    const conductor = await createPiAgent({
       cwd,
       pi: { agentDir, projectDir },
       modelId: 'anthropic/model-1',
@@ -1584,7 +1608,7 @@ describe('PiConductorAgent', () => {
       }),
     );
 
-    const conductor = await PiConductorAgent.create({
+    const conductor = await createPiAgent({
       cwd,
       pi: { agentDir, projectDir },
       modelId: 'anthropic/model-1',
@@ -1629,7 +1653,7 @@ describe('PiConductorAgent', () => {
       }),
     );
 
-    const conductor = await PiConductorAgent.create({
+    const conductor = await createPiAgent({
       cwd,
       pi: { agentDir, projectDir },
       modelId: 'anthropic/model-1',
@@ -1693,10 +1717,6 @@ describe('PiConductorAgent', () => {
         conductor: { backend: 'pi' as const },
         workers: [],
       };
-      const hashResumeStorePath = sessionResumeStorePath({
-        repoRoot: cwd,
-        conductorAgentId: agentId,
-      });
       const resumeStorePath = resolveEnsemblePaths({ repoRoot: cwd })
         .canonicalSessionResumeStorePath(issueUrl, agentId);
       await mkdir(join(cwd, '.agents'), { recursive: true });
@@ -1706,7 +1726,7 @@ describe('PiConductorAgent', () => {
       );
 
       if (mode === 'resume') {
-        await saveSessionResumeStore(hashResumeStorePath, {
+        await saveSessionResumeStore(resumeStorePath, {
           version: SESSION_RESUME_STORE_VERSION,
           conductorAgentId: agentId,
           conductorBackend: 'pi',
@@ -1851,7 +1871,7 @@ describe('PiConductorAgent', () => {
       }),
     );
 
-    const conductor = await PiConductorAgent.create({
+    const conductor = await createPiAgent({
       cwd,
       pi: { agentDir, projectDir },
       modelId: 'anthropic/model-1',
@@ -1973,7 +1993,7 @@ describe('PiConductorAgent', () => {
     );
     mockGetModel.mockReturnValue(undefined);
 
-    const conductor = await PiConductorAgent.create({
+    const conductor = await createPiAgent({
       cwd,
       pi: { agentDir, projectDir },
       modelId: 'local/review-model',
@@ -2075,6 +2095,7 @@ describe('PiConductorAgent', () => {
     const factory = createPiConductorAgentFactory();
     const conductorOptions = {
       cwd,
+      issueUrl: PI_TEST_ISSUE_URL,
       pi: { agentDir, projectDir },
       modelId: 'local/review-model',
       systemPrompt: 'operator auth regression',
@@ -2125,7 +2146,7 @@ describe('PiConductorAgent', () => {
     );
     mockGetModel.mockReturnValue(undefined);
 
-    const conductor = await PiConductorAgent.create({
+    const conductor = await createPiAgent({
       cwd,
       pi: { agentDir, projectDir },
       modelId: 'local/review-model',
@@ -2236,7 +2257,7 @@ describe('PiConductorAgent', () => {
     );
     mockGetModel.mockReturnValue(undefined);
 
-    const conductor = await PiConductorAgent.create({
+    const conductor = await createPiAgent({
       cwd,
       pi: { agentDir, projectDir },
       modelId: 'local/review-model',

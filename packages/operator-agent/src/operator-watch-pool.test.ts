@@ -22,6 +22,16 @@ import {
   operatorWatchStatePath,
 } from './operator-watch-pool.js';
 
+const DEFAULT_ISSUE_URL = 'https://github.com/example/repo/issues/1';
+
+function currentWatchStatePath(_repoRoot: string): string {
+  return operatorWatchStatePath(
+    join(process.env.ENSEMBLE_USER_ROOT ?? '', ''),
+    'default',
+    DEFAULT_ISSUE_URL,
+  );
+}
+
 describe('operator watch pool', () => {
   let repoRoot = '';
   let homeRoot = '';
@@ -44,7 +54,37 @@ describe('operator watch pool', () => {
     vi.unstubAllEnvs();
   });
 
-  it('migrates legacy project watch state into the user-scoped repository directory', async () => {
+  it('resolves canonical watch storage from a valid profile and Issue identity', () => {
+    const userRoot = join(homeRoot, '.ensemble');
+    expect(
+      operatorWatchStatePath(
+        userRoot,
+        'work',
+        'https://github.com/Example/Repo/issues/42',
+      ),
+    ).toBe(
+      join(
+        userRoot,
+        'operator-agents',
+        'work',
+        'watch',
+        'github.com',
+        'example',
+        'repo',
+        'watch-state.json',
+      ),
+    );
+    expect(() => operatorWatchStatePath(userRoot, 'work', '')).toThrow();
+    expect(() =>
+      operatorWatchStatePath(
+        userRoot,
+        '../legacy',
+        'https://github.com/example/repo/issues/42',
+      ),
+    ).toThrow(/Invalid operator-agent profile name/u);
+  });
+
+  it('does not load project-local operator watch state', async () => {
     repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-watch-legacy-'));
     const legacyPath = join(
       repoRoot,
@@ -72,20 +112,7 @@ describe('operator watch pool', () => {
       dispatchQueue: createOperatorDispatchQueue(),
     });
     try {
-      expect(pool.list()).toEqual([
-        {
-          conductorAgentId: 'session-one',
-          pollIntervalMs: 60_000,
-          debounceMs: 0,
-        },
-      ]);
-      expect(
-        JSON.parse(await readFile(operatorWatchStatePath(repoRoot), 'utf8')),
-      ).toEqual({
-        ...legacyState,
-        messageListeners: {},
-        messageCursors: {},
-      });
+      expect(pool.list()).toEqual([]);
       expect(JSON.parse(await readFile(legacyPath, 'utf8'))).toEqual(legacyState);
     } finally {
       pool.close();
@@ -94,26 +121,28 @@ describe('operator watch pool', () => {
 
   it('continues an existing slug-keyed watch state without reading or overwriting the stale hash copy', async () => {
     repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-watch-slug-state-'));
-    await mkdir(join(repoRoot, '.ensemble', 'sessions'), { recursive: true });
     const agentId = '607';
+    const userRoot = join(homeRoot, '.ensemble');
     const paths = resolveEnsemblePaths({ repoRoot });
     const issueUrl = 'https://github.com/example/watch-state/issues/607';
     await writeResumeStore(agentId, 1, undefined, issueUrl);
-    const slugResumeStorePath = paths.canonicalSessionResumeStorePath(
+    const canonicalPath = operatorWatchStatePath(
+      userRoot,
+      'default',
       issueUrl,
-      agentId,
     );
-    await mkdir(dirname(slugResumeStorePath), { recursive: true });
-    await writeFile(
-      slugResumeStorePath,
-      await readFile(
-        join(repoRoot, '.ensemble', 'sessions', `${agentId}.json`),
-        'utf8',
-      ),
-      'utf8',
+    const hashPath = join(
+      userRoot,
+      'operator-agent',
+      paths.repoKey,
+      'watch-state.json',
     );
-    const canonicalPath = paths.canonicalOperatorWatchStatePath(issueUrl);
-    const hashPath = paths.operatorWatchStatePath;
+    const projectPath = join(
+      repoRoot,
+      '.ensemble',
+      'operator-agent',
+      'watch-state.json',
+    );
     const state = (pollIntervalMs: number) => ({
       version: 1,
       watches: {
@@ -128,8 +157,10 @@ describe('operator watch pool', () => {
     });
     await mkdir(dirname(canonicalPath), { recursive: true });
     await mkdir(dirname(hashPath), { recursive: true });
+    await mkdir(dirname(projectPath), { recursive: true });
     await writeFile(canonicalPath, JSON.stringify(state(30_000)), 'utf8');
     await writeFile(hashPath, JSON.stringify(state(50_000)), 'utf8');
+    await writeFile(projectPath, JSON.stringify(state(70_000)), 'utf8');
 
     const pool = await createOperatorWatchPool({
       repoRoot,
@@ -155,12 +186,16 @@ describe('operator watch pool', () => {
         JSON.parse(await readFile(hashPath, 'utf8')).watches[agentId]
           .pollIntervalMs,
       ).toBe(50_000);
+      expect(
+        JSON.parse(await readFile(projectPath, 'utf8')).watches[agentId]
+          .pollIntervalMs,
+      ).toBe(70_000);
     } finally {
       pool.close();
     }
   });
 
-  it('moves hash watch state to the selected slug key on load and keeps the hash copy', async () => {
+  it('ignores old hash watch state when the profile store is missing', async () => {
     repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-watch-state-migrate-'));
     const paths = resolveEnsemblePaths({ repoRoot });
     const agentId = 'watch-state-migrate';
@@ -194,11 +229,17 @@ describe('operator watch pool', () => {
       cursors: {},
       pendingReports: [],
     };
-    const hashStatePath = paths.operatorWatchStatePath;
-    const slugStatePath = operatorWatchStatePath(repoRoot, {
-      location: 'canonical-slug',
+    const hashStatePath = join(
+      join(homeRoot, '.ensemble'),
+      'operator-agent',
+      paths.repoKey,
+      'watch-state.json',
+    );
+    const slugStatePath = operatorWatchStatePath(
+      join(homeRoot, '.ensemble'),
+      'default',
       issueUrl,
-    });
+    );
     await mkdir(dirname(hashStatePath), { recursive: true });
     await writeFile(hashStatePath, JSON.stringify(state), 'utf8');
 
@@ -207,16 +248,10 @@ describe('operator watch pool', () => {
       dispatchQueue: createOperatorDispatchQueue(),
     });
     try {
-      expect(pool.list()).toEqual([
-        {
-          conductorAgentId: agentId,
-          pollIntervalMs: 30_000,
-          debounceMs: 0,
-        },
-      ]);
-      await expect(
-        readFile(slugStatePath, 'utf8').then((text) => JSON.parse(text)),
-      ).resolves.toMatchObject(state);
+      expect(pool.list()).toEqual([]);
+      await expect(readFile(slugStatePath, 'utf8')).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
       await expect(
         readFile(hashStatePath, 'utf8').then((text) => JSON.parse(text)),
       ).resolves.toMatchObject(state);
@@ -225,7 +260,7 @@ describe('operator watch pool', () => {
     }
   });
 
-  it('splits a legacy watch bundle by verified Issue slug without losing its related cursors or reports', async () => {
+  it('does not load a legacy hash watch bundle for multiple Issue sessions', async () => {
     const userRoot = join(homeRoot, '.ensemble');
     const firstIssue = 'https://github.com/org/one/issues/1';
     const secondIssue = 'https://github.com/org/two/issues/2';
@@ -316,29 +351,15 @@ describe('operator watch pool', () => {
       dispatchQueue: createOperatorDispatchQueue(),
     });
     try {
-      expect(pool.list()).toHaveLength(2);
-      expect(pool.listConductorMessageListens()).toHaveLength(2);
-      await pool.register(firstId, {
-        pollIntervalMs: 60_000,
-        debounceMs: 0,
-      });
+      expect(pool.list()).toHaveLength(0);
+      expect(pool.listConductorMessageListens()).toHaveLength(0);
       const firstPath = operatorWatchStatePath(userRoot, 'work', firstIssue);
       const secondPath = operatorWatchStatePath(userRoot, 'work', secondIssue);
-      const first = JSON.parse(await readFile(firstPath, 'utf8')) as typeof legacyState;
-      const second = JSON.parse(await readFile(secondPath, 'utf8')) as typeof legacyState;
-      expect(first).toMatchObject({
-        watches: { [firstId]: expect.any(Object) },
-        cursors: { [firstId]: { sequence: 1 } },
-        messageListeners: { [firstId]: expect.any(Object) },
-        messageCursors: { [firstId]: 10 },
-        pendingReports: [{ reportId: 'legacy-report-1', issueUrl: firstIssue }],
+      await expect(readFile(firstPath, 'utf8')).rejects.toMatchObject({
+        code: 'ENOENT',
       });
-      expect(second).toMatchObject({
-        watches: { [secondId]: expect.any(Object) },
-        cursors: { [secondId]: { sequence: 2 } },
-        messageListeners: { [secondId]: expect.any(Object) },
-        messageCursors: { [secondId]: 20 },
-        pendingReports: [{ reportId: 'legacy-report-2', issueUrl: secondIssue }],
+      await expect(readFile(secondPath, 'utf8')).rejects.toMatchObject({
+        code: 'ENOENT',
       });
       await expect(readFile(legacyPath, 'utf8')).resolves.toBe(
         JSON.stringify(legacyState),
@@ -472,7 +493,7 @@ describe('operator watch pool', () => {
       expect(await pool.pollOnce('live-one')).toBe(0);
       expect(await pool.pollOnce('offline-two')).toBe(0);
       const stored = JSON.parse(
-        await readFile(operatorWatchStatePath(repoRoot), 'utf8'),
+        await readFile(currentWatchStatePath(repoRoot), 'utf8'),
       ) as { cursors: Record<string, { sequence: number }> };
       expect(stored.cursors['live-one']?.sequence).toBe(2);
       expect(stored.cursors['offline-two']?.sequence).toBe(2);
@@ -493,7 +514,7 @@ describe('operator watch pool', () => {
     }
   });
 
-  it('watches through the slug socket when a duplicate path-hash store has no socket', async () => {
+  it('watches through the canonical slug socket without reading a path-hash duplicate', async () => {
     repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-watch-duplicate-'));
     const agentId = 'duplicate-live-session';
     const issueUrl = 'https://github.com/example/live-socket/issues/607';
@@ -520,7 +541,7 @@ describe('operator watch pool', () => {
     });
     closeServers.push(() => liveServer.close());
 
-    const hashPath = join(paths.sessionsDir, `${agentId}.json`);
+    const hashPath = join(paths.legacyHashSessionsDir, `${agentId}.json`);
     const slugPath = paths.canonicalSessionResumeStorePath(issueUrl, agentId);
     const hashStore = {
       version: 1,
@@ -552,10 +573,7 @@ describe('operator watch pool', () => {
     });
     try {
       await pool.register(agentId, { pollIntervalMs: 60_000, debounceMs: 0 });
-      expect(diagnostics).toHaveLength(1);
-      expect(diagnostics[0]).toContain(`selected canonical-slug=${slugPath}`);
-      expect(diagnostics[0]).toContain(`${hashPath} (harnessSocketPath=absent)`);
-      expect(diagnostics[0]).toContain(`${slugPath} (harnessSocketPath=present)`);
+      expect(diagnostics).toHaveLength(0);
       await pool.pollOnce(agentId);
       expect(pool.getLiveStatus(agentId)).toMatchObject({
         connectivity: 'reachable',
@@ -608,7 +626,7 @@ describe('operator watch pool', () => {
       workers: {},
       updatedAt: 1,
     };
-    const hashPath = join(paths.sessionsDir, `${agentId}.json`);
+    const hashPath = join(paths.legacyHashSessionsDir, `${agentId}.json`);
     const slugPath = paths.canonicalSessionResumeStorePath(issueUrl, agentId);
     await mkdir(dirname(hashPath), { recursive: true });
     await mkdir(dirname(slugPath), { recursive: true });
@@ -616,7 +634,7 @@ describe('operator watch pool', () => {
     await writeFile(slugPath, JSON.stringify(resumeStore), 'utf8');
 
     const hashYamlPath = join(
-      paths.sessionsDir,
+      paths.legacyHashSessionsDir,
       agentId,
       'open-questions.yaml',
     );
@@ -677,9 +695,7 @@ describe('operator watch pool', () => {
     try {
       await pool.register(agentId, { pollIntervalMs: 60_000, debounceMs: 0 });
       expect(await pool.pollOnce(agentId)).toBe(0);
-      expect(diagnostics[0]).toContain(
-        `selected canonical-slug=${slugPath}`,
-      );
+      expect(diagnostics).toHaveLength(0);
       await writeSlugQuestions(2, [
         'initial canonical question',
         'new canonical slug question',
@@ -689,7 +705,7 @@ describe('operator watch pool', () => {
         { continuationConsumed: false },
         Date.now(),
       );
-      expect(diagnostics.join('\n')).toContain(`${agentId}.json`);
+      expect(diagnostics).toHaveLength(0);
       expect(batch?.events[0]?.type === 'report' && batch.events[0].text).toContain(
         'new canonical slug question',
       );
@@ -698,14 +714,12 @@ describe('operator watch pool', () => {
     }
   });
 
-  it('reads canonical slug snapshots before clone-local hash fallbacks', async () => {
+  it('reads canonical slug snapshots and ignores clone-local hash snapshots', async () => {
     repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-watch-location-yaml-'));
     const paths = resolveEnsemblePaths({ repoRoot });
-    const slugIssueUrl = 'https://github.com/example/slug-fallback/issues/607';
-    const hashIssueUrl = 'https://github.com/example/hash-fallback/issues/608';
-    const slugAgentId = 'slug-fallback';
-    const hashAgentId = 'hash-fallback';
-    const makeResumeStore = (agentId: string, issueUrl: string) => ({
+    const issueUrl = 'https://github.com/example/canonical-snapshots/issues/607';
+    const agentId = 'canonical-snapshots';
+    const resumeStore = {
       version: 1,
       conductorAgentId: agentId,
       issueUrl,
@@ -715,22 +729,23 @@ describe('operator watch pool', () => {
       sequence: 0,
       workers: {},
       updatedAt: 1,
-    });
-    const writeStore = async (path: string, agentId: string, issueUrl: string) => {
-      await mkdir(dirname(path), { recursive: true });
-      await writeFile(
-        path,
-        JSON.stringify(makeResumeStore(agentId, issueUrl)),
-        'utf8',
-      );
     };
+    const canonicalStorePath = paths.canonicalSessionResumeStorePath(
+      issueUrl,
+      agentId,
+    );
+    const canonicalQuestionsPath = paths.canonicalOpenQuestionsPath(
+      issueUrl,
+      agentId,
+    );
+    const hashQuestionsPath = paths.legacyHashOpenQuestionsPath(agentId);
+    await mkdir(dirname(canonicalStorePath), { recursive: true });
+    await writeFile(canonicalStorePath, JSON.stringify(resumeStore), 'utf8');
     const writeQuestions = async (
       path: string,
-      questions: Array<{ id: string; question: string }>,
+      sequence: number,
+      questions: string[],
     ) => {
-      const sequence = Math.max(
-        ...questions.map(({ id }) => Number(id.slice('inq-'.length))),
-      );
       await mkdir(dirname(path), { recursive: true });
       await writeFile(
         path,
@@ -738,8 +753,8 @@ describe('operator watch pool', () => {
           'version: 1',
           `sequence: ${sequence}`,
           'openQuestions:',
-          ...questions.flatMap(({ id, question }, index) => [
-            `  - id: ${id}`,
+          ...questions.flatMap((question, index) => [
+            `  - id: inq-${index + 1}`,
             `    question: ${JSON.stringify(question)}`,
             '    responseType: text',
             '    source: conductor',
@@ -751,62 +766,26 @@ describe('operator watch pool', () => {
         'utf8',
       );
     };
-
-    const slugStorePath = paths.canonicalSessionResumeStorePath(
-      slugIssueUrl,
-      slugAgentId,
-    );
-    await writeStore(slugStorePath, slugAgentId, slugIssueUrl);
-    await writeQuestions(
-      paths.openQuestionsPath(slugAgentId),
-      [{ id: 'inq-1', question: 'hash fallback for selected slug' }],
-    );
-
-    const hashStorePath = paths.sessionResumeStorePath(hashAgentId);
-    await writeStore(hashStorePath, hashAgentId, hashIssueUrl);
-    await writeQuestions(
-      paths.canonicalOpenQuestionsPath(hashIssueUrl, hashAgentId),
-      [{ id: 'inq-1', question: 'canonical slug for hash-selected session' }],
-    );
-    await writeQuestions(
-      paths.openQuestionsPath(hashAgentId),
-      [{ id: 'inq-1', question: 'hash snapshot for selected hash' }],
-    );
+    await writeQuestions(canonicalQuestionsPath, 1, ['canonical question']);
+    await writeQuestions(hashQuestionsPath, 1, ['legacy hash question']);
 
     const dispatchQueue = createOperatorDispatchQueue();
     const pool = await createOperatorWatchPool({ repoRoot, dispatchQueue });
     try {
-      await pool.register(slugAgentId, { pollIntervalMs: 60_000, debounceMs: 0 });
-      await pool.register(hashAgentId, { pollIntervalMs: 60_000, debounceMs: 0 });
-      await expect(pool.pollOnce(slugAgentId)).resolves.toBe(0);
-      await expect(pool.pollOnce(hashAgentId)).resolves.toBe(0);
+      await pool.register(agentId, { pollIntervalMs: 60_000, debounceMs: 0 });
+      await expect(pool.pollOnce(agentId)).resolves.toBe(0);
       await writeQuestions(
-        paths.openQuestionsPath(slugAgentId),
-        [
-          { id: 'inq-1', question: 'hash fallback for selected slug' },
-          { id: 'inq-2', question: 'new hash fallback for selected slug' },
-        ],
+        hashQuestionsPath,
+        2,
+        ['legacy hash question', 'new legacy hash question'],
       );
+      await expect(pool.pollOnce(agentId)).resolves.toBe(0);
       await writeQuestions(
-        paths.openQuestionsPath(hashAgentId),
-        [
-          { id: 'inq-1', question: 'hash snapshot for selected hash' },
-          { id: 'inq-2', question: 'new hash snapshot for selected hash' },
-        ],
+        canonicalQuestionsPath,
+        2,
+        ['canonical question', 'new canonical question'],
       );
-      await expect(pool.pollOnce(slugAgentId)).resolves.toBe(1);
-      await expect(pool.pollOnce(hashAgentId)).resolves.toBe(0);
-      await writeQuestions(
-        paths.canonicalOpenQuestionsPath(hashIssueUrl, hashAgentId),
-        [
-          { id: 'inq-1', question: 'canonical slug for hash-selected session' },
-          {
-            id: 'inq-2',
-            question: 'new canonical slug snapshot for hash-selected session',
-          },
-        ],
-      );
-      await expect(pool.pollOnce(hashAgentId)).resolves.toBe(1);
+      await expect(pool.pollOnce(agentId)).resolves.toBe(1);
       const reports = [0, 1]
         .flatMap(() =>
           dispatchQueue.takeBatch(
@@ -817,16 +796,9 @@ describe('operator watch pool', () => {
         .filter((event) => event.type === 'report')
         .map((event) => event.type === 'report' ? event.text : '');
       expect(reports).toEqual(
-        expect.arrayContaining([
-          expect.stringContaining('new hash fallback for selected slug'),
-          expect.stringContaining(
-            'new canonical slug snapshot for hash-selected session',
-          ),
-        ]),
+        expect.arrayContaining([expect.stringContaining('new canonical question')]),
       );
-      expect(reports?.join('\n')).not.toContain(
-        'new hash snapshot for selected hash',
-      );
+      expect(reports.join('\n')).not.toContain('legacy hash question');
     } finally {
       pool.close();
     }
@@ -916,7 +888,7 @@ describe('operator watch pool', () => {
 
       await resumedPool.acknowledge(retry.events);
       const stored = JSON.parse(
-        await readFile(operatorWatchStatePath(repoRoot), 'utf8'),
+        await readFile(currentWatchStatePath(repoRoot), 'utf8'),
       ) as { pendingReports: Array<{ reportId: string }> };
       expect(stored.pendingReports).toHaveLength(1);
       expect(stored.pendingReports[0]?.reportId).not.toBe(firstReportId);
@@ -1037,7 +1009,7 @@ describe('operator watch pool', () => {
         },
       },
     ];
-    const statePath = operatorWatchStatePath(repoRoot);
+    const statePath = currentWatchStatePath(repoRoot);
     await mkdir(dirname(statePath), { recursive: true });
 
     for (const invalidState of invalidStates) {
@@ -1075,7 +1047,7 @@ describe('operator watch pool', () => {
       [{ ...validReport, debounceMs: -1 }],
       [{ ...validReport, debounceMs: 10_001 }],
     ];
-    const statePath = operatorWatchStatePath(repoRoot);
+    const statePath = currentWatchStatePath(repoRoot);
     await mkdir(dirname(statePath), { recursive: true });
 
     for (const pendingReports of invalidPendingReports) {
@@ -1127,12 +1099,9 @@ describe('operator watch pool', () => {
         reportedAt: 20,
       });
       await rm(
-        join(
-          repoRoot,
-          '.ensemble',
-          'sessions',
+        resolveEnsemblePaths({ repoRoot }).canonicalSessionStatePath(
+          DEFAULT_ISSUE_URL,
           'live-dedup',
-          'session-state.yaml',
         ),
         { force: true },
       );
@@ -1365,13 +1334,16 @@ describe('operator watch pool', () => {
 
   it('keeps Open Question text out of watch poll warning logs', async () => {
     repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-watch-logs-'));
-    await mkdir(join(repoRoot, '.ensemble', 'sessions'), { recursive: true });
     await writeResumeStore('session-private', 1);
     const secretBody = 'private-question-body-marker';
-    const sessionDir = join(repoRoot, '.ensemble', 'sessions', 'session-private');
-    await mkdir(sessionDir, { recursive: true });
+    const malformedSnapshotPath =
+      resolveEnsemblePaths({ repoRoot }).canonicalOpenQuestionsPath(
+        DEFAULT_ISSUE_URL,
+        'session-private',
+      );
+    await mkdir(dirname(malformedSnapshotPath), { recursive: true });
     await writeFile(
-      join(sessionDir, 'open-questions.yaml'),
+      malformedSnapshotPath,
       `version: 1\nsequence: 1\nopenQuestions:\n  - ${secretBody}: [\n`,
     );
     const warnings: string[] = [];
@@ -1478,7 +1450,7 @@ describe('operator watch pool', () => {
       expect(pool.listConductorMessageListens()).toHaveLength(1);
       expect(dispatchQueue.pendingEventCount).toBe(0);
 
-      const storedPath = operatorWatchStatePath(repoRoot);
+      const storedPath = currentWatchStatePath(repoRoot);
       const baseline = JSON.parse(await readFile(storedPath, 'utf8')) as {
         cursors: Record<string, { sequence: number }>;
         messageCursors: Record<string, number>;
@@ -1605,7 +1577,7 @@ describe('operator watch pool', () => {
         }
       }
       const state = JSON.parse(
-        await readFile(operatorWatchStatePath(repoRoot), 'utf8'),
+        await readFile(currentWatchStatePath(repoRoot), 'utf8'),
       ) as {
         messageCursors: Record<string, number>;
         pendingReports: Array<{ sendCount?: number }>;
@@ -1703,7 +1675,7 @@ describe('operator watch pool', () => {
         }
       }
       const state = JSON.parse(
-        await readFile(operatorWatchStatePath(repoRoot), 'utf8'),
+        await readFile(currentWatchStatePath(repoRoot), 'utf8'),
       ) as {
         messageCursors: Record<string, number>;
         pendingReports: Array<{ sendCount?: number }>;
@@ -1822,7 +1794,7 @@ describe('operator watch pool', () => {
       expect(batch.events[2]?.text).toContain('inbound 9');
 
       const state = JSON.parse(
-        await readFile(operatorWatchStatePath(repoRoot), 'utf8'),
+        await readFile(currentWatchStatePath(repoRoot), 'utf8'),
       ) as {
         messageCursors: Record<string, number>;
         pendingReports: Array<{ sendCount?: number }>;
@@ -1922,7 +1894,7 @@ describe('operator watch pool', () => {
       expect(formatted).toContain('sendCount: 2, 3');
       expect(formatted).toContain('readable inbound 4');
       const state = JSON.parse(
-        await readFile(operatorWatchStatePath(repoRoot), 'utf8'),
+        await readFile(currentWatchStatePath(repoRoot), 'utf8'),
       ) as {
         messageCursors: Record<string, number>;
         pendingReports: Array<{ sendCount?: number }>;
@@ -1973,7 +1945,7 @@ describe('operator watch pool', () => {
       expect(pool.listConductorMessageListens()).toEqual([]);
       expect(vi.getTimerCount()).toBe(0);
       const state = JSON.parse(
-        await readFile(operatorWatchStatePath(repoRoot), 'utf8'),
+        await readFile(currentWatchStatePath(repoRoot), 'utf8'),
       ) as {
         messageListeners: Record<string, unknown>;
         messageCursors: Record<string, number>;
@@ -2025,7 +1997,7 @@ describe('operator watch pool', () => {
       expect(pool.listConductorMessageListens()).toHaveLength(1);
       expect(dispatchQueue.pendingEventCount).toBe(0);
       const baselineState = JSON.parse(
-        await readFile(operatorWatchStatePath(repoRoot), 'utf8'),
+        await readFile(currentWatchStatePath(repoRoot), 'utf8'),
       ) as { messageCursors: Record<string, number> };
       expect(baselineState.messageCursors['message-oversized-baseline']).toBe(6);
 
@@ -2109,7 +2081,7 @@ describe('operator watch pool', () => {
       expect(pool.listConductorMessageListens()).toEqual([previousConfig]);
       expect(vi.getTimerCount()).toBe(1);
       const state = JSON.parse(
-        await readFile(operatorWatchStatePath(repoRoot), 'utf8'),
+        await readFile(currentWatchStatePath(repoRoot), 'utf8'),
       ) as {
         messageListeners: Record<string, {
           conductorAgentId: string;
@@ -2149,7 +2121,7 @@ describe('operator watch pool', () => {
       expect(dispatchQueue.pendingEventCount).toBe(0);
       expect(
         JSON.parse(
-          await readFile(operatorWatchStatePath(repoRoot), 'utf8'),
+          await readFile(currentWatchStatePath(repoRoot), 'utf8'),
         ).messageCursors['offline-message-session'],
       ).toBeUndefined();
     } finally {
@@ -2163,8 +2135,12 @@ describe('operator watch pool', () => {
     harnessSocketPath?: string,
     issueUrl = 'https://github.com/example/repo/issues/1',
   ) {
+    const path = resolveEnsemblePaths({
+      repoRoot,
+    }).canonicalSessionResumeStorePath(issueUrl, agentId);
+    await mkdir(dirname(path), { recursive: true });
     await writeFile(
-      join(repoRoot, '.ensemble', 'sessions', `${agentId}.json`),
+      path,
       JSON.stringify({
         version: 1,
         conductorAgentId: agentId,
@@ -2189,10 +2165,19 @@ describe('operator watch pool', () => {
       reportedAt: number;
     },
   ) {
-    const sessionDir = join(repoRoot, '.ensemble', 'sessions', agentId);
-    await mkdir(sessionDir, { recursive: true });
+    const paths = resolveEnsemblePaths({ repoRoot });
+    const openQuestionsPath = paths.canonicalOpenQuestionsPath(
+      DEFAULT_ISSUE_URL,
+      agentId,
+    );
+    const sessionStatePath = paths.canonicalSessionStatePath(
+      DEFAULT_ISSUE_URL,
+      agentId,
+    );
+    await mkdir(dirname(openQuestionsPath), { recursive: true });
+    await mkdir(dirname(sessionStatePath), { recursive: true });
     await writeFile(
-      join(sessionDir, 'open-questions.yaml'),
+      openQuestionsPath,
       [
         'version: 1',
         `sequence: ${input.sequence}`,
@@ -2224,7 +2209,7 @@ describe('operator watch pool', () => {
       ].join('\n'),
     );
     await writeFile(
-      join(sessionDir, 'session-state.yaml'),
+      sessionStatePath,
       `version: 1\nstatusLine: "${input.statusLine}"\nreportedAt: ${input.reportedAt}\n`,
     );
   }
