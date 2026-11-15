@@ -35,6 +35,7 @@ import {
   open,
   readFile,
   readdir,
+  realpath,
   writeFile,
 } from 'node:fs/promises';
 import { constants as fsConstants } from 'node:fs';
@@ -974,6 +975,68 @@ async function pathKind(path) {
     }
     throw error;
   }
+}
+
+async function findUserRootSymlinkEscape(path, userRoot) {
+  const root = normalize(resolve(userRoot));
+  const targetPath = normalize(resolve(path));
+  if (!isWithin(root, targetPath)) {
+    return { path: targetPath, target: targetPath };
+  }
+
+  let realRoot;
+  try {
+    realRoot = normalize(await realpath(root));
+  } catch (error) {
+    if (error && typeof error === 'object' && error.code === 'ENOENT') {
+      return undefined;
+    }
+    return { path: root, error };
+  }
+
+  const relativePath = relative(root, targetPath);
+  let current = root;
+  for (const segment of relativePath === '' ? [] : relativePath.split(sep)) {
+    current = join(current, segment);
+    let info;
+    try {
+      info = await lstat(current);
+    } catch (error) {
+      if (error && typeof error === 'object' && error.code === 'ENOENT') {
+        return undefined;
+      }
+      return { path: current, error };
+    }
+    if (!info.isSymbolicLink()) continue;
+
+    let resolvedTarget;
+    try {
+      resolvedTarget = normalize(await realpath(current));
+    } catch (error) {
+      return { path: current, error };
+    }
+    if (!isWithin(realRoot, resolvedTarget)) {
+      return { path: current, target: resolvedTarget };
+    }
+  }
+  return undefined;
+}
+
+function recordUserRootSymlinkRejection(
+  manifest,
+  source,
+  kind,
+  provenance,
+  inspection,
+  userRoot,
+) {
+  const reason = inspection.target
+    ? `Refused to scan the legacy slug-keyed watch path: symlink at ${inspection.path} resolves outside user root ${userRoot} (target ${inspection.target}).`
+    : `Refused to scan the legacy slug-keyed watch path: could not verify that ${inspection.path} stays inside user root ${userRoot} because path inspection failed: ${inspection.error.message}`;
+  unresolvedEntry(manifest, source, kind, reason, provenance, {
+    recovery:
+      'Keep the source unchanged. Remove or replace the symlink so the watch path resolves inside user root, then rerun the inventory.',
+  });
 }
 
 async function listDirectory(path, manifest, kind, provenance = {}) {
@@ -2456,7 +2519,40 @@ async function scanLegacySlugWatchSources({
   watchGroups,
   archiveCandidates,
 }) {
+  const operatorRoot = join(userRoot, 'operator-agent');
+  const operatorInspection = await findUserRootSymlinkEscape(
+    operatorRoot,
+    userRoot,
+  );
+  if (operatorInspection) {
+    recordUserRootSymlinkRejection(
+      manifest,
+      operatorInspection.path,
+      'legacy-operator-slug-watch-root',
+      { sourceType: 'user-slug-keyed' },
+      operatorInspection,
+      userRoot,
+    );
+    return;
+  }
+
   const githubRoot = join(userRoot, 'operator-agent', 'github.com');
+  const githubInspection = await findUserRootSymlinkEscape(
+    githubRoot,
+    userRoot,
+  );
+  if (githubInspection) {
+    recordUserRootSymlinkRejection(
+      manifest,
+      githubInspection.path,
+      'legacy-operator-slug-watch-root',
+      { sourceType: 'user-slug-keyed' },
+      githubInspection,
+      userRoot,
+    );
+    return;
+  }
+
   const owners = await listDirectory(
     githubRoot,
     manifest,
@@ -2465,6 +2561,21 @@ async function scanLegacySlugWatchSources({
   );
   for (const ownerEntry of owners) {
     const ownerPath = join(githubRoot, ownerEntry.name);
+    const ownerInspection = await findUserRootSymlinkEscape(
+      ownerPath,
+      userRoot,
+    );
+    if (ownerInspection) {
+      recordUserRootSymlinkRejection(
+        manifest,
+        ownerInspection.path,
+        'legacy-operator-slug-watch-owner',
+        { sourceType: 'user-slug-keyed', owner: ownerEntry.name },
+        ownerInspection,
+        userRoot,
+      );
+      continue;
+    }
     if (ownerEntry.isSymbolicLink() || !ownerEntry.isDirectory()) {
       unresolvedEntry(
         manifest,
@@ -2483,6 +2594,25 @@ async function scanLegacySlugWatchSources({
     );
     for (const repositoryEntry of repositories) {
       const repositoryPath = join(ownerPath, repositoryEntry.name);
+      const repositoryInspection = await findUserRootSymlinkEscape(
+        repositoryPath,
+        userRoot,
+      );
+      if (repositoryInspection) {
+        recordUserRootSymlinkRejection(
+          manifest,
+          repositoryInspection.path,
+          'legacy-operator-slug-watch-repository',
+          {
+            sourceType: 'user-slug-keyed',
+            owner: ownerEntry.name,
+            repository: repositoryEntry.name,
+          },
+          repositoryInspection,
+          userRoot,
+        );
+        continue;
+      }
       const legacySlug = join(
         'github.com',
         ownerEntry.name,
@@ -2508,6 +2638,21 @@ async function scanLegacySlugWatchSources({
         continue;
       }
       const source = join(repositoryPath, 'watch-state.json');
+      const sourceInspectionWithinRoot = await findUserRootSymlinkEscape(
+        source,
+        userRoot,
+      );
+      if (sourceInspectionWithinRoot) {
+        recordUserRootSymlinkRejection(
+          manifest,
+          source,
+          'legacy-operator-slug-watch-source',
+          provenance,
+          sourceInspectionWithinRoot,
+          userRoot,
+        );
+        continue;
+      }
       const sourceInspection = await inspectScanPath(
         source,
         manifest,

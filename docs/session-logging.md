@@ -324,6 +324,8 @@ node scripts/migrate-project-ensemble-runtime-to-user.mjs \
 
 `--checkout-root` は対象 checkout ごとに指定し、`--checkout-roots-complete` は列挙が完了していることを operator が明示します。root が 0 件の場合、この flag だけでは完全 inventory とみなされず、manifest に `complete: false` と `<no checkout roots declared>` が残ります。root の網羅性を確認できない場合も flag を付けず、未確認 root を manifest に残してください。各実行は `~/.ensemble/migration/issue-session-migration-<timestamp>-<id>.json` を新規作成します。`--manifest <path>` で出力先を指定できますが、既存 file は上書きしません。
 
+旧 slug-keyed watch の path component または source file が symlink で、解決先が userRoot 外になる場合は、source 内容を読まずに unresolved として記録し、copy / archive を行いません。失敗箇所と理由は manifest に残ります。
+
 Issue session data は、有効な schema の SessionResumeStore にある `issueUrl` が canonical slug を一意に証明する場合だけ割り当てます。同じ `conductorAgentId` から異なる Issue URL が見つかった場合や、Store / sidecar の schema が不正な場合は成功扱いにせず、source を保全して manifest に unresolved と recovery を記録します。`repoRoot` の一致は条件にしません。Pi transcript は transcript header の session ID と一意な Store evidence が対応する場合だけ copy し、Issue data の可能性を排除できない共有 transcript は source を保全したまま未解決として記録します。
 
 watch state は `conductorAgentId` ごとに watches・cursors・message listeners・message cursors・pending reports を一体の bundle として扱います。旧 slug-keyed source では source path の slug も一意な SessionResumeStore の `issueUrl` と一致しなければなりません。Store の `issueUrl` が一意で、pending report の Issue URL も一致し、`--profile` で operator が移行先 profile を選んだ場合だけ profile / slug 配下へ copy します。根拠不足、破損、または移行先との衝突がある bundle は checksum 付きで `~/.ensemble/operator-agents/legacy/watch/` に保全します。profile を指定しない場合も watch bundle は同じ archive に保全します。

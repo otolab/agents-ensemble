@@ -6,8 +6,11 @@ import {
   lstat,
   mkdir,
   mkdtemp,
+  readlink,
   readFile,
+  readdir,
   rm,
+  symlink,
   writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -1173,6 +1176,101 @@ test('slug-keyed watch sources dry-run, copy complete conductor bundles, and rer
   );
 });
 
+test('slug-keyed watch inventory rejects an operator-agent symlink outside user root in both modes', async () => {
+  const root = await makeRoot();
+  const { userRoot } = root;
+  const agentId = 'external-operator-root-watch';
+  const operatorRoot = join(userRoot, 'operator-agent');
+  const sourcePath = join(
+    operatorRoot,
+    'github.com',
+    'example',
+    'repo',
+    'watch-state.json',
+  );
+  const externalOperatorRoot = join(root.path, 'outside-operator-agent');
+  const externalSourcePath = join(
+    externalOperatorRoot,
+    'github.com',
+    'example',
+    'repo',
+    'watch-state.json',
+  );
+  const sourceText = `${JSON.stringify(
+    makeWatchState(agentId, issueUrl, 17),
+    null,
+    2,
+  )}\n`;
+  await mkdir(dirname(externalSourcePath), { recursive: true });
+  await writeFile(externalSourcePath, sourceText, 'utf8');
+  await writeJson(
+    join(
+      userRoot,
+      'sessions',
+      'github.com',
+      'example',
+      'repo',
+      `${agentId}.json`,
+    ),
+    makeStore(agentId, issueUrl, '/unrelated/clone'),
+  );
+  await symlink(externalOperatorRoot, operatorRoot, 'dir');
+
+  await assertSlugWatchSymlinkRejected(root, {
+    sourcePath,
+    externalSourcePath,
+    linkPath: operatorRoot,
+    expectedManifestSource: operatorRoot,
+    sourceText,
+    linkTarget: externalOperatorRoot,
+    existingDestinationText: 'existing destination must remain unchanged\n',
+    archiveSentinelText: 'existing archive must remain unchanged\n',
+  });
+});
+
+test('slug-keyed watch inventory rejects an external watch-state symlink in both modes', async () => {
+  const root = await makeRoot();
+  const { userRoot } = root;
+  const agentId = 'external-watch-state-file';
+  const sourcePath = join(
+    userRoot,
+    'operator-agent',
+    'github.com',
+    'example',
+    'repo',
+    'watch-state.json',
+  );
+  const externalSourcePath = join(root.path, 'outside-watch-state.json');
+  const sourceText = `${JSON.stringify(
+    makeWatchState(agentId, issueUrl, 18),
+    null,
+    2,
+  )}\n`;
+  await writeFile(externalSourcePath, sourceText, 'utf8');
+  await writeJson(
+    join(
+      userRoot,
+      'sessions',
+      'github.com',
+      'example',
+      'repo',
+      `${agentId}.json`,
+    ),
+    makeStore(agentId, issueUrl, '/unrelated/clone'),
+  );
+  await mkdir(dirname(sourcePath), { recursive: true });
+  await symlink(externalSourcePath, sourcePath, 'file');
+
+  await assertSlugWatchSymlinkRejected(root, {
+    sourcePath,
+    externalSourcePath,
+    linkPath: sourcePath,
+    expectedManifestSource: sourcePath,
+    sourceText,
+    linkTarget: externalSourcePath,
+  });
+});
+
 test('a slug-keyed source whose path disagrees with its SessionResumeStore is archived', async () => {
   const root = await makeRoot();
   const { userRoot } = root;
@@ -1456,6 +1554,10 @@ test('user docs distinguish bulk inventory from resume-time lazy promotion', asy
   assert.match(
     sessionLogging,
     /operator watch state の profile \/ slug 移行も担いません/u,
+  );
+  assert.match(
+    sessionLogging,
+    /旧 slug-keyed watch.*symlink.*userRoot 外.*source 内容を読まず.*unresolved.*copy \/ archive を行いません/u,
   );
   assert.match(
     sessionLogging,
@@ -1748,6 +1850,127 @@ function runMigration(
   return spawnSync(process.execPath, args, { encoding: 'utf8' });
 }
 
+async function assertSlugWatchSymlinkRejected(
+  root,
+  {
+    sourcePath,
+    externalSourcePath,
+    linkPath,
+    expectedManifestSource,
+    sourceText,
+    linkTarget,
+    existingDestinationText,
+    archiveSentinelText,
+  },
+) {
+  const markerPath = join(root.path, 'external-watch-read-attempted');
+  const preloadPath = join(root.path, 'guard-external-watch-read.mjs');
+  await writeFile(
+    preloadPath,
+    [
+      "import fs from 'node:fs';",
+      "import fsp from 'node:fs/promises';",
+      "import { syncBuiltinESMExports } from 'node:module';",
+      `const watchedPaths = new Set(${JSON.stringify([
+        sourcePath,
+        externalSourcePath,
+      ])});`,
+      `const markerPath = ${JSON.stringify(markerPath)};`,
+      'const rejectExternalRead = (path, operation) => {',
+      '  if (!watchedPaths.has(String(path))) return;',
+      '  fs.writeFileSync(markerPath, operation);',
+      "  const error = new Error('Blocked read of an external watch source.');",
+      "  Object.assign(error, { code: 'EACCES', errno: -13, syscall: operation, path: String(path) });",
+      '  throw error;',
+      '};',
+      'const originalReadFile = fsp.readFile;',
+      'fsp.readFile = async (path, ...args) => {',
+      "  rejectExternalRead(path, 'readFile');",
+      '  return originalReadFile.call(fsp, path, ...args);',
+      '};',
+      'const originalCreateReadStream = fs.createReadStream;',
+      'fs.createReadStream = (path, ...args) => {',
+      "  rejectExternalRead(path, 'createReadStream');",
+      '  return originalCreateReadStream.call(fs, path, ...args);',
+      '};',
+      'syncBuiltinESMExports();',
+      '',
+    ].join('\n'),
+    'utf8',
+  );
+
+  const destination = join(
+    root.userRoot,
+    'operator-agents',
+    'personal',
+    'watch',
+    'github.com',
+    'example',
+    'repo',
+    'watch-state.json',
+  );
+  const archiveDirectory = join(
+    root.userRoot,
+    'operator-agents',
+    'legacy',
+    'watch',
+  );
+  const archiveSentinelPath = join(archiveDirectory, 'sentinel.json');
+  if (existingDestinationText !== undefined) {
+    await mkdir(dirname(destination), { recursive: true });
+    await writeFile(destination, existingDestinationText, 'utf8');
+  }
+  if (archiveSentinelText !== undefined) {
+    await mkdir(archiveDirectory, { recursive: true });
+    await writeFile(archiveSentinelPath, archiveSentinelText, 'utf8');
+  }
+  const sourceMetadataBefore = await pathMetadata(externalSourcePath);
+  const linkMetadataBefore = await pathMetadata(linkPath);
+  for (const apply of [false, true]) {
+    const result = runMigration(root, {
+      profile: 'personal',
+      apply,
+      preloadPath,
+    });
+    assert.equal(result.status, 0, result.stderr);
+    const manifest = await readManifest(root);
+    const entry = manifest.entries.find(
+      (candidate) =>
+        candidate.source === expectedManifestSource &&
+        candidate.provenance.sourceType === 'user-slug-keyed' &&
+        candidate.disposition === 'unresolved',
+    );
+    assert.ok(entry, 'manifest should identify the rejected slug-keyed path');
+    assert.match(entry.reason, /symlink.*outside.*user root/iu);
+    assert.match(entry.recovery, /symlink/iu);
+    assert.equal(await fileExists(markerPath), false);
+    if (existingDestinationText === undefined) {
+      assert.equal(await fileExists(destination), false);
+    } else {
+      assert.equal(
+        await readFile(destination, 'utf8'),
+        existingDestinationText,
+      );
+    }
+    if (archiveSentinelText === undefined) {
+      assert.equal(await pathExists(archiveDirectory), false);
+    } else {
+      assert.deepEqual(await readdir(archiveDirectory), ['sentinel.json']);
+      assert.equal(
+        await readFile(archiveSentinelPath, 'utf8'),
+        archiveSentinelText,
+      );
+    }
+    assert.equal(await readFile(externalSourcePath, 'utf8'), sourceText);
+    assert.equal(await readlink(linkPath), linkTarget);
+    assert.deepEqual(
+      await pathMetadata(externalSourcePath),
+      sourceMetadataBefore,
+    );
+    assert.deepEqual(await pathMetadata(linkPath), linkMetadataBefore);
+  }
+}
+
 async function readManifest(root) {
   return JSON.parse(await readFile(root.manifestPath, 'utf8'));
 }
@@ -1772,4 +1995,28 @@ async function fileExists(path) {
     }
     throw error;
   }
+}
+
+async function pathExists(path) {
+  try {
+    await lstat(path);
+    return true;
+  } catch (error) {
+    if (error && typeof error === 'object' && error.code === 'ENOENT') {
+      return false;
+    }
+    throw error;
+  }
+}
+
+async function pathMetadata(path) {
+  const info = await lstat(path);
+  return {
+    dev: info.dev,
+    ino: info.ino,
+    mode: info.mode,
+    size: info.size,
+    mtimeMs: info.mtimeMs,
+    ctimeMs: info.ctimeMs,
+  };
 }
