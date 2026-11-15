@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { resolve } from 'node:path';
-import { Command, Option } from 'commander';
+import { Command, CommanderError, Option } from 'commander';
 import {
   DEFAULT_DISPATCH_HOLD_REMINDER_MS,
   DEFAULT_PERMISSION_DEADLOCK_STALL_MS,
@@ -46,6 +46,7 @@ import {
 } from './conductor-auth-command.js';
 import { runSetupCommand } from './setup-command.js';
 import { runDoctorCommand } from './doctor-command.js';
+import { runDoctorCheckCommand } from './doctor-check-command.js';
 import {
   runPiModelsAdd,
   runPiModelsDiff,
@@ -622,9 +623,11 @@ program
     }
   });
 
-program
+const doctor = program
   .command('doctor')
-  .description('Configure allowlisted harness settings with an interactive agent')
+  .description(
+    'Configure allowlisted settings or run non-interactive diagnostics',
+  )
   .option(
     '--repo-root <path>',
     'Repository root used to resolve project configuration',
@@ -645,6 +648,42 @@ program
       process.exitCode = 1;
     }
   });
+
+const doctorCheck = doctor
+  .command('check')
+  .description(
+    'Check local conductor, worker, and config prerequisites without changing settings',
+  )
+  .argument(
+    '[request...]',
+    'Natural-language request; starts the read-only diagnostic agent for one turn',
+  )
+  .option('--json', 'Output the structured diagnostic report as JSON')
+  .option(
+    '--repo-root <path>',
+    'Repository root used to resolve project configuration',
+    process.cwd(),
+  )
+  .action(
+    async (
+      request: string[],
+      options: { json?: boolean; repoRoot: string },
+    ) => {
+      try {
+        const report = await runDoctorCheckCommand({
+          request,
+          json: options.json,
+          repoRoot: resolve(options.repoRoot),
+        });
+        process.exitCode = report.exitCode;
+      } catch {
+        console.error('Doctor check を完了できませんでした。');
+        process.exitCode = 2;
+      }
+    },
+  );
+
+doctorCheck.exitOverride();
 
 const auth = program.command('auth').description('Conductor authentication');
 
@@ -1072,4 +1111,14 @@ function formatSessionExportText(
   ].join('\n');
 }
 
-program.parse();
+try {
+  program.parse();
+} catch (error) {
+  if (!(error instanceof CommanderError)) throw error;
+  if (error.code === 'commander.helpDisplayed') {
+    process.exitCode = 0;
+  } else {
+    if (error.message) console.error(error.message);
+    process.exitCode = 2;
+  }
+}

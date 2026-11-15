@@ -19,6 +19,11 @@ export interface CreateDoctorConfigToolsOptions {
   confirm: (proposal: DoctorConfigWriteProposal) => Promise<boolean>;
 }
 
+export interface CreateDoctorReadConfigToolOptions {
+  repoRoot: string;
+  userEnsembleRoot?: string;
+}
+
 const CONFIG_KEYS = Object.keys(
   DOCTOR_CONFIG_SETTING_PATHS,
 ) as DoctorConfigSettingKey[];
@@ -36,50 +41,7 @@ const CONFIG_VALUES: ConductorJsonValue[] = [
 export function createDoctorConfigTools(
   options: CreateDoctorConfigToolsOptions,
 ): ConductorToolSet {
-  const readTool: ConductorTool = {
-    name: 'doctor_read_config',
-    description:
-      'Read the effective values and source for the non-secret doctor config allowlist.',
-    inputSchema: {
-      type: 'object',
-      properties: {},
-      additionalProperties: false,
-    },
-    execute: async (args) => {
-      if (Object.keys(args).length > 0) {
-        return toolError('This tool does not accept arguments.');
-      }
-      try {
-        const snapshot = await readDoctorConfigSettings({
-          repoRoot: options.repoRoot,
-          ...(options.userEnsembleRoot
-            ? { userEnsembleRoot: options.userEnsembleRoot }
-            : {}),
-        });
-        const settings = snapshot.settings.map(({ key, value, source }) => ({
-          key,
-          value,
-          source,
-        }));
-        return {
-          content: [
-            {
-              type: 'text',
-              text: settings
-                .map(({ key, value, source }) => `${key}: ${value} (source: ${source})`)
-                .join('\n'),
-            },
-          ],
-          structuredContent: { settings },
-        };
-      } catch {
-        return toolError(
-          'Could not read the allowlisted settings. No config values were returned.',
-        );
-      }
-    },
-  };
-
+  const readTool = createDoctorReadConfigTool(options);
   const writeTool: ConductorTool = {
     name: 'doctor_write_config',
     description:
@@ -141,6 +103,55 @@ export function createDoctorConfigTools(
   return {
     doctor_read_config: readTool,
     doctor_write_config: writeTool,
+  };
+}
+
+/** Create the read-only allowlisted config tool used by diagnostic agents. */
+export function createDoctorReadConfigTool(
+  options: CreateDoctorReadConfigToolOptions,
+): ConductorTool {
+  return {
+    name: 'doctor_read_config',
+    description:
+      'Read the effective values and source for the non-secret doctor config allowlist.',
+    inputSchema: {
+      type: 'object',
+      properties: {},
+      additionalProperties: false,
+    },
+    execute: async (args) => {
+      if (Object.keys(args).length > 0) {
+        return toolError('This tool does not accept arguments.');
+      }
+      try {
+        const snapshot = await readDoctorConfigSettings({
+          repoRoot: options.repoRoot,
+          ...(options.userEnsembleRoot
+            ? { userEnsembleRoot: options.userEnsembleRoot }
+            : {}),
+        });
+        const settings = snapshot.settings.map(({ key, value, source }) => ({
+          key,
+          value,
+          source,
+        }));
+        return {
+          content: [
+            {
+              type: 'text',
+              text: settings
+                .map(({ key, value, source }) => `${key}: ${value} (source: ${source})`)
+                .join('\n'),
+            },
+          ],
+          structuredContent: { settings },
+        };
+      } catch {
+        return toolError(
+          'Could not read the allowlisted settings. No config values were returned.',
+        );
+      }
+    },
   };
 }
 
