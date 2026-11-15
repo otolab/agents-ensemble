@@ -600,6 +600,7 @@ describe('runOperatorAgent', () => {
     const output = createOutput();
     let agentOptions: ConductorAgentCreateOptions | undefined;
     let listedSessions = '';
+    let workspaceFileResult = '';
     const sentPrompts: string[] = [];
     const fakeAgent = createFakeAgent({
       send: async (prompt) => {
@@ -608,6 +609,20 @@ describe('runOperatorAgent', () => {
         expect(tool).toBeDefined();
         const toolResult = await tool!.execute({ limit: 1 });
         listedSessions = toolResult.content[0]?.text ?? '';
+        const writeWorkspaceFile =
+          agentOptions?.customTools?.write_operator_workspace_file;
+        const readWorkspaceFile =
+          agentOptions?.customTools?.read_operator_workspace_file;
+        expect(writeWorkspaceFile).toBeDefined();
+        expect(readWorkspaceFile).toBeDefined();
+        await writeWorkspaceFile!.execute({
+          path: 'notes/session.md',
+          content: 'Session notes.',
+        });
+        const readResult = await readWorkspaceFile!.execute({
+          path: 'notes/session.md',
+        });
+        workspaceFileResult = readResult.content[0]?.text ?? '';
         return {
           runId: 'run-1',
           status: 'completed',
@@ -648,6 +663,23 @@ describe('runOperatorAgent', () => {
       'https://github.com/example/project/issues/12',
     );
     expect(listedSessions).toContain('permission-1');
+    expect(JSON.parse(workspaceFileResult)).toEqual({
+      path: 'notes/session.md',
+      content: 'Session notes.',
+    });
+    await expect(
+      readFile(
+        join(
+          repoRoot,
+          '.ensemble',
+          'operator-agents',
+          'smoke',
+          'notes',
+          'session.md',
+        ),
+        'utf8',
+      ),
+    ).resolves.toBe('Session notes.');
     expect(transcript).toContain(
       '\u001b[2m[observation]\u001b[0m (pi) ready — enter /exit to start a fresh session next time.',
     );
@@ -682,6 +714,7 @@ describe('runOperatorAgent', () => {
       },
       piExtensions: false,
     });
+    expect(agentOptions).not.toHaveProperty('mcpServers');
     expect(agentOptions).not.toHaveProperty('reasoning');
     expect(agentOptions?.systemPrompt).toContain('operator ロール');
     expect(agentOptions?.systemPrompt).toContain('Profile operator guidance.');
@@ -693,6 +726,15 @@ describe('runOperatorAgent', () => {
     expect(agentOptions?.systemPrompt).toContain('openQuestionHistory');
     expect(agentOptions?.systemPrompt).toContain('register_conductor_message_listen');
     expect(agentOptions?.systemPrompt).toContain('shutdown_issue_session');
+    expect(agentOptions?.systemPrompt).toContain(
+      '検査と open の間に workspace root や親 directory を差し替える TOCTOU は防げず',
+    );
+    expect(agentOptions?.systemPrompt).toContain(
+      '信頼できない同一ユーザー process と workspace を共有しないでください',
+    );
+    expect(agentOptions?.systemPrompt).toContain(
+      'workspace file tool は内容をそのまま読み書きし、秘密情報を redaction しません',
+    );
     expect(agentOptions?.customTools).not.toHaveProperty('prompt_worker');
     expect(
       Object.keys(agentOptions?.customTools ?? {}).filter(
@@ -714,6 +756,8 @@ describe('runOperatorAgent', () => {
       'release_reports',
       'send_operator_message',
       'shutdown_issue_session',
+      'read_operator_workspace_file',
+      'write_operator_workspace_file',
     ]);
     await expect(
       listOperatorAgentStates(join(repoRoot, '.ensemble')),

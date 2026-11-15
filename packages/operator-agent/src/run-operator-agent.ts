@@ -58,6 +58,10 @@ import {
 } from './open-question-control-tools.js';
 import { createListWorkerMessagesTool } from './worker-session-tools.js';
 import {
+  createOperatorWorkspaceFileTools,
+  resolveOperatorWorkspaceRoot,
+} from './operator-workspace-tools.js';
+import {
   listOperatorAgentStates,
   loadOperatorAgentState,
   saveOperatorAgentState,
@@ -187,6 +191,9 @@ export async function runOperatorAgent(
     existingState,
     { stdin, stdout },
   );
+  const workspaceFileTools = createOperatorWorkspaceFileTools(
+    await resolveOperatorWorkspaceRoot(runtime.workspace),
+  );
   const factory =
     dependencies.agentFactory ?? createConductorAgentFactory(runtime.backend);
   const dispatchQueue = createOperatorDispatchQueue();
@@ -308,6 +315,7 @@ export async function runOperatorAgent(
         { userEnsembleRoot: runtime.userEnsembleRoot },
         reportResumeStoreDuplicate,
       ),
+      ...workspaceFileTools,
     },
   };
   let agent: ConductorAgent;
@@ -403,7 +411,11 @@ async function resolveOperatorRuntime(
   if (!profile) {
     throw new Error(`Operator-agent profile "${selectedProfileName}" is not defined.`);
   }
-  const workspace = join(userEnsembleRoot, 'operator-agents', selectedProfileName);
+  const workspace = join(
+    userEnsembleRoot,
+    'operator-agents',
+    selectedProfileName,
+  );
   await mkdir(workspace, { recursive: true, mode: 0o700 });
   const backend = resolveOperatorSetting(
     process.env[OPERATOR_AGENT_BACKEND_ENV],

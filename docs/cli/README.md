@@ -156,6 +156,16 @@ session list は user store 内の全 canonical GitHub slug group を既定 scop
 
 会話 record は repository や profile に結び付けず、`operatorAgentId` ごとに `~/.ensemble/operator-agents/conversations/<operatorAgentId>/conversation.json` へ保存します。起動時は `--resume <operatorAgentId>` で指定でき、保存会話が一件なら自動再開、複数なら TTY で選択します。`--new` は別の会話を作り、既存 record を消しません。Pi transcript も会話 ID ごとに同じ directory の `pi-sessions/` に保存します。起動 cwd が変わっただけでは再開を拒否しません。再現できない context / resource は通知した上で選択中設定による再開を試し、backend が復元できない場合は失敗します。その場合も既存 record は保持します。`/exit` は現在の record だけを削除し、Pi transcript を削除しません。
 
+#### profile workspace のファイル操作
+
+operator-agent は `read_operator_workspace_file` / `write_operator_workspace_file` custom tool で、選択中 profile の workspace（`~/.ensemble/operator-agents/<profile>/`）内にある UTF-8 file を読み書きできます。path は workspace からの相対 path に限られ、directory 構造が操作中に変わらない通常の状態では、絶対 path、`..`、symlink の解決先が workspace 外になる path は拒否されます。write は workspace 内に必要な親 directory を作成し、既存 file を置き換えます。read / write とも 1 file あたりの上限は 1 MiB です。directory の一覧取得 tool はありません。
+
+各 file 操作は realpath などで path を検査してから、path-based `open()` を行います。その間に同一ユーザーの別 process が workspace root や親 directory を差し替える競合（TOCTOU）は防止できず、競合時に workspace 外へのアクセスを防ぐ保証はありません。この機能は OS-level sandbox ではなく、同一ユーザーで動く任意 process を保護対象にしていません。信頼できない同一ユーザー process と profile workspace を共有しないでください。Pi sandbox plugin が利用可能になった段階で適用を検討する方針ですが、現時点では適用していません。
+
+directory 構造が変わらない通常の状態では、path 検査により Issue worktree、別 profile、`~/.ensemble/sessions/` へのアクセスを拒否します。operator-agent は backend の built-in coding tools を無効にし、Pi extension を読み込みません。また MCP server を起動 options に渡さないため、file tool の迂回経路となる MCP tool はありません。
+
+file の内容は redaction されず、読み出した内容はそのまま選択中 backend に渡ります。API key、token、password、credential などを workspace file に保存したり、秘密情報を含む file を agent に読ませたりしないでください。
+
 旧 profile-less operator conversation log は新しい record へ自動移行せず、resume も保証しません。#698 の copy-only migration は Issue session data と watch state の inventory / copy に利用できます。全 checkout を列挙してから dry-run manifest を確認し、必要な場合に `--apply` で移行してください。migration は source を削除・rename せず、異なる destination を上書きしません。手順と保全条件は [session data の migration 手順](../session-logging.md#legacy-data-の一括-inventory-copy) を参照してください。
 
 ## 保存済み session の閲覧
