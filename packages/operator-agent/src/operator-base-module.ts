@@ -70,7 +70,8 @@ export const operatorBaseModule: PromptModule<OperatorPromptContext> = {
       type: 'subsection',
       title: 'saved worker transcript',
       items: [
-        '- `list_worker_messages` は `issueUrl`、`conductorAgentId`、worker 名で対象 run を特定し、Pi / Codex ACP transcript を読みます。直近20件が既定で、最大100件、`providerId` cursor で続きに進めます',
+        '- `list_worker_messages` は `issueUrl`、`conductorAgentId`、worker 名で対象 run を特定し、Pi / Codex ACP transcript を読みます。直近20件が既定で、最大100件です。続きは同じ対象・同じ `order` で、返された不透明な `nextCursor` を使ってください',
+        '- `paginationStatus: invalid_cursor` は cursor の対象 run / worker / 順序 / reader が現在の選択と異なるか、保存 transcript 上の境界と一致しないことを示します。先頭から取得し直してください。cursor の不一致を空の最終ページとして扱わないでください',
         '- 応答の `status` と `reason` を確認してください。worker session が保存されていない、preset 未対応、transcript が無い状態を区別し、読めない履歴を空の成功として扱いません',
         '- SessionResumeStore には worker prompt failure event が永続化されません。failure の有無は保存済み CLI summary / captured harness log が別途ある場合にだけ説明し、worker record や transcript の欠如から失敗を推測しないでください',
       ],

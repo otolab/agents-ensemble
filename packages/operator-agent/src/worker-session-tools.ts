@@ -10,6 +10,19 @@ type WorkerSessionStoreLocation = string | OperatorSessionStoreRoot;
 
 const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 100;
+const WORKER_MESSAGES_CURSOR_VERSION = 1;
+
+interface WorkerMessagesCursor {
+  version: typeof WORKER_MESSAGES_CURSOR_VERSION;
+  issueUrl: string;
+  conductorAgentId: string;
+  worker: string;
+  order: 'asc' | 'desc';
+  preset: string | null;
+  reader: string | null;
+  position: number;
+  providerId: string;
+}
 
 export const LIST_WORKER_MESSAGES_TOOL = 'list_worker_messages';
 
@@ -49,7 +62,8 @@ export function createListWorkerMessagesTool(
         },
         cursor: {
           type: 'string',
-          description: 'Exclusive providerId boundary from a returned message.',
+          description:
+            'Opaque nextCursor from this tool, bound to the same Issue, run, worker, order, and history reader.',
         },
         includeSourceFiles: {
           type: 'boolean',
@@ -113,13 +127,48 @@ export function createListWorkerMessagesTool(
 
       const ordered =
         order === 'desc' ? [...history.messages].reverse() : history.messages;
-      const cursorIndex = cursor
-        ? ordered.findIndex((message) => message.providerId === cursor)
-        : -1;
-      if (cursor && cursorIndex < 0) {
-        throw new Error(
-          `cursor providerId was not found in ${conductorAgentId}/${worker}.`,
-        );
+      let cursorIndex = -1;
+      if (cursor) {
+        const decoded = decodeWorkerMessagesCursor(cursor);
+        if (!decoded) {
+          return invalidCursorResult(
+            history,
+            issueUrl,
+            conductorAgentId,
+            worker,
+            'Cursor is malformed or uses an unsupported version. Request the first page without a cursor.',
+          );
+        }
+        if (
+          decoded.issueUrl !== issueUrl ||
+          decoded.conductorAgentId !== conductorAgentId ||
+          decoded.worker !== worker ||
+          decoded.order !== order ||
+          decoded.preset !== history.preset ||
+          decoded.reader !== (history.reader ?? null)
+        ) {
+          return invalidCursorResult(
+            history,
+            issueUrl,
+            conductorAgentId,
+            worker,
+            'Cursor belongs to a different Issue, run, worker, order, or history reader. Request the first page for this selection.',
+          );
+        }
+        cursorIndex = decoded.position;
+        if (
+          !Number.isSafeInteger(cursorIndex) ||
+          cursorIndex < 0 ||
+          ordered[cursorIndex]?.providerId !== decoded.providerId
+        ) {
+          return invalidCursorResult(
+            history,
+            issueUrl,
+            conductorAgentId,
+            worker,
+            'Cursor boundary no longer matches this saved transcript. Request the first page again.',
+          );
+        }
       }
       const remaining = ordered.slice(cursorIndex + 1);
       const messages = remaining.slice(0, limit);
@@ -131,13 +180,99 @@ export function createListWorkerMessagesTool(
         workerSessionRecorded: true,
         total: history.messages.length,
         returned: messages.length,
-        ...(hasMore ? { nextCursor: messages.at(-1)!.providerId } : {}),
+        ...(hasMore
+          ? {
+              nextCursor: encodeWorkerMessagesCursor({
+                version: WORKER_MESSAGES_CURSOR_VERSION,
+                issueUrl,
+                conductorAgentId,
+                worker,
+                order,
+                preset: history.preset,
+                reader: history.reader ?? null,
+                position: cursorIndex + messages.length,
+                providerId: messages.at(-1)!.providerId,
+              }),
+            }
+          : {}),
         hasMore,
         messages,
       };
       return toToolResult(result);
     },
   };
+}
+
+function invalidCursorResult(
+  history: WorkerSessionHistoryResult,
+  issueUrl: string,
+  conductorAgentId: string,
+  worker: string,
+  paginationReason: string,
+): {
+  content: Array<{ type: 'text'; text: string }>;
+  structuredContent: Record<string, ConductorJsonValue>;
+} {
+  return toToolResult({
+    ...history,
+    issueUrl,
+    sessionFound: true,
+    workerSessionRecorded: true,
+    total: history.messages.length,
+    returned: 0,
+    hasMore: false,
+    messages: [],
+    paginationStatus: 'invalid_cursor',
+    paginationReason,
+    conductorAgentId,
+    worker,
+  });
+}
+
+function encodeWorkerMessagesCursor(cursor: WorkerMessagesCursor): string {
+  return Buffer.from(JSON.stringify(cursor), 'utf8').toString('base64url');
+}
+
+function decodeWorkerMessagesCursor(
+  value: string,
+): WorkerMessagesCursor | undefined {
+  if (!/^[A-Za-z0-9_-]+$/u.test(value)) return undefined;
+  try {
+    const parsed: unknown = JSON.parse(
+      Buffer.from(value, 'base64url').toString('utf8'),
+    );
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return undefined;
+    }
+    const cursor = parsed as Record<string, unknown>;
+    if (
+      cursor.version !== WORKER_MESSAGES_CURSOR_VERSION ||
+      typeof cursor.issueUrl !== 'string' ||
+      typeof cursor.conductorAgentId !== 'string' ||
+      typeof cursor.worker !== 'string' ||
+      (cursor.order !== 'asc' && cursor.order !== 'desc') ||
+      (cursor.preset !== null && typeof cursor.preset !== 'string') ||
+      (cursor.reader !== null && typeof cursor.reader !== 'string') ||
+      typeof cursor.position !== 'number' ||
+      !Number.isSafeInteger(cursor.position) ||
+      typeof cursor.providerId !== 'string'
+    ) {
+      return undefined;
+    }
+    return {
+      version: WORKER_MESSAGES_CURSOR_VERSION,
+      issueUrl: cursor.issueUrl,
+      conductorAgentId: cursor.conductorAgentId,
+      worker: cursor.worker,
+      order: cursor.order,
+      preset: cursor.preset,
+      reader: cursor.reader,
+      position: cursor.position,
+      providerId: cursor.providerId,
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 function toToolResult(value: Record<string, unknown>): {
