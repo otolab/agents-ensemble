@@ -21,6 +21,7 @@ import {
 } from './run-operator-agent.js';
 import { operatorWatchStatePath } from './operator-watch-pool.js';
 import {
+  loadOperatorAgentState,
   listOperatorAgentStates,
   operatorAgentStatePath,
   operatorPiSessionDirectory,
@@ -294,7 +295,7 @@ describe('runOperatorAgent', () => {
     await mkdir(unrelatedLaunchDirectory);
     const originalCwd = process.cwd();
     process.chdir(unrelatedLaunchDirectory);
-    let agentOptions: ConductorAgentCreateOptions | undefined;
+    const createdOptions: ConductorAgentCreateOptions[] = [];
     try {
       await runOperatorAgent(
         { profile: 'first', newSession: true },
@@ -303,7 +304,7 @@ describe('runOperatorAgent', () => {
           stdout: createOutput(),
           agentFactory: {
             create: async (options) => {
-              agentOptions = options;
+              createdOptions.push(options);
               return createFakeAgent({
                 send: async () => ({
                   runId: 'unused',
@@ -321,12 +322,41 @@ describe('runOperatorAgent', () => {
     } finally {
       process.chdir(originalCwd);
     }
-    expect(agentOptions).toMatchObject({
+    await runOperatorAgent(
+      { newSession: true },
+      {
+        stdin: createInput('/exit\n'),
+        stdout: createOutput(),
+        agentFactory: {
+          create: async (options) => {
+            createdOptions.push(options);
+            return createFakeAgent({
+              send: async () => ({
+                runId: 'unused',
+                status: 'completed',
+                result: '',
+              }),
+            });
+          },
+          resume: async () => {
+            throw new Error('not used');
+          },
+        },
+      },
+    );
+
+    expect(createdOptions[0]).toMatchObject({
       cwd: join(repoRoot, '.ensemble', 'operator-agents', 'first'),
       modelId: 'environment-model',
       reasoning: 'high',
     });
-    expect(agentOptions).not.toHaveProperty('pi');
+    expect(createdOptions[0]).not.toHaveProperty('pi');
+    expect(createdOptions[1]).toMatchObject({
+      cwd: join(repoRoot, '.ensemble', 'operator-agents', 'second'),
+      modelId: 'environment-model',
+      reasoning: 'high',
+    });
+    expect(createdOptions[1]).not.toHaveProperty('pi');
   });
 
   it('prompts for an operator profile when no default or unique profile exists', async () => {
@@ -2428,6 +2458,57 @@ describe('runOperatorAgent', () => {
       }),
     );
     await expect(listOperatorAgentStates(userRoot)).resolves.toEqual([]);
+  });
+
+  it('reports changed workspace and Pi resources, then preserves a record when backend resume fails', async () => {
+    const userRoot = join(repoRoot, '.ensemble');
+    const priorState: OperatorAgentState = {
+      version: 2,
+      operatorAgentId: 'operator-cannot-resume',
+      providerSessionId: 'provider-cannot-resume',
+      backend: 'pi',
+      profile: 'smoke',
+      workspace: '/previous/home/operator-agents/smoke',
+      piResourceRoots: {
+        agentDir: '/previous/home/pi',
+        projectDir: '/previous/home/operator-agents/smoke/pi',
+      },
+      createdAt: 1,
+      updatedAt: 2,
+    };
+    await saveOperatorAgentState(userRoot, priorState);
+    const output = createOutput();
+    const resume = vi.fn(async () => {
+      throw new Error('provider session is unavailable');
+    });
+
+    await expect(
+      runOperatorAgent(
+        { resumeId: priorState.operatorAgentId },
+        {
+          stdin: createInput('/exit\n'),
+          stdout: output,
+          agentFactory: {
+            create: async () => {
+              throw new Error('not used');
+            },
+            resume,
+          },
+        },
+      ),
+    ).rejects.toThrow('provider session is unavailable');
+
+    expect(resume).toHaveBeenCalledWith(
+      priorState.providerSessionId,
+      expect.objectContaining({
+        cwd: join(userRoot, 'operator-agents', 'smoke'),
+      }),
+    );
+    expect(output.capturedText()).toContain('workspace=');
+    expect(output.capturedText()).toContain('Pi resource root');
+    await expect(
+      loadOperatorAgentState(userRoot, priorState.operatorAgentId),
+    ).resolves.toEqual(priorState);
   });
 
   it('closes the agent and keeps its identity when the process receives SIGTERM', async () => {
