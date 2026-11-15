@@ -61,7 +61,21 @@ tool は SessionResumeStore に保存した conductor backend / cwd から provi
 `list_worker_messages`:
 
 ```json
-{"issueUrl":"https://github.com/owner/repo/issues/691","conductorAgentId":"agent-123","worker":"implementer","limit":20,"order":"desc","cursor":"provider-message-id"}
+{"issueUrl":"https://github.com/owner/repo/issues/691","conductorAgentId":"agent-123","worker":"implementer","limit":20,"order":"desc"}
+```
+
+初回の応答に `nextCursor` が含まれる場合、次のページでは同じ Issue / run / worker / `order` を指定し、その値を加工せず `cursor` に渡します。`providerId` から cursor を組み立てないでください。以下の値は説明用 placeholder です。
+
+前ページの応答:
+
+```json
+{"nextCursor":"<tool が返した不透明な値>"}
+```
+
+次ページのリクエスト:
+
+```json
+{"issueUrl":"https://github.com/owner/repo/issues/691","conductorAgentId":"agent-123","worker":"implementer","limit":20,"order":"desc","cursor":"<前ページの nextCursor をそのままコピー>"}
 ```
 
 list tool の `structuredContent` は UDS の `result`（`{ "questions": [...] }`）です。answer tool の text content は UDS result (`{ "question": {...} }`) を JSON 表示し、`structuredContent` は `questionId`, `status`, 任意の `answeredBy`, `approved` を持つ object に整形します。これは operator-agent tool wrapper の出力で、UDS wire response とは形が異なります。
