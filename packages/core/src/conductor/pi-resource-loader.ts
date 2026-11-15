@@ -119,6 +119,8 @@ export interface PiResourceLoaderOptions {
   home?: string;
   /** When false, do not discover, import, or execute configured extensions. */
   loadExtensions?: boolean;
+  /** When false, do not discover or load prompt templates or skill resources. */
+  loadPromptResources?: boolean;
   /** When false, only `skillPaths` are resolved and `skills` stays empty. */
   loadSkillContents?: boolean;
 }
@@ -212,12 +214,15 @@ export async function loadPiResources(
   options: PiResourceLoaderOptions,
 ): Promise<PiResources> {
   const roots = resolvePiResourceRoots(options);
+  const loadPromptResources = options.loadPromptResources !== false;
   const layers = [
     await readResourceLayer(roots.agentDir, {
       loadExtensions: options.loadExtensions !== false,
+      loadPromptResources,
     }),
     await readResourceLayer(roots.projectDir, {
       loadExtensions: options.loadExtensions !== false,
+      loadPromptResources,
     }),
   ];
 
@@ -254,12 +259,14 @@ export async function loadPiResources(
         ? []
         : await loadExtensionTools(extensionPaths, options.cwd),
     extensionPaths,
-    skillPaths,
-    promptPaths,
+    skillPaths: loadPromptResources ? skillPaths : [],
+    promptPaths: loadPromptResources ? promptPaths : [],
     themePaths,
     skills:
-      options.loadSkillContents === false ? [] : await loadSkills(skillPaths),
-    prompts: await loadPromptTemplates(promptPaths),
+      !loadPromptResources || options.loadSkillContents === false
+        ? []
+        : await loadSkills(skillPaths),
+    prompts: loadPromptResources ? await loadPromptTemplates(promptPaths) : [],
     themes: await loadThemes(themePaths),
   };
 }
@@ -281,7 +288,7 @@ interface ResourceLayer {
 
 async function readResourceLayer(
   root: string,
-  options: { loadExtensions: boolean },
+  options: { loadExtensions: boolean; loadPromptResources: boolean },
 ): Promise<ResourceLayer> {
   const settings = (await readOptionalJson(join(root, 'settings.json'))) as PiSettingsFile ?? {};
   return {
@@ -300,14 +307,24 @@ async function readResourceLayer(
           ),
         ])
       : [],
-    skillPaths: uniquePaths([
-      ...(await discoverDirectoryResources(join(root, 'skills'), false)),
-      ...configuredResourcePaths(getPiHeadlessSetting(settings, 'skills', 'resource-path'), root),
-    ]),
-    promptPaths: uniquePaths([
-      ...(await discoverDirectoryResources(join(root, 'prompts'), false)),
-      ...configuredResourcePaths(getPiHeadlessSetting(settings, 'prompts', 'resource-path'), root),
-    ]),
+    skillPaths: options.loadPromptResources
+      ? uniquePaths([
+          ...(await discoverDirectoryResources(join(root, 'skills'), false)),
+          ...configuredResourcePaths(
+            getPiHeadlessSetting(settings, 'skills', 'resource-path'),
+            root,
+          ),
+        ])
+      : [],
+    promptPaths: options.loadPromptResources
+      ? uniquePaths([
+          ...(await discoverDirectoryResources(join(root, 'prompts'), false)),
+          ...configuredResourcePaths(
+            getPiHeadlessSetting(settings, 'prompts', 'resource-path'),
+            root,
+          ),
+        ])
+      : [],
     themePaths: uniquePaths([
       ...(await discoverDirectoryResources(join(root, 'themes'), false)),
       ...configuredResourcePaths(getPiHeadlessSetting(settings, 'themes', 'resource-path'), root),

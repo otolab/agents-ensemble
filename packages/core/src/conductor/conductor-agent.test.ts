@@ -161,6 +161,48 @@ describe('CursorSdkConductorAgent.send', () => {
     }
   });
 
+  it('keeps only supplied custom tools when the doctor disables built-in tools', async () => {
+    mockCreate.mockResolvedValue({
+      agentId: 'doctor-agent',
+      send: mockSend,
+      [Symbol.asyncDispose]: vi.fn(),
+    });
+    const customTools = {
+      doctor_read_config: {
+        name: 'doctor_read_config',
+        description: 'Read allowlisted settings',
+        inputSchema: { type: 'object', properties: {} },
+        execute: vi.fn(),
+      },
+      doctor_write_config: {
+        name: 'doctor_write_config',
+        description: 'Write one approved setting',
+        inputSchema: { type: 'object', properties: {} },
+        execute: vi.fn(),
+      },
+    };
+
+    const conductor = await CursorSdkConductorAgent.create({
+      cwd: '/repo',
+      systemPrompt: 'doctor system',
+      builtinTools: false,
+      customTools,
+    });
+
+    try {
+      const agentOptions = mockCreate.mock.calls[0]?.[0];
+      expect(agentOptions?.disallowedTools).toEqual(
+        EXPECTED_CURSOR_CODING_TOOLS,
+      );
+      expect(agentOptions).not.toHaveProperty('mcpServers');
+      expect(
+        Object.keys(agentOptions?.local?.customTools ?? {}),
+      ).toEqual(['doctor_read_config', 'doctor_write_config']);
+    } finally {
+      await conductor.close();
+    }
+  });
+
   it('forwards inline MCP servers to Agent.create', async () => {
     const mcpServers = {
       docs: {

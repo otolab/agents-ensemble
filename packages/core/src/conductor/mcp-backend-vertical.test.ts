@@ -317,6 +317,7 @@ describe('shared mcp.json backend path', () => {
     await expect(
       PiConductorAgent.create({
         cwd,
+        issueUrl: 'https://github.com/org/repo/issues/1',
         pi: { agentDir },
         modelId: 'fixture/fixture-model',
         systemPrompt: 'fixture system prompt',
@@ -334,6 +335,7 @@ describe('shared mcp.json backend path', () => {
     await expect(
       PiConductorAgent.create({
         cwd,
+        issueUrl: 'https://github.com/org/repo/issues/1',
         pi: { agentDir },
         modelId: 'fixture/fixture-model',
         systemPrompt: 'fixture system prompt',

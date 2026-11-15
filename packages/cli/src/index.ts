@@ -45,6 +45,7 @@ import {
   type ConductorCommandOptions,
 } from './conductor-auth-command.js';
 import { runSetupCommand } from './setup-command.js';
+import { runDoctorCommand } from './doctor-command.js';
 import {
   runPiModelsAdd,
   runPiModelsDiff,
@@ -618,6 +619,30 @@ program
     } catch (error) {
       console.error(error instanceof Error ? error.message : error);
       process.exit(1);
+    }
+  });
+
+program
+  .command('doctor')
+  .description('Configure allowlisted harness settings with an interactive agent')
+  .option(
+    '--repo-root <path>',
+    'Repository root used to resolve project configuration',
+    process.cwd(),
+  )
+  .option(
+    '--project',
+    'Allow approved changes to be written to this project config',
+  )
+  .action(async (options: { repoRoot: string; project?: boolean }) => {
+    try {
+      await runDoctorCommand({
+        repoRoot: resolve(options.repoRoot),
+        project: options.project,
+      });
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : error);
+      process.exitCode = 1;
     }
   });
 
