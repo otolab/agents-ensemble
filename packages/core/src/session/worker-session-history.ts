@@ -13,7 +13,10 @@ import { parseIssueUrl } from '../issue/issue-ref.js';
 import { resolveEnsemblePaths } from '../ensemble-paths.js';
 import { resolvePiAcpSessionMapPaths } from '../acp/pi-session-map.js';
 import type { PiAcpRuntimeMarker } from '../acp/resolve-acp-spawn.js';
-import { findSessionResumeStoreBySelector } from './session-resume-store.js';
+import {
+  findSessionResumeStoreBySelector,
+  listUserLocatedSessionResumeStoresPage,
+} from './session-resume-store.js';
 
 export type WorkerSessionHistoryMessageRole = 'user' | 'assistant';
 
@@ -40,6 +43,7 @@ export interface WorkerSessionHistoryReaderSupport {
 export interface WorkerSessionHistoryReaderInput {
   repoRoot: string;
   fallbackRepoRoots?: readonly string[];
+  userEnsembleRoot?: string;
   workerName: string;
   acpSessionId: string;
   acpCwd: string;
@@ -137,27 +141,38 @@ export function getWorkerSessionHistoryReaderSupport(
 }
 
 export async function readWorkerSessionHistory(input: {
-  repoRoot: string;
+  repoRoot?: string;
+  userEnsembleRoot?: string;
   conductorAgentId: string;
   workerName: string;
   githubRepo?: string;
   issueUrl?: string;
   includeSourceFiles?: boolean;
 }): Promise<WorkerSessionHistoryResult> {
-  const repoRoot = resolve(input.repoRoot);
   const conductorAgentId = requireNonEmpty(
     input.conductorAgentId,
     'conductorAgentId',
   );
   const workerName = requireNonEmpty(input.workerName, 'workerName');
-  const located = await findSessionResumeStoreBySelector(repoRoot, {
-    githubRepo: input.githubRepo,
-    issueUrl: input.issueUrl,
-    conductorAgentId,
-  });
+  const located = input.userEnsembleRoot
+    ? await findUserWorkerSessionResumeStore({
+        userEnsembleRoot: input.userEnsembleRoot,
+        conductorAgentId,
+        githubRepo: input.githubRepo,
+        issueUrl: input.issueUrl,
+      })
+    : await findSessionResumeStoreBySelector(
+        requireRepoRoot(input.repoRoot),
+        {
+          githubRepo: input.githubRepo,
+          issueUrl: input.issueUrl,
+          conductorAgentId,
+        },
+      );
   if (!located) {
     throw new Error(`No saved session found for ${conductorAgentId}.`);
   }
+  const repoRoot = resolve(input.repoRoot ?? located.resumeStore.repoRoot);
 
   const worker = located.resumeStore.workers[workerName];
   if (!worker) {
@@ -222,6 +237,9 @@ export async function readWorkerSessionHistory(input: {
     const readerInput: WorkerSessionHistoryReaderInput = {
       repoRoot,
       fallbackRepoRoots: [located.resumeStore.repoRoot],
+      ...(input.userEnsembleRoot
+        ? { userEnsembleRoot: input.userEnsembleRoot }
+        : {}),
       workerName,
       acpSessionId: worker.acpSessionId,
       acpCwd: worker.acpCwd,
@@ -258,6 +276,40 @@ export async function readWorkerSessionHistory(input: {
   }
 }
 
+async function findUserWorkerSessionResumeStore(input: {
+  userEnsembleRoot: string;
+  conductorAgentId: string;
+  githubRepo?: string;
+  issueUrl?: string;
+}) {
+  if (!input.githubRepo && !input.issueUrl) {
+    throw new Error(
+      'Repository scope is required to read a session; pass githubRepo or issueUrl.',
+    );
+  }
+  const page = await listUserLocatedSessionResumeStoresPage(
+    {
+      githubRepo: input.githubRepo,
+      issueUrl: input.issueUrl,
+      conductorAgentId: input.conductorAgentId,
+    },
+    { userEnsembleRoot: input.userEnsembleRoot },
+  );
+  if (page.sessions.length > 1) {
+    throw new Error(
+      `Session ${input.conductorAgentId} is ambiguous in this repository; specify issueUrl.`,
+    );
+  }
+  return page.sessions[0];
+}
+
+function requireRepoRoot(value: string | undefined): string {
+  if (!value?.trim()) {
+    throw new Error('repoRoot is required to read a repository-scoped session.');
+  }
+  return resolve(value);
+}
+
 class WorkerSessionHistoryUnavailableError extends Error {
   constructor(message: string) {
     super(message);
@@ -279,7 +331,10 @@ async function readPiAcpSessionHistoryWithSources(
 }> {
   const paths =
     input.piRuntime === 'builtin'
-      ? resolveEnsemblePaths({ repoRoot: input.repoRoot })
+      ? resolveEnsemblePaths({
+          repoRoot: input.repoRoot,
+          userEnsembleRoot: input.userEnsembleRoot,
+        })
       : undefined;
   let session: PiAcpSessionMapEntry | undefined;
   let foundMap = false;
@@ -299,7 +354,10 @@ async function readPiAcpSessionHistoryWithSources(
     sessionMapPaths = [
       ...[input.repoRoot, ...(input.fallbackRepoRoots ?? [])].flatMap(
         (repoRoot) => {
-          const rootPaths = resolveEnsemblePaths({ repoRoot });
+          const rootPaths = resolveEnsemblePaths({
+            repoRoot,
+            userEnsembleRoot: input.userEnsembleRoot,
+          });
           const mapPaths = resolvePiAcpSessionMapPaths(
             rootPaths.piWorkerDir(input.workerName, issueNumber),
             rootPaths.legacyPiWorkerDir(input.workerName),

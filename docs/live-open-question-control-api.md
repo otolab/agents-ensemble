@@ -8,7 +8,7 @@
 - operator-agent は client です。listener の起動や停止中 session の回答保存は行いません。
 - API は稼働中 session の Open Question 一覧・回答、watch 用 observation snapshot、operator-agent から conductor への明示メッセージ、最後の conductor 成功応答取得、成功応答と対応する inbound の bounded list を提供します。質問の保存・resume の正本は引き続き Open Questions YAML です。UDS の `session.conductor_messages.list` は稼働中 harness のメモリ内 ring buffer を使います。一方、operator-agent tool の `list_conductor_messages` は provider session history を直接読み、停止後も利用できます。
 
-operator-agent には `list_live_open_questions` / `answer_live_open_question`、watch pool の `register_session_watch` / `unregister_session_watch`、`send_operator_message`、`get_last_conductor_message`、`list_conductor_messages`、`register_conductor_message_listen` / `unregister_conductor_message_listen` の tool があります。session を指定する tool は `list_operator_sessions` で得た `conductorAgentId` を受け取ります。回答 tool は `questionId` と `answer`、送信 tool は `text` と任意の `delivery` を要求します。各 tool の input schema は未知の field を許可しません。
+operator-agent には `list_live_open_questions` / `answer_live_open_question`、watch pool の `register_session_watch` / `unregister_session_watch`、`send_operator_message`、`get_last_conductor_message`、`list_conductor_messages`、`list_worker_messages`、`register_conductor_message_listen` / `unregister_conductor_message_listen` の tool があります。session を指定する tool は `list_operator_sessions` で得た `conductorAgentId` を受け取ります。回答 tool は `questionId` と `answer`、送信 tool は `text` と任意の `delivery` を要求します。各 tool の input schema は未知の field を許可しません。
 
 operator-agent tool の input は次のとおりです。
 
@@ -48,6 +48,34 @@ tool は SessionResumeStore に保存した conductor backend / cwd から provi
 
 ```json
 {"conductorAgentId":"agent-123","messageDebounceMs":10000}
+```
+
+## 停止後の operator-agent 履歴参照
+
+`list_operator_sessions` は `issueUrl` と `conductorAgentId` の完全一致 filter を受け付けます。同一 Issue に複数の run がある場合は一覧の各 `conductorAgentId` を確認し、対象の ID を後続 tool に指定してください。一覧は run の SessionResumeStore、保存 harness phase、statusLine YAML、Open Questions の履歴を投影します。`openQuestionHistory` は Open Questions YAML を読み、回答本文・回答者などを含みます。YAML が存在しない旧 session では `openQuestionHistorySource: "resume_store_compatibility"` として ResumeStore の互換コピーを返します。YAML が破損・読取不能なら status / 件数を `unavailable` にし、互換コピーへ fallback しません。
+
+`list_worker_messages` は Issue URL、run ID、worker 名を必須とし、保存された ACP session ID / cwd に対応する Pi / Codex transcript を読みます。既定は最新20件、最大100件です。`nextCursor` は Issue URL / run ID / worker / `order` / reader と transcript 内の境界位置に結び付いた不透明な値です。続きは同じ対象・同じ `order` で取得してください。別 run などから cursor を流用した場合や、現在の transcript に境界がない場合は `paginationStatus: invalid_cursor` と理由を返し、メッセージを返しません。先頭から取得し直してください。応答の `status` は `supported`（読めた）、`unsupported`（preset / reader 未対応）、`unavailable`（保存 session や transcript がない、または照合できない）を区別します。profile に構成がある worker の session record がない場合も `unavailable` と理由を返します。これは prompt failure の証拠ではありません。SessionResumeStore は worker failure event を保存せず、終了 JSON の `workerFailureCount` も件数だけを示します。どの worker が失敗したかを確認するには captured harness log などの詳細な記録が必要です。
+
+これらは停止後の保存データを読む read-only tool です。`list_live_open_questions` などの live control が停止時に保存 YAML へ fallback する方針は変更しません。Open Question の質問・回答は保存値のまま返り、secret redaction は行われません。
+
+`list_worker_messages`:
+
+```json
+{"issueUrl":"https://github.com/owner/repo/issues/691","conductorAgentId":"agent-123","worker":"implementer","limit":20,"order":"desc"}
+```
+
+初回の応答に `nextCursor` が含まれる場合、次のページでは同じ Issue / run / worker / `order` を指定し、その値を加工せず `cursor` に渡します。`providerId` から cursor を組み立てないでください。以下の値は説明用 placeholder です。
+
+前ページの応答:
+
+```json
+{"nextCursor":"<tool が返した不透明な値>"}
+```
+
+次ページのリクエスト:
+
+```json
+{"issueUrl":"https://github.com/owner/repo/issues/691","conductorAgentId":"agent-123","worker":"implementer","limit":20,"order":"desc","cursor":"<前ページの nextCursor をそのままコピー>"}
 ```
 
 list tool の `structuredContent` は UDS の `result`（`{ "questions": [...] }`）です。answer tool の text content は UDS result (`{ "question": {...} }`) を JSON 表示し、`structuredContent` は `questionId`, `status`, 任意の `answeredBy`, `approved` を持つ object に整形します。これは operator-agent tool wrapper の出力で、UDS wire response とは形が異なります。

@@ -50,6 +50,13 @@ describe('list_operator_sessions', () => {
         lifecycle: string;
         liveControlPathRecorded: boolean;
         openQuestionCount: number;
+        openQuestionHistorySource: string;
+        openQuestionHistoryStatus: string;
+        openQuestionHistory: Array<{
+          id: string;
+          status: string;
+          answer?: string;
+        }>;
         workers: string[];
         openQuestions: Array<{ id: string; question: string }>;
         answeredQuestionCount: number;
@@ -74,6 +81,16 @@ describe('list_operator_sessions', () => {
           lifecycle: 'closed',
           liveControlPathRecorded: false,
           openQuestionCount: 1,
+          openQuestionHistorySource: 'resume_store_compatibility',
+          openQuestionHistoryStatus: 'available',
+          openQuestionHistory: [
+            expect.objectContaining({ id: 'inq-open', status: 'open' }),
+            expect.objectContaining({
+              id: 'inq-answered',
+              status: 'answered',
+              answer: 'Yes.',
+            }),
+          ],
           workers: ['implementer'],
           openQuestions: [
             {
@@ -132,6 +149,52 @@ describe('list_operator_sessions', () => {
       expect.objectContaining({ conductorAgentId: 'closed', issueUrl }),
       expect.objectContaining({ conductorAgentId: 'exited', issueUrl }),
     ]);
+  });
+
+  it('filters multiple runs of one Issue by exact Issue URL and conductorAgentId', async () => {
+    const issueUrl = 'https://github.com/example/project/issues/691';
+    const otherIssueUrl = 'https://github.com/example/project/issues/694';
+    await writeResumeStore('run-a', 10, issueUrl);
+    await writeResumeStore('run-b', 20, issueUrl);
+    await writeResumeStore('other-issue', 30, otherIssueUrl);
+    const tool = createListOperatorSessionsTool(repoRoot);
+
+    const issueRuns = JSON.parse(
+      (await tool.execute({ issueUrl })).content[0]!.text,
+    ) as {
+      total: number;
+      sessions: Array<{ issueUrl: string; conductorAgentId: string }>;
+    };
+    expect(issueRuns).toMatchObject({
+      total: 2,
+      sessions: [
+        { issueUrl, conductorAgentId: 'run-b' },
+        { issueUrl, conductorAgentId: 'run-a' },
+      ],
+    });
+
+    const selectedRun = JSON.parse(
+      (
+        await tool.execute({
+          issueUrl,
+          conductorAgentId: 'run-a',
+        })
+      ).content[0]!.text,
+    ) as {
+      total: number;
+      sessions: Array<{ issueUrl: string; conductorAgentId: string }>;
+    };
+    expect(selectedRun).toMatchObject({
+      total: 1,
+      sessions: [{ issueUrl, conductorAgentId: 'run-a' }],
+    });
+
+    const firstPage = JSON.parse(
+      (await tool.execute({ issueUrl, limit: 1 })).content[0]!.text,
+    ) as { nextCursor: string };
+    await expect(
+      tool.execute({ issueUrl: otherIssueUrl, cursor: firstPage.nextCursor }),
+    ).rejects.toThrow('Invalid operator session cursor or it does not match');
   });
 
   it('applies profile and CLI repository scopes with cursor pagination', async () => {
@@ -294,6 +357,118 @@ describe('list_operator_sessions', () => {
         }),
       ]),
     );
+  });
+
+  it('uses Open Questions YAML as the stopped-session history source', async () => {
+    const issueUrl = 'https://github.com/example/project/issues/692';
+    await writeResumeStore('yaml-history', 30, issueUrl);
+    const paths = resolveEnsemblePaths({
+      repoRoot,
+      userEnsembleRoot: join(repoRoot, '.user-ensemble'),
+    });
+    const path = paths.canonicalOpenQuestionsPath(issueUrl, 'yaml-history');
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(
+      path,
+      [
+        'version: 1',
+        'sequence: 2',
+        'openQuestions:',
+        '  - id: inq-1',
+        '    question: Should the release proceed?',
+        '    responseType: yes_no',
+        '    source: conductor',
+        '    status: answered',
+        '    askedAt: 10',
+        '    answer: Yes, after CI passed.',
+        '    assent: yes',
+        '    approved: true',
+        '    answeredAt: 20',
+        '    answeredBy: operator',
+        '  - id: inq-2',
+        '    question: Which rollout?',
+        '    responseType: choice',
+        '    source: conductor',
+        '    status: open',
+        '    askedAt: 30',
+        '    choices:',
+        '      - id: canary',
+        '        label: Canary',
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+
+    const result = JSON.parse(
+      (
+        await createListOperatorSessionsTool({
+          userEnsembleRoot: join(repoRoot, '.user-ensemble'),
+        }).execute({ issueUrl })
+      ).content[0]!.text,
+    ) as {
+      sessions: Array<{
+        openQuestionCount: number | null;
+        answeredQuestionCount: number | null;
+        openQuestionHistorySource: string;
+        openQuestions: Array<{ id: string; question: string }>;
+        openQuestionHistory: Array<{
+          id: string;
+          answer?: string;
+          answeredBy?: string;
+        }>;
+      }>;
+    };
+    expect(result.sessions[0]).toMatchObject({
+      openQuestionCount: 1,
+      answeredQuestionCount: 1,
+      openQuestionHistorySource: 'open_questions_yaml',
+      openQuestions: [
+        { id: 'inq-2', question: 'Which rollout?' },
+      ],
+      openQuestionHistory: [
+        {
+          id: 'inq-1',
+          answer: 'Yes, after CI passed.',
+          answeredBy: 'operator',
+        },
+        { id: 'inq-2' },
+      ],
+    });
+  });
+
+  it('does not fall back to the compatibility copy when Open Questions YAML is unreadable', async () => {
+    const issueUrl = 'https://github.com/example/project/issues/693';
+    await writeResumeStore('bad-yaml', 30, issueUrl);
+    const paths = resolveEnsemblePaths({
+      repoRoot,
+      userEnsembleRoot: join(repoRoot, '.user-ensemble'),
+    });
+    const path = paths.canonicalOpenQuestionsPath(issueUrl, 'bad-yaml');
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, 'version: [broken', 'utf8');
+
+    const result = JSON.parse(
+      (
+        await createListOperatorSessionsTool({
+          userEnsembleRoot: join(repoRoot, '.user-ensemble'),
+        }).execute({ issueUrl })
+      ).content[0]!.text,
+    ) as {
+      sessions: Array<{
+        openQuestionCount: number | null;
+        answeredQuestionCount: number | null;
+        openQuestionHistoryStatus: string;
+        openQuestionHistorySource: string;
+        openQuestionHistory: unknown[];
+      }>;
+    };
+    expect(result.sessions[0]).toMatchObject({
+      openQuestionCount: null,
+      answeredQuestionCount: null,
+      openQuestionHistoryStatus: 'unavailable',
+      openQuestionHistorySource: 'unavailable',
+      openQuestionHistory: [],
+    });
   });
 
   it('projects persisted phase against live observation time', async () => {
