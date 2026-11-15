@@ -169,6 +169,73 @@ describe('Pi resource loader', () => {
     expect(prompt).toBe('/skill:review extra');
   });
 
+  it('does not discover or load Pi prompt and skill resources when disabled', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'pi-resource-disabled-'));
+    const agentDir = join(cwd, 'user-pi');
+    const projectDir = join(cwd, '.ensemble', 'pi');
+    await mkdir(join(agentDir, 'prompts'), { recursive: true });
+    await mkdir(join(agentDir, 'skills', 'private'), { recursive: true });
+    await mkdir(join(projectDir, 'prompts'), { recursive: true });
+    await mkdir(join(projectDir, 'skills', 'private'), { recursive: true });
+    await writeFile(
+      join(agentDir, 'prompts', 'private.md'),
+      'user prompt secret sentinel',
+    );
+    await writeFile(
+      join(agentDir, 'skills', 'private', 'SKILL.md'),
+      'user skill secret sentinel',
+    );
+    await writeFile(
+      join(projectDir, 'prompts', 'private.md'),
+      'project prompt secret sentinel',
+    );
+    await writeFile(
+      join(projectDir, 'skills', 'private', 'SKILL.md'),
+      'project skill secret sentinel',
+    );
+
+    const resources = await loadPiResources({
+      cwd,
+      pi: { agentDir, projectDir },
+      loadPromptResources: false,
+    });
+
+    expect(resources.promptPaths).toEqual([]);
+    expect(resources.skillPaths).toEqual([]);
+    expect(resources.prompts).toEqual([]);
+    expect(resources.skills).toEqual([]);
+    expect(JSON.stringify(resources)).not.toMatch(/secret sentinel/);
+  });
+
+  it('expands Pi prompt and skill invocations by default', () => {
+    const resources = {
+      prompts: [
+        {
+          name: 'review',
+          description: 'review',
+          filePath: '/tmp/review.md',
+          content: 'prompt template body',
+        },
+      ],
+      skills: [
+        {
+          name: 'review',
+          description: 'review',
+          filePath: '/tmp/SKILL.md',
+          content: 'skill body',
+          disableModelInvocation: false,
+        },
+      ],
+    };
+
+    expect(expandPiResourcePrompt('/review', resources)).toBe(
+      'prompt template body',
+    );
+    expect(expandPiResourcePrompt('/skill:review', resources)).toBe(
+      'skill body',
+    );
+  });
+
   it('uses the ensemble defaults and PI_CODING_AGENT_DIR compatibility override', async () => {
     const cwd = '/repo';
     const home = '/home/tester';

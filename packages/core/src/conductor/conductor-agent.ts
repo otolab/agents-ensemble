@@ -15,6 +15,11 @@ export interface ConductorAgentCreateOptions {
   systemPrompt: string;
   /** Whether backend built-in coding tools are available; omitted means enabled. */
   builtinTools?: boolean;
+  /**
+   * Pi backend only: load and expand Pi prompt templates and explicit skill
+   * invocations; omitted means enabled.
+   */
+  piPromptResources?: boolean;
   /** Pi backend only: use Pi standard skill discovery; omitted means enabled. */
   piSkills?: boolean;
   /** Pi backend only: load configured extension modules and tools; omitted means enabled. */

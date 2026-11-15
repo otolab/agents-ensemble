@@ -231,6 +231,7 @@ export class PiConductorAgent implements ConductorAgent {
     private readonly mcpLifecycleState: PiMcpLifecycleState,
     private readonly commandAuthRequestGate: PiCommandAuthRequestGate,
     private readonly piSkills: boolean,
+    private readonly piPromptResources: boolean,
     private readonly onStreamText?: (text: string) => void,
     private readonly onContextCompaction?: () => void,
   ) {
@@ -289,9 +290,11 @@ export class PiConductorAgent implements ConductorAgent {
     this.activeSend = state;
     try {
       await this.session.prompt(
-        expandPiResourcePrompt(prompt, this.resources, {
-          expandSkills: !this.piSkills,
-        }),
+        this.piPromptResources
+          ? expandPiResourcePrompt(prompt, this.resources, {
+              expandSkills: !this.piSkills,
+            })
+          : prompt,
         {
           expandPromptTemplates: false,
           source: 'rpc',
@@ -835,9 +838,11 @@ async function createPiConductorSession(
     loadPiMcpConfig(options.mcpServers, piMcpResolution);
   }
   const piSkills = options.piSkills !== false;
+  const piPromptResources = options.piPromptResources !== false;
   const resources = await loadPiResources({
     ...options,
     loadExtensions: options.piExtensions !== false,
+    loadPromptResources: piPromptResources,
     loadSkillContents: !piSkills,
   });
   const headlessSettingsOverrides = getPiHeadlessSettingsManagerOverrides(resources.settings);
@@ -927,7 +932,7 @@ async function createPiConductorSession(
   // (.ensemble/pi), so use an in-memory manager and populate it only through
   // the code-level headless settings allowlist below.
   const settingsManager = SettingsManager.inMemory();
-  if (piSkills) {
+  if (piSkills && piPromptResources) {
     applyPiHeadlessSettings(
       settingsManager,
       getPiSkillsDiscoverySettingsOverrides(resources.settings),
@@ -939,8 +944,9 @@ async function createPiConductorSession(
     agentDir: authContext.agentDir,
     settingsManager,
     noExtensions: true,
-    noSkills: !piSkills,
-    additionalSkillPaths: piSkills ? resources.skillPaths : [],
+    noSkills: !piSkills || !piPromptResources,
+    additionalSkillPaths:
+      piSkills && piPromptResources ? resources.skillPaths : [],
     noPromptTemplates: true,
     noThemes: true,
     noContextFiles: true,
@@ -1021,6 +1027,7 @@ async function createPiConductorSession(
       mcpLifecycleState,
       commandAuthRequestGate,
       piSkills,
+      piPromptResources,
       options.onStreamText,
       options.onContextCompaction,
     );

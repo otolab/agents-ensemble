@@ -211,6 +211,7 @@ describe('runDoctorCommand', () => {
     ]);
     expect(result.optionsUsed).toMatchObject({
       builtinTools: false,
+      piPromptResources: false,
       piSkills: false,
       piExtensions: false,
       piInternalExtensions: false,

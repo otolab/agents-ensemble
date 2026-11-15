@@ -43,7 +43,7 @@ backend を選んだ後の主経路は共通です。リポジトリのディレ
 
 ## 認証後の設定調整 — `ensemble doctor`
 
-`ensemble setup` は conductor backend の選択と conductor 認証を準備する入口です。認証後の `ensemble doctor` は、同じ conductor backend を使う独立した対話 configurator として、worker preset や Issue 実行時の設定を確認・提案します。Issue session、team profile の実行、worker の起動は行いません。doctor が読める・変更できるのは、secret を含まない許可済み config 項目だけです。書き込み前には変更内容と保存先を TTY に表示して同意を確認します。現時点では TTY 対話モードのみで、`doctor check --json` などの非対話診断は未提供です。
+`ensemble setup` は conductor backend の選択と conductor 認証を準備する入口です。認証後の `ensemble doctor` は、同じ conductor backend を使う独立した対話 configurator として、worker preset や Issue 実行時の設定を確認・提案します。Issue session、team profile の実行、worker の起動は行いません。doctor が読める・変更できるのは、secret を含まない許可済み config 項目だけです。Pi backend では Pi user/project の prompt template と skill 本文を読み込まず、`/name`・`/skill:name` の展開も無効にします。doctor 専用の role/materials は引き続き system prompt として使います。書き込み前には変更内容と保存先を TTY に表示して同意を確認します。現時点では TTY 対話モードのみで、`doctor check --json` などの非対話診断は未提供です。
 
 設定の保存先は user config が既定です。対象 repository の `.ensemble/config.yaml` に保存する場合だけ `--project` を明示します。doctor は secret を尋ねたり表示・保存したりしません。worker CLI の認証は [ADR 0028](../adr/0028-authentication-delegation-and-ensemble-auth.md) に従って各 CLI に移譲されるため、必要な場合はその CLI 側で準備してください。
 

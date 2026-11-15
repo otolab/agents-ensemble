@@ -112,6 +112,7 @@ export async function runDoctorCommand(
       ...(context.auth.backend === 'pi'
         ? {
             ...(context.auth.pi?.pi ? { pi: context.auth.pi.pi } : {}),
+            piPromptResources: false,
             piSkills: false,
             piExtensions: false,
             piInternalExtensions: false,

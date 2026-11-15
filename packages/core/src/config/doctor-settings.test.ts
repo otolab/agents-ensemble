@@ -1,4 +1,11 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  symlink,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -236,6 +243,74 @@ describe('doctor config settings', () => {
       }),
     ).rejects.toThrow('Unsupported doctor config setting or value');
     expect(confirm).not.toHaveBeenCalled();
+
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it('refuses user config symlinks for reads and writes before consent', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'ensemble-doctor-user-symlink-'));
+    const repoRoot = join(root, 'repo');
+    const userRoot = join(root, 'user');
+    const targetPath = join(root, 'outside-config.yaml');
+    const userConfigPath = join(userRoot, 'config.yaml');
+    await mkdir(userRoot, { recursive: true });
+    await writeFile(targetPath, 'acp:\n  defaultPreset: cursor\n');
+    await symlink(targetPath, userConfigPath);
+    const confirm = vi.fn();
+
+    await expect(
+      readDoctorConfigSettings({ repoRoot, userEnsembleRoot: userRoot }),
+    ).rejects.toThrow('symbolic link');
+    await expect(
+      writeDoctorConfigSetting({
+        repoRoot,
+        userEnsembleRoot: userRoot,
+        key: 'acp.defaultPreset',
+        value: 'codex',
+        target: 'user',
+        confirm,
+      }),
+    ).rejects.toThrow('symbolic link');
+    expect(confirm).not.toHaveBeenCalled();
+    await expect(readFile(targetPath, 'utf8')).resolves.toContain('cursor');
+
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it('refuses project config symlinks for reads and writes before consent', async () => {
+    const root = await mkdtemp(
+      join(tmpdir(), 'ensemble-doctor-project-symlink-'),
+    );
+    const repoRoot = join(root, 'repo');
+    const userRoot = join(root, 'user');
+    const projectConfigDir = join(repoRoot, '.ensemble');
+    const projectConfigPath = join(projectConfigDir, 'config.yaml');
+    const targetPath = join(root, 'outside-project-config.yaml');
+    await mkdir(userRoot, { recursive: true });
+    await mkdir(projectConfigDir, { recursive: true });
+    await writeFile(
+      join(userRoot, 'config.yaml'),
+      'config:\n  loadProjectConfig: true\n',
+    );
+    await writeFile(targetPath, 'session:\n  lazyWorkers: false\n');
+    await symlink(targetPath, projectConfigPath);
+    const confirm = vi.fn();
+
+    await expect(
+      readDoctorConfigSettings({ repoRoot, userEnsembleRoot: userRoot }),
+    ).rejects.toThrow('symbolic link');
+    await expect(
+      writeDoctorConfigSetting({
+        repoRoot,
+        userEnsembleRoot: userRoot,
+        key: 'session.lazyWorkers',
+        value: true,
+        target: 'project',
+        confirm,
+      }),
+    ).rejects.toThrow('symbolic link');
+    expect(confirm).not.toHaveBeenCalled();
+    await expect(readFile(targetPath, 'utf8')).resolves.toContain('false');
 
     await rm(root, { recursive: true, force: true });
   });
