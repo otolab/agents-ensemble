@@ -67,6 +67,124 @@ describe('CursorSdkConductorAgent', () => {
         },
       }),
     );
+    expect(createAgent.mock.calls[0]?.[0].local).not.toHaveProperty(
+      'settingSources',
+    );
+  });
+
+  it('resolves inline MCP placeholders while keeping built-in coding tools disabled', async () => {
+    const originalToken = process.env.MCP_TOKEN;
+    process.env.MCP_TOKEN = 'fixture-token';
+    const agent = {
+      agentId: 'agent-1',
+      [Symbol.asyncDispose]: vi.fn(),
+    };
+    createAgent.mockResolvedValue(agent);
+
+    try {
+      const conductor = await CursorSdkConductorAgent.create({
+        cwd: '/operator/workspace',
+        systemPrompt: 'system',
+        modelId: 'model-1',
+        builtinTools: false,
+        disableCursorAmbientSettings: true,
+        customTools: {
+          operator_tool: {
+            name: 'operator_tool',
+            description: 'Operator custom tool',
+            inputSchema: { type: 'object', properties: {} },
+            execute: async () => ({
+              content: [{ type: 'text', text: 'custom result' }],
+            }),
+          },
+        },
+        mcpServers: {
+          fixture: {
+            type: 'stdio',
+            command: 'fixture-server',
+            args: ['--token', '${env:MCP_TOKEN}'],
+            env: { MCP_TOKEN: '${env:MCP_TOKEN}' },
+          },
+          remote: {
+            type: 'http',
+            url: 'https://mcp.example.test/${workspaceFolderBasename}',
+            headers: { Authorization: 'Bearer ${env:MCP_TOKEN}' },
+          },
+        },
+      });
+
+      expect(createAgent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          disallowedTools: expect.arrayContaining(['shell', 'read', 'edit']),
+          local: expect.objectContaining({
+            settingSources: [],
+            customTools: {
+              operator_tool: expect.objectContaining({
+                description: 'Operator custom tool',
+                inputSchema: { type: 'object', properties: {} },
+              }),
+            },
+          }),
+          mcpServers: {
+            fixture: {
+              type: 'stdio',
+              command: 'fixture-server',
+              args: ['--token', 'fixture-token'],
+              env: { MCP_TOKEN: 'fixture-token' },
+            },
+            remote: {
+              type: 'http',
+              url: 'https://mcp.example.test/workspace',
+              headers: { Authorization: 'Bearer fixture-token' },
+            },
+          },
+        }),
+      );
+      await conductor.close();
+    } finally {
+      if (originalToken === undefined) delete process.env.MCP_TOKEN;
+      else process.env.MCP_TOKEN = originalToken;
+    }
+  });
+
+  it('passes inline MCP servers to resume and closes the SDK handle', async () => {
+    const dispose = vi.fn().mockResolvedValue(undefined);
+    resumeAgent.mockResolvedValue({
+      agentId: 'agent-1',
+      [Symbol.asyncDispose]: dispose,
+    });
+
+    const conductor = await CursorSdkConductorAgent.resume('agent-1', {
+      cwd: '/operator/workspace',
+      systemPrompt: 'system',
+      modelId: 'model-1',
+      builtinTools: false,
+      disableCursorAmbientSettings: true,
+      mcpServers: {
+        fixture: {
+          type: 'stdio',
+          command: 'fixture-server',
+          args: ['--workspace', '${workspaceFolder}'],
+        },
+      },
+    });
+
+    expect(resumeAgent).toHaveBeenCalledWith(
+      'agent-1',
+      expect.objectContaining({
+        disallowedTools: expect.arrayContaining(['shell', 'read', 'edit']),
+        local: expect.objectContaining({ settingSources: [] }),
+        mcpServers: {
+          fixture: {
+            type: 'stdio',
+            command: 'fixture-server',
+            args: ['--workspace', '/operator/workspace'],
+          },
+        },
+      }),
+    );
+    await conductor.close();
+    expect(dispose).toHaveBeenCalledOnce();
   });
 
   it('prefers an exact catalog model ID over an alias from another entry', async () => {

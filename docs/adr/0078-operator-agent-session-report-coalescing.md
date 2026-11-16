@@ -1,4 +1,4 @@
-# ADR 0077: operator-agent の同一 session report 集約
+# ADR 0078: operator-agent の同一 session report 集約
 
 - Status: accepted
 - Date: 2026-11-16

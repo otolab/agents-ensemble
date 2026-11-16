@@ -1,6 +1,6 @@
 # ADR 0037: operator-agent session watch と report dispatch
 
-- Status: superseded in part by [ADR 0077](0077-operator-agent-session-report-coalescing.md)（watch report の source 粒度と同一 session の debounce / batching のみ）
+- Status: superseded in part by [ADR 0078](0078-operator-agent-session-report-coalescing.md)（watch report の source 粒度と同一 session の debounce / batching のみ）
 - Date: 2026-10-21
 - Related: [ADR 0014](0014-conductor-dispatch-batch-coalescing.md), [ADR 0031](0031-operator-agent-layer.md), [ADR 0033](0033-live-open-question-control-uds.md), [ADR 0038](0038-operator-agent-conversation-report-hold.md), [Issue #525](https://github.com/otolab/agents-ensemble/issues/525)
 

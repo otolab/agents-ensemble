@@ -9,7 +9,8 @@ import { ModelsError } from '@earendil-works/pi-ai/models';
 const {
   mockCreateAgentSession,
   mockCreateMcpExtension,
-  mockCreateExtension,
+  mockCreateCodemodeExtension,
+  mockCreateToolSearchExtension,
   mockSessionManagerCreate,
   mockSessionManagerFindById,
   mockSessionManagerOpen,
@@ -20,7 +21,8 @@ const {
 } = vi.hoisted(() => ({
   mockCreateAgentSession: vi.fn(),
   mockCreateMcpExtension: vi.fn(),
-  mockCreateExtension: vi.fn(() => () => {}),
+  mockCreateCodemodeExtension: vi.fn(() => () => {}),
+  mockCreateToolSearchExtension: vi.fn(() => () => {}),
   mockSessionManagerCreate: vi.fn(),
   mockSessionManagerFindById: vi.fn(),
   mockSessionManagerOpen: vi.fn(),
@@ -46,8 +48,8 @@ vi.mock('@earendil-works/pi-coding-agent', async () => {
     ...actual,
     createAgentSession: mockCreateAgentSession,
     createMcpExtension: mockCreateMcpExtension,
-    createCodemodeExtension: mockCreateExtension,
-    createToolSearchExtension: mockCreateExtension,
+    createCodemodeExtension: mockCreateCodemodeExtension,
+    createToolSearchExtension: mockCreateToolSearchExtension,
     SessionManager: {
       ...actual.SessionManager,
       create: mockSessionManagerCreate,
@@ -77,6 +79,7 @@ import {
   saveSessionResumeStore,
   SESSION_RESUME_STORE_VERSION,
 } from '../session/session-resume-store.js';
+import * as piResourceLoaderModule from './pi-resource-loader.js';
 import * as issueContextModule from '../github/issue-context.js';
 import * as resolveGitHubAuthTokenModule from '../github/resolve-github-auth-token.js';
 import { sendConductorWithReconnect } from './conductor-send-reconnect.js';
@@ -158,7 +161,8 @@ describe('PiConductorAgent', () => {
       mcpLoadConfig = options.loadConfig;
       return () => {};
     });
-    mockCreateExtension.mockClear();
+    mockCreateCodemodeExtension.mockClear();
+    mockCreateToolSearchExtension.mockClear();
     mockGetEnvApiKey.mockReset();
     mockGetEnvApiKey.mockReturnValue(undefined);
     mockGetModels.mockReset();
@@ -339,6 +343,8 @@ describe('PiConductorAgent', () => {
         },
       ],
     });
+    expect(mockCreateCodemodeExtension).toHaveBeenCalledOnce();
+    expect(mockCreateToolSearchExtension).toHaveBeenCalledOnce();
 
     const finalMessage = {
       role: 'assistant',
@@ -853,9 +859,96 @@ describe('PiConductorAgent', () => {
     });
 
     expect(mockCreateMcpExtension).toHaveBeenCalledOnce();
-    expect(mockCreateExtension).toHaveBeenCalledTimes(2);
+    expect(mockCreateCodemodeExtension).toHaveBeenCalledOnce();
+    expect(mockCreateToolSearchExtension).toHaveBeenCalledOnce();
     await conductor.close();
   });
+
+  it.each(['create', 'resume'] as const)(
+    'uses direct MCP and omits Codemode for operator Pi %s',
+    async (operation) => {
+      if (operation === 'resume') {
+        mockSessionManagerFindById.mockReturnValue(
+          '/tmp/operator-direct-session.jsonl',
+        );
+      }
+      const options = {
+        cwd,
+        pi: { agentDir },
+        modelId: 'anthropic/model-1',
+        systemPrompt: 'operator system',
+        builtinTools: false,
+        piExtensions: false,
+        operatorPiMcpMode: 'direct' as const,
+        mcpServers: {
+          selected: { type: 'stdio' as const, command: 'selected-mcp' },
+          'selected-http': {
+            type: 'http' as const,
+            url: 'https://mcp.example.test/mcp',
+            headers: { Authorization: 'Bearer token' },
+          },
+        },
+        customTools: {
+          read_operator_workspace_file: {
+            name: 'read_operator_workspace_file',
+            description: 'Read an operator workspace file',
+            inputSchema: { type: 'object', properties: {} },
+            execute: async () => ({
+              content: [{ type: 'text' as const, text: 'workspace file' }],
+            }),
+          },
+        },
+      };
+      const loadResourcesSpy = vi.spyOn(
+        piResourceLoaderModule,
+        'loadPiResources',
+      );
+      const conductor =
+        operation === 'create'
+          ? await createPiAgent(options)
+          : await resumePiAgent('operator-direct-session', options);
+
+      expect(loadResourcesSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ loadExtensions: false }),
+      );
+      expect(mockCreateMcpExtension).toHaveBeenCalledOnce();
+      expect(mockCreateCodemodeExtension).not.toHaveBeenCalled();
+      expect(mockCreateToolSearchExtension).toHaveBeenCalledOnce();
+      expect(mcpLoadConfig?.()).toEqual({
+        autoEnableCodemode: false,
+        errors: [],
+        servers: [
+          {
+            name: 'selected',
+            source: '<agents-ensemble-resolved-mcp.json>',
+            scope: 'project',
+            config: {
+              type: 'stdio',
+              command: 'selected-mcp',
+              exposure: 'direct',
+            },
+          },
+          {
+            name: 'selected-http',
+            source: '<agents-ensemble-resolved-mcp.json>',
+            scope: 'project',
+            config: {
+              type: 'http',
+              url: 'https://mcp.example.test/mcp',
+              headers: { Authorization: 'Bearer token' },
+              exposure: 'direct',
+            },
+          },
+        ],
+      });
+      const sessionOptions = mockCreateAgentSession.mock.calls[0]![0];
+      expect(sessionOptions.noTools).toBe('builtin');
+      expect(sessionOptions.customTools).toEqual([
+        expect.objectContaining({ name: 'read_operator_workspace_file' }),
+      ]);
+      await conductor.close();
+    },
+  );
 
   it('keeps Pi prompt templates and skills enabled by default', async () => {
     const projectDir = join(cwd, '.ensemble', 'pi');
@@ -929,7 +1022,8 @@ describe('PiConductorAgent', () => {
       sessionOptions.customTools?.map((tool: { name: string }) => tool.name),
     ).toEqual(['doctor_read_config']);
     expect(mockCreateMcpExtension).not.toHaveBeenCalled();
-    expect(mockCreateExtension).not.toHaveBeenCalled();
+    expect(mockCreateCodemodeExtension).not.toHaveBeenCalled();
+    expect(mockCreateToolSearchExtension).not.toHaveBeenCalled();
     expect(mcpLoadConfig).toBeUndefined();
     await conductor.close();
   });

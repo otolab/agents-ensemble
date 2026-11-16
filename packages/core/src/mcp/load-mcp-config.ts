@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { resolveUserEnsembleRoot } from '../resolve-user-ensemble-root.js';
 
 export const MCP_CONFIG_FILE = 'mcp.json';
@@ -41,6 +41,13 @@ export interface LoadMcpConfigOptions {
   userEnsembleRoot?: string;
   /** テスト用。既定は `console`。 */
   logger?: McpConfigLogger;
+}
+
+export interface ResolveMcpServerConfigOptions {
+  /** MCP の `${workspaceFolder}` placeholder を解決する workspace。 */
+  cwd?: string;
+  /** MCP の `${env:NAME}` placeholder を解決する環境。 */
+  env?: NodeJS.ProcessEnv;
 }
 
 function userMcpConfigPath(options: LoadMcpConfigOptions): string {
@@ -215,6 +222,151 @@ function mergeMcpConfig(base: McpConfig, override: McpConfig): McpConfig {
   };
 }
 
+/** Load only `~/.ensemble/mcp.json`, without depending on a repository root. */
+export async function loadUserMcpConfig(
+  options: LoadMcpConfigOptions = {},
+): Promise<McpConfig> {
+  const logger = options.logger ?? console;
+  const config = await readMcpConfigFile(userMcpConfigPath(options), logger);
+  return config ?? { mcpServers: {} };
+}
+
+/** Resolve only the user MCP server definitions, without project settings. */
+export async function resolveUserMcpServers(
+  options: LoadMcpConfigOptions = {},
+): Promise<McpServerConfigMap> {
+  return (await loadUserMcpConfig(options)).mcpServers;
+}
+
+/**
+ * Expand the Cursor MCP placeholders supported by the conductor backends.
+ * Resolution is applied only to the selected server map supplied by callers.
+ */
+export function resolveMcpServerConfigPlaceholders(
+  name: string,
+  config: McpServerConfig,
+  options: ResolveMcpServerConfigOptions = {},
+): McpServerConfig {
+  const resolution = {
+    cwd: options.cwd ?? process.cwd(),
+    env: options.env ?? process.env,
+  };
+  const resolved: McpServerConfig = { ...config };
+  if (config.command !== undefined) {
+    resolved.command = expandMcpString(
+      config.command,
+      name,
+      'command',
+      resolution,
+    );
+  }
+  if (config.args !== undefined) {
+    resolved.args = config.args.map((value, index) =>
+      expandMcpString(value, name, `args[${index}]`, resolution),
+    );
+  }
+  if (config.env !== undefined) {
+    resolved.env = expandMcpRecord(config.env, name, 'env', resolution);
+  }
+  if (config.cwd !== undefined) {
+    resolved.cwd = expandMcpString(config.cwd, name, 'cwd', resolution);
+  }
+  if (config.url !== undefined) {
+    resolved.url = expandMcpString(config.url, name, 'url', resolution);
+  }
+  if (config.headers !== undefined) {
+    resolved.headers = expandMcpRecord(
+      config.headers,
+      name,
+      'headers',
+      resolution,
+    );
+  }
+  if (config.auth !== undefined) {
+    resolved.auth = {
+      CLIENT_ID: expandMcpString(
+        config.auth.CLIENT_ID,
+        name,
+        'auth.CLIENT_ID',
+        resolution,
+      ),
+      ...(config.auth.CLIENT_SECRET !== undefined
+        ? {
+            CLIENT_SECRET: expandMcpString(
+              config.auth.CLIENT_SECRET,
+              name,
+              'auth.CLIENT_SECRET',
+              resolution,
+            ),
+          }
+        : {}),
+      ...(config.auth.scopes !== undefined
+        ? {
+            scopes: config.auth.scopes.map((scope, index) =>
+              expandMcpString(
+                scope,
+                name,
+                `auth.scopes[${index}]`,
+                resolution,
+              ),
+            ),
+          }
+        : {}),
+    };
+  }
+  return resolved;
+}
+
+/** Resolve placeholders across the selected MCP server map. */
+export function resolveMcpServerConfigMapPlaceholders(
+  servers: McpServerConfigMap,
+  options: ResolveMcpServerConfigOptions = {},
+): McpServerConfigMap {
+  return Object.fromEntries(
+    Object.entries(servers).map(([name, config]) => [
+      name,
+      resolveMcpServerConfigPlaceholders(name, config, options),
+    ]),
+  );
+}
+
+function expandMcpRecord(
+  values: Record<string, string>,
+  server: string,
+  field: string,
+  resolution: { cwd: string; env: NodeJS.ProcessEnv },
+): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(values).map(([key, value]) => [
+      key,
+      expandMcpString(value, server, `${field}.${key}`, resolution),
+    ]),
+  );
+}
+
+function expandMcpString(
+  value: string,
+  server: string,
+  field: string,
+  resolution: { cwd: string; env: NodeJS.ProcessEnv },
+): string {
+  return value.replace(
+    /\$\{env:([A-Za-z_][A-Za-z0-9_]*)\}|\$\{workspaceFolder(Basename)?\}/g,
+    (placeholder, variable: string | undefined, basenameSuffix: string | undefined) => {
+      if (variable) {
+        const resolved = resolution.env[variable];
+        if (resolved === undefined) {
+          throw new Error(
+            `MCP server "${server}" references missing environment variable "${variable}" in ${field}.`,
+          );
+        }
+        return resolved;
+      }
+      return basenameSuffix ? basename(resolution.cwd) : resolution.cwd;
+    },
+  );
+}
+
 /**
  * user `~/.ensemble/mcp.json` → project `<repoRoot>/.agents/mcp.json` の順で
  * `mcpServers` をサーバー名単位にマージする。欠損または不正な層は無視する。
@@ -223,14 +375,9 @@ export async function loadMcpConfig(
   repoRoot: string,
   options: LoadMcpConfigOptions = {},
 ): Promise<McpConfig> {
+  let merged = await loadUserMcpConfig(options);
+
   const logger = options.logger ?? console;
-  let merged: McpConfig = { mcpServers: {} };
-
-  const userConfig = await readMcpConfigFile(userMcpConfigPath(options), logger);
-  if (userConfig) {
-    merged = mergeMcpConfig(merged, userConfig);
-  }
-
   const projectConfig = await readMcpConfigFile(
     projectMcpConfigPath(repoRoot),
     logger,

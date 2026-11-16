@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { chmod, mkdir } from 'node:fs/promises';
-import { basename, join } from 'node:path';
+import { join } from 'node:path';
 import {
   type AgentMessage,
   type AgentTool,
@@ -76,7 +76,10 @@ import {
   type PiResources,
   type PiSettingsFile,
 } from './pi-resource-loader.js';
-import type { McpServerConfigMap } from '../mcp/load-mcp-config.js';
+import {
+  resolveMcpServerConfigMapPlaceholders,
+  type McpServerConfigMap,
+} from '../mcp/load-mcp-config.js';
 
 export const PI_CONDUCTOR_MESSAGE_HISTORY_ENTRY_TYPE =
   'agents-ensemble/conductor-message-history/v1';
@@ -838,7 +841,13 @@ async function createPiConductorSession(
 ): Promise<PiConductorAgent> {
   const sessionDir = resolvePiConductorSessionDir(options);
   const piInternalExtensions = options.piInternalExtensions !== false;
-  const piMcpResolution = { cwd: options.cwd };
+  const operatorDirectMcp = options.operatorPiMcpMode === 'direct';
+  const piMcpResolution = {
+    cwd: options.cwd,
+    ...(operatorDirectMcp
+      ? { exposure: 'direct' as const, autoEnableCodemode: false }
+      : {}),
+  };
   const mcpLifecycleState: PiMcpLifecycleState = {
     enabled:
       piInternalExtensions && Object.keys(options.mcpServers ?? {}).length > 0,
@@ -946,7 +955,9 @@ async function createPiConductorSession(
                   piMcpResolution,
                 ),
             }),
-            createCodemodeExtension({ mode: 'on' }),
+            ...(operatorDirectMcp
+              ? []
+              : [createCodemodeExtension({ mode: 'on' })]),
             createToolSearchExtension(),
           ]
         : []),
@@ -1180,14 +1191,18 @@ export function loadPiMcpConfig(
     cwd: options.cwd ?? process.cwd(),
     env: options.env ?? process.env,
   };
+  const resolvedServers = resolveMcpServerConfigMapPlaceholders(
+    servers ?? {},
+    resolution,
+  );
   return {
-    servers: Object.entries(servers ?? {}).map(([name, config]) => ({
+    servers: Object.entries(resolvedServers).map(([name, config]) => ({
       name,
-      config: toPiMcpServerConfig(name, config, resolution),
+      config: toPiMcpServerConfig(name, config, options.exposure),
       source: '<agents-ensemble-resolved-mcp.json>',
       scope: 'project' as const,
     })),
-    autoEnableCodemode: true,
+    autoEnableCodemode: options.autoEnableCodemode ?? true,
     errors: [],
   };
 }
@@ -1197,12 +1212,16 @@ export interface PiMcpConfigResolutionOptions {
   cwd?: string;
   /** Environment used for Cursor's `${env:NAME}` placeholders. */
   env?: NodeJS.ProcessEnv;
+  /** Pi MCP tool exposure override. Operator-agent uses direct exposure. */
+  exposure?: 'direct';
+  /** Whether Pi should activate Codemode for MCP servers with Codemode exposure. */
+  autoEnableCodemode?: boolean;
 }
 
 function toPiMcpServerConfig(
   name: string,
   config: McpServerConfigMap[string],
-  resolution: Required<PiMcpConfigResolutionOptions>,
+  exposure?: 'direct',
 ): PiMcpServerConfig {
   if (config.type === 'sse') {
     throw new Error(
@@ -1213,60 +1232,33 @@ function toPiMcpServerConfig(
   if (config.command) {
     return {
       type: 'stdio',
-      command: expandPiMcpString(config.command, name, 'command', resolution),
+      command: config.command,
       ...(config.args
-        ? {
-            args: config.args.map((value, index) =>
-              expandPiMcpString(value, name, `args[${index}]`, resolution),
-            ),
-          }
+        ? { args: config.args }
         : {}),
-      ...(config.env
-        ? { env: expandPiMcpRecord(config.env, name, 'env', resolution) }
-        : {}),
-      ...(config.cwd
-        ? { cwd: expandPiMcpString(config.cwd, name, 'cwd', resolution) }
-        : {}),
+      ...(config.env ? { env: config.env } : {}),
+      ...(config.cwd ? { cwd: config.cwd } : {}),
+      ...(exposure ? { exposure } : {}),
     };
   }
   if (config.url) {
     return {
       type: 'http',
-      url: expandPiMcpString(config.url, name, 'url', resolution),
-      ...(config.headers
-        ? { headers: expandPiMcpRecord(config.headers, name, 'headers', resolution) }
-        : {}),
+      url: config.url,
+      ...(config.headers ? { headers: config.headers } : {}),
+      ...(exposure ? { exposure } : {}),
       ...(config.auth
         ? {
             oauth: {
-              clientId: expandPiMcpString(
-                config.auth.CLIENT_ID,
-                name,
-                'auth.CLIENT_ID',
-                resolution,
-              ),
+              clientId: config.auth.CLIENT_ID,
               ...(config.auth.CLIENT_SECRET !== undefined
                 ? {
-                    clientSecret: expandPiMcpString(
-                      config.auth.CLIENT_SECRET,
-                      name,
-                      'auth.CLIENT_SECRET',
-                      resolution,
-                    ),
+                    clientSecret: config.auth.CLIENT_SECRET,
                   }
                 : {}),
               ...(config.auth.scopes?.length
                 ? {
-                    scope: config.auth.scopes
-                      .map((value, index) =>
-                        expandPiMcpString(
-                          value,
-                          name,
-                          `auth.scopes[${index}]`,
-                          resolution,
-                        ),
-                      )
-                      .join(' '),
+                    scope: config.auth.scopes.join(' '),
                   }
                 : {}),
             },
@@ -1277,43 +1269,6 @@ function toPiMcpServerConfig(
   throw new Error(
     `MCP server "${name}" has no command or URL. ` +
       'Use a valid resolved stdio or streamable HTTP configuration.',
-  );
-}
-
-function expandPiMcpRecord(
-  values: Record<string, string>,
-  server: string,
-  field: string,
-  resolution: Required<PiMcpConfigResolutionOptions>,
-): Record<string, string> {
-  return Object.fromEntries(
-    Object.entries(values).map(([key, value]) => [
-      key,
-      expandPiMcpString(value, server, `${field}.${key}`, resolution),
-    ]),
-  );
-}
-
-function expandPiMcpString(
-  value: string,
-  server: string,
-  field: string,
-  resolution: Required<PiMcpConfigResolutionOptions>,
-): string {
-  return value.replace(
-    /\$\{env:([A-Za-z_][A-Za-z0-9_]*)\}|\$\{workspaceFolder(Basename)?\}/g,
-    (placeholder, variable: string | undefined, basenameSuffix: string | undefined) => {
-      if (variable) {
-        const resolved = resolution.env[variable];
-        if (resolved === undefined) {
-          throw new Error(
-            `MCP server "${server}" references missing environment variable "${variable}" in ${field}.`,
-          );
-        }
-        return resolved;
-      }
-      return basenameSuffix ? basename(resolution.cwd) : resolution.cwd;
-    },
   );
 }
 

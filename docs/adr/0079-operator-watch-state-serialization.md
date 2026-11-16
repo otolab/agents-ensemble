@@ -1,8 +1,8 @@
-# ADR 0078: operator-agent watch state の process 間直列化
+# ADR 0079: operator-agent watch state の process 間直列化
 
 - Status: accepted
 - Date: 2026-11-16
-- Related: [ADR 0037](0037-operator-agent-session-watch-and-dispatch.md), [ADR 0038](0038-operator-agent-conversation-report-hold.md), [ADR 0077](0077-operator-agent-session-report-coalescing.md), [Issue #736](https://github.com/otolab/agents-ensemble/issues/736)
+- Related: [ADR 0037](0037-operator-agent-session-watch-and-dispatch.md), [ADR 0038](0038-operator-agent-conversation-report-hold.md), [ADR 0078](0078-operator-agent-session-report-coalescing.md), [Issue #736](https://github.com/otolab/agents-ensemble/issues/736)
 
 ## Context
 
@@ -15,7 +15,7 @@ watch pool は profile state file 全体を読み込み、repository ごとの f
 - 同じ profile の watch state 更新に profile 単位の cross-process file lock を使う。lock を取得してから全 state file を読み直し、session identity の検証、poll cursor と pending report の更新、ack / 登録変更、atomic save を同じ lock 内で行う。poll は observation を読む間も lock を保持し、別 process が同じ cursor から先に進むことを防ぐ。
 - lock を取得できない操作は保存せず error とする。別の poll / retry で再試行できる。lock は 20 秒ごとに heartbeat を更新し、120 秒更新されない場合は stale lock recovery の対象とする。lock が失われたと検知した場合、保存前に error とする。lock acquisition は有限回で打ち切り、永久待機にはしない。
 - oversized warning は到着順で隣り合う warning だけをまとめる。間に readable message または別 report がある場合は warning を分けて表示し、各 sendCount の前後関係を維持する。
-- report ID、cursor / pending report の永続化、再起動後の retry と ack は ADR 0037 / 0077 の at-least-once 契約を保つ。複数 process の in-memory dispatch queue にすでに載った report までは共有しないため、重複配送はありうる。exactly-once delivery は約束しない。
+- report ID、cursor / pending report の永続化、再起動後の retry と ack は ADR 0037 / 0078 の at-least-once 契約を保つ。複数 process の in-memory dispatch queue にすでに載った report までは共有しないため、重複配送はありうる。exactly-once delivery は約束しない。
 
 ## Consequences
 

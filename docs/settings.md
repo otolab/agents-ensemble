@@ -14,7 +14,7 @@
 | **user instructions** | `~/.ensemble/AGENTS.md` | profile に依存しない conductor / worker 共通の運用前提 |
 | **team profile** | `profile.yaml`（[elements.md](elements.md)） | worker 構成・workspace（**ACP は含まない → [config.md](config.md)**） |
 | **Codex profile** | `~/.codex/config.toml` + `codex --profile` | Codex CLI の profile（ensemble team profile とは無関係） |
-| **MCP** | `.agents/mcp.json` / `~/.ensemble/mcp.json` | conductor 向け MCP（[config.md § MCP](config.md#conductor-mcp-設定mcpjson)） |
+| **MCP** | `.agents/mcp.json` / `~/.ensemble/mcp.json` | Issue conductor は project > user で merge（[config.md § Conductor MCP](config.md#conductor-mcp-設定mcpjson)）。operator-agent は専用 profile から user 定義を明示選択（[config.md](config.md#operator-agent-の-mcp-選択)） |
 | **コード default** | `packages/core/src/config/defaults.ts` 等 | config 未作成時のフォールバック |
 
 config は default → 選択された user config → project config（読み込み有効時）の順に **deep merge** します。`--config <path>` を指定した場合は明示ファイルを user config 層として使い、標準 user config は読み込みません。project config は `config.loadProjectConfig` が有効な場合に適用され、同じキーは project config が優先します。この toggle は選択された user config から解決するため、明示ファイルにも指定できます。秘密情報（token 本体）は **config に平文で書かない**（[config.md](config.md)）。
@@ -163,6 +163,7 @@ operator-agent は `~/.ensemble/operator-agents.config.yaml` の profile を読�
 | backend | `ENSEMBLE_OPERATOR_AGENT_BACKEND` | — | env > profile > `common.conductor` > `pi` |
 | model | `ENSEMBLE_OPERATOR_AGENT_MODEL` | — | env > profile > `common.conductor` > `default` |
 | reasoning | `ENSEMBLE_OPERATOR_AGENT_REASONING` | — | env > profile > `common.conductor` > backend default |
+| MCP server 選択 | — | — | `profiles.<name>.mcp.servers` > `common.mcp.servers`。空配列は無効化 |
 | Pi 共通 resource root | `PI_CODING_AGENT_DIR` | — | `common.pi.agentDir` > env > `~/.ensemble/pi` |
 | Pi profile resource root | — | — | `profiles.<name>.pi.projectDir` > `<profile workspace>/pi` |
 | session scope | — | `--repo-filter`（repeatable） | profile `include` との積集合。filter 同士は OR |
@@ -202,7 +203,8 @@ TUI 設定は `loadEnsembleConfig` 結果を `createIssueSessionTuiHost` へ渡�
 
 | 設定 | ファイル | 解決順 |
 |------|----------|--------|
-| conductor MCP | `.agents/mcp.json` / `~/.ensemble/mcp.json` | project > user（サーバー名単位 merge） |
+| Issue conductor MCP | `.agents/mcp.json` / `~/.ensemble/mcp.json` | project > user（サーバー名単位 merge） |
+| operator-agent MCP | `~/.ensemble/operator-agents.config.yaml` + `~/.ensemble/mcp.json` | profile の明示選択 > common。起動 repository の MCP 設定は読まない |
 | user instructions | `~/.ensemble/AGENTS.md` | user 固定。conductor と worker 全員に適用。project 層なし |
 | team profile | `.ensemble/profiles/…` / `--profile` パス | [ADR 0018](https://github.com/otolab/agents-ensemble/blob/main/docs/adr/0018-team-profile-four-layer-resolution.md) |
 

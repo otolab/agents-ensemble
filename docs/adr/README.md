@@ -108,7 +108,7 @@ ADR は**合意された設計判断の履歴**を残すもの。一度 `accepte
 | [0034](0034-bounded-open-question-dispatch-drain.md) | 稼働中 Open Question の bounded dispatch drain | superseded → [0035](0035-open-question-shutdown-commit-order.md) |
 | [0035](0035-open-question-shutdown-commit-order.md) | Open Question の shutdown retry 抑止と永続化 commit 順序 | accepted |
 | [0036](0036-live-open-question-answer-contract.md) | 稼働中 Open Question の回答応答条件 | accepted |
-| [0037](0037-operator-agent-session-watch-and-dispatch.md) | operator-agent の session watch と report dispatch | superseded in part → [0077](0077-operator-agent-session-report-coalescing.md)（watch report の source 粒度と同一 session の debounce / batching のみ） |
+| [0037](0037-operator-agent-session-watch-and-dispatch.md) | operator-agent の session watch と report dispatch | superseded in part → [0078](0078-operator-agent-session-report-coalescing.md)（watch report の source 粒度と同一 session の debounce / batching のみ） |
 | [0038](0038-operator-agent-conversation-report-hold.md) | operator-agent の会話中に watch report を保留する | accepted |
 | [0039](0039-session-resume-state-and-operator-projection.md) | SessionResumeStore・harness phase・operator 投影（到達性・coherence） | accepted |
 | [0040](0040-explicit-ensemble-config-file.md) | 起動時に指定する ensemble config ファイル | superseded → [0042](0042-explicit-config-replaces-user-layer.md) |
@@ -148,8 +148,9 @@ ADR は**合意された設計判断の履歴**を残すもの。一度 `accepte
 | [0074](0074-manual-resume-after-close-failure.md) | close failure 後の明示 reconnect | accepted |
 | [0075](0075-pi-conductor-default-and-model-selection.md) | Pi conductor の既定化と model 選択 | accepted |
 | [0076](0076-retire-legacy-issue-session-read-fallbacks.md) | Issue session の legacy read fallback 廃止と migration 手順 | accepted |
-| [0077](0077-operator-agent-session-report-coalescing.md) | operator-agent の同一 session report 集約 | accepted |
-| [0078](0078-operator-watch-state-serialization.md) | operator-agent watch state の process 間直列化 | accepted |
+| [0077](0077-operator-agent-mcp-server-selection.md) | operator-agent MCP server 選択と設定 source | accepted |
+| [0078](0078-operator-agent-session-report-coalescing.md) | operator-agent の同一 session report 集約 | accepted |
+| [0079](0079-operator-watch-state-serialization.md) | operator-agent watch state の process 間直列化 | accepted |
 
 ## 追加するとき
 
