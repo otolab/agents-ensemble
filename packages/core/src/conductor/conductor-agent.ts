@@ -29,6 +29,11 @@ export interface ConductorAgentCreateOptions {
    * extensions; omitted means enabled.
    */
   piInternalExtensions?: boolean;
+  /**
+   * Operator-agent Pi only: publish MCP tools directly and omit the Codemode extension.
+   * Omitted for Issue conductors, which keep the existing MCP exposure policy.
+   */
+  operatorPiMcpMode?: 'direct';
   /** Pi backend only: called when `compaction_end` reports a successful compaction. */
   onContextCompaction?: () => void;
   apiKey?: string;
@@ -40,6 +45,8 @@ export interface ConductorAgentCreateOptions {
   /** Resolved conductor reasoning / thinking level; each backend validates its own support. */
   reasoning?: string;
   mcpServers?: McpServerConfigMap;
+  /** Cursor SDK only: prevent loading ambient settings files and MCP servers. */
+  disableCursorAmbientSettings?: boolean;
   /** Pi-only resource root overrides; ignored by other backends. */
   pi?: ConductorPiResourceOptions;
   /** Pi-only Issue identity used to resolve the canonical transcript directory. */

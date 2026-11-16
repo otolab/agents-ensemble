@@ -86,11 +86,97 @@ profiles:
     pi:
       projectDir: pi
       skills: true
+    mcp:
+      servers:
+        - github-read-only
 ```
 
 profile は `--profile` > `ENSEMBLE_OPERATOR_AGENT_PROFILE` > 再開対象 conversation に記録された profile > `defaultProfile` > 唯一の profile の順に選びます。まだ複数候補が残る場合は TTY で選択します。保存 conversation の profile が config から消えていて選び直す場合は、その差を表示します。
 
 `backend` / `model` / `reasoning` は `ENSEMBLE_OPERATOR_AGENT_BACKEND` / `ENSEMBLE_OPERATOR_AGENT_MODEL` / `ENSEMBLE_OPERATOR_AGENT_REASONING` > 選択 profile > `common.conductor` > 既定値の順です。operator-agent は `CONDUCTOR_*`、generic config、project config、team profile から値を継承しません。Pi 共通 root は `common.pi.agentDir` > `PI_CODING_AGENT_DIR` > `~/.ensemble/pi`、profile root は `profiles.<name>.pi.projectDir` > `<profile workspace>/pi` の順です。Pi はこの user 共通 root と選択 profile root のみを読み、launch cwd や profile workspace から `.ensemble/pi` を自動探索しません。
+
+#### operator-agent の MCP 選択
+
+operator-agent は profile ごとに `mcp.servers` で MCP server 名を選びます。定義は `~/.ensemble/mcp.json` から選択名の分だけ読み込み、起動した repository の `.agents/mcp.json` や `.ensemble/` は参照しません。profile の `mcp.servers` があれば `common.mcp.servers` 全体を置き換え、未指定なら common の選択を使います。profile に `servers: []` を指定すると common の選択も無効になります。どちらにも選択がなければ `mcp.json` 自体を読みません。
+
+この operator-agent 固有の選択方針は [ADR 0077](adr/0077-operator-agent-mcp-server-selection.md) に記録しています。Issue conductor の MCP 解決には適用しません。
+
+```yaml
+version: 1
+common:
+  mcp:
+    servers:
+      - coeiro-operator
+profiles:
+  personal:
+    mcp:
+      servers:
+        - github-read-only
+```
+
+この例では `personal` profile は GitHub server だけを使い、それ以外の profile は common の `coeiro-operator` を使います。`~/.ensemble/mcp.json` に定義しただけでは MCP server は起動しません。選択された定義だけが operator conductor の起動・resume・reconnect 時に backend へ渡されます。選択名が定義されていない場合は、server 名と設定ファイルの場所を含むエラーで起動を止めます。
+
+Cursor SDK backend は SDK が受け付ける stdio / HTTP / SSE を使います。Cursor には `local.settingSources: []` を渡すため、SDK は明示した inline MCP server のみを読み込みます（[Cursor SDK の設定 source](https://cursor.com/docs/sdk/typescript#what-gets-loaded)）。Pi backend は stdio と Streamable HTTP を使い、Pi 公式 MCP extension が未対応の SSE は server 名を含むエラーにします。`${env:NAME}` は operator process の環境変数、`${workspaceFolder}` と `${workspaceFolderBasename}` は選択 profile の workspace（`~/.ensemble/operator-agents/<profile>/`）へ展開します。未定義の環境変数は、値をそのまま渡さず server 名・項目名とともにエラーにします。トークンなどの値は config に直接書かず、権限を絞った環境変数で渡してください。
+
+Pi backend の operator-agent は、選択した各 server の MCP tool を [Pi 1.2.0 の MCP extension](https://github.com/earendil-works/pi/blob/v1.2.0/packages/coding-agent/docs/mcp.md) の `direct` exposure で公開します。server が提示する tool は `mcp__<server>__<tool>` 名（名前の変換後に衝突または長さ制限がある場合は hash suffix 付き）でモデル向け tool declaration に載り、Pi の通常の tool call 経路で実行されます。server が提示する全 tool が対象なので、read-only が必要なら server 側の read-only mode と認証権限を設定してください。operator-agent の Pi 経路では Codemode extension を登録しないため、JavaScript 実行 tool と `models.*` API は利用できません。Pi の MCP `resources` は server が提供していれば `list_mcp_resources`、`list_mcp_resource_templates`、`read_mcp_resource` で公開されます。Pi 1.2.0 の MCP extension は MCP `prompts` を公開しません。
+
+Pi は初回 prompt の前に direct tool server の接続を最大 10 秒待ちます。direct MCP text result が 20 KiB を超えると、Pi はモデル向け本文を中央で切り詰め、全体を一時ファイルに保存した path を結果へ含めます。operator-agent には一般的な filesystem reader がなく、workspace file tool も active profile workspace 内に限定されるため、その一時ファイルを必ず読み戻せるとは限りません。大きな結果は server 側で検索・ページングして取得してください。
+
+MCP server は接続先の認証情報と server process / service が持つ権限で処理します。profile で選択した server の限定は server 単位で、Pi の direct exposure 自体は tool の副作用を制限せず、workspace file tool の path 検査も MCP server には適用されません。ローカル stdio server は operator と同じ OS user で動き、HTTP server は渡された token の権限で操作します。MCP は一般的な OS sandbox ではないため、信頼できる server と最小権限の認証情報を選んでください。
+
+##### GitHub official MCP server（read-only）
+
+GitHub official MCP server は stdio で起動し、Issue と Pull Request の read/list/search を使えるよう `issues,pull_requests` toolset を選びます。`GITHUB_READ_ONLY=1` は toolset に書き込み系 tool が含まれる場合も read-only で除外する server 側の制御です。
+
+`~/.ensemble/mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "github-read-only": {
+      "type": "stdio",
+      "command": "docker",
+      "args": [
+        "run",
+        "-i",
+        "--rm",
+        "-e",
+        "GITHUB_PERSONAL_ACCESS_TOKEN",
+        "-e",
+        "GITHUB_TOOLSETS",
+        "-e",
+        "GITHUB_READ_ONLY",
+        "ghcr.io/github/github-mcp-server"
+      ],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "${env:GITHUB_PERSONAL_ACCESS_TOKEN}",
+        "GITHUB_TOOLSETS": "issues,pull_requests",
+        "GITHUB_READ_ONLY": "1"
+      }
+    }
+  }
+}
+```
+
+利用する profile に `mcp.servers: [github-read-only]` を設定し、起動環境に token を用意します。token は対象 repository だけに限定した fine-grained PAT を推奨します。Issue と Pull Request を読むだけなら、対象 repository に対して `Issues: read` と `Pull requests: read` を付与し、書き込み権限は追加しません。GitHub MCP server の read-only mode は tool の公開を絞りますが、GitHub 側の token 権限も同じ範囲に絞ってください。詳細は [GitHub MCP server の read-only 設定](https://github.com/github/github-mcp-server/blob/main/docs/server-configuration.md#read-only-mode)、[toolset 設定](https://github.com/github/github-mcp-server/blob/main/docs/server-configuration.md#enabling-specific-toolsets)、[fine-grained PAT の権限と制限](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens)を参照してください。
+
+##### coeiro-operator
+
+[coeiro-operator の MCP server](https://github.com/otolab/coeiro-operator/blob/main/packages/mcp/src/server.ts) は `StdioServerTransport` で接続する実装です。MCP 接続自体に HTTP token や OAuth は要求せず、`npx -y --package @coeiro-operator/mcp coeiro-operator` で起動できます。音声合成は別途ローカル COEIROINK を必要とし、公開設定ガイドでは `localhost:50032` を接続先、`~/.coeiro-operator/config.json` を利用者設定として案内しています。利用可能な tool には `say`、operator の割当・解放、辞書登録などが含まれます。書き込みや音声出力を伴う操作もあるため、使う tool とローカルサービスの権限を確認して選択してください。詳細は [coeiro-operator README](https://github.com/otolab/coeiro-operator) と[設定ガイド](https://github.com/otolab/coeiro-operator/blob/main/docs/user-guide/configuration-guide.md)を参照してください。
+
+```json
+{
+  "mcpServers": {
+    "coeiro-operator": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "--package", "@coeiro-operator/mcp", "coeiro-operator"]
+    }
+  }
+}
+```
+
+この経路はローカルの模擬 stdio MCP server で tool discovery / call / close を確認しています。COEIROINK の実機と coeiro-operator package を使った接続・音声出力はこの作業環境では未確認です。
 
 profile の `include` は `owner/repo` または `owner/*` の repository pattern 配列です。未指定または空なら scope を狭めません。CLI の複数 `--repo-filter` は OR で照合し、指定した `include` との AND を取ります。対象は user store にある session data で、GitHub API から repository を列挙しません。
 
@@ -591,7 +677,7 @@ MCP 設定は次の 2 層から読み込み、`mcpServers` のサーバー名単
 
 解決済み設定は conductor の両 backend に同じ map として渡す。Cursor SDK では `Agent.create` / `Agent.resume` の inline MCP として、Pi では Pi 1.x の `DefaultResourceLoader` に `createMcpExtension({ loadConfig })` を extension factory として登録し、`createAgentSession` の起動時に注入する。Pi 側で `.pi/mcp.json` へ同期・コピー・symlink は行わず、resume 時は現在 clone で解決した map を使う。SessionResumeStore にはこの map の canonical SHA-256 digest を診断情報として保存するが、digest の差だけで resume を拒否しない。digest に秘密値そのものは保存しない。MCP 接続の管理、tool discovery、OAuth、resource tools は Pi 公式 extension に委ね、core は MCP client/transport を実装しない。
 
-`env` / `headers` / `cwd` は harness 境界で Cursor 形式の placeholder を解決してから Pi 公式 extension に渡す。`${env:VAR}` は現在の process environment の値、`${workspaceFolder}` / `${workspaceFolderBasename}` は conductor の cwd へ変換し、値が見つからない placeholder は literal のまま渡さず明確なエラーにする。Pi 標準の `$VAR` / `${VAR}` は公式 resolver に委ねる。Pi は `stdio` と Streamable HTTP (`http`) をサポートするが、shared `mcp.json` の `sse` 定義は Pi 1.x ではサポートしないため、Pi conductor の起動時に明確なエラーにする。HTTP の `auth` (`CLIENT_ID` / `CLIENT_SECRET` / `scopes`) は Pi の MCP OAuth 設定へ渡され、認可フローと credential 保存は公式 extension が管理する。`.cursor/mcp.json` や `.pi/mcp.json` へのコピー・symlink、`settings.json` の書き換えは行わず、ACP worker にはこの設定を渡さない。MCP server tool は公式名 `mcp__<server>__<tool>`（長すぎる・衝突する場合は Pi の hash suffix）で公開される。resources がある場合は公式の `list_mcp_resources`、`list_mcp_resource_templates`、`read_mcp_resource` が提供される。`codemode` / `tool_search` の exposure は公式 extension の設定に従う。
+`command` / `args` / `env` / `cwd` / `url` / `headers` / `auth` は harness 境界で Cursor 形式の placeholder を解決してから Pi 公式 extension に渡す。`${env:VAR}` は現在の process environment の値、`${workspaceFolder}` / `${workspaceFolderBasename}` は conductor の cwd へ変換し、値が見つからない placeholder は literal のまま渡さず明確なエラーにする。Pi 標準の `$VAR` / `${VAR}` は公式 resolver に委ねる。Pi は `stdio` と Streamable HTTP (`http`) をサポートするが、shared `mcp.json` の `sse` 定義は Pi 1.x ではサポートしないため、Pi conductor の起動時に明確なエラーにする。HTTP の `auth` (`CLIENT_ID` / `CLIENT_SECRET` / `scopes`) は Pi の MCP OAuth 設定へ渡され、認可フローと credential 保存は公式 extension が管理する。`.cursor/mcp.json` や `.pi/mcp.json` へのコピー・symlink、`settings.json` の書き換えは行わず、ACP worker にはこの設定を渡さない。MCP server tool は公式名 `mcp__<server>__<tool>`（長すぎる・衝突する場合は Pi の hash suffix）で公開される。resources がある場合は公式の `list_mcp_resources`、`list_mcp_resource_templates`、`read_mcp_resource` が提供される。`codemode` / `tool_search` の exposure は公式 extension の設定に従う。
 
 Pi backend は `@earendil-works/pi-coding-agent@1.2.x` の公式 MCP extension を使う。MCP 未設定時は extension に空の解決結果を渡し、conductor は harness tools と local extension tools だけで起動する。
 

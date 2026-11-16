@@ -168,7 +168,7 @@ ensemble operator-agent --resume operator-<id>
 ensemble operator-agent --new
 ```
 
-profile は `--profile` > `ENSEMBLE_OPERATOR_AGENT_PROFILE` > 選択した保存会話の profile > `defaultProfile` > profile が一つだけならその profile > TTY 選択の順で決まります。backend / model / reasoning は、それぞれ専用の `ENSEMBLE_OPERATOR_AGENT_BACKEND` / `ENSEMBLE_OPERATOR_AGENT_MODEL` / `ENSEMBLE_OPERATOR_AGENT_REASONING` > profile > `common.conductor` > 既定値の順です。generic `CONDUCTOR_*` は参照しません。以前 project config や team profile にだけ設定していた operator 用 backend / model / prompt / Pi resources は自動変換されないため、専用 config へ手動で移してください。Pi は共通 user resource root と選択 profile の明示 root だけを読み、起動元 repository の `.ensemble/pi/` や Pi の cwd 自動探索は使いません。設定例は [operator-agent 専用設定](../config.md#operator-agent-専用設定)、Pi の詳細は [Pi resources](../pi-conductor-setup.md#operator-agent-の-pi-resources) を参照してください。
+profile は `--profile` > `ENSEMBLE_OPERATOR_AGENT_PROFILE` > 選択した保存会話の profile > `defaultProfile` > profile が一つだけならその profile > TTY 選択の順で決まります。backend / model / reasoning は、それぞれ専用の `ENSEMBLE_OPERATOR_AGENT_BACKEND` / `ENSEMBLE_OPERATOR_AGENT_MODEL` / `ENSEMBLE_OPERATOR_AGENT_REASONING` > profile > `common.conductor` > 既定値の順です。MCP は profile の `mcp.servers` > `common.mcp.servers` の順で選択し、profile に空配列を指定すると MCP を無効にします。選択された名前の定義だけを `~/.ensemble/mcp.json` から読み、起動 repository の `.agents/mcp.json` や `.ensemble/` は参照しません。generic `CONDUCTOR_*` は参照しません。以前 project config や team profile にだけ設定していた operator 用 backend / model / prompt / Pi resources は自動変換されないため、専用 config へ手動で移してください。Pi は共通 user resource root と選択 profile の明示 root だけを読み、起動元 repository の `.ensemble/pi/` や Pi の cwd 自動探索は使いません。設定例は [operator-agent 専用設定](../config.md#operator-agent-専用設定)、Pi の詳細は [Pi resources](../pi-conductor-setup.md#operator-agent-の-pi-resources) を参照してください。
 
 session list は user store 内の全 canonical GitHub slug group を既定 scope とし、GitHub API で repository を列挙しません。profile の `include` と複数の `--repo-filter <owner/repo|owner/*>` を指定すると、両者の一致を取り、同じ項目内ではいずれかの filter に合う repository を対象にします。list tool は `limit` / `cursor` / `nextCursor` で続きのページを返し、件数上限で結果を黙って捨てません。
 
@@ -180,7 +180,7 @@ operator-agent は `read_operator_workspace_file` / `write_operator_workspace_fi
 
 各 file 操作は realpath などで path を検査してから、path-based `open()` を行います。その間に同一ユーザーの別 process が workspace root や親 directory を差し替える競合（TOCTOU）は防止できず、競合時に workspace 外へのアクセスを防ぐ保証はありません。この機能は OS-level sandbox ではなく、同一ユーザーで動く任意 process を保護対象にしていません。信頼できない同一ユーザー process と profile workspace を共有しないでください。Pi sandbox plugin が利用可能になった段階で適用を検討する方針ですが、現時点では適用していません。
 
-directory 構造が変わらない通常の状態では、path 検査により Issue worktree、別 profile、`~/.ensemble/sessions/` へのアクセスを拒否します。operator-agent は backend の built-in coding tools を無効にし、Pi extension を読み込みません。また MCP server を起動 options に渡さないため、file tool の迂回経路となる MCP tool はありません。
+directory 構造が変わらない通常の状態では、path 検査により Issue worktree、別 profile、`~/.ensemble/sessions/` へのアクセスを拒否します。operator-agent は backend の built-in coding tools と Pi の user extensions を無効にします。明示選択した MCP server は別経路で接続され、その tool が server process と外部サービス側で持つ権限は workspace file tool の path 制限を受けません。MCP の選択や `builtinTools: false` は OS sandbox ではありません。信頼できる server だけを選び、server process が実行する command、環境変数、接続先サービスの権限を確認してください。
 
 file の内容は redaction されず、読み出した内容はそのまま選択中 backend に渡ります。API key、token、password、credential などを workspace file に保存したり、秘密情報を含む file を agent に読ませたりしないでください。
 

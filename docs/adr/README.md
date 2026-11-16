@@ -148,6 +148,7 @@ ADR は**合意された設計判断の履歴**を残すもの。一度 `accepte
 | [0074](0074-manual-resume-after-close-failure.md) | close failure 後の明示 reconnect | accepted |
 | [0075](0075-pi-conductor-default-and-model-selection.md) | Pi conductor の既定化と model 選択 | accepted |
 | [0076](0076-retire-legacy-issue-session-read-fallbacks.md) | Issue session の legacy read fallback 廃止と migration 手順 | accepted |
+| [0077](0077-operator-agent-mcp-server-selection.md) | operator-agent MCP server 選択と設定 source | accepted |
 
 ## 追加するとき
 

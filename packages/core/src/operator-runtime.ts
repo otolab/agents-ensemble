@@ -27,6 +27,14 @@ export {
   type ResolveEnsemblePathsOptions,
 } from './ensemble-paths.js';
 export { resolveUserEnsembleRoot } from './resolve-user-ensemble-root.js';
+export {
+  MCP_CONFIG_FILE,
+  resolveUserMcpServers,
+} from './mcp/load-mcp-config.js';
+export type {
+  McpServerConfig,
+  McpServerConfigMap,
+} from './mcp/load-mcp-config.js';
 export type { EnsembleConfig, EnsembleConfigControlConfig } from './config/types.js';
 export {
   resolveConductorBackendSetting,

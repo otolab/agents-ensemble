@@ -81,6 +81,7 @@ import {
   type OperatorAgentConfiguration,
   type OperatorAgentProfile,
 } from './operator-agent-config.js';
+import { resolveOperatorAgentMcpServers } from './operator-agent-mcp.js';
 
 export interface RunOperatorAgentOptions {
   profile?: string;
@@ -117,6 +118,7 @@ interface OperatorRuntime {
   backend: ConductorBackend;
   modelId: string;
   reasoning?: string;
+  mcpServers?: ConductorAgentCreateOptions['mcpServers'];
   piResourceRoots: { agentDir: string; projectDir: string };
   systemPrompt: string;
 }
@@ -194,8 +196,9 @@ export async function runOperatorAgent(
   const workspaceFileTools = createOperatorWorkspaceFileTools(
     await resolveOperatorWorkspaceRoot(runtime.workspace),
   );
-  const factory =
-    dependencies.agentFactory ?? createConductorAgentFactory(runtime.backend);
+  const factory = addOperatorMcpStartupContext(
+    dependencies.agentFactory ?? createConductorAgentFactory(runtime.backend),
+  );
   const dispatchQueue = createOperatorDispatchQueue();
   const reportResumeStoreDuplicate = (
     diagnostic: SessionResumeStoreDuplicateDiagnostic,
@@ -256,8 +259,12 @@ export async function runOperatorAgent(
     ...(runtime.reasoning !== undefined
       ? { reasoning: runtime.reasoning }
       : {}),
+    ...(runtime.mcpServers ? { mcpServers: runtime.mcpServers } : {}),
     // The operator role has no repository editing or shell tools in Phase 1.
     builtinTools: false,
+    ...(runtime.backend === 'cursor'
+      ? { disableCursorAmbientSettings: true }
+      : {}),
     ...(runtime.backend === 'pi'
       ? {
           pi: runtime.piResourceRoots,
@@ -267,6 +274,7 @@ export async function runOperatorAgent(
           ),
           piSkills: runtime.profile.pi?.skills !== false,
           piExtensions: false,
+          operatorPiMcpMode: 'direct' as const,
         }
       : {}),
     customTools: {
@@ -410,6 +418,12 @@ async function resolveOperatorRuntime(
   if (!profile) {
     throw new Error(`Operator-agent profile "${selectedProfileName}" is not defined.`);
   }
+  const mcpServers = await resolveOperatorAgentMcpServers(
+    userEnsembleRoot,
+    selectedProfileName,
+    profile,
+    config.common,
+  );
   const workspace = join(
     userEnsembleRoot,
     'operator-agents',
@@ -469,8 +483,38 @@ async function resolveOperatorRuntime(
     backend,
     modelId,
     ...(reasoning !== undefined ? { reasoning } : {}),
+    ...(mcpServers ? { mcpServers } : {}),
     piResourceRoots,
     systemPrompt,
+  };
+}
+
+function addOperatorMcpStartupContext(
+  factory: ConductorAgentFactory,
+): ConductorAgentFactory {
+  const withContext = async <T>(
+    options: ConductorAgentCreateOptions,
+    start: () => Promise<T>,
+  ): Promise<T> => {
+    try {
+      return await start();
+    } catch (error) {
+      const names = Object.keys(options.mcpServers ?? {});
+      if (names.length === 0) throw error;
+      const reason = error instanceof Error ? error.message : String(error);
+      if (names.some((name) => reason.includes(name))) throw error;
+      throw new Error(
+        `Operator-agent conductor startup failed with MCP server(s) [${names.join(', ')}]: ${reason}`,
+        { cause: error },
+      );
+    }
+  };
+
+  return {
+    create: (options) =>
+      withContext(options, () => factory.create(options)),
+    resume: (agentId, options) =>
+      withContext(options, () => factory.resume(agentId, options)),
   };
 }
 
@@ -804,12 +848,24 @@ async function runTtyConversation(options: {
               agentId,
               success,
               source,
+              error,
               closeFailed,
             }) => {
               reconnectReported = true;
+              const errorDetail =
+                !success && error
+                  ? ` error=${escapeTerminalControlCharacters(error)}`
+                  : '';
+              const cleanupDetail = closeFailed
+                ? ' 旧 conductor の終了処理に失敗したため、リソース解放は確認できません。'
+                : '';
+              const message =
+                `${success ? 'conductor に再接続しました。' : 'conductor の再接続に失敗しました。'}` +
+                `agentId=${agentId} source=${source} failure=${failureClass}` +
+                `${errorDetail}${cleanupDetail}`;
               writeChannelLine(
                 success ? 'observation' : 'harness',
-                `${success ? 'conductor に再接続しました。' : 'conductor の再接続に失敗しました。'}agentId=${agentId} source=${source} failure=${failureClass}${closeFailed ? ' 旧 conductor の終了処理に失敗したため、リソース解放は確認できません。' : ''}`,
+                message,
                 success ? {} : { color: ANSI_RED },
               );
             },

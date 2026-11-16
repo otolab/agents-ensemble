@@ -4,14 +4,18 @@ import { basename, join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import {
   createAgentSession,
-  createCodemodeExtension,
   createMcpExtension,
   DefaultResourceLoader,
   ModelRuntime,
   SessionManager,
   SettingsManager,
 } from '@earendil-works/pi-coding-agent';
-import type { Model } from '@earendil-works/pi-ai';
+import type { ToolDefinition } from '@earendil-works/pi-coding-agent';
+import {
+  fauxAssistantMessage,
+  fauxProvider,
+  fauxToolCall,
+} from '@earendil-works/pi-ai';
 import { PiConductorAgent, loadPiMcpConfig } from './pi-conductor-agent.js';
 import { resolveMcpServers } from '../mcp/load-mcp-config.js';
 
@@ -226,25 +230,71 @@ describe('shared mcp.json backend path', () => {
         args: ['-e', serverScript],
       },
     };
-    const piConfig = loadPiMcpConfig(mcpServers);
+    const piConfig = loadPiMcpConfig(mcpServers, {
+      exposure: 'direct',
+      autoEnableCodemode: false,
+    });
+    expect(piConfig).toMatchObject({
+      autoEnableCodemode: false,
+      servers: [
+        {
+          name: 'representative',
+          config: { exposure: 'direct' },
+        },
+      ],
+    });
     const runtime = await ModelRuntime.create({
       authPath: join(agentDir, 'auth.json'),
       modelsPath: null,
       allowModelNetwork: false,
       refreshOnCreate: false,
     });
-    const model = {
-      id: 'fixture-model',
-      name: 'Fixture model',
+    const fakeModelProvider = fauxProvider({
+      api: 'fixture',
       provider: 'fixture',
-      api: 'openai-completions',
-      baseUrl: 'http://127.0.0.1:1/v1',
-      reasoning: false,
-      input: ['text'],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 128_000,
-      maxTokens: 1_024,
-    } as Model<any>;
+      models: [{ id: 'fixture-model', input: ['text'] }],
+    });
+    let modelDeclaredTools: string[] = [];
+    let mcpToolResult = '';
+    let workspaceToolResult = '';
+    fakeModelProvider.setResponses([
+      (context) => {
+        modelDeclaredTools = context.messages
+          .filter((message) => message.role === 'system')
+          .flatMap((message) => message.toolsAdded ?? [])
+          .map((tool) => tool.name);
+        return fauxAssistantMessage(
+          [
+            fauxToolCall('mcp__representative__echo', {
+              text: 'model-invoked-mcp-tool',
+            }),
+            fauxToolCall('read_operator_workspace_file', {}),
+          ],
+          { stopReason: 'toolUse' },
+        );
+      },
+      (context) => {
+        const toolResults = context.messages.filter(
+          (message) => message.role === 'toolResult',
+        );
+        mcpToolResult =
+          toolResults
+            .find((message) => message.toolName === 'mcp__representative__echo')
+            ?.content.map((block) => (block.type === 'text' ? block.text : ''))
+            .join('') ?? '';
+        workspaceToolResult =
+          toolResults
+            .find((message) => message.toolName === 'read_operator_workspace_file')
+            ?.content.map((block) => (block.type === 'text' ? block.text : ''))
+            .join('') ?? '';
+        return fauxAssistantMessage(
+          'MCP and workspace tool results received',
+        );
+      },
+    ]);
+    runtime.registerNativeProvider(fakeModelProvider.provider);
+    const model = runtime.getModel('fixture', 'fixture-model');
+    if (!model) throw new Error('Fixture model was not registered.');
     const settingsManager = SettingsManager.create(cwd, agentDir);
     const resourceLoader = new DefaultResourceLoader({
       cwd,
@@ -262,7 +312,6 @@ describe('shared mcp.json backend path', () => {
           logPath: join(cwd, 'mcp.log'),
           startupWaitMs: 2_000,
         }),
-        createCodemodeExtension({ mode: 'on' }),
       ],
     });
     await resourceLoader.reload();
@@ -275,6 +324,17 @@ describe('shared mcp.json backend path', () => {
       settingsManager,
       resourceLoader,
       noTools: 'builtin',
+      customTools: [
+        {
+          name: 'read_operator_workspace_file',
+          label: 'read_operator_workspace_file',
+          description: 'Read an operator workspace file',
+          parameters: { type: 'object', properties: {} } as ToolDefinition['parameters'],
+          execute: async () => ({
+            content: [{ type: 'text', text: 'workspace-file-result' }],
+          }),
+        },
+      ],
     });
     await session.bindExtensions({});
 
@@ -284,11 +344,46 @@ describe('shared mcp.json backend path', () => {
       echo = session.getToolDefinition('mcp__representative__echo');
     }
     expect(echo).toBeDefined();
-    await expect(
-      echo!.execute('call-1', { text: 'shared-result' }, new AbortController().signal),
-    ).resolves.toMatchObject({
-      content: [{ type: 'text', text: 'shared-result' }],
+    const registeredTools = session.getAllTools();
+    expect(registeredTools.find((tool) => tool.name === echo!.name)).toMatchObject({
+      exposure: 'direct',
     });
+    const modelTools = session.getActiveToolNames();
+    const callableTools = session.getCallableToolNames();
+    expect(modelTools).toContain(echo!.name);
+    expect(modelTools).toContain('read_operator_workspace_file');
+    expect(session.getToolDefinition('codemode')).toBeUndefined();
+    expect(modelTools).not.toContain('read');
+    expect(modelTools).not.toContain('bash');
+    expect(modelTools).not.toContain('edit');
+    expect(modelTools).not.toContain('write');
+    expect(callableTools).not.toContain('read');
+    expect(callableTools).not.toContain('bash');
+    expect(callableTools).not.toContain('edit');
+    expect(callableTools).not.toContain('write');
+    await session.prompt('Call the MCP and workspace tools.', {
+      expandPromptTemplates: false,
+    });
+    expect(modelDeclaredTools).toContain(echo!.name);
+    expect(modelDeclaredTools).toContain('read_operator_workspace_file');
+    expect(modelDeclaredTools).not.toContain('read');
+    expect(modelDeclaredTools).not.toContain('bash');
+    expect(modelDeclaredTools).not.toContain('edit');
+    expect(modelDeclaredTools).not.toContain('write');
+    expect(modelDeclaredTools).not.toContain('codemode');
+    expect(mcpToolResult).toBe('model-invoked-mcp-tool');
+    expect(workspaceToolResult).toBe('workspace-file-result');
+    expect(session.messages).toContainEqual(
+      expect.objectContaining({
+        role: 'assistant',
+        content: expect.arrayContaining([
+          expect.objectContaining({
+            type: 'text',
+            text: 'MCP and workspace tool results received',
+          }),
+        ]),
+      }),
+    );
 
     session.dispose();
   });
