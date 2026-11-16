@@ -20,12 +20,10 @@
   "dependencies": {
     "@agents-ensemble/core": "workspace:*",
     "@modular-prompt/core": "0.3.0",
-    "proper-lockfile": "4.1.2",
     "yaml": "2.9.1"
   },
   "devDependencies": {
     "@types/node": "22.18.10",
-    "@types/proper-lockfile": "4.1.4",
     "typescript": "5.9.3",
     "vitest": "3.2.4"
   },
@@ -43,6 +41,6 @@
     "registry": "https://registry.npmjs.org/"
   },
   "engines": {
-    "node": ">=22.0.0"
+    "node": ">=22.13.0"
   }
 }

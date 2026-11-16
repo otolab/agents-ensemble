@@ -1,6 +1,6 @@
 # ADR 0079: operator-agent watch state の process 間直列化
 
-- Status: accepted
+- Status: superseded in part by [ADR 0080](0080-operator-watch-state-lock-transaction.md)（lock lease と stale takeover の扱い）
 - Date: 2026-11-16
 - Related: [ADR 0037](0037-operator-agent-session-watch-and-dispatch.md), [ADR 0038](0038-operator-agent-conversation-report-hold.md), [ADR 0078](0078-operator-agent-session-report-coalescing.md), [Issue #736](https://github.com/otolab/agents-ensemble/issues/736)
 

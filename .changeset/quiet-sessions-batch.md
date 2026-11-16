@@ -1,5 +1,6 @@
 ---
 "@agents-ensemble/operator-agent": patch
+"@agents-ensemble/cli": patch
 ---
 
-Coalesce watch reports by session and retain unresolved watch state for safe recovery.
+Batch related watch reports without losing event order or cross-process state updates, and preserve unresolved watch state for safe recovery.

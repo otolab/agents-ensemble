@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { lock } from 'proper-lockfile';
+import { DatabaseSync } from 'node:sqlite';
 import {
   access,
   chmod,
@@ -49,6 +49,8 @@ const MAX_DEBOUNCE_MS = 10_000;
 const DEFAULT_MESSAGE_DEBOUNCE_MS = 10_000;
 const MAX_MESSAGE_DEBOUNCE_MS = 120_000;
 const MESSAGE_POLL_INTERVAL_MS = 2_000;
+const WATCH_STATE_LOCK_RETRIES = 40;
+const WATCH_STATE_LOCK_RETRY_DELAY_MS = 25;
 
 interface WatchConfig {
   conductorAgentId: string;
@@ -193,7 +195,6 @@ export async function createOperatorWatchPool(
     );
   };
   let state = emptyWatchState();
-  let assertStateLockHeld = () => {};
   const refreshStateFromDisk = async () => {
     const paths = new Set([
       ...statePaths,
@@ -291,7 +292,6 @@ export async function createOperatorWatchPool(
   let stateOperationQueue = Promise.resolve();
 
   const persist = async () => {
-    assertStateLockHeld();
     const partitions = partitionWatchState(state, pathById, issueUrlById);
     for (const [path, retained] of unassignedStateByPath) {
       partitions.set(
@@ -301,25 +301,19 @@ export async function createOperatorWatchPool(
     }
     for (const [path, partition] of partitions) {
       statePaths.add(path);
-      await saveWatchState(path, partition, assertStateLockHeld);
+      await saveWatchState(path, partition);
     }
     for (const path of statePaths) {
       if (!partitions.has(path)) {
-        await saveWatchState(path, emptyWatchState(), assertStateLockHeld);
+        await saveWatchState(path, emptyWatchState());
       }
     }
   };
   const withStateLock = <T>(operation: () => Promise<T>): Promise<T> => {
     const next = stateOperationQueue.then(() =>
-      withWatchStateLock(root, profile, async (assertLockHeld) => {
+      withWatchStateLock(root, profile, async () => {
         await refreshStateFromDisk();
-        const previousAssertStateLockHeld = assertStateLockHeld;
-        assertStateLockHeld = assertLockHeld;
-        try {
-          return await operation();
-        } finally {
-          assertStateLockHeld = previousAssertStateLockHeld;
-        }
+        return operation();
       }),
     );
     stateOperationQueue = next.then(
@@ -829,16 +823,41 @@ export async function createOperatorWatchPool(
             throw readResult.responseSizeError;
           }
           const nextCursor = readResult.cursor;
-          const reports: OperatorWatchState['pendingReports'] = messages.map((message) => ({
-            reportId: randomUUID(),
-            reportType: 'conductor_message' as const,
-            conductorAgentId: id,
-            issueUrl: resumeStore.issueUrl,
-            text: formatConductorMessageReport(resumeStore, message),
-            debounceMs: listener.messageDebounceMs,
-            sendCount: message.sendCount,
-          }));
-          if (readResult.oversizedSendCounts.length > 0) {
+          const messageEvents = [
+            ...messages.map((message) => ({
+              type: 'message' as const,
+              sendCount: message.sendCount,
+              message,
+            })),
+            ...readResult.oversizedSendCounts.map((sendCount) => ({
+              type: 'oversized' as const,
+              sendCount,
+            })),
+          ].sort((left, right) => left.sendCount - right.sendCount);
+          const reports: OperatorWatchState['pendingReports'] = [];
+          for (let index = 0; index < messageEvents.length; ) {
+            const event = messageEvents[index]!;
+            if (event.type === 'message') {
+              reports.push({
+                reportId: randomUUID(),
+                reportType: 'conductor_message',
+                conductorAgentId: id,
+                issueUrl: resumeStore.issueUrl,
+                text: formatConductorMessageReport(resumeStore, event.message),
+                debounceMs: listener.messageDebounceMs,
+                sendCount: event.sendCount,
+              });
+              index += 1;
+              continue;
+            }
+
+            const oversizedSendCounts: number[] = [];
+            while (
+              messageEvents[index]?.type === 'oversized'
+            ) {
+              oversizedSendCounts.push(messageEvents[index]!.sendCount);
+              index += 1;
+            }
             reports.push({
               reportId: randomUUID(),
               reportType: 'conductor_message',
@@ -847,11 +866,11 @@ export async function createOperatorWatchPool(
               text: formatOversizedConductorMessageWarning(
                 resumeStore.issueUrl,
                 id,
-                readResult.oversizedSendCounts,
+                oversizedSendCounts,
               ),
               debounceMs: listener.messageDebounceMs,
-              sendCount: readResult.oversizedSendCounts.at(-1)!,
-              oversizedSendCounts: readResult.oversizedSendCounts,
+              sendCount: oversizedSendCounts.at(-1)!,
+              oversizedSendCounts,
             });
           }
           reports.sort(
@@ -1913,7 +1932,6 @@ async function loadWatchState(path: string): Promise<OperatorWatchState> {
 async function saveWatchState(
   path: string,
   state: OperatorWatchState,
-  assertLockHeld: () => void,
 ): Promise<void> {
   const directory = dirname(path);
   await mkdir(directory, { recursive: true, mode: 0o700 });
@@ -1924,55 +1942,71 @@ async function saveWatchState(
     mode: 0o600,
   });
   await chmod(temporary, 0o600);
-  assertLockHeld();
   await rename(temporary, path);
 }
 
 async function withWatchStateLock<T>(
   root: string,
   profile: string,
-  operation: (assertLockHeld: () => void) => Promise<T>,
+  operation: () => Promise<T>,
 ): Promise<T> {
   const directory = join(root, 'operator-agents', profile, 'watch');
   await mkdir(directory, { recursive: true, mode: 0o700 });
   await chmod(directory, 0o700);
   const canonicalDirectory = await realpath(directory);
-  let compromisedError: Error | undefined;
-  const release = await lock(canonicalDirectory, {
-    realpath: false,
-    stale: 120_000,
-    update: 20_000,
-    onCompromised: (error) => {
-      compromisedError = error;
-    },
-    retries: {
-      retries: 100,
-      factor: 1.2,
-      minTimeout: 25,
-      maxTimeout: 500,
-      randomize: true,
-    },
-  });
-  const assertLockHeld = () => {
-    if (compromisedError) {
-      throw new Error('Operator watch state profile lock was lost.', {
-        cause: compromisedError,
-      });
-    }
-  };
+  const database = new DatabaseSync(
+    join(canonicalDirectory, 'watch-state-lock.sqlite'),
+  );
+  let transactionStarted = false;
   let operationError: unknown;
   try {
-    assertLockHeld();
-    const result = await operation(assertLockHeld);
-    assertLockHeld();
-    return result;
+    await chmod(
+      join(canonicalDirectory, 'watch-state-lock.sqlite'),
+      0o600,
+    );
+    database.exec('PRAGMA busy_timeout = 0');
+    let lastLockError: unknown;
+    for (let attempt = 0; attempt < WATCH_STATE_LOCK_RETRIES; attempt += 1) {
+      try {
+        database.exec('BEGIN IMMEDIATE');
+        transactionStarted = true;
+        break;
+      } catch (error) {
+        if (!isSqliteLockContention(error)) throw error;
+        lastLockError = error;
+        if (attempt + 1 < WATCH_STATE_LOCK_RETRIES) {
+          await new Promise((resolve) =>
+            setTimeout(resolve, WATCH_STATE_LOCK_RETRY_DELAY_MS),
+          );
+        }
+      }
+    }
+    if (!transactionStarted) {
+      throw new Error(
+        `Could not acquire operator watch state profile lock after ${WATCH_STATE_LOCK_RETRIES} attempts.`,
+        { cause: lastLockError },
+      );
+    }
+    return await operation();
   } catch (error) {
     operationError = error;
     throw error;
   } finally {
+    let releaseError: unknown;
     try {
-      await release();
-    } catch (releaseError) {
+      if (transactionStarted) database.exec('ROLLBACK');
+    } catch (error) {
+      releaseError = error;
+    }
+    try {
+      database.close();
+    } catch (error) {
+      releaseError =
+        releaseError === undefined
+          ? error
+          : new AggregateError([releaseError, error]);
+    }
+    if (releaseError !== undefined) {
       if (operationError !== undefined) {
         throw new AggregateError(
           [operationError, releaseError],
@@ -1982,6 +2016,19 @@ async function withWatchStateLock<T>(
       throw releaseError;
     }
   }
+}
+
+function isSqliteLockContention(error: unknown): boolean {
+  if (
+    typeof error !== 'object' ||
+    error === null ||
+    !('errcode' in error) ||
+    typeof error.errcode !== 'number'
+  ) {
+    return false;
+  }
+  const primaryCode = error.errcode & 0xff;
+  return primaryCode === 5 || primaryCode === 6;
 }
 
 function hash(value: unknown): string {

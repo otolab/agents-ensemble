@@ -150,7 +150,8 @@ ADR は**合意された設計判断の履歴**を残すもの。一度 `accepte
 | [0076](0076-retire-legacy-issue-session-read-fallbacks.md) | Issue session の legacy read fallback 廃止と migration 手順 | accepted |
 | [0077](0077-operator-agent-mcp-server-selection.md) | operator-agent MCP server 選択と設定 source | accepted |
 | [0078](0078-operator-agent-session-report-coalescing.md) | operator-agent の同一 session report 集約 | accepted |
-| [0079](0079-operator-watch-state-serialization.md) | operator-agent watch state の process 間直列化 | accepted |
+| [0079](0079-operator-watch-state-serialization.md) | operator-agent watch state の process 間直列化 | superseded in part → [0080](0080-operator-watch-state-lock-transaction.md)（lock lease と stale takeover の扱い） |
+| [0080](0080-operator-watch-state-lock-transaction.md) | operator-agent watch state を SQLite transaction lock で保護 | accepted |
 
 ## 追加するとき
 

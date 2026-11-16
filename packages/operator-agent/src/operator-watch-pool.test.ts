@@ -1,4 +1,12 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  stat,
+  utimes,
+  writeFile,
+} from 'node:fs/promises';
 import { fork, type ChildProcess } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -1727,8 +1735,9 @@ describe('operator watch pool', () => {
         expect(
           new Set(pollProcesses.map((process) => process.child.pid)).size,
         ).toBe(2);
-        // Both OS processes have loaded the same cursor/pending snapshot before
-        // either poll is allowed to observe and save its session update.
+        // Both OS processes start from the same pre-poll snapshot. The delayed
+        // observation keeps the first transaction open while the second waits;
+        // the second poll must reload state after acquiring the profile lock.
         for (const process of pollProcesses) process.poll();
         expect(await Promise.all(pollProcesses.map((process) => process.result))).toEqual([
           1,
@@ -1824,6 +1833,243 @@ describe('operator watch pool', () => {
     } finally {
       initialPool.close();
       for (const pool of resumedPools) pool.close();
+    }
+  });
+
+  it('does not take over a live profile state owner after the lock artifact ages past 120 seconds', async () => {
+    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-watch-stale-lock-'));
+    await mkdir(join(repoRoot, '.ensemble', 'sessions'), { recursive: true });
+    const sessions = [
+      {
+        id: 'stale-lock-session-one',
+        issueUrl: 'https://github.com/example/repo/issues/111',
+      },
+      {
+        id: 'stale-lock-session-two',
+        issueUrl: 'https://github.com/example/repo/issues/112',
+      },
+    ];
+    const observations = new Map(
+      sessions.map((session) => [
+        session.id,
+        {
+          sequence: 1,
+          openQuestions: [],
+          sessionState: {
+            current: { statusLine: 'waiting', reportedAt: 20 },
+            history: [],
+          },
+        } satisfies SessionObservationSnapshot,
+      ]),
+    );
+    let blockOwnerObservation = false;
+    let markOwnerObservationStarted!: () => void;
+    const ownerObservationStarted = new Promise<void>((resolve) => {
+      markOwnerObservationStarted = resolve;
+    });
+    let releaseOwnerObservation!: () => void;
+    const ownerObservationGate = new Promise<void>((resolve) => {
+      releaseOwnerObservation = resolve;
+    });
+    const ownerServer = await startOpenQuestionControlServer({
+      listOpenQuestions: () => [],
+      observeSession: async () => {
+        if (blockOwnerObservation) {
+          blockOwnerObservation = false;
+          markOwnerObservationStarted();
+          await ownerObservationGate;
+        }
+        return observations.get(sessions[0]!.id)!;
+      },
+    });
+    closeServers.push(() => ownerServer.close());
+    const contenderServer = await startOpenQuestionControlServer({
+      listOpenQuestions: () => [],
+      observeSession: async () => observations.get(sessions[1]!.id)!,
+    });
+    closeServers.push(() => contenderServer.close());
+    await writeResumeStore(
+      sessions[0]!.id,
+      1,
+      ownerServer.socketPath,
+      sessions[0]!.issueUrl,
+    );
+    await writeResumeStore(
+      sessions[1]!.id,
+      1,
+      contenderServer.socketPath,
+      sessions[1]!.issueUrl,
+    );
+
+    const initialQueue = createOperatorDispatchQueue();
+    const initialPool = await createOperatorWatchPool({
+      repoRoot,
+      dispatchQueue: initialQueue,
+    });
+    const processes: ReturnType<typeof startWatchPollProcess>[] = [];
+    const statePath = currentWatchStatePath(repoRoot);
+    const readState = async () =>
+      JSON.parse(await readFile(statePath, 'utf8')) as {
+        cursors: Record<string, { sequence: number }>;
+        pendingReports: Array<{ reportId: string; conductorAgentId: string }>;
+      };
+    try {
+      for (const session of sessions) {
+        await initialPool.register(session.id, {
+          pollIntervalMs: 60_000,
+          debounceMs: 0,
+        });
+        await initialPool.pollOnce(session.id);
+      }
+      let baseline = initialQueue.takeBatch(
+        { continuationConsumed: false },
+        Date.now(),
+      );
+      while (baseline) {
+        await initialPool.acknowledge(baseline.events);
+        baseline = initialQueue.takeBatch(
+          { continuationConsumed: false },
+          Date.now(),
+        );
+      }
+      const baselineState = await readState();
+      expect(
+        sessions.map((session) => baselineState.cursors[session.id]?.sequence),
+      ).toEqual([1, 1]);
+      expect(baselineState.pendingReports).toEqual([]);
+      initialPool.close();
+
+      for (const session of sessions) {
+        observations.set(session.id, {
+          sequence: 2,
+          openQuestions: [
+            {
+              id: 'inq-2',
+              question: `${session.id} changed`,
+              responseType: 'text',
+              source: 'conductor',
+              status: 'open',
+              askedAt: 21,
+            },
+          ],
+          sessionState: {
+            current: { statusLine: 'waiting', reportedAt: 20 },
+            history: [],
+          },
+        });
+      }
+
+      const userEnsembleRoot = join(homeRoot, '.ensemble');
+      const owner = startWatchPollProcess(userEnsembleRoot, sessions[0]!.id);
+      const contender = startWatchPollProcess(userEnsembleRoot, sessions[1]!.id);
+      processes.push(owner, contender);
+      await Promise.all([owner.ready, contender.ready]);
+
+      blockOwnerObservation = true;
+      owner.poll();
+      await ownerObservationStarted;
+
+      const profileWatchDirectory = join(
+        userEnsembleRoot,
+        'operator-agents',
+        'default',
+        'watch',
+      );
+      const sqliteLockPath = join(
+        profileWatchDirectory,
+        'watch-state-lock.sqlite',
+      );
+      const legacyLeasePath = `${profileWatchDirectory}.lock`;
+      let lockArtifactPath = sqliteLockPath;
+      try {
+        await stat(sqliteLockPath);
+      } catch {
+        lockArtifactPath = legacyLeasePath;
+      }
+      const staleTime = new Date(Date.now() - 121_000);
+      await utimes(lockArtifactPath, staleTime, staleTime);
+      expect((await stat(lockArtifactPath)).mtimeMs).toBeLessThan(
+        Date.now() - 120_000,
+      );
+
+      const contenderOutcomePromise = contender.result.then(
+        (count) => ({ type: 'completed' as const, count }),
+        (error: unknown) => ({ type: 'failed' as const, error }),
+      );
+      contender.poll();
+      const contenderOutcome = await contenderOutcomePromise;
+      await contender.exit.catch(() => undefined);
+      const stateAfterContender = await readState();
+
+      releaseOwnerObservation();
+      const ownerOutcome = await owner.result.then(
+        (count) => ({ type: 'completed' as const, count }),
+        (error: unknown) => ({ type: 'failed' as const, error }),
+      );
+      await owner.exit.catch(() => undefined);
+      const stateAfterOwner = await readState();
+
+      let retriedContenderCount: number | undefined;
+      if (contenderOutcome.type === 'failed') {
+        const retry = startWatchPollProcess(userEnsembleRoot, sessions[1]!.id);
+        processes.push(retry);
+        await retry.ready;
+        retry.poll();
+        retriedContenderCount = await retry.result;
+        await retry.exit;
+      }
+      const finalState = await readState();
+      expect({
+        contenderOutcome:
+          contenderOutcome.type === 'completed'
+            ? `completed:${contenderOutcome.count}`
+            : `failed:${contenderOutcome.error instanceof Error ? contenderOutcome.error.message : String(contenderOutcome.error)}`,
+        sessionTwoCursorBeforeOwnerResumed:
+          stateAfterContender.cursors[sessions[1]!.id]?.sequence,
+        pendingSessionsBeforeOwnerResumed: stateAfterContender.pendingReports
+          .map((report) => report.conductorAgentId)
+          .sort(),
+        ownerOutcome:
+          ownerOutcome.type === 'completed'
+            ? `completed:${ownerOutcome.count}`
+            : `failed:${ownerOutcome.error instanceof Error ? ownerOutcome.error.message : String(ownerOutcome.error)}`,
+        cursorSequences: sessions.map(
+          (session) => finalState.cursors[session.id]?.sequence,
+        ),
+        pendingSessions: finalState.pendingReports
+          .map((report) => report.conductorAgentId)
+          .sort(),
+        pendingReportIds: finalState.pendingReports.map(
+          (report) => report.reportId,
+        ),
+        retriedContenderCount,
+      }).toEqual({
+        contenderOutcome: expect.stringMatching(
+          /^failed:Could not acquire operator watch state profile lock/u,
+        ),
+        sessionTwoCursorBeforeOwnerResumed: 1,
+        pendingSessionsBeforeOwnerResumed: [],
+        ownerOutcome: 'completed:1',
+        cursorSequences: [2, 2],
+        pendingSessions: sessions.map((session) => session.id).sort(),
+        pendingReportIds: expect.arrayContaining([
+          expect.any(String),
+          expect.any(String),
+        ]),
+        retriedContenderCount: 1,
+      });
+      expect(new Set(finalState.pendingReports.map((report) => report.reportId)).size)
+        .toBe(2);
+      expect(stateAfterOwner.pendingReports.map((report) => report.conductorAgentId))
+        .toEqual([sessions[0]!.id]);
+    } finally {
+      releaseOwnerObservation();
+      initialPool.close();
+      for (const process of processes) {
+        if (process.child.exitCode === null && process.child.connected) {
+          process.child.kill();
+        }
+      }
     }
   });
 
@@ -2628,7 +2874,7 @@ describe('operator watch pool', () => {
     }
   });
 
-  it('groups several oversized messages into one warning and continues in order', async () => {
+  it('keeps oversized warnings in production poll order around readable messages', async () => {
     repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-message-multiple-oversized-'));
     await mkdir(join(repoRoot, '.ensemble', 'sessions'), { recursive: true });
     const baselineMessage = {
@@ -2688,41 +2934,58 @@ describe('operator watch pool', () => {
 
       await expect(
         pool.pollConductorMessagesOnce('message-multiple-oversized'),
-      ).resolves.toBe(3);
+      ).resolves.toBe(4);
       const batch = dispatchQueue.takeBatch(
         { continuationConsumed: false },
         Date.now(),
       )!;
-      expect(batch.events.map((event) => event.sendCount)).toEqual([7, 8, 9]);
+      expect(batch.events.map((event) => event.sendCount)).toEqual([
+        6, 7, 8, 9,
+      ]);
       const warningReports = batch.events.filter(
         (event) =>
           event.type === 'report' &&
           event.text.includes('発言は単独のUDS responseが1 MiBを超えたため読み取れず'),
       );
-      expect(warningReports).toHaveLength(1);
-      expect(warningReports[0]?.text).toContain('3件');
-      expect(warningReports[0]?.text).toContain('sendCount: 5, 6, 8');
+      expect(warningReports).toHaveLength(2);
+      expect(warningReports[0]?.reportId).toBeDefined();
+      expect(warningReports[0]?.text).toContain('2件');
+      expect(warningReports[0]?.text).toContain('sendCount: 5, 6');
+      expect(warningReports[1]?.reportId).toBeDefined();
+      expect(warningReports[1]?.text).toContain('1件');
+      expect(warningReports[1]?.text).toContain('sendCount: 8');
+      expect(new Set(warningReports.map((event) => event.reportId)).size).toBe(2);
       const groupedReport = formatOperatorDispatchBatch(batch.events);
-      expect((groupedReport.match(/⚠/g) ?? [])).toHaveLength(1);
-      expect(groupedReport.indexOf('sendCount: 7')).toBeLessThan(
-        groupedReport.indexOf('sendCount: 5, 6, 8'),
-      );
-      expect(groupedReport.indexOf('sendCount: 5, 6, 8')).toBeLessThan(
-        groupedReport.indexOf('sendCount: 9'),
-      );
-      expect(batch.events[0]?.text).toContain('inbound 7');
-      expect(batch.events[2]?.text).toContain('inbound 9');
+      expect((groupedReport.match(/⚠/g) ?? [])).toHaveLength(2);
+      const warningFiveSix = groupedReport.indexOf('sendCount: 5, 6');
+      const readableSeven = groupedReport.indexOf('inbound 7');
+      const warningEight = groupedReport.indexOf('sendCount: 8');
+      const readableNine = groupedReport.indexOf('inbound 9');
+      expect(warningFiveSix).toBeGreaterThanOrEqual(0);
+      expect(readableSeven).toBeGreaterThan(warningFiveSix);
+      expect(warningEight).toBeGreaterThan(readableSeven);
+      expect(readableNine).toBeGreaterThan(warningEight);
+      expect(batch.events[1]?.text).toContain('inbound 7');
+      expect(batch.events[3]?.text).toContain('inbound 9');
 
       const state = JSON.parse(
         await readFile(currentWatchStatePath(repoRoot), 'utf8'),
       ) as {
         messageCursors: Record<string, number>;
-        pendingReports: Array<{ sendCount?: number }>;
+        pendingReports: Array<{ reportId: string; sendCount?: number }>;
       };
       expect(state.messageCursors['message-multiple-oversized']).toBe(9);
       expect(state.pendingReports.map((report) => report.sendCount)).toEqual([
-        7, 8, 9,
+        6, 7, 8, 9,
       ]);
+      expect(
+        new Set(state.pendingReports.map((report) => report.reportId)).size,
+      ).toBe(4);
+      await pool.acknowledge(batch.events);
+      const acknowledgedState = JSON.parse(
+        await readFile(currentWatchStatePath(repoRoot), 'utf8'),
+      ) as { pendingReports: Array<{ reportId: string }> };
+      expect(acknowledgedState.pendingReports).toEqual([]);
       await expect(
         pool.pollConductorMessagesOnce('message-multiple-oversized'),
       ).resolves.toBe(0);
