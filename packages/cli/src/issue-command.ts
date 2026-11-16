@@ -50,6 +50,8 @@ export interface IssueCommandOptions {
   defaultAcpCli?: string;
   defaultAcpCommand?: string;
   defaultAcpArgs?: string[];
+  /** Absolute CLI entrypoint inherited by local worker ACP backends. */
+  secretCliEntrypoint?: string;
   /** `ensemble issue <ref> [message...]` の初回オペレータメッセージ。 */
   initialOperatorMessage?: string;
   /** commander の `--no-github-monitor` 用。false で監視無効。 */
@@ -291,6 +293,9 @@ export async function executeIssueCommand(
         ? { dispatchHoldReminderMs: options.dispatchHoldReminderMs }
         : {}),
       ...(defaultAcp ? { defaultAcp: { ...defaultAcp, config: ensembleConfig } } : { defaultAcp: { config: ensembleConfig } }),
+      ...(options.secretCliEntrypoint
+        ? { secretCliEntrypoint: options.secretCliEntrypoint }
+        : {}),
       ...(interactive
         ? {
             bindOperatorInput:

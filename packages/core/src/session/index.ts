@@ -91,6 +91,22 @@ export type {
   SessionObservationSnapshot,
 } from './open-question-control.js';
 export {
+  isOneTimeSecretPlatformSupported,
+  ONE_TIME_SECRET_ENV,
+  ONE_TIME_SECRET_INPUT_MAX_BYTES,
+  ONE_TIME_SECRET_MAX_PENDING_REQUESTS,
+  ONE_TIME_SECRET_REQUEST_TTL_MS,
+  sendOneTimeSecretControlRequest,
+  startOneTimeSecretControlServer,
+  validateOneTimeSecretBytes,
+} from './one-time-secret-control.js';
+export type {
+  OneTimeSecretControlServer,
+  OneTimeSecretControlServerOptions,
+  OneTimeSecretRequestInfo,
+  SecretPushOutcome,
+} from './one-time-secret-control.js';
+export {
   loadSessionStateStore,
   legacySessionStateStorePath,
   saveSessionStatusLine,

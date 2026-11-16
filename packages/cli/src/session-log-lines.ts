@@ -84,6 +84,25 @@ export function formatHarnessLogBody(
     case 'harness.worker.state':
       if (!verbose) return undefined;
       return `worker.state name=${event.name} kind=${event.kind} state=${event.state}`;
+    case 'worker.secret.requested': {
+      const command = JSON.stringify([event.command, ...event.args]);
+      const secondsLeft = Math.max(
+        0,
+        Math.ceil((event.expiresAt - Date.now()) / 1000),
+      );
+      return [
+        'secret.request',
+        `worker=${escapeTerminalControlCharacters(JSON.stringify(event.workerName))}`,
+        `label=${escapeTerminalControlCharacters(JSON.stringify(event.label))}`,
+        `env=${escapeTerminalControlCharacters(JSON.stringify(event.envName))}`,
+        `command=${escapeTerminalControlCharacters(command)}`,
+        `cwd=${escapeTerminalControlCharacters(JSON.stringify(event.cwd))}`,
+        `expiresIn=${secondsLeft}s`,
+        `socket=${escapeTerminalControlCharacters(JSON.stringify(event.socketPath))}`,
+        `request=${event.requestId}`,
+        'review every field before running ensemble secret push',
+      ].join(' ');
+    }
     case 'harness.session.workers':
       if (!verbose) return undefined;
       return `session.workers count=${event.workers.length} names=${event.workers.map((worker) => worker.name).join(',')}`;

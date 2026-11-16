@@ -9,6 +9,7 @@ export const HARNESS_TELEMETRY_EVENT_TYPES = [
   'harness.worker.prompt.failed',
   'harness.worker.acp.update',
   'harness.worker.state',
+  'worker.secret.requested',
   'harness.session.workers',
   'operator.input',
   'operator.queue.changed',

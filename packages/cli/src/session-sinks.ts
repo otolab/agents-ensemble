@@ -57,6 +57,7 @@ export function createDialogueSink(options: DialogueSinkOptions = {}): SessionLo
       case 'harness.worker.prompt.completed':
       case 'harness.worker.prompt.failed':
       case 'harness.worker.state':
+      case 'worker.secret.requested':
       case 'harness.session.workers':
       case 'worker.round':
       case 'worker.failed':

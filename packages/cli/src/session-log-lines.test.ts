@@ -78,6 +78,29 @@ describe('session-log-lines', () => {
     );
   });
 
+  it('shows one-time secret request metadata without any value field', () => {
+    const body = formatHarnessLogBody({
+      type: 'worker.secret.requested',
+      requestId: 'a'.repeat(43),
+      socketPath: '/tmp/ens-secret/s.sock',
+      workerName: 'implementer',
+      label: 'staging token',
+      envName: 'API_TOKEN',
+      command: 'curl',
+      args: ['--header', 'Authorization: Bearer'],
+      cwd: '/tmp/worktree',
+      expiresAt: Date.now() + 30_000,
+    });
+
+    expect(body).toContain('worker="implementer"');
+    expect(body).toContain('label="staging token"');
+    expect(body).toContain('env="API_TOKEN"');
+    expect(body).toContain('command=["curl","--header","Authorization: Bearer"]');
+    expect(body).toContain('cwd="/tmp/worktree"');
+    expect(body).toContain(`request=${'a'.repeat(43)}`);
+    expect(body).not.toContain('value=');
+  });
+
   it('formats harness.warning body', () => {
     expect(
       formatHarnessLogBody({
