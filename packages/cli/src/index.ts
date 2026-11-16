@@ -56,7 +56,6 @@ import {
   type PiModelsSyncResult,
   type PiModelsSyncTarget,
 } from './pi-model-catalog-command.js';
-import { runOperatorAgent } from '@agents-ensemble/operator-agent';
 import { runSecretExec, runSecretPush } from './secret-command.js';
 
 const program = new Command();
@@ -127,6 +126,7 @@ program
     new: boolean;
   }) => {
     try {
+      const { runOperatorAgent } = await import('@agents-ensemble/operator-agent');
       await runOperatorAgent({
         profile: options.profile,
         repoFilters: options.repoFilter,
