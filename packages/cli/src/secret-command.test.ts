@@ -462,6 +462,310 @@ describe('one-time secret CLI commands', () => {
     expect(input.readableFlowing).toBeNull();
   });
 
+  it('consumes the reservation when cancellation arrives during approval before reading stdin', async () => {
+    const input = new PassThrough();
+    input.end(Buffer.from('value'));
+    const cancellation = new AbortController();
+    const actions: string[] = [];
+    const controlRequest = vi.fn(
+      async (_path: string, payload: Record<string, unknown>) => {
+        actions.push(String(payload.action));
+        if (payload.action === 'inspect') {
+          return {
+            requestId,
+            socketPath,
+            workerName: 'implementer',
+            label: 'staging API',
+            envName: 'API_TOKEN',
+            command: 'curl',
+            args: [],
+            cwd: '/tmp/worktree',
+            expiresAt: Date.now() + 60_000,
+          };
+        }
+        if (payload.action === 'reserve') {
+          return { requestId, reservationToken: 'p'.repeat(43) };
+        }
+        return { cancelled: true };
+      },
+    ) as unknown as typeof sendOneTimeSecretControlRequest;
+    const stdout: string[] = [];
+    const stderr: string[] = [];
+
+    await expect(
+      runSecretPush(socketPath, requestId, {
+        stdin: input,
+        request: controlRequest,
+        signal: cancellation.signal,
+        confirm: () => {
+          cancellation.abort();
+          return true;
+        },
+        writeStdout: (message) => stdout.push(message),
+        writeStderr: (message) => stderr.push(message),
+      }),
+    ).resolves.toBe(130);
+
+    expect(actions).toEqual(['inspect', 'reserve', 'abort']);
+    expect(input.readableFlowing).toBeNull();
+    expect(stdout).toEqual([]);
+    expect(stderr).toEqual(['One-time secret request cancelled.']);
+  });
+
+  it.each([
+    ['SIGINT', 130],
+    ['SIGTERM', 143],
+  ] as const)(
+    'handles %s during approval before reading stdin',
+    async (signalName, expectedExitCode) => {
+      const input = new PassThrough();
+      const signalHandlers = new Map<NodeJS.Signals, () => void>();
+      const registerSignalHandler = vi
+        .spyOn(process, 'once')
+        .mockImplementation(
+          ((event: NodeJS.Signals | string, handler: (...args: never[]) => void) => {
+            if (event === 'SIGINT' || event === 'SIGTERM') {
+              signalHandlers.set(event, handler as () => void);
+            }
+            return process;
+          }) as typeof process.once,
+        );
+      const actions: string[] = [];
+      const controlRequest = vi.fn(
+        async (_path: string, payload: Record<string, unknown>) => {
+          actions.push(String(payload.action));
+          if (payload.action === 'inspect') {
+            return {
+              requestId,
+              socketPath,
+              workerName: 'implementer',
+              label: 'staging API',
+              envName: 'API_TOKEN',
+              command: 'curl',
+              args: [],
+              cwd: '/tmp/worktree',
+              expiresAt: Date.now() + 60_000,
+            };
+          }
+          if (payload.action === 'reserve') {
+            return { requestId, reservationToken: 'p'.repeat(43) };
+          }
+          return { cancelled: true };
+        },
+      ) as unknown as typeof sendOneTimeSecretControlRequest;
+      const stderr: string[] = [];
+
+      try {
+        await expect(
+          runSecretPush(socketPath, requestId, {
+            stdin: input,
+            request: controlRequest,
+            confirm: () => {
+              signalHandlers.get(signalName)?.();
+              return true;
+            },
+            writeStderr: (message) => stderr.push(message),
+          }),
+        ).resolves.toBe(expectedExitCode);
+      } finally {
+        registerSignalHandler.mockRestore();
+      }
+
+      expect(actions).toEqual(['inspect', 'reserve', 'abort']);
+      expect(input.readableFlowing).toBeNull();
+      expect(stderr).toEqual(['One-time secret request cancelled.']);
+    },
+  );
+
+  it('consumes a cancelled approval reservation so that the worker can wait again', async () => {
+    const firstRequest = deferred<OneTimeSecretRequestInfo>();
+    const secondRequest = deferred<OneTimeSecretRequestInfo>();
+    let requestCount = 0;
+    const server = await startOneTimeSecretControlServer({
+      workerTokens: new Map([['implementer', workerToken]]),
+      onRequest: (request) => {
+        requestCount += 1;
+        if (requestCount === 1) firstRequest.resolve(request);
+        else secondRequest.resolve(request);
+      },
+    });
+    try {
+      const workerEnv = {
+        ...controlEnvironment,
+        [ONE_TIME_SECRET_ENV.socket]: server.socketPath,
+      };
+      const spawnTarget = vi.fn() as unknown as typeof spawn;
+      const firstWait = runSecretExec(
+        {
+          label: 'first request',
+          envName: 'API_TOKEN',
+          command: 'fake-target',
+          args: [],
+        },
+        { env: workerEnv, request: sendOneTimeSecretControlRequest, spawn: spawnTarget },
+      );
+      const pending = await firstRequest.promise;
+      const input = new PassThrough();
+      input.end(Buffer.from('value'));
+      const cancellation = new AbortController();
+
+      await expect(
+        runSecretPush(server.socketPath, pending.requestId, {
+          stdin: input,
+          signal: cancellation.signal,
+          confirm: () => {
+            cancellation.abort();
+            return true;
+          },
+        }),
+      ).resolves.toBe(130);
+      await expect(firstWait).resolves.toBe(1);
+      expect(spawnTarget).not.toHaveBeenCalled();
+
+      const secondWait = sendOneTimeSecretControlRequest(
+        server.socketPath,
+        {
+          action: 'request',
+          workerName: 'implementer',
+          workerToken,
+          label: 'second request',
+          envName: 'API_TOKEN',
+          command: 'fake-target',
+          args: [],
+          cwd: '/tmp/worktree',
+        },
+        { timeoutMs: 2_000 },
+      );
+      const secondWaitRejected = expect(secondWait).rejects.toThrow();
+      await expect(secondRequest.promise).resolves.toMatchObject({
+        workerName: 'implementer',
+      });
+      await server.close();
+      await secondWaitRejected;
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('aborts stdin reading and consumes the reservation when cancelled before submit', async () => {
+    const input = new PassThrough();
+    const inputStarted = deferred<void>();
+    input.once('resume', () => inputStarted.resolve());
+    const cancellation = new AbortController();
+    const actions: string[] = [];
+    const controlRequest = vi.fn(
+      async (_path: string, payload: Record<string, unknown>) => {
+        actions.push(String(payload.action));
+        if (payload.action === 'inspect') {
+          return {
+            requestId,
+            socketPath,
+            workerName: 'implementer',
+            label: 'staging API',
+            envName: 'API_TOKEN',
+            command: 'curl',
+            args: [],
+            cwd: '/tmp/worktree',
+            expiresAt: Date.now() + 60_000,
+          };
+        }
+        if (payload.action === 'reserve') {
+          return { requestId, reservationToken: 'p'.repeat(43) };
+        }
+        return { cancelled: true };
+      },
+    ) as unknown as typeof sendOneTimeSecretControlRequest;
+    const stderr: string[] = [];
+    const push = runSecretPush(socketPath, requestId, {
+      stdin: input,
+      request: controlRequest,
+      signal: cancellation.signal,
+      confirm: () => true,
+      writeStderr: (message) => stderr.push(message),
+    });
+
+    await inputStarted.promise;
+    cancellation.abort();
+    await expect(push).resolves.toBe(130);
+
+    expect(actions).toEqual(['inspect', 'reserve', 'abort']);
+    expect(stderr).toEqual(['One-time secret request cancelled.']);
+  });
+
+  it('reports an unknown result when cancellation interrupts an in-flight submit', async () => {
+    const input = new PassThrough();
+    input.end(Buffer.from('value'));
+    const cancellation = new AbortController();
+    const submitEntered = deferred<void>();
+    const lateStarted = deferred<{ status: string }>();
+    let submitOptions: { signal?: AbortSignal } | undefined;
+    const controlRequest = vi.fn(
+      async (
+        _path: string,
+        payload: Record<string, unknown>,
+        options?: { signal?: AbortSignal },
+      ) => {
+        if (payload.action === 'inspect') {
+          return {
+            requestId,
+            socketPath,
+            workerName: 'implementer',
+            label: 'staging API',
+            envName: 'API_TOKEN',
+            command: 'curl',
+            args: [],
+            cwd: '/tmp/worktree',
+            expiresAt: Date.now() + 60_000,
+          };
+        }
+        if (payload.action === 'reserve') {
+          return { requestId, reservationToken: 'p'.repeat(43) };
+        }
+        if (payload.action === 'submit') {
+          submitOptions = options;
+          submitEntered.resolve();
+          return new Promise<{ status: string }>((resolve, reject) => {
+            options?.signal?.addEventListener(
+              'abort',
+              () => reject(new Error('operator interrupted')),
+              { once: true },
+            );
+            void lateStarted.promise.then(resolve);
+          });
+        }
+        return { cancelled: true };
+      },
+    ) as unknown as typeof sendOneTimeSecretControlRequest;
+    const stdout: string[] = [];
+    const stderr: string[] = [];
+    const push = runSecretPush(socketPath, requestId, {
+      stdin: input,
+      request: controlRequest,
+      signal: cancellation.signal,
+      confirm: () => true,
+      writeStdout: (message) => stdout.push(message),
+      writeStderr: (message) => stderr.push(message),
+    });
+
+    await submitEntered.promise;
+    expect(submitOptions?.signal).toBeDefined();
+    expect(submitOptions?.signal?.aborted).toBe(false);
+    cancellation.abort();
+    await expect(push).resolves.toBe(1);
+    expect(submitOptions?.signal?.aborted).toBe(true);
+    lateStarted.resolve({ status: 'started' });
+    await Promise.resolve();
+
+    expect(stdout).toEqual([]);
+    expect(stderr).toEqual([
+      'Secret submission outcome is unknown; do not resubmit until you inspect the target.',
+    ]);
+    expect(controlRequest).not.toHaveBeenCalledWith(
+      socketPath,
+      expect.objectContaining({ action: 'abort' }),
+    );
+  });
+
   it('does not read stdin when the reservation token is malformed', async () => {
     const input = new PassThrough();
     input.end(Buffer.from('value'));

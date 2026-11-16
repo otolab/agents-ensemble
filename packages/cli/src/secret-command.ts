@@ -51,6 +51,8 @@ export interface SecretPushDependencies {
   stdin?: Readable;
   request?: typeof sendOneTimeSecretControlRequest;
   confirm?: (request: OneTimeSecretRequestInfo) => boolean;
+  /** Injectable cancellation signal for callers and phase-specific tests. */
+  signal?: AbortSignal;
   writeStdout?: (message: string) => void;
   writeStderr?: (message: string) => void;
 }
@@ -187,12 +189,18 @@ export async function runSecretPush(
     dependencies.writeStderr ?? ((message) => process.stderr.write(`${message}\n`));
   let reservationToken: string | undefined;
   let inputBytes: Buffer | undefined;
-  let abortController: AbortController | undefined;
+  const abortController = new AbortController();
   let secretBase64 = '';
+  let cancellationSignal: NodeJS.Signals | undefined;
   let signalHandlers: Array<{
     signal: NodeJS.Signals;
     handler: () => void;
   }> = [];
+  const externalSignal = dependencies.signal;
+  const onExternalAbort = () => {
+    cancellationSignal ??= 'SIGINT';
+    abortController.abort();
+  };
   let submitStarted = false;
 
   if (
@@ -204,11 +212,19 @@ export async function runSecretPush(
     return 1;
   }
 
+  signalHandlers = registerCancellationSignals(abortController, (signal) => {
+    cancellationSignal = signal;
+  });
+  if (externalSignal?.aborted) onExternalAbort();
+  else externalSignal?.addEventListener('abort', onExternalAbort, { once: true });
+
   try {
+    if (abortController.signal.aborted) throw new SecretPushCancelledError();
     const pending = await request<OneTimeSecretRequestInfo>(socketPath, {
       action: 'inspect',
       requestId,
     });
+    if (abortController.signal.aborted) throw new SecretPushCancelledError();
     if (!isMatchingRequest(pending, socketPath, requestId)) {
       writeStderr(GENERIC_SECRET_ERROR);
       return 1;
@@ -227,22 +243,28 @@ export async function runSecretPush(
       return 1;
     }
     reservationToken = reservation.reservationToken;
+    if (abortController.signal.aborted) throw new SecretPushCancelledError();
 
     const approved =
-      dependencies.confirm?.(pending) ?? confirmOnControllingTerminal(pending);
+      dependencies.confirm?.(pending) ??
+      confirmOnControllingTerminal(pending, abortController.signal);
+    if (abortController.signal.aborted) throw new SecretPushCancelledError();
     if (!approved) {
-      await request(socketPath, {
-        action: 'abort',
+      const cancelled = await abortSecretReservation(
+        request,
+        socketPath,
         requestId,
         reservationToken,
-      }).catch(() => {});
+      );
       reservationToken = undefined;
-      writeStderr('One-time secret request cancelled.');
+      writeStderr(
+        cancelled
+          ? 'One-time secret request cancelled.'
+          : 'Cancellation could not be confirmed; the request will expire automatically.',
+      );
       return 1;
     }
 
-    abortController = new AbortController();
-    signalHandlers = registerCancellationSignals(abortController);
     inputBytes = await readSecretStdin(stdin, {
       maxBytes: ONE_TIME_SECRET_INPUT_MAX_BYTES,
       timeoutMs: SECRET_INPUT_TIMEOUT_MS,
@@ -260,7 +282,10 @@ export async function runSecretPush(
         reservationToken,
         secretBase64,
       },
-      { timeoutMs: WORKER_START_ACK_TIMEOUT_MS + 5_000 },
+      {
+        timeoutMs: WORKER_START_ACK_TIMEOUT_MS + 5_000,
+        signal: abortController.signal,
+      },
     );
     reservationToken = undefined;
     if (outcome.status !== 'started') {
@@ -273,27 +298,65 @@ export async function runSecretPush(
     }
     writeStdout('Secret accepted; the target command started.');
     return 0;
-  } catch {
+  } catch (error) {
+    const cancelledBeforeSubmit =
+      !submitStarted &&
+      (abortController.signal.aborted ||
+        error instanceof SecretPushCancelledError);
+    let reservationCancelled = true;
     if (reservationToken && !submitStarted) {
-      await request(socketPath, {
-        action: 'abort',
+      reservationCancelled = await abortSecretReservation(
+        request,
+        socketPath,
         requestId,
         reservationToken,
-      }).catch(() => {});
+      );
+      reservationToken = undefined;
     }
-    writeStderr(
-      submitStarted ? UNKNOWN_SUBMISSION_OUTCOME : GENERIC_SECRET_ERROR,
-    );
-    return abortController?.signal.aborted ? 130 : 1;
+    if (submitStarted) {
+      writeStderr(UNKNOWN_SUBMISSION_OUTCOME);
+      return 1;
+    }
+    if (cancelledBeforeSubmit) {
+      writeStderr(
+        reservationCancelled
+          ? 'One-time secret request cancelled.'
+          : 'Cancellation could not be confirmed; the request will expire automatically.',
+      );
+      return cancellationSignal === 'SIGTERM' ? 143 : 130;
+    }
+    writeStderr(GENERIC_SECRET_ERROR);
+    return 1;
   } finally {
     secretBase64 = '';
     inputBytes?.fill(0);
-    abortController?.abort();
+    externalSignal?.removeEventListener('abort', onExternalAbort);
     removeCancellationSignals(signalHandlers);
+    abortController.abort();
   }
 }
 
 const WORKER_START_ACK_TIMEOUT_MS = 10_000;
+
+class SecretPushCancelledError extends Error {}
+
+async function abortSecretReservation(
+  request: typeof sendOneTimeSecretControlRequest,
+  socketPath: string,
+  requestId: string,
+  reservationToken: string,
+): Promise<boolean> {
+  try {
+    await request(socketPath, {
+      action: 'abort',
+      requestId,
+      reservationToken,
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 function waitForTargetExit(input: {
   child: ChildProcess;
@@ -435,46 +498,6 @@ function readSecretStdin(
   });
 }
 
-function confirmOnControllingTerminal(
-  request: OneTimeSecretRequestInfo,
-): boolean {
-  let ttyFd: number;
-  try {
-    ttyFd = openSync('/dev/tty', 'r+');
-  } catch {
-    throw new Error(GENERIC_SECRET_ERROR);
-  }
-
-  try {
-    writeSync(ttyFd, formatSecretApprovalSummary(request));
-
-    const chunks: Buffer[] = [];
-    let totalBytes = 0;
-    let ended = false;
-    while (!ended && totalBytes <= 256) {
-      const chunk = Buffer.alloc(64);
-      const bytesRead = readSync(ttyFd, chunk, 0, chunk.byteLength, null);
-      if (bytesRead === 0) break;
-      const lineEnding = chunk.subarray(0, bytesRead).indexOf(0x0a);
-      const length = lineEnding >= 0 ? lineEnding + 1 : bytesRead;
-      chunks.push(Buffer.from(chunk.subarray(0, length)));
-      totalBytes += length;
-      ended = lineEnding >= 0;
-      chunk.fill(0);
-    }
-    const answer = Buffer.concat(chunks, totalBytes);
-    for (const chunk of chunks) chunk.fill(0);
-    const approved =
-      ended &&
-      answer.toString('utf8').trim().toLowerCase() === 'y' &&
-      totalBytes <= 256;
-    answer.fill(0);
-    return approved;
-  } finally {
-    closeSync(ttyFd);
-  }
-}
-
 export function formatSecretApprovalSummary(
   request: OneTimeSecretRequestInfo,
 ): string {
@@ -493,11 +516,73 @@ export function formatSecretApprovalSummary(
   ].join('\n');
 }
 
+function confirmOnControllingTerminal(
+  request: OneTimeSecretRequestInfo,
+  signal: AbortSignal,
+): boolean {
+  let ttyFd: number;
+  try {
+    ttyFd = openSync('/dev/tty', 'r+');
+  } catch {
+    throw new Error(GENERIC_SECRET_ERROR);
+  }
+
+  try {
+    if (signal.aborted) throw new SecretPushCancelledError();
+    writeSync(ttyFd, formatSecretApprovalSummary(request));
+
+    const chunks: Buffer[] = [];
+    let totalBytes = 0;
+    let ended = false;
+    let answer: Buffer | undefined;
+    try {
+      while (!ended && totalBytes <= 256) {
+        if (signal.aborted) throw new SecretPushCancelledError();
+        const chunk = Buffer.alloc(64);
+        try {
+          let bytesRead: number;
+          try {
+            bytesRead = readSync(ttyFd, chunk, 0, chunk.byteLength, null);
+          } catch (error) {
+            if (isInterruptedSystemCall(error)) {
+              throw new SecretPushCancelledError();
+            }
+            throw error;
+          }
+          if (bytesRead === 0) break;
+          const lineEnding = chunk.subarray(0, bytesRead).indexOf(0x0a);
+          const length = lineEnding >= 0 ? lineEnding + 1 : bytesRead;
+          chunks.push(Buffer.from(chunk.subarray(0, length)));
+          totalBytes += length;
+          ended = lineEnding >= 0;
+        } finally {
+          chunk.fill(0);
+        }
+      }
+      answer = Buffer.concat(chunks, totalBytes);
+      return (
+        ended &&
+        answer.toString('utf8').trim().toLowerCase() === 'y' &&
+        totalBytes <= 256
+      );
+    } finally {
+      for (const chunk of chunks) chunk.fill(0);
+      answer?.fill(0);
+    }
+  } finally {
+    closeSync(ttyFd);
+  }
+}
+
 function registerCancellationSignals(
   controller: AbortController,
+  onSignal: (signal: NodeJS.Signals) => void,
 ): Array<{ signal: NodeJS.Signals; handler: () => void }> {
   const handlers = (['SIGINT', 'SIGTERM'] as const).map((signal) => {
-    const handler = () => controller.abort();
+    const handler = () => {
+      onSignal(signal);
+      controller.abort();
+    };
     process.once(signal, handler);
     return { signal, handler };
   });
@@ -542,4 +627,13 @@ function isValidEnvName(value: string): boolean {
 
 function isAbsoluteValue(value: string | undefined): value is string {
   return Boolean(value && value.startsWith('/'));
+}
+
+function isInterruptedSystemCall(error: unknown): boolean {
+  return (
+    error !== null &&
+    typeof error === 'object' &&
+    'code' in error &&
+    error.code === 'EINTR'
+  );
 }

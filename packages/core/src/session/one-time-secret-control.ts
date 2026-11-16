@@ -503,7 +503,7 @@ export async function startOneTimeSecretControlServer(
 export function sendOneTimeSecretControlRequest<T>(
   socketPath: string,
   request: Record<string, unknown>,
-  options: { timeoutMs?: number } = {},
+  options: { timeoutMs?: number; signal?: AbortSignal } = {},
 ): Promise<T> {
   let serialized = JSON.stringify(request);
   if (Buffer.byteLength(serialized) > MAX_CONTROL_MESSAGE_BYTES) {
@@ -515,7 +515,12 @@ export function sendOneTimeSecretControlRequest<T>(
   return new Promise<T>((resolve, reject) => {
     const socket = net.createConnection(socketPath);
     let settled = false;
-    let buffer = Buffer.alloc(0);
+    let buffer: Buffer = Buffer.alloc(0);
+    let requestBody = '';
+    const clearBuffer = () => {
+      buffer.fill(0);
+      buffer = Buffer.alloc(0);
+    };
     const cleanup = () => {
       socket.setTimeout(0);
       socket.off('connect', onConnect);
@@ -523,6 +528,10 @@ export function sendOneTimeSecretControlRequest<T>(
       socket.off('end', onEnd);
       socket.off('close', onClose);
       socket.off('error', onError);
+      options.signal?.removeEventListener('abort', onAbort);
+      serialized = '';
+      requestBody = '';
+      clearBuffer();
     };
     const settle = (callback: () => void) => {
       if (settled) return;
@@ -534,15 +543,15 @@ export function sendOneTimeSecretControlRequest<T>(
     const fail = () =>
       settle(() => reject(new Error('One-time secret control request failed.')));
     const onConnect = () => {
-      let body = `${serialized}\n`;
+      requestBody = `${serialized}\n`;
       serialized = '';
-      socket.write(body, (error) => {
-        body = '';
+      socket.write(requestBody, (error) => {
+        requestBody = '';
         if (error) fail();
       });
     };
     const onData = (chunk: Buffer) => {
-      buffer = Buffer.concat([buffer, chunk]);
+      buffer = appendAndWipeBuffer(buffer, chunk);
       if (buffer.byteLength > MAX_CONTROL_MESSAGE_BYTES) {
         fail();
         return;
@@ -559,9 +568,6 @@ export function sendOneTimeSecretControlRequest<T>(
         settle(() => resolve(response.result as T));
       } catch {
         fail();
-      } finally {
-        buffer.fill(0);
-        buffer = Buffer.alloc(0);
       }
     };
     const onEnd = () => fail();
@@ -569,13 +575,16 @@ export function sendOneTimeSecretControlRequest<T>(
       if (!settled) fail();
     };
     const onError = () => fail();
+    const onAbort = () => fail();
 
     socket.setTimeout(timeoutMs, fail);
+    options.signal?.addEventListener('abort', onAbort, { once: true });
     socket.on('connect', onConnect);
     socket.on('data', onData);
     socket.on('end', onEnd);
     socket.on('close', onClose);
     socket.on('error', onError);
+    if (options.signal?.aborted) fail();
   });
 }
 
@@ -695,27 +704,62 @@ async function writeControlResponse(
   response: { ok: true; result: unknown } | { ok: false; error: string },
 ): Promise<void> {
   if (socket.destroyed) return Promise.resolve();
-  let body = `${JSON.stringify(response)}\n`;
+  let serialized = JSON.stringify(response);
+  let body = Buffer.from(`${serialized}\n`);
+  serialized = '';
   if (Buffer.byteLength(body) > MAX_CONTROL_MESSAGE_BYTES) {
-    body = '';
-    return endSocket(
-      socket,
+    body.fill(0);
+    body = Buffer.from(
       '{"ok":false,"error":"Secret control response failed."}\n',
     );
   }
   try {
     await endSocket(socket, body);
   } finally {
-    body = '';
+    body.fill(0);
   }
 }
 
-function endSocket(socket: Socket, body: string): Promise<void> {
+function endSocket(socket: Socket, body: Buffer): Promise<void> {
   return new Promise((resolve) => {
     if (socket.destroyed) {
       resolve();
       return;
     }
-    socket.end(body, resolve);
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      socket.setTimeout(0);
+      socket.off('close', finish);
+      socket.off('error', finish);
+      resolve();
+    };
+    socket.once('close', finish);
+    socket.once('error', finish);
+    socket.setTimeout(SOCKET_REQUEST_TIMEOUT_MS, () => {
+      socket.destroy();
+      finish();
+    });
+    try {
+      socket.end(body, finish);
+    } catch {
+      finish();
+    }
   });
+}
+
+/**
+ * Append a socket fragment while clearing the two application-owned input
+ * buffers. Node's socket-provided chunk is left untouched; `fragment` is the
+ * private copy whose contents we own and can overwrite.
+ */
+function appendAndWipeBuffer(current: Buffer, chunk: Buffer): Buffer {
+  const fragment = Buffer.from(chunk);
+  try {
+    return Buffer.concat([current, fragment]);
+  } finally {
+    current.fill(0);
+    fragment.fill(0);
+  }
 }

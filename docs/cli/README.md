@@ -179,6 +179,8 @@ credential-source-command | ensemble secret push '<socket path>' '<request ID>'
 
 入力は **空でない UTF-8、最大 64 KiB、NUL byte なし**に限ります。改行や末尾改行はそのまま保持し、trim しません。binary 値、NUL、空値、上限超過、期限切れ、不正 ID、二重投入、worker 切断時は command を実行しません。request は120秒で失効し、同じ worker の待機は同時に一件まで、session 全体では最大8件です。secret の投入後に起動確認が届かない場合は結果が不明です。その場合は再投入せず、target の状態を調べてください。起動前の失敗は固定の generic error として表示し、backend の例外本文は出しません。
 
+承認画面・stdin 読取中に SIGINT / SIGTERM で中断すると、CLI は予約を abort して待機 request を消費してから終了します。abort の応答を確認できない場合はその旨を表示し、request は最大120秒の期限切れまで残る可能性があります。submit を始めた後は安全に取り消せません。中断や接続切断で応答が得られない場合は「結果不明」と表示します。target がすでに起動している可能性があるため、再投入せず target の状態を確認してください。submit 開始後に起動確認を受け取れた場合は、その確認を優先して起動成功を表示します。
+
 この機能は macOS / Linux 上の組み込み `cursor` / `claude` / `codex` / `pi` ACP preset を対象にし、custom ACP と Windows / 他 OS では有効にしません。harness は Issue worker の ACP process に CLI と Node の絶対 path、worker token、owner-only Unix socket を設定します。Pi BYO / builtin はどちらも ACP process の environment から Pi CLI の child process へ継承します。Claude ACP / Codex ACP の現行 adapter も process environment を child に継承します。Cursor は外部 `agent acp` CLI の内部実装に依存します。Bash tool が helper 用 environment を引き継がない環境では helper は target を起動せず失敗します。`ensemble` が worker の Bash `PATH` にあることには依存しません。custom backend で動かすために環境を手動追加する設定はありません。
 
 対象は、利用者が環境変数で credential を受け取ると確認できる信頼済み command 一回分です。credential を argv / stdin で受け取る CLI、対話的なログイン、長時間または複数 command にまたがる credential 利用には使わず、それぞれの既存の認証経路を使ってください。特に command が credential を標準出力・標準エラーへ書くと worker の会話に漏れるため、その動作をしない target を選びます。
