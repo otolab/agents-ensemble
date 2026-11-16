@@ -11,7 +11,11 @@ import {
   SettingsManager,
 } from '@earendil-works/pi-coding-agent';
 import type { ToolDefinition } from '@earendil-works/pi-coding-agent';
-import type { Model } from '@earendil-works/pi-ai';
+import {
+  fauxAssistantMessage,
+  fauxProvider,
+  fauxToolCall,
+} from '@earendil-works/pi-ai';
 import { PiConductorAgent, loadPiMcpConfig } from './pi-conductor-agent.js';
 import { resolveMcpServers } from '../mcp/load-mcp-config.js';
 
@@ -245,18 +249,52 @@ describe('shared mcp.json backend path', () => {
       allowModelNetwork: false,
       refreshOnCreate: false,
     });
-    const model = {
-      id: 'fixture-model',
-      name: 'Fixture model',
+    const fakeModelProvider = fauxProvider({
+      api: 'fixture',
       provider: 'fixture',
-      api: 'openai-completions',
-      baseUrl: 'http://127.0.0.1:1/v1',
-      reasoning: false,
-      input: ['text'],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 128_000,
-      maxTokens: 1_024,
-    } as Model<any>;
+      models: [{ id: 'fixture-model', input: ['text'] }],
+    });
+    let modelDeclaredTools: string[] = [];
+    let mcpToolResult = '';
+    let workspaceToolResult = '';
+    fakeModelProvider.setResponses([
+      (context) => {
+        modelDeclaredTools = context.messages
+          .filter((message) => message.role === 'system')
+          .flatMap((message) => message.toolsAdded ?? [])
+          .map((tool) => tool.name);
+        return fauxAssistantMessage(
+          [
+            fauxToolCall('mcp__representative__echo', {
+              text: 'model-invoked-mcp-tool',
+            }),
+            fauxToolCall('read_operator_workspace_file', {}),
+          ],
+          { stopReason: 'toolUse' },
+        );
+      },
+      (context) => {
+        const toolResults = context.messages.filter(
+          (message) => message.role === 'toolResult',
+        );
+        mcpToolResult =
+          toolResults
+            .find((message) => message.toolName === 'mcp__representative__echo')
+            ?.content.map((block) => (block.type === 'text' ? block.text : ''))
+            .join('') ?? '';
+        workspaceToolResult =
+          toolResults
+            .find((message) => message.toolName === 'read_operator_workspace_file')
+            ?.content.map((block) => (block.type === 'text' ? block.text : ''))
+            .join('') ?? '';
+        return fauxAssistantMessage(
+          'MCP and workspace tool results received',
+        );
+      },
+    ]);
+    runtime.registerNativeProvider(fakeModelProvider.provider);
+    const model = runtime.getModel('fixture', 'fixture-model');
+    if (!model) throw new Error('Fixture model was not registered.');
     const settingsManager = SettingsManager.create(cwd, agentDir);
     const resourceLoader = new DefaultResourceLoader({
       cwd,
@@ -323,24 +361,29 @@ describe('shared mcp.json backend path', () => {
     expect(callableTools).not.toContain('bash');
     expect(callableTools).not.toContain('edit');
     expect(callableTools).not.toContain('write');
-    const workspaceFile = session.getToolDefinition(
-      'read_operator_workspace_file',
+    await session.prompt('Call the MCP and workspace tools.', {
+      expandPromptTemplates: false,
+    });
+    expect(modelDeclaredTools).toContain(echo!.name);
+    expect(modelDeclaredTools).toContain('read_operator_workspace_file');
+    expect(modelDeclaredTools).not.toContain('read');
+    expect(modelDeclaredTools).not.toContain('bash');
+    expect(modelDeclaredTools).not.toContain('edit');
+    expect(modelDeclaredTools).not.toContain('write');
+    expect(modelDeclaredTools).not.toContain('codemode');
+    expect(mcpToolResult).toBe('model-invoked-mcp-tool');
+    expect(workspaceToolResult).toBe('workspace-file-result');
+    expect(session.messages).toContainEqual(
+      expect.objectContaining({
+        role: 'assistant',
+        content: expect.arrayContaining([
+          expect.objectContaining({
+            type: 'text',
+            text: 'MCP and workspace tool results received',
+          }),
+        ]),
+      }),
     );
-    expect(workspaceFile).toBeDefined();
-    await expect(
-      echo!.execute('call-1', { text: 'shared-result' }, new AbortController().signal),
-    ).resolves.toMatchObject({
-      content: [{ type: 'text', text: 'shared-result' }],
-    });
-    await expect(
-      workspaceFile!.execute(
-        'workspace-call',
-        {},
-        new AbortController().signal,
-      ),
-    ).resolves.toMatchObject({
-      content: [{ type: 'text', text: 'workspace-file-result' }],
-    });
 
     session.dispose();
   });
