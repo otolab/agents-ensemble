@@ -397,22 +397,29 @@ export async function startOneTimeSecretControlServer(
       }
       sockets.add(socket);
       const controller = new AbortController();
-      socket.setTimeout(SOCKET_REQUEST_TIMEOUT_MS, () => socket.destroy());
+      let buffer: Buffer = Buffer.alloc(0);
+      const clearBuffer = () => {
+        buffer.fill(0);
+        buffer = Buffer.alloc(0);
+      };
+      socket.setTimeout(SOCKET_REQUEST_TIMEOUT_MS, () => {
+        clearBuffer();
+        socket.destroy();
+      });
       socket.on('close', () => {
         sockets.delete(socket);
         controller.abort();
+        clearBuffer();
       });
-      socket.on('error', () => {});
+      socket.on('error', () => clearBuffer());
 
-      let buffer = Buffer.alloc(0);
       let handled = false;
       socket.on('data', (chunk: Buffer) => {
         if (handled) return;
-        buffer = Buffer.concat([buffer, chunk]);
+        buffer = appendAndWipeBuffer(buffer, chunk);
         if (buffer.byteLength > MAX_CONTROL_MESSAGE_BYTES) {
           handled = true;
-          buffer.fill(0);
-          buffer = Buffer.alloc(0);
+          clearBuffer();
           void writeControlResponse(socket, {
             ok: false,
             error: 'Secret control request failed.',
@@ -427,9 +434,9 @@ export async function startOneTimeSecretControlServer(
         const hasInvalidTrailing = buffer
           .subarray(newlineIndex + 1)
           .some((byte) => !isJsonWhitespace(byte));
-        buffer.fill(0);
-        buffer = Buffer.alloc(0);
+        clearBuffer();
         if (hasInvalidTrailing) {
+          rawLine = '';
           void writeControlResponse(socket, {
             ok: false,
             error: 'Secret control request failed.',

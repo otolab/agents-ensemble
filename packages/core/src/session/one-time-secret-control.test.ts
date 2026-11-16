@@ -1,7 +1,8 @@
-import { access, stat } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { access, mkdtemp, rm, stat } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
+import { tmpdir } from 'node:os';
 import net from 'node:net';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   ONE_TIME_SECRET_INPUT_MAX_BYTES,
   ONE_TIME_SECRET_REQUEST_TTL_MS,
@@ -203,6 +204,139 @@ describe('one-time secret control', () => {
     ).rejects.toThrow();
   });
 
+  it('clears owned request fragments and the accumulator when a client disconnects mid-message', async () => {
+    const secretMarker = 'c2VjcmV0';
+    const watched = watchSecretConcats(secretMarker);
+    server = await startOneTimeSecretControlServer({
+      workerTokens: new Map([[workerName, workerToken]]),
+      onRequest: () => {},
+    });
+    const socket = net.createConnection(server.socketPath);
+    socket.on('error', () => {});
+    try {
+      await new Promise<void>((resolve) => socket.once('connect', resolve));
+      socket.write(`{"action":"submit","secretBase64":"${secretMarker}`);
+      await watched.seen;
+      socket.destroy();
+      await server.close();
+      server = undefined;
+
+      expectBuffersCleared(watched.buffers);
+    } finally {
+      socket.destroy();
+      watched.restore();
+    }
+  });
+
+  it.each(['disconnect', 'timeout', 'abort'] as const)(
+    'clears partial response buffers after client %s',
+    async (failureMode) => {
+      const secretMarker = 'c2VjcmV0';
+      const watched = watchSecretConcats(secretMarker);
+      const directory = await mkdtemp(join(tmpdir(), 'ens-secret-client-'));
+      const socketPath = join(directory, 's.sock');
+      const cancellation = new AbortController();
+      const fakeServer = net.createServer((socket) => {
+        socket.once('data', () => {
+          socket.write(
+            `{"ok":true,"result":{"secretBase64":"${secretMarker}`,
+            () => {
+              if (failureMode === 'disconnect') socket.destroy();
+            },
+          );
+        });
+      });
+
+      try {
+        await new Promise<void>((resolve, reject) => {
+          fakeServer.once('error', reject);
+          fakeServer.listen(socketPath, resolve);
+        });
+        const pending = sendOneTimeSecretControlRequest(
+          socketPath,
+          { action: 'submit', secretBase64: secretMarker },
+          {
+            timeoutMs: failureMode === 'timeout' ? 50 : 1_000,
+            signal: cancellation.signal,
+          },
+        );
+        await watched.seen;
+        if (failureMode === 'abort') cancellation.abort();
+        await expect(pending).rejects.toThrow();
+
+        expectBuffersCleared(watched.buffers);
+      } finally {
+        await new Promise<void>((resolve) => fakeServer.close(() => resolve()));
+        await rm(directory, { recursive: true, force: true });
+        watched.restore();
+      }
+    },
+  );
+
+  it('clears the secret-bearing response body Buffer after a successful write', async () => {
+    const pendingEvent = deferred<OneTimeSecretRequestInfo>();
+    server = await startOneTimeSecretControlServer({
+      workerTokens: new Map([[workerName, workerToken]]),
+      onRequest: pendingEvent.resolve,
+    });
+    const secretBase64 = Buffer.from('response-only-secret').toString('base64');
+    const responseBuffers: Buffer[] = [];
+    const originalEnd = net.Socket.prototype.end;
+    const endSpy = vi
+      .spyOn(net.Socket.prototype, 'end')
+      .mockImplementation(function (
+        this: net.Socket,
+        ...args: Parameters<net.Socket['end']>
+      ) {
+        const body = args[0];
+        if (
+          Buffer.isBuffer(body) &&
+          body.toString('utf8').includes(secretBase64)
+        ) {
+          responseBuffers.push(body);
+        }
+        return originalEnd.apply(this, args);
+      });
+
+    try {
+      const workerWait = sendOneTimeSecretControlRequest<{
+        requestId: string;
+        secretBase64: string;
+      }>(server.socketPath, requestInput, { timeoutMs: 2_000 });
+      const pending = await pendingEvent.promise;
+      const reservation = await sendOneTimeSecretControlRequest<{
+        requestId: string;
+        reservationToken: string;
+      }>(server.socketPath, {
+        action: 'reserve',
+        requestId: pending.requestId,
+      });
+      const submit = sendOneTimeSecretControlRequest<{ status: string }>(
+        server.socketPath,
+        {
+          action: 'submit',
+          requestId: pending.requestId,
+          reservationToken: reservation.reservationToken,
+          secretBase64,
+        },
+        { timeoutMs: 2_000 },
+      );
+      await expect(workerWait).resolves.toMatchObject({ secretBase64 });
+      await sendOneTimeSecretControlRequest(server.socketPath, {
+        action: 'started',
+        requestId: pending.requestId,
+        workerName,
+        workerToken,
+      });
+      await expect(submit).resolves.toEqual({ status: 'started' });
+
+      expect(responseBuffers).toHaveLength(1);
+      expectBuffersCleared(responseBuffers);
+    } finally {
+      endSpy.mockRestore();
+    }
+  });
+
   it('expires a waiting request and rejects a late push', async () => {
     const pendingEvent = deferred<OneTimeSecretRequestInfo>();
     let now = 10_000;
@@ -329,4 +463,37 @@ function deferred<T>(): {
     resolve = done;
   });
   return { promise, resolve };
+}
+
+function watchSecretConcats(marker: string): {
+  buffers: Buffer[];
+  seen: Promise<void>;
+  restore: () => void;
+} {
+  const markerBytes = Buffer.from(marker);
+  const buffers: Buffer[] = [];
+  let markSeen!: () => void;
+  const seen = new Promise<void>((resolve) => {
+    markSeen = resolve;
+  });
+  const originalConcat = Buffer.concat.bind(Buffer);
+  const spy = vi.spyOn(Buffer, 'concat').mockImplementation((list, totalLength) => {
+    const result = originalConcat(list, totalLength);
+    if (result.includes(markerBytes)) {
+      for (const part of list) {
+        if (Buffer.isBuffer(part)) buffers.push(part);
+      }
+      buffers.push(result);
+      markSeen();
+    }
+    return result;
+  });
+  return { buffers, seen, restore: () => spy.mockRestore() };
+}
+
+function expectBuffersCleared(buffers: Buffer[]): void {
+  expect(buffers.length).toBeGreaterThan(0);
+  expect(
+    buffers.every((buffer) => buffer.every((byte) => byte === 0)),
+  ).toBe(true);
 }
