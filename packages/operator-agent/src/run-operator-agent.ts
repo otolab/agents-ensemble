@@ -35,6 +35,11 @@ import {
   type OperatorDispatchBatch,
   type OperatorDispatchState,
 } from './operator-dispatch.js';
+import {
+  OPERATOR_WATCH_ACK_MAX_RETRIES,
+  OPERATOR_WATCH_ACK_RETRY_DELAY_MS,
+  retryOperatorWatchAcknowledgement,
+} from './operator-watch-ack.js';
 import { createListOperatorSessionsTool } from './list-operator-sessions-tool.js';
 import {
   createReleaseReportsTool,
@@ -702,6 +707,19 @@ async function runTtyConversation(options: {
       );
     }
   };
+  const waitForAcknowledgementRetry = (delayMs: number) =>
+    new Promise<boolean>((resolve) => {
+      let settled = false;
+      let timer: NodeJS.Timeout;
+      const finish = (stopped: boolean) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(stopped);
+      };
+      timer = setTimeout(() => finish(false), delayMs);
+      void stopping.then(() => finish(true));
+    });
   options.ttyChannels.harness = (detail, displayOptions) =>
     writeChannelLine('harness', detail, displayOptions);
   options.ttyChannels.observation = (detail, displayOptions) =>
@@ -1052,7 +1070,32 @@ async function runTtyConversation(options: {
       });
       automaticReconnectResult.current = undefined;
       if (sendCompleted) {
-        await options.watchPool.acknowledge(batch.events);
+        const acknowledgement = await retryOperatorWatchAcknowledgement(
+          () => options.watchPool.acknowledge(batch.events),
+          waitForAcknowledgementRetry,
+          (retryNumber) => {
+            writeChannelLine(
+              'harness',
+              `監視報告の ack 保存に失敗しました。完了済み turn は再送せず、${OPERATOR_WATCH_ACK_RETRY_DELAY_MS / 1_000} 秒後に ack だけを再試行します（${retryNumber}/${OPERATOR_WATCH_ACK_MAX_RETRIES}）。`,
+              { color: ANSI_RED },
+            );
+          },
+        );
+        if (acknowledgement.status === 'stopped') {
+          return exitContinuity;
+        }
+        if (acknowledgement.status === 'exhausted') {
+          const message =
+            `監視報告の ack 保存に${OPERATOR_WATCH_ACK_MAX_RETRIES}回の retry 後も失敗しました。` +
+            'pending state は保持されています。重複 turn を避けるため runner を停止します。' +
+            '再起動後は同じ report ID を再送する場合があります。';
+          writeChannelLine('harness', message, { color: ANSI_RED });
+          requestStop(1);
+          throw new Error(
+            `Operator watch report acknowledgement failed after ${OPERATOR_WATCH_ACK_MAX_RETRIES} retries; pending reports were retained. Restart may redeliver the same report IDs.`,
+            { cause: acknowledgement.error },
+          );
+        }
       } else {
         for (const event of batch.events) {
           if (event.type === 'report') options.dispatchQueue.requeue(event, 5_000);

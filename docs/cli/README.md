@@ -6,7 +6,7 @@
 
 ## インストール
 
-Node.js 22 以上を用意し、npm または pnpm でインストールします。
+Node.js 22.13.0 以上を用意し、npm または pnpm でインストールします。
 
 ```bash
 npm install -g @agents-ensemble/cli

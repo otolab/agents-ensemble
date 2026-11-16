@@ -1,4 +1,5 @@
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { DatabaseSync } from 'node:sqlite';
 import { dirname, join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { tmpdir } from 'node:os';
@@ -22,7 +23,16 @@ import {
   type OperatorAgentInput,
   type OperatorAgentOutput,
 } from './run-operator-agent.js';
-import { operatorWatchStatePath } from './operator-watch-pool.js';
+import {
+  OPERATOR_WATCH_ACK_MAX_RETRIES,
+  OPERATOR_WATCH_ACK_RETRY_DELAY_MS,
+  retryOperatorWatchAcknowledgement,
+} from './operator-watch-ack.js';
+import { createOperatorDispatchQueue } from './operator-dispatch.js';
+import {
+  createOperatorWatchPool,
+  operatorWatchStatePath,
+} from './operator-watch-pool.js';
 import {
   loadOperatorAgentState,
   listOperatorAgentStates,
@@ -1452,7 +1462,14 @@ describe('runOperatorAgent', () => {
     );
   });
 
-  it('sends multiple same-source watch reports in one operator-agent dispatch', async () => {
+  it('sends Open Question, status, and conductor-message reports for one session in one dispatch', async () => {
+    let messages: Array<{
+      text: string;
+      inbound: string;
+      at: number;
+      sendCount: number;
+      dispatchSource: string;
+    }> = [];
     let liveSnapshot: SessionObservationSnapshot = {
       sequence: 0,
       openQuestions: [],
@@ -1460,6 +1477,7 @@ describe('runOperatorAgent', () => {
     const liveServer = await startOpenQuestionControlServer({
       listOpenQuestions: () => [],
       observeSession: async () => liveSnapshot,
+      listConductorMessages: () => messages,
       answerOpenQuestion: async () => {
         throw new Error('unused');
       },
@@ -1490,6 +1508,10 @@ describe('runOperatorAgent', () => {
             pollIntervalMs: 250,
             debounceMs: 0,
           });
+          await agentOptions!.customTools!.register_conductor_message_listen!.execute({
+            conductorAgentId: 'conductor-one',
+            messageDebounceMs: 5_000,
+          });
           setTimeout(() => {
             liveSnapshot = {
               sequence: 2,
@@ -1511,7 +1533,18 @@ describe('runOperatorAgent', () => {
                   askedAt: 3,
                 },
               ],
+              sessionState: {
+                current: { statusLine: 'レビュー確認済み', reportedAt: 4 },
+                history: [],
+              },
             };
+            messages = [1, 2].map((sendCount) => ({
+              text: `conductor reply ${sendCount}`,
+              inbound: `operator message ${sendCount}`,
+              at: 1_700_000_000_000 + sendCount,
+              sendCount,
+              dispatchSource: 'operator',
+            }));
           }, 350);
         }
         return {
@@ -1541,7 +1574,10 @@ describe('runOperatorAgent', () => {
         expect(output.capturedText()).toContain('\u001b[2muser>\u001b[0m '),
       );
       input.write('start watching\n');
-      await vi.waitFor(() => expect(sentPrompts).toHaveLength(2));
+      await vi.waitFor(
+        () => expect(sentPrompts).toHaveLength(2),
+        { timeout: 15_000, interval: 50 },
+      );
       input.write('/exit\n');
       await run;
     } finally {
@@ -1549,10 +1585,302 @@ describe('runOperatorAgent', () => {
     }
 
     expect(sentPrompts).toHaveLength(2);
-    expect(sentPrompts[1]).toContain('## Open Question 追加（2 件）');
+    expect(sentPrompts[1]).toContain('## セッション報告（5 件）');
+    expect(sentPrompts[1]).toContain('— Open Question');
+    expect(sentPrompts[1]).toContain('— セッション状態');
+    expect(sentPrompts[1]).toContain('— Conductor の発言');
     expect(sentPrompts[1]).toContain('Review the implementation?');
     expect(sentPrompts[1]).toContain('Confirm the test result?');
+    expect(sentPrompts[1]).toContain('レビュー確認済み');
+    expect(sentPrompts[1]).toContain('conductor reply 1');
+    expect(sentPrompts[1]).toContain('conductor reply 2');
   });
+
+  it('retries a completed report acknowledgement in the same runner without resending the turn', async () => {
+    let liveSnapshot: SessionObservationSnapshot = {
+      sequence: 1,
+      openQuestions: [],
+    };
+    const liveServer = await startOpenQuestionControlServer({
+      listOpenQuestions: () => [],
+      observeSession: async () => liveSnapshot,
+      answerOpenQuestion: async () => {
+        throw new Error('unused');
+      },
+    });
+    closeServers.push(() => liveServer.close());
+
+    const resumeStorePath = canonicalBaseResumeStorePath(repoRoot);
+    const resumeStore = JSON.parse(await readFile(resumeStorePath, 'utf8')) as Record<
+      string,
+      unknown
+    >;
+    await writeFile(
+      resumeStorePath,
+      JSON.stringify({ ...resumeStore, harnessSocketPath: liveServer.socketPath }),
+    );
+
+    const setupPool = await createOperatorWatchPool({
+      repoRoot,
+      userEnsembleRoot: join(repoRoot, '.ensemble'),
+      profile: 'smoke',
+      dispatchQueue: createOperatorDispatchQueue(),
+    });
+    try {
+      await setupPool.register('conductor-one', {
+        pollIntervalMs: 60_000,
+        debounceMs: 0,
+      });
+      expect(await setupPool.pollOnce('conductor-one')).toBe(0);
+      liveSnapshot = {
+        sequence: 2,
+        openQuestions: [
+          {
+            id: 'inq-ack-retry',
+            question: 'Retry only the acknowledgement?',
+            responseType: 'yes_no',
+            source: 'conductor',
+            status: 'open',
+            askedAt: 10,
+          },
+        ],
+      };
+      expect(await setupPool.pollOnce('conductor-one')).toBe(1);
+    } finally {
+      setupPool.close();
+    }
+
+    const statePath = baseWatchStatePath(repoRoot);
+    const reportIds = (
+      JSON.parse(await readFile(statePath, 'utf8')) as {
+        pendingReports: Array<{ reportId: string }>;
+      }
+    ).pendingReports.map((report) => report.reportId);
+    expect(reportIds).toHaveLength(1);
+
+    const lockPath = join(
+      repoRoot,
+      '.ensemble',
+      'operator-agents',
+      'smoke',
+      'watch',
+      'watch-state-lock.sqlite',
+    );
+    let stateLock: DatabaseSync | undefined;
+    const send = vi.fn(async (prompt: string) => {
+      expect(prompt).toContain('Retry only the acknowledgement?');
+      stateLock = new DatabaseSync(lockPath);
+      stateLock.exec('BEGIN IMMEDIATE');
+      return {
+        runId: 'completed-watch-report',
+        status: 'finished',
+        result: 'The report was handled.',
+      };
+    });
+    const input = new PassThrough() as PassThrough & OperatorAgentInput;
+    input.isTTY = true;
+    const output = createOutput();
+    const run = runOperatorAgent(
+      { repoRoot, newSession: true },
+      {
+        stdin: input,
+        stdout: output,
+        agentFactory: {
+          create: async () => createFakeAgent({ send }),
+          resume: async () => {
+            throw new Error('not used');
+          },
+        },
+      },
+    );
+    let runSettled = false;
+    void run.then(
+      () => {
+        runSettled = true;
+      },
+      () => {
+        runSettled = true;
+      },
+    );
+
+    try {
+      await vi.waitFor(() =>
+        expect(output.capturedText()).toContain(
+          `5 秒後に ack だけを再試行します（1/${OPERATOR_WATCH_ACK_MAX_RETRIES}）`,
+        ),
+        { timeout: 6_000, interval: 25 },
+      );
+      expect(runSettled).toBe(false);
+      expect(send).toHaveBeenCalledOnce();
+      expect(
+        (
+          JSON.parse(await readFile(statePath, 'utf8')) as {
+            pendingReports: Array<{ reportId: string }>;
+          }
+        ).pendingReports.map((report) => report.reportId),
+      ).toEqual(reportIds);
+
+      const firstFailureAt = Date.now();
+      stateLock.exec('ROLLBACK');
+      stateLock.close();
+      stateLock = undefined;
+
+      await vi.waitFor(async () => {
+        const state = JSON.parse(await readFile(statePath, 'utf8')) as {
+          pendingReports: Array<{ reportId: string }>;
+        };
+        expect(state.pendingReports).toEqual([]);
+      }, { timeout: 12_000, interval: 50 });
+      expect(Date.now() - firstFailureAt).toBeGreaterThanOrEqual(
+        OPERATOR_WATCH_ACK_RETRY_DELAY_MS - 100,
+      );
+      expect(send).toHaveBeenCalledOnce();
+      expect(runSettled).toBe(false);
+
+      input.write('/exit\n');
+      await run;
+    } finally {
+      if (stateLock) {
+        stateLock.exec('ROLLBACK');
+        stateLock.close();
+      }
+      if (!runSettled) input.write('/exit\n');
+      input.end();
+      await run.catch(() => {});
+    }
+  }, 20_000);
+
+  it('stops explicitly after bounded ack retries and preserves the pending report', async () => {
+    const previousExitCode = process.exitCode;
+    let liveSnapshot: SessionObservationSnapshot = {
+      sequence: 1,
+      openQuestions: [],
+    };
+    const liveServer = await startOpenQuestionControlServer({
+      listOpenQuestions: () => [],
+      observeSession: async () => liveSnapshot,
+      answerOpenQuestion: async () => {
+        throw new Error('unused');
+      },
+    });
+    closeServers.push(() => liveServer.close());
+
+    const resumeStorePath = canonicalBaseResumeStorePath(repoRoot);
+    const resumeStore = JSON.parse(await readFile(resumeStorePath, 'utf8')) as Record<
+      string,
+      unknown
+    >;
+    await writeFile(
+      resumeStorePath,
+      JSON.stringify({ ...resumeStore, harnessSocketPath: liveServer.socketPath }),
+    );
+
+    const setupPool = await createOperatorWatchPool({
+      repoRoot,
+      userEnsembleRoot: join(repoRoot, '.ensemble'),
+      profile: 'smoke',
+      dispatchQueue: createOperatorDispatchQueue(),
+    });
+    try {
+      await setupPool.register('conductor-one', {
+        pollIntervalMs: 60_000,
+        debounceMs: 0,
+      });
+      expect(await setupPool.pollOnce('conductor-one')).toBe(0);
+      liveSnapshot = {
+        sequence: 2,
+        openQuestions: [
+          {
+            id: 'inq-ack-exhausted',
+            question: 'Keep the report when acknowledgement is unavailable?',
+            responseType: 'yes_no',
+            source: 'conductor',
+            status: 'open',
+            askedAt: 11,
+          },
+        ],
+      };
+      expect(await setupPool.pollOnce('conductor-one')).toBe(1);
+    } finally {
+      setupPool.close();
+    }
+
+    const statePath = baseWatchStatePath(repoRoot);
+    const reportIds = (
+      JSON.parse(await readFile(statePath, 'utf8')) as {
+        pendingReports: Array<{ reportId: string }>;
+      }
+    ).pendingReports.map((report) => report.reportId);
+    expect(reportIds).toHaveLength(1);
+
+    let stateLock: DatabaseSync | undefined;
+    const send = vi.fn(async (prompt: string) => {
+      expect(prompt).toContain('Keep the report when acknowledgement is unavailable?');
+      stateLock = new DatabaseSync(
+        join(
+          repoRoot,
+          '.ensemble',
+          'operator-agents',
+          'smoke',
+          'watch',
+          'watch-state-lock.sqlite',
+        ),
+      );
+      stateLock.exec('BEGIN IMMEDIATE');
+      return {
+        runId: 'completed-but-unacknowledged',
+        status: 'finished',
+        result: 'The report was handled.',
+      };
+    });
+    const input = new PassThrough() as PassThrough & OperatorAgentInput;
+    input.isTTY = true;
+    const output = createOutput();
+    const run = runOperatorAgent(
+      { repoRoot, newSession: true },
+      {
+        stdin: input,
+        stdout: output,
+        agentFactory: {
+          create: async () => createFakeAgent({ send }),
+          resume: async () => {
+            throw new Error('not used');
+          },
+        },
+      },
+    );
+
+    try {
+      await expect(run).rejects.toThrow(
+        `Operator watch report acknowledgement failed after ${OPERATOR_WATCH_ACK_MAX_RETRIES} retries`,
+      );
+      expect(send).toHaveBeenCalledOnce();
+      expect(process.exitCode).toBe(1);
+      expect(output.capturedText()).toContain(
+        'pending state は保持されています。重複 turn を避けるため runner を停止します。',
+      );
+      expect(
+        output
+          .capturedText()
+          .match(/5 秒後に ack だけを再試行します/gu),
+      ).toHaveLength(OPERATOR_WATCH_ACK_MAX_RETRIES);
+      expect(
+        (
+          JSON.parse(await readFile(statePath, 'utf8')) as {
+            pendingReports: Array<{ reportId: string }>;
+          }
+        ).pendingReports.map((report) => report.reportId),
+      ).toEqual(reportIds);
+    } finally {
+      if (stateLock) {
+        stateLock.exec('ROLLBACK');
+        stateLock.close();
+      }
+      input.end();
+      process.exitCode = previousExitCode;
+      await run.catch(() => {});
+    }
+  }, 30_000);
 
   it('retains a cancelled watch report across restart and acknowledges it only after a completed retry', async () => {
     let liveSnapshot: SessionObservationSnapshot = {
@@ -2883,6 +3211,84 @@ describe('runOperatorAgent', () => {
     expect(sentPrompts[0]).toContain('agents-ensemble の operator ロール');
     expect(sentPrompts[0]).toContain('## User message');
     expect(sentPrompts[0]).toContain('hello');
+  });
+});
+
+describe('retryOperatorWatchAcknowledgement', () => {
+  it('retries only the ack at five-second intervals and resolves after repeated failures', async () => {
+    const delays: number[] = [];
+    const acknowledge = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValueOnce(new Error('first lock contention'))
+      .mockRejectedValueOnce(new Error('second lock contention'))
+      .mockResolvedValueOnce(undefined);
+    const onRetry = vi.fn();
+
+    const result = await retryOperatorWatchAcknowledgement(
+      acknowledge,
+      async (delayMs) => {
+        delays.push(delayMs);
+        return false;
+      },
+      onRetry,
+    );
+
+    expect(result).toEqual({
+      status: 'acknowledged',
+      attempts: 3,
+      retries: 2,
+    });
+    expect(acknowledge).toHaveBeenCalledTimes(3);
+    expect(delays).toEqual([
+      OPERATOR_WATCH_ACK_RETRY_DELAY_MS,
+      OPERATOR_WATCH_ACK_RETRY_DELAY_MS,
+    ]);
+    expect(onRetry).toHaveBeenNthCalledWith(1, 1);
+    expect(onRetry).toHaveBeenNthCalledWith(2, 2);
+  });
+
+  it('stops after the retry budget and returns the error without a hot loop', async () => {
+    const delays: number[] = [];
+    const failure = new Error('profile lock remains unavailable');
+    const acknowledge = vi.fn<() => Promise<void>>().mockRejectedValue(failure);
+
+    const result = await retryOperatorWatchAcknowledgement(
+      acknowledge,
+      async (delayMs) => {
+        delays.push(delayMs);
+        return false;
+      },
+    );
+
+    expect(result).toEqual({
+      status: 'exhausted',
+      attempts: OPERATOR_WATCH_ACK_MAX_RETRIES + 1,
+      retries: OPERATOR_WATCH_ACK_MAX_RETRIES,
+      error: failure,
+    });
+    expect(acknowledge).toHaveBeenCalledTimes(OPERATOR_WATCH_ACK_MAX_RETRIES + 1);
+    expect(delays).toEqual(
+      Array(OPERATOR_WATCH_ACK_MAX_RETRIES).fill(
+        OPERATOR_WATCH_ACK_RETRY_DELAY_MS,
+      ),
+    );
+  });
+
+  it('does not start another ack attempt when shutdown interrupts the retry delay', async () => {
+    const acknowledge = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValue(new Error('profile lock contention'));
+
+    const result = await retryOperatorWatchAcknowledgement(
+      acknowledge,
+      async (delayMs) => {
+        expect(delayMs).toBe(OPERATOR_WATCH_ACK_RETRY_DELAY_MS);
+        return true;
+      },
+    );
+
+    expect(result).toEqual({ status: 'stopped', attempts: 1, retries: 1 });
+    expect(acknowledge).toHaveBeenCalledOnce();
   });
 });
 

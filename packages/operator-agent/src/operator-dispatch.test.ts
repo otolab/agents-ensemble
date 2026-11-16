@@ -39,7 +39,7 @@ describe('operator dispatch batching', () => {
       { lastDispatchedSourceKey: 'session:one', continuationConsumed: false },
       0,
     );
-    expect(first?.batch.sourceKey).toBe('open_question:one');
+    expect(first?.batch.sourceKey).toBe('session:one');
 
     const user: OperatorDispatchEvent = {
       type: 'user',
@@ -186,7 +186,7 @@ describe('operator dispatch batching', () => {
       { continuationConsumed: false },
       0,
     );
-    expect(first?.batch.sourceKey).toBe('open_question:session-1');
+    expect(first?.batch.sourceKey).toBe('session:session-1');
     expect(formatOperatorDispatchBatch(first!.batch.events)).toContain(
       '## Open Question 追加',
     );
@@ -198,10 +198,141 @@ describe('operator dispatch batching', () => {
       { continuationConsumed: false },
       0,
     );
-    expect(second?.batch.sourceKey).toBe('open_question:session-2');
+    expect(second?.batch.sourceKey).toBe('session:session-2');
     expect(formatOperatorDispatchBatch(second!.batch.events)).toContain(
       'Issue 2 / inq-1',
     );
+  });
+
+  it('keeps distinct reports while grouping oversized-message warnings in a mixed batch', () => {
+    const queue = createOperatorDispatchQueue();
+    queue.enqueueReports(
+      [
+        {
+          type: 'report',
+          reportType: 'open_question',
+          reportId: 'question-report',
+          conductorAgentId: 'session-1',
+          issueUrl: 'https://github.com/example/repo/issues/1',
+          text: '解決: inq-1 / operator の回答',
+        },
+        {
+          type: 'report',
+          reportType: 'conductor_message',
+          reportId: 'oversized-3',
+          conductorAgentId: 'session-1',
+          issueUrl: 'https://github.com/example/repo/issues/1',
+          text: 'oversized sendCount 3',
+          sendCount: 3,
+          oversizedSendCounts: [3],
+        },
+        {
+          type: 'report',
+          reportType: 'conductor_message',
+          reportId: 'oversized-4',
+          conductorAgentId: 'session-1',
+          issueUrl: 'https://github.com/example/repo/issues/1',
+          text: 'oversized sendCount 4',
+          sendCount: 4,
+          oversizedSendCounts: [4],
+        },
+        {
+          type: 'report',
+          reportType: 'session_state',
+          reportId: 'status-report',
+          conductorAgentId: 'session-1',
+          issueUrl: 'https://github.com/example/repo/issues/1',
+          text: '状態: 完了',
+        },
+      ],
+      0,
+    );
+
+    const batch = queue.takeBatch(
+      { continuationConsumed: false },
+      Date.now(),
+    )!;
+    expect(batch.events.map((event) => event.reportId)).toEqual([
+      'question-report',
+      'oversized-3',
+      'oversized-4',
+      'status-report',
+    ]);
+    const formatted = formatOperatorDispatchBatch(batch.events);
+    expect(formatted.match(/⚠/g)).toHaveLength(1);
+    expect(formatted).toContain('2件の発言');
+    expect(formatted).toContain('sendCount: 3, 4');
+    expect(formatted).toContain('解決: inq-1');
+    expect(formatted).toContain('状態: 完了');
+  });
+
+  it('does not move grouped oversized warnings across intervening messages or reports', () => {
+    const queue = createOperatorDispatchQueue();
+    queue.enqueueReports(
+      [
+        {
+          type: 'report',
+          reportType: 'open_question',
+          reportId: 'question-report',
+          conductorAgentId: 'session-1',
+          issueUrl: 'https://github.com/example/repo/issues/1',
+          text: '解決: inq-1 / operator の回答',
+        },
+        {
+          type: 'report',
+          reportType: 'conductor_message',
+          reportId: 'oversized-3',
+          conductorAgentId: 'session-1',
+          issueUrl: 'https://github.com/example/repo/issues/1',
+          text: '⚠ oversized sendCount: 3',
+          sendCount: 3,
+          oversizedSendCounts: [3],
+        },
+        {
+          type: 'report',
+          reportType: 'conductor_message',
+          reportId: 'message-4',
+          conductorAgentId: 'session-1',
+          issueUrl: 'https://github.com/example/repo/issues/1',
+          text: 'readable message 4',
+          sendCount: 4,
+        },
+        {
+          type: 'report',
+          reportType: 'session_state',
+          reportId: 'status-report',
+          conductorAgentId: 'session-1',
+          issueUrl: 'https://github.com/example/repo/issues/1',
+          text: '状態: 完了',
+        },
+        {
+          type: 'report',
+          reportType: 'conductor_message',
+          reportId: 'oversized-5',
+          conductorAgentId: 'session-1',
+          issueUrl: 'https://github.com/example/repo/issues/1',
+          text: '⚠ oversized sendCount: 5',
+          sendCount: 5,
+          oversizedSendCounts: [5],
+        },
+      ],
+      0,
+    );
+
+    const batch = queue.takeBatch(
+      { continuationConsumed: false },
+      Date.now(),
+    )!;
+    expect(batch.events).toHaveLength(5);
+    expect(queue.pendingEventCount).toBe(0);
+    const formatted = formatOperatorDispatchBatch(batch.events);
+    const warningThree = formatted.indexOf('sendCount: 3');
+    const readableFour = formatted.indexOf('readable message 4');
+    const warningFive = formatted.indexOf('sendCount: 5');
+    expect(warningThree).toBeGreaterThanOrEqual(0);
+    expect(readableFour).toBeGreaterThan(warningThree);
+    expect(warningFive).toBeGreaterThan(readableFour);
+    expect(formatted.match(/⚠/g)).toHaveLength(2);
   });
 
   it('gives reports from one observation a shared debounce deadline', () => {
@@ -289,6 +420,160 @@ describe('operator dispatch batching', () => {
           'send 12\n#### inbound\ncontext 12\n#### response\nreply 12',
         ].join('\n'),
       );
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it('holds related watch reports for the message-listen window and extends it on new messages', () => {
+    const queue = createOperatorDispatchQueue();
+    const now = vi.spyOn(Date, 'now');
+    now.mockReturnValue(1_000);
+    queue.enqueueReports(
+      [
+        {
+          type: 'report',
+          reportType: 'open_question',
+          conductorAgentId: 'session-1',
+          issueUrl: 'https://github.com/example/repo/issues/1',
+          text: 'question answered',
+        },
+        {
+          type: 'report',
+          reportType: 'session_state',
+          conductorAgentId: 'session-1',
+          issueUrl: 'https://github.com/example/repo/issues/1',
+          text: 'status updated',
+        },
+      ],
+      10_000,
+    );
+    expect(queue.deferWatchReports).toBeTypeOf('function');
+    queue.deferWatchReports?.('session-1', 10_000);
+    queue.enqueueReport(
+      {
+        type: 'report',
+        reportType: 'session_state',
+        conductorAgentId: 'session-2',
+        issueUrl: 'https://github.com/example/repo/issues/2',
+        text: 'independent session',
+      },
+      0,
+    );
+
+    try {
+      const independent = queue.takeBatch(
+        { continuationConsumed: false },
+        1_000,
+      )!;
+      expect(independent.sourceKey).toBe('session:session-2');
+
+      now.mockReturnValue(2_000);
+      queue.enqueueDebouncedReports(
+        [
+          {
+            type: 'report',
+            reportType: 'conductor_message',
+            conductorAgentId: 'session-1',
+            issueUrl: 'https://github.com/example/repo/issues/1',
+            text: 'first conductor reply',
+            sendCount: 1,
+          },
+        ],
+        10_000,
+      );
+      now.mockReturnValue(9_000);
+      queue.enqueueDebouncedReports(
+        [
+          {
+            type: 'report',
+            reportType: 'conductor_message',
+            conductorAgentId: 'session-1',
+            issueUrl: 'https://github.com/example/repo/issues/1',
+            text: 'second conductor reply',
+            sendCount: 2,
+          },
+        ],
+        10_000,
+      );
+
+      expect(
+        queue.takeBatch({ continuationConsumed: false }, 18_999),
+      ).toBeUndefined();
+      const combined = queue.takeBatch(
+        { continuationConsumed: false },
+        19_000,
+      )!;
+      expect(combined.sourceKey).toBe('session:session-1');
+      expect(combined.events.map((event) =>
+        event.type === 'report' ? event.reportType : event.type,
+      )).toEqual([
+        'open_question',
+        'session_state',
+        'conductor_message',
+        'conductor_message',
+      ]);
+      expect(combined.events.map((event) => event.text)).toContain(
+        'question answered',
+      );
+      expect(combined.events.map((event) => event.text)).toContain(
+        'status updated',
+      );
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it('schedules wake-up at the latest deadline for a blocked session batch', () => {
+    const queue = createOperatorDispatchQueue();
+    const now = vi.spyOn(Date, 'now');
+    now.mockReturnValue(1_000);
+    queue.enqueueReport(
+      {
+        type: 'report',
+        reportType: 'open_question',
+        conductorAgentId: 'session-1',
+        issueUrl: 'https://github.com/example/repo/issues/1',
+        text: 'early report',
+      },
+      0,
+    );
+    now.mockReturnValue(2_000);
+    queue.enqueueReport(
+      {
+        type: 'report',
+        reportType: 'conductor_message',
+        conductorAgentId: 'session-1',
+        issueUrl: 'https://github.com/example/repo/issues/1',
+        text: 'later report',
+      },
+      5_000,
+    );
+    queue.enqueueReport(
+      {
+        type: 'report',
+        reportType: 'session_state',
+        conductorAgentId: 'session-2',
+        issueUrl: 'https://github.com/example/repo/issues/2',
+        text: 'independent report',
+      },
+      0,
+    );
+
+    try {
+      expect(queue.nextReadyAt()).toBe(2_000);
+      expect(
+        queue.takeBatch({ continuationConsumed: false }, 2_000)?.sourceKey,
+      ).toBe('session:session-2');
+      expect(queue.nextReadyAt()).toBe(7_000);
+      expect(
+        queue.takeBatch({ continuationConsumed: false }, 6_999),
+      ).toBeUndefined();
+      expect(
+        queue.takeBatch({ continuationConsumed: false }, 7_000)?.events.map(
+          (event) => event.text,
+        ),
+      ).toEqual(['early report', 'later report']);
     } finally {
       now.mockRestore();
     }
@@ -421,6 +706,106 @@ describe('operator dispatch batching', () => {
         (event) => event.text,
       ),
     ).toEqual(['first report', 'second report']);
+  });
+
+  it('batches related report types from one session after both holds release', () => {
+    const queue = createOperatorDispatchQueue();
+    queue.setConversationHold(true);
+    queue.setHold(true);
+    queue.enqueueReports(
+      [
+        {
+          type: 'report',
+          reportType: 'open_question',
+          reportId: 'question-report',
+          conductorAgentId: 'session-one',
+          issueUrl: 'https://github.com/example/repo/issues/1',
+          text: '解決: inq-1 / operator の回答',
+        },
+        {
+          type: 'report',
+          reportType: 'session_state',
+          reportId: 'status-report',
+          conductorAgentId: 'session-one',
+          issueUrl: 'https://github.com/example/repo/issues/1',
+          text: '状態 (2026-11-16T00:00:00.000Z): CI 待ち',
+        },
+      ],
+      0,
+    );
+    queue.enqueueDebouncedReports(
+      [
+        {
+          type: 'report',
+          reportType: 'conductor_message',
+          reportId: 'message-report',
+          conductorAgentId: 'session-one',
+          issueUrl: 'https://github.com/example/repo/issues/1',
+          text: 'sendCount: 12\n#### inbound\n回答確認\n#### response\n対応します',
+          sendCount: 12,
+        },
+      ],
+      0,
+    );
+    queue.enqueueReport(
+      {
+        type: 'report',
+        reportType: 'session_state',
+        reportId: 'other-session-report',
+        conductorAgentId: 'session-two',
+        issueUrl: 'https://github.com/example/repo/issues/2',
+        text: '状態 (2026-11-16T00:00:01.000Z): 別 Issue',
+      },
+      0,
+    );
+
+    expect(queue.setHold(false)).toEqual({
+      heldEventCount: 4,
+      releasedEventCount: 0,
+    });
+    expect(queue.conversationHold).toBe(true);
+    expect(queue.pendingEventCount).toBe(0);
+    expect(queue.setConversationHold(false)).toEqual({
+      heldEventCount: 0,
+      releasedEventCount: 4,
+    });
+
+    const first = queue.takeBatch(
+      { continuationConsumed: false },
+      Date.now(),
+    )!;
+    expect(first.sourceKey).toBe('session:session-one');
+    expect(first.events.map((event) => event.reportId)).toEqual([
+      'question-report',
+      'status-report',
+      'message-report',
+    ]);
+    const formatted = formatOperatorDispatchBatch(first.events);
+    expect(formatted).toContain('解決: inq-1');
+    expect(formatted).toContain('状態 (2026-11-16T00:00:00.000Z)');
+    expect(formatted).toContain('sendCount: 12');
+    expect(formatted.indexOf('解決: inq-1')).toBeLessThan(
+      formatted.indexOf('sendCount: 12'),
+    );
+
+    for (const event of first.events) queue.requeue(event, 5_000);
+    const retry = queue.takeBatch(
+      { lastDispatchedSourceKey: first.sourceKey, continuationConsumed: false },
+      Math.max(...first.events.map(() => Date.now() + 5_000)),
+    )!;
+    expect(retry.events.map((event) => event.reportId)).toEqual([
+      'question-report',
+      'status-report',
+      'message-report',
+    ]);
+
+    const second = queue.takeBatch(
+      { lastDispatchedSourceKey: retry.sourceKey, continuationConsumed: true },
+      Date.now() + 5_000,
+    )!;
+    expect(second.events.map((event) => event.reportId)).toEqual([
+      'other-session-report',
+    ]);
   });
 
   it('keeps reports held when conversation hold starts during manual hold', () => {

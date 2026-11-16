@@ -82,7 +82,9 @@ list tool の `structuredContent` は UDS の `result`（`{ "questions": [...] }
 
 ## Operator-agent watch state の欠損・破損と復旧
 
-watch pool は選択 profile と Issue URL の canonical repository slug ごとに `~/.ensemble/operator-agents/<profile>/watch/github.com/<owner>/<repo>/watch-state.json` を使い、watch 登録、session ごとの cursor、未 dispatch report を atomic に保存します。旧 user path-hash / slug-keyed watch bundle と列挙 checkout の project-local watch state は明示 migration tool の source で、runtime は読みません。profile state がなければ空の state として扱い、legacy source を自動で統合・変更・削除しません。
+watch pool は選択 profile と Issue URL の canonical repository slug ごとに `~/.ensemble/operator-agents/<profile>/watch/github.com/<owner>/<repo>/watch-state.json` を使い、watch 登録、session ごとの cursor、未 dispatch report を atomic に保存します。同じ profile の複数 operator-agent process は `~/.ensemble/operator-agents/<profile>/watch/watch-state-lock.sqlite` の SQLite transaction lock で更新を直列化し、poll / ack / 登録変更の前に state file 群を読み直します。cursor と pending report は同じ lock 内で保存するため、古い全体 snapshot による他 process の更新消失を防ぎます。poll 中も lock を保持するので、同一 profile の poll は session / repository をまたいで直列になります。さらに各 state refresh と2秒間隔の pending refresh で、稼働中 peer も disk 上の未 ack report を queue に反映します。通常は保存から次の refresh まで最大2秒で、poll 起点の refresh が先に走ればそれより早く回収します。lock 取得に失敗した refresh は最大40回・25ms間隔で retry して error を記録し、次の2秒周期で再試行します。継続的に lock を取得できない場合の有限な配送期限はありません。lock は時間で失効せず、OS suspend 中も生きた owner が保持します。process 終了時は OS が lock を解放します。lock 保証は SQLite の file locking を実装する local filesystem が前提です。旧 user path-hash / slug-keyed watch bundle と列挙 checkout の project-local watch state は明示 migration tool の source で、runtime は読みません。profile state がなければ空の state として扱い、legacy source を自動で統合・変更・削除しません。
+
+profile state 内の ID に対して一意な SessionResumeStore が見つからない、同じ ID の Store が複数ある、state file の repository scope または pending report の Issue URL が Store と一致しない場合、その session bundle（watch / cursor / listener / pending report）は元の state file に残して dispatch しません。原因と field 件数を session 単位で診断し、同じ内容の persist ごとには繰り返しません。Store が後から一意になり、repository path と pending report の Issue identity も一致すれば `register_session_watch` / `register_conductor_message_listen` による再登録時に元の cursor と report ID を復旧します。食い違いが残る間は自動割当・自動破棄を行いません。
 
 - **state file が存在しない場合:** empty state として起動し、watch pool は空です。保存済み watch 登録・cursor・未 dispatch report は復元されません。監視を再開するには対象 session ごとに `register_session_watch` を実行してください。cursor がないため、再登録後の最初の成功した snapshot は既存 Open Question ID の silent baseline になります。その snapshot にすでに含まれる質問（state 欠損中に追加された質問も含む）は新規通知として replay されません。baseline 後に追加された ID は通常どおり通知されます。
 - **JSON または state schema が不正な場合:** operator-agent の初期化は失敗し、empty state へ黙って置き換えません。保存ファイルを退避してから、有効な backup を戻すか、version と必須 field を修復して再起動してください。state を意図的に破棄する場合も、まず必要ならコピーを保全してください。ファイルを取り除いて再起動すると empty state から始まり、上記の再登録と silent baseline が必要です。
@@ -140,7 +142,9 @@ Response:
 
 live UDS を使った report には稼働中 UDS、UDS が到達不能または未対応で保存 snapshot に切り替えた report には保存済み SessionResumeStore / YAML という観測元を付けます。session-state report の変更検出には各質問 fingerprint とは独立した `reportedAt` cursor を使います。初回 poll では snapshot に session-state があれば最新の status を1件報告し、以後は `reportedAt` ごとに内容の変化を検出して報告します。この method は読み取り専用で、各 poll は独立した短い JSON-RPC 接続です。
 
-watch report は既存 operator-agent queue の `open_question:${conductorAgentId}` source と debounce / batch / report hold を通ります。質問本文を含む report は operator-agent への入力であり、複数 session は session ごとに別の batch として Issue URL・conductor ID 付きで整形されます。
+Open Question / session-state / conductor-message report は、同じ `conductorAgentId` の source にまとめます。各 report の ID と到着順は保ち、質問・status・発言を本文付きの別 section として同じ `agent.send` に渡します。Open Question を含む session は通常の status report より優先され、別 session の report は混ぜません。report ID は process 内の queue で重複 enqueue を抑え、disk から ack 済みになった未 dispatch copy は refresh 時に取り除きます。send が未完了なら同じ ID を5秒後に通常 dispatch queue へ戻し、`agent.send` を再試行します。send 完了後に ack 保存だけが失敗した場合は、report を in-flight に保って同じ batch の ack だけを5秒間隔で最大3回 retry し、完了済み turn は再送しません。全 retry に失敗すると pending state を残して明示 error で runner を停止します。再起動後は at-least-once 契約により同じ ID が再送される可能性があります。poll refresh は retry deadline を早めません。どの process からの ack でも pending state から削除できます。別 process が同じ report をすでに send 中なら止められず重複配送になることがあり、exactly-once は保証しません（設計判断は [ADR 0081](adr/0081-operator-watch-pending-report-handoff.md)、[ADR 0082](adr/0082-operator-watch-acknowledgement-retry.md)）。
+
+watch の poll interval は既定 2,000ms、`debounceMs` は既定 250ms（0〜10,000ms）です。conductor message listen は別の既定 2,000ms poll と `messageDebounceMs` 既定 10,000ms（0〜120,000ms）を持ちます。message listen 中は watch report も `max(debounceMs, messageDebounceMs)` の期限を待ちます。message report が届くたび同一 session の未 dispatch report 全体を最新 message の quiet window まで延長するため、短いやり取りの report をまとめやすくなります。message listen がある場合、message が来なくても watch report は最大設定値まで待ち、message が続けば quiet window がその都度延びます。遅延を抑えたい場合は `register_conductor_message_listen` の `messageDebounceMs` を短くしてください。hold 中も report は個別に保存され、両 hold 解除後に到着順で batch されます。
 
 ### `open_questions.list`
 
@@ -313,7 +317,7 @@ UDS response の上限は従来どおり **1,048,576 bytes（1 MiB）** です�
 
 operator-agent の listen は limit 20 の page から読み始め、aggregate response が 1 MiB を超えた場合は同じ exclusive cursor から limit を下げて再試行します。取得できた複数 page はその poll の debounce report にまとめ、sendCount 昇順で通知します。cursor は取得済み page の最後までだけ進めるため、retry で発言を飛ばしたり並べ替えたりしません。
 
-limit 1 でも単独 response が上限を超える発言に達した場合、その発言の `sendCount` を使って listen cursor を安全に進めます。読み取れなかった発言は内容を切り詰めずに読み飛ばし、同じ debounce window に複数 poll で見つかったものも含め、report ごとに件数と `sendCount` を列挙した warning section 1つにまとめます。その後も polling を続け、後続の読み取り可能な発言を順序どおり通知します。先に取得した page、読み飛ばした発言、後続 page は同じ report window にまとめられます。list API はこの動作をせず、単独 oversized record を含む response に対して従来どおり明示的な size error を返します。
+limit 1 でも単独 response が上限を超える発言に達した場合、その発言の `sendCount` を使って listen cursor を安全に進めます。読み取れなかった発言は内容を切り詰めずに読み飛ばし、同じ debounce window の複数 poll で見つかった oversized warning は隣り合うものを1 sectionにまとめます。間に読み取り可能な発言や別 report がある場合は warning を分け、`sendCount` と report の到着順を保ちます。その後も polling を続け、後続の読み取り可能な発言を順序どおり通知します。先に取得した page、読み飛ばした発言、後続 page は同じ report window にまとめられます。list API はこの動作をせず、単独 oversized record を含む response に対して従来どおり明示的な size error を返します。
 
 ### operator-agent の provider history list
 

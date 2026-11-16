@@ -4,7 +4,7 @@
 
 ## 前提
 
-Node.js 22 と、ルート `package.json` の `packageManager` に指定された pnpm を使用する。Builtin Pi worker runtime を使う場合は Node.js 22.19.0 以上が必要です。Corepack も利用できます。
+Node.js 22.13.0 以上と、ルート `package.json` の `packageManager` に指定された pnpm を使用する。operator-agent の profile lock に Node.js 組み込み SQLite を使います。Builtin Pi worker runtime を使う場合は Node.js 22.19.0 以上が必要です。Corepack も利用できます。
 
 ```bash
 corepack enable   # 初回のみ（任意）

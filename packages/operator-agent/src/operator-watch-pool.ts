@@ -1,5 +1,14 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { access, chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { DatabaseSync } from 'node:sqlite';
+import {
+  access,
+  chmod,
+  mkdir,
+  readFile,
+  realpath,
+  rename,
+  writeFile,
+} from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import {
   CONDUCTOR_MESSAGE_PAGE_DEFAULT_LIMIT,
@@ -40,6 +49,9 @@ const MAX_DEBOUNCE_MS = 10_000;
 const DEFAULT_MESSAGE_DEBOUNCE_MS = 10_000;
 const MAX_MESSAGE_DEBOUNCE_MS = 120_000;
 const MESSAGE_POLL_INTERVAL_MS = 2_000;
+const PENDING_REPORT_REFRESH_INTERVAL_MS = 2_000;
+const WATCH_STATE_LOCK_RETRIES = 40;
+const WATCH_STATE_LOCK_RETRY_DELAY_MS = 25;
 
 interface WatchConfig {
   conductorAgentId: string;
@@ -81,6 +93,7 @@ interface OperatorWatchState {
     issueUrl: string;
     text: string;
     debounceMs: number;
+    readyAt: number;
     sendCount?: number;
     oversizedSendCounts?: number[];
   }>;
@@ -101,6 +114,7 @@ export interface OperatorWatchPool {
   listConductorMessageListens(): ConductorMessageListenConfig[];
   pollOnce(conductorAgentId: string): Promise<number>;
   pollConductorMessagesOnce(conductorAgentId: string): Promise<number>;
+  refreshPendingReports?(): Promise<void>;
   getLiveStatus(conductorAgentId: string): OperatorSessionLiveStatus | undefined;
   acknowledge(events: readonly OperatorDispatchEvent[]): Promise<void>;
   close(): void;
@@ -130,6 +144,7 @@ export async function createOperatorWatchPool(
 ): Promise<OperatorWatchPool> {
   const root = options.userEnsembleRoot ?? resolveUserEnsembleRoot();
   const profile = options.profile ?? 'default';
+  await listOperatorWatchStatePaths(root, profile);
   const stores = (
     await listUserLocatedSessionResumeStoresPage(
       {},
@@ -158,45 +173,215 @@ export async function createOperatorWatchPool(
     }
   }
 
-  const newStatePaths = await listOperatorWatchStatePaths(root, profile);
+  const loadedStatesByPath = new Map<string, OperatorWatchState>();
+  const statePaths = new Set<string>();
+  const stateSourcesById = new Map<string, Set<string>>();
+  const unassignedStateByPath = new Map<string, OperatorWatchState>();
+  const unassignedDiagnostics = new Map<string, string>();
+  const ambiguousResumeStoreIds = new Set<string>();
+  const reportUnassignedBundle = (
+    id: string,
+    reason: string,
+    sourcePaths: readonly string[],
+    bundles: readonly OperatorWatchState[],
+  ) => {
+    const summary = summarizeWatchStateBundles(id, bundles);
+    const signature = hash({
+      reason,
+      sourcePaths: [...sourcePaths].sort(),
+      bundles: bundles.map((bundle) => hash(bundle)),
+    });
+    if (unassignedDiagnostics.get(id) === signature) return;
+    unassignedDiagnostics.set(id, signature);
+    options.onError?.(
+      `watch state for ${id} remains unresolved (${reason}); retained in ${sourcePaths.length} original profile state file(s): ${summary}.`,
+    );
+  };
   let state = emptyWatchState();
-  for (const path of newStatePaths) {
-    state = mergeWatchStates(state, await loadWatchState(path));
-  }
-  const statePaths = new Set(newStatePaths);
-  for (const path of pathById.values()) {
-    if (await pathExists(path)) statePaths.add(path);
-  }
+  const fallbackQueuedReportIds = new Set<string>();
+  const syncPendingReportsToQueue = () => {
+    const reports = state.pendingReports.map((report) => ({
+      event: {
+        type: 'report' as const,
+        reportId: report.reportId,
+        reportType: report.reportType,
+        conductorAgentId: report.conductorAgentId,
+        issueUrl: report.issueUrl,
+        text: report.text,
+        sendCount: report.sendCount,
+        oversizedSendCounts: report.oversizedSendCounts,
+      },
+      readyAt: report.readyAt,
+    }));
+    if (options.dispatchQueue.reconcileReports) {
+      options.dispatchQueue.reconcileReports(reports);
+      return;
+    }
+
+    const pendingIds = new Set(reports.map(({ event }) => event.reportId));
+    const removed = [...fallbackQueuedReportIds].filter(
+      (reportId) => !pendingIds.has(reportId),
+    );
+    options.dispatchQueue.discardQueuedReports?.(removed);
+    for (const reportId of removed) fallbackQueuedReportIds.delete(reportId);
+    for (const { event, readyAt } of reports) {
+      if (fallbackQueuedReportIds.has(event.reportId)) continue;
+      options.dispatchQueue.enqueueReports(
+        [event],
+        Math.max(0, readyAt - Date.now()),
+      );
+      fallbackQueuedReportIds.add(event.reportId);
+    }
+  };
+  const refreshStateFromDisk = async () => {
+    const paths = new Set([
+      ...statePaths,
+      ...(await listOperatorWatchStatePaths(root, profile)),
+    ]);
+    loadedStatesByPath.clear();
+    statePaths.clear();
+    for (const path of paths) {
+      loadedStatesByPath.set(path, await loadWatchState(path));
+      statePaths.add(path);
+    }
+    stateSourcesById.clear();
+    unassignedStateByPath.clear();
+    state = emptyWatchState();
+    for (const [path, loaded] of loadedStatesByPath) {
+      for (const id of watchStateSessionIds(loaded)) {
+        const sourcePaths = stateSourcesById.get(id) ?? new Set<string>();
+        sourcePaths.add(path);
+        stateSourcesById.set(id, sourcePaths);
+      }
+    }
+    for (const id of stateSourcesById.keys()) {
+      const sourcePaths = [...(stateSourcesById.get(id) ?? [])];
+      const sourceBundles = sourcePaths.map((path) =>
+        extractWatchStateForSession(loadedStatesByPath.get(path)!, id),
+      );
+      const targetPath = pathById.get(id);
+      const expectedIssueUrl = issueUrlById.get(id);
+      let reason: string | undefined;
+      if (!targetPath || !expectedIssueUrl) {
+        reason =
+          ambiguousResumeStoreIds.has(id) ||
+          (storesById.get(id)?.length ?? 0) > 1
+            ? 'multiple SessionResumeStores exist for this conductor ID'
+            : 'no unique verified Issue session is available';
+      } else if (sourcePaths.length !== 1) {
+        reason = 'the session appears in multiple profile state files';
+      } else if (sourcePaths[0] !== targetPath) {
+        reason = 'the source repository scope does not match the saved Issue URL';
+      } else if (
+        sourceBundles.some((bundle) =>
+          bundle.pendingReports.some(
+            (report) =>
+              issueIdentity(report.issueUrl) !== issueIdentity(expectedIssueUrl),
+          ),
+        )
+      ) {
+        reason = 'a pending report Issue URL does not match the saved Issue session';
+      }
+
+      if (reason) {
+        for (const [index, sourcePath] of sourcePaths.entries()) {
+          const retained =
+            unassignedStateByPath.get(sourcePath) ?? emptyWatchState();
+          unassignedStateByPath.set(
+            sourcePath,
+            mergeWatchStates(sourceBundles[index]!, retained),
+          );
+        }
+        reportUnassignedBundle(id, reason, sourcePaths, sourceBundles);
+        continue;
+      }
+      state = mergeWatchStates(state, sourceBundles[0]!);
+      unassignedDiagnostics.delete(id);
+    }
+    syncPendingReportsToQueue();
+  };
+  await withWatchStateLock(root, profile, refreshStateFromDisk);
   const timers = new Map<string, NodeJS.Timeout>();
   const polling = new Set<string>();
   const messageTimers = new Map<string, NodeJS.Timeout>();
   const messagePolling = new Set<string>();
   const liveStatuses = new Map<string, OperatorSessionLiveStatus>();
-  const reportedResumeStoreDuplicates = new Set<string>();
+  const reportedResumeStoreDuplicates = new Map<string, string>();
   const onResumeStoreDuplicate = (
     diagnostic: SessionResumeStoreDuplicateDiagnostic,
   ) => {
+    ambiguousResumeStoreIds.add(diagnostic.conductorAgentId);
     const signature = JSON.stringify(diagnostic);
-    if (reportedResumeStoreDuplicates.has(signature)) return;
-    reportedResumeStoreDuplicates.add(signature);
-    options.onError?.(formatResumeStoreDuplicateDiagnostic(diagnostic));
+    if (
+      reportedResumeStoreDuplicates.get(diagnostic.conductorAgentId) ===
+      signature
+    ) {
+      return;
+    }
+    reportedResumeStoreDuplicates.set(diagnostic.conductorAgentId, signature);
+    if (
+      watchStateSessionIds(
+        extractWatchStateForSession(state, diagnostic.conductorAgentId),
+      ).size === 0
+    ) {
+      options.onError?.(formatResumeStoreDuplicateDiagnostic(diagnostic));
+    }
   };
   let closed = false;
-  let persistQueue = Promise.resolve();
+  let stateOperationQueue = Promise.resolve();
+  let pendingReportRefreshTimer: NodeJS.Timeout | undefined;
+  let pendingReportRefreshInFlight = false;
 
   const persist = async () => {
-    const next = persistQueue.then(async () => {
-      const partitions = partitionWatchState(state, pathById, issueUrlById, options.onError);
-      for (const [path, partition] of partitions) {
-        statePaths.add(path);
-        await saveWatchState(path, partition);
+    const partitions = partitionWatchState(state, pathById, issueUrlById);
+    for (const [path, retained] of unassignedStateByPath) {
+      partitions.set(
+        path,
+        mergeWatchStates(partitions.get(path) ?? emptyWatchState(), retained),
+      );
+    }
+    for (const [path, partition] of partitions) {
+      statePaths.add(path);
+      await saveWatchState(path, partition);
+    }
+    for (const path of statePaths) {
+      if (!partitions.has(path)) {
+        await saveWatchState(path, emptyWatchState());
       }
-      for (const path of statePaths) {
-        if (!partitions.has(path)) await saveWatchState(path, emptyWatchState());
+    }
+  };
+  const deferWatchPendingReports = (
+    conductorAgentId: string,
+    debounceMs: number,
+  ) => {
+    const readyAt = Date.now() + Math.max(0, debounceMs);
+    for (const report of state.pendingReports) {
+      if (
+        report.conductorAgentId === conductorAgentId &&
+        report.reportType !== 'conductor_message'
+      ) {
+        report.readyAt = readyAt;
       }
-    });
-    persistQueue = next.catch(() => {});
-    await next;
+    }
+  };
+  const withStateLock = <T>(operation: () => Promise<T>): Promise<T> => {
+    const next = stateOperationQueue.then(() =>
+      withWatchStateLock(root, profile, async () => {
+        await refreshStateFromDisk();
+        const result = await operation();
+        syncPendingReportsToQueue();
+        return result;
+      }),
+    );
+    stateOperationQueue = next.then(
+      () => undefined,
+      () => undefined,
+    );
+    return next;
+  };
+  const refreshPendingReports = async () => {
+    if (closed) return;
+    await withStateLock(async () => undefined);
   };
   const startTimer = (watch: WatchConfig) => {
     if (timers.has(watch.conductorAgentId)) return;
@@ -222,57 +407,213 @@ export async function createOperatorWatchPool(
     timer.unref();
     messageTimers.set(listener.conductorAgentId, timer);
   };
-  const pool: OperatorWatchPool = {
-    async register(conductorAgentId, input = {}) {
-      const id = requireNonEmptyString(conductorAgentId, 'conductorAgentId');
+  const quarantineActiveSession = (
+    id: string,
+    reason: string,
+  ): boolean => {
+    const activeBundle = extractWatchStateForSession(state, id);
+    if (watchStateSessionIds(activeBundle).size === 0) return false;
+    const sourcePath = pathById.get(id);
+    if (!sourcePath) return false;
+
+    removeWatchStateForSession(state, id);
+    const retained = unassignedStateByPath.get(sourcePath) ?? emptyWatchState();
+    unassignedStateByPath.set(
+      sourcePath,
+      mergeWatchStates(retained, activeBundle),
+    );
+    options.dispatchQueue.discardQueuedReports?.(
+      activeBundle.pendingReports.map((report) => report.reportId),
+    );
+    const watchTimer = timers.get(id);
+    if (watchTimer) clearInterval(watchTimer);
+    timers.delete(id);
+    const messageTimer = messageTimers.get(id);
+    if (messageTimer) clearInterval(messageTimer);
+    messageTimers.delete(id);
+    pathById.delete(id);
+    issueUrlById.delete(id);
+    reportUnassignedBundle(id, reason, [sourcePath], [activeBundle]);
+    return true;
+  };
+  const locateSession = async (
+    id: string,
+  ): Promise<LocatedSessionResumeStore | undefined> => {
+    try {
       const located = await findSession(id, {
         root,
         onDuplicate: onResumeStoreDuplicate,
       });
-      if (!located) throw new Error(`No saved session found for ${id}.`);
-      const watch = {
-        conductorAgentId: id,
-        pollIntervalMs: parseBoundedInteger(
-          input.pollIntervalMs,
-          DEFAULT_POLL_INTERVAL_MS,
-          MIN_POLL_INTERVAL_MS,
-          MAX_POLL_INTERVAL_MS,
-          'pollIntervalMs',
-        ),
-        debounceMs: parseBoundedInteger(
-          input.debounceMs,
-          250,
-          0,
-          MAX_DEBOUNCE_MS,
-          'debounceMs',
-        ),
-      };
-      const previousWatch = state.watches[id];
-      state.watches[id] = watch;
-      try {
-        await persist();
-      } catch (error) {
-        if (previousWatch) state.watches[id] = previousWatch;
-        else delete state.watches[id];
-        throw error;
+      if (located) ambiguousResumeStoreIds.delete(id);
+      if (!located) {
+        quarantineActiveSession(
+          id,
+          'no unique verified Issue session is available',
+        );
       }
+      return located;
+    } catch (error) {
+      if (isAmbiguousResumeStoreError(error)) {
+        ambiguousResumeStoreIds.add(id);
+        quarantineActiveSession(
+          id,
+          'multiple SessionResumeStores exist for this conductor ID',
+        );
+      }
+      throw error;
+    }
+  };
+  const bindLocatedSession = (
+    id: string,
+    located: LocatedSessionResumeStore,
+  ): { assigned: boolean; reason?: string } => {
+    let targetPath: string;
+    try {
+      targetPath = profileOperatorWatchStatePath(
+        root,
+        profile,
+        located.resumeStore.issueUrl,
+      );
+    } catch {
+      const sources = [...(stateSourcesById.get(id) ?? [])];
+      const bundles = sources.map((path) =>
+        unassignedStateByPath.has(path)
+          ? extractWatchStateForSession(unassignedStateByPath.get(path)!, id)
+          : extractWatchStateForSession(state, id),
+      );
+      const reason = 'the saved Issue URL is invalid';
+      if (!quarantineActiveSession(id, reason)) {
+        reportUnassignedBundle(id, reason, sources, bundles);
+      }
+      return { assigned: false, reason };
+    }
+    const nextIssueUrl = located.resumeStore.issueUrl;
+    const sourcePaths = [...(stateSourcesById.get(id) ?? [])];
+    const retainedPaths = [...unassignedStateByPath.entries()]
+      .filter(([, bundle]) => watchStateSessionIds(bundle).has(id))
+      .map(([path]) => path);
+    const allSourcePaths = [...new Set([...sourcePaths, ...retainedPaths])];
+    const bundles = allSourcePaths.map((path) => {
+      const retained = unassignedStateByPath.get(path);
+      return retained
+        ? extractWatchStateForSession(retained, id)
+        : extractWatchStateForSession(
+            loadedStatesByPath.get(path) ?? emptyWatchState(),
+            id,
+          );
+    });
+    if (retainedPaths.length > 0) {
+      let reason: string | undefined;
+      if (retainedPaths.length !== 1 || allSourcePaths.length !== 1) {
+        reason = 'the session appears in multiple profile state files';
+      } else if (retainedPaths[0] !== targetPath) {
+        reason = 'the source repository scope does not match the saved Issue URL';
+      } else if (
+        bundles.some((bundle) =>
+          bundle.pendingReports.some(
+            (report) =>
+              issueIdentity(report.issueUrl) !== issueIdentity(nextIssueUrl),
+          ),
+        )
+      ) {
+        reason = 'a pending report Issue URL does not match the saved Issue session';
+      }
+      if (reason) {
+        reportUnassignedBundle(id, reason, allSourcePaths, bundles);
+        return { assigned: false, reason };
+      }
+      const retainedPath = retainedPaths[0]!;
+      const retained = unassignedStateByPath.get(retainedPath)!;
+      const promoted = extractWatchStateForSession(retained, id);
+      removeWatchStateForSession(retained, id);
+      if (watchStateSessionIds(retained).size === 0) {
+        unassignedStateByPath.delete(retainedPath);
+      }
+      state = mergeWatchStates(state, promoted);
+    }
+
+    const previousPath = pathById.get(id);
+    const previousIssueUrl = issueUrlById.get(id);
+    if (
+      previousPath &&
+      (previousPath !== targetPath ||
+        (previousIssueUrl !== undefined &&
+          issueIdentity(previousIssueUrl) !== issueIdentity(nextIssueUrl)))
+    ) {
+      const reason = 'the verified Issue identity changed for this session ID';
+      quarantineActiveSession(id, reason);
+      return { assigned: false, reason };
+    }
+    pathById.set(id, targetPath);
+    issueUrlById.set(id, nextIssueUrl);
+    statePaths.add(targetPath);
+    reportedResumeStoreDuplicates.delete(id);
+    unassignedDiagnostics.delete(id);
+    return { assigned: true };
+  };
+  const pool: OperatorWatchPool = {
+    async register(conductorAgentId, input = {}) {
+      const id = requireNonEmptyString(conductorAgentId, 'conductorAgentId');
+      const watch = await withStateLock(async () => {
+        const located = await locateSession(id);
+        if (!located) throw new Error(`No saved session found for ${id}.`);
+        const binding = bindLocatedSession(id, located);
+        if (!binding.assigned) {
+          throw new Error(
+            `Watch state for ${id} remains unresolved and was retained: ${binding.reason}.`,
+          );
+        }
+        const nextWatch = {
+          conductorAgentId: id,
+          pollIntervalMs: parseBoundedInteger(
+            input.pollIntervalMs,
+            DEFAULT_POLL_INTERVAL_MS,
+            MIN_POLL_INTERVAL_MS,
+            MAX_POLL_INTERVAL_MS,
+            'pollIntervalMs',
+          ),
+          debounceMs: parseBoundedInteger(
+            input.debounceMs,
+            250,
+            0,
+            MAX_DEBOUNCE_MS,
+            'debounceMs',
+          ),
+        };
+        const previousWatch = state.watches[id];
+        state.watches[id] = nextWatch;
+        try {
+          await persist();
+        } catch (error) {
+          if (previousWatch) state.watches[id] = previousWatch;
+          else delete state.watches[id];
+          throw error;
+        }
+        return nextWatch;
+      });
       const existingTimer = timers.get(id);
       if (existingTimer) clearInterval(existingTimer);
       timers.delete(id);
       startTimer(watch);
+      const existingListener = state.messageListeners[id];
+      if (existingListener) startMessageTimer(existingListener);
       return watch;
     },
     async unregister(conductorAgentId) {
       const id = requireNonEmptyString(conductorAgentId, 'conductorAgentId');
-      const previousWatch = state.watches[id];
-      if (!previousWatch) return false;
-      delete state.watches[id];
-      try {
-        await persist();
-      } catch (error) {
-        state.watches[id] = previousWatch;
-        throw error;
-      }
+      const removed = await withStateLock(async () => {
+        const previousWatch = state.watches[id];
+        if (!previousWatch) return false;
+        delete state.watches[id];
+        try {
+          await persist();
+        } catch (error) {
+          state.watches[id] = previousWatch;
+          throw error;
+        }
+        return true;
+      });
+      if (!removed) return false;
       const timer = timers.get(id);
       if (timer) clearInterval(timer);
       timers.delete(id);
@@ -283,11 +624,6 @@ export async function createOperatorWatchPool(
     },
     async registerConductorMessageListen(conductorAgentId, input = {}) {
       const id = requireNonEmptyString(conductorAgentId, 'conductorAgentId');
-      const located = await findSession(id, {
-        root,
-        onDuplicate: onResumeStoreDuplicate,
-      });
-      if (!located) throw new Error(`No saved session found for ${id}.`);
       const listener = {
         conductorAgentId: id,
         messageDebounceMs: parseBoundedInteger(
@@ -298,16 +634,49 @@ export async function createOperatorWatchPool(
           'messageDebounceMs',
         ),
       };
-      const previous = state.messageListeners[id];
-      const previousCursor = state.messageCursors[id];
-      state.messageListeners[id] = listener;
-      try {
-        await persist();
-      } catch (error) {
-        if (previous) state.messageListeners[id] = previous;
-        else delete state.messageListeners[id];
-        throw error;
-      }
+      let previous: ConductorMessageListenConfig | undefined;
+      let previousCursor: number | undefined;
+      await withStateLock(async () => {
+        const located = await locateSession(id);
+        if (!located) throw new Error(`No saved session found for ${id}.`);
+        const binding = bindLocatedSession(id, located);
+        if (!binding.assigned) {
+          throw new Error(
+            `Watch state for ${id} remains unresolved and was retained: ${binding.reason}.`,
+          );
+        }
+        previous = state.messageListeners[id];
+        previousCursor = state.messageCursors[id];
+        state.messageListeners[id] = listener;
+        deferWatchPendingReports(
+          id,
+          Math.max(
+            listener.messageDebounceMs,
+            state.watches[id]?.debounceMs ?? 0,
+          ),
+        );
+        try {
+          await persist();
+        } catch (error) {
+          if (previous) state.messageListeners[id] = previous;
+          else delete state.messageListeners[id];
+          deferWatchPendingReports(
+            id,
+            Math.max(
+              previous?.messageDebounceMs ?? 0,
+              state.watches[id]?.debounceMs ?? 0,
+            ),
+          );
+          throw error;
+        }
+      });
+      options.dispatchQueue.deferWatchReports?.(
+        id,
+        Math.max(
+          listener.messageDebounceMs,
+          state.watches[id]?.debounceMs ?? 0,
+        ),
+      );
       const existingTimer = messageTimers.get(id);
       if (existingTimer) clearInterval(existingTimer);
       messageTimers.delete(id);
@@ -318,20 +687,51 @@ export async function createOperatorWatchPool(
         const timer = messageTimers.get(id);
         if (timer) clearInterval(timer);
         messageTimers.delete(id);
-        if (previous) state.messageListeners[id] = previous;
-        else delete state.messageListeners[id];
-        if (previousCursor === undefined) {
-          delete state.messageCursors[id];
-        }
         try {
-          await persist();
+          await withStateLock(async () => {
+            if (
+              state.messageListeners[id]?.messageDebounceMs !==
+              listener.messageDebounceMs
+            ) {
+              return;
+            }
+            if (previous) state.messageListeners[id] = previous;
+            else delete state.messageListeners[id];
+            if (previousCursor === undefined) {
+              delete state.messageCursors[id];
+            } else {
+              state.messageCursors[id] = previousCursor;
+            }
+            deferWatchPendingReports(
+              id,
+              Math.max(
+                previous?.messageDebounceMs ?? 0,
+                state.watches[id]?.debounceMs ?? 0,
+              ),
+            );
+            await persist();
+          });
         } catch (rollbackError) {
+          options.dispatchQueue.deferWatchReports?.(
+            id,
+            Math.max(
+              previous?.messageDebounceMs ?? 0,
+              state.watches[id]?.debounceMs ?? 0,
+            ),
+          );
           if (previous) startMessageTimer(previous);
           throw new AggregateError(
             [error, rollbackError],
             'Conductor message listen registration failed and could not be rolled back.',
           );
         }
+        options.dispatchQueue.deferWatchReports?.(
+          id,
+          Math.max(
+            previous?.messageDebounceMs ?? 0,
+            state.watches[id]?.debounceMs ?? 0,
+          ),
+        );
         if (previous) startMessageTimer(previous);
         throw error;
       }
@@ -339,21 +739,33 @@ export async function createOperatorWatchPool(
     },
     async unregisterConductorMessageListen(conductorAgentId) {
       const id = requireNonEmptyString(conductorAgentId, 'conductorAgentId');
-      const previous = state.messageListeners[id];
-      if (!previous) return false;
-      delete state.messageListeners[id];
-      const previousCursor = state.messageCursors[id];
-      delete state.messageCursors[id];
-      try {
-        await persist();
-      } catch (error) {
-        state.messageListeners[id] = previous;
-        if (previousCursor !== undefined) state.messageCursors[id] = previousCursor;
-        throw error;
-      }
+      const removed = await withStateLock(async () => {
+        const previous = state.messageListeners[id];
+        if (!previous) return false;
+        delete state.messageListeners[id];
+        const previousCursor = state.messageCursors[id];
+        delete state.messageCursors[id];
+        deferWatchPendingReports(
+          id,
+          state.watches[id]?.debounceMs ?? 0,
+        );
+        try {
+          await persist();
+        } catch (error) {
+          state.messageListeners[id] = previous;
+          if (previousCursor !== undefined) state.messageCursors[id] = previousCursor;
+          throw error;
+        }
+        return true;
+      });
+      if (!removed) return false;
       const timer = messageTimers.get(id);
       if (timer) clearInterval(timer);
       messageTimers.delete(id);
+      options.dispatchQueue.deferWatchReports?.(
+        id,
+        state.watches[id]?.debounceMs ?? 0,
+      );
       return true;
     },
     listConductorMessageListens() {
@@ -369,169 +781,185 @@ export async function createOperatorWatchPool(
     },
     async pollOnce(conductorAgentId) {
       const id = requireNonEmptyString(conductorAgentId, 'conductorAgentId');
-      const watch = state.watches[id];
-      if (!watch || closed || polling.has(id)) return 0;
+      if (closed || polling.has(id)) return 0;
       polling.add(id);
       try {
-        const located = await findSession(id, {
-          root,
-          onDuplicate: onResumeStoreDuplicate,
-        });
-        if (!located) return 0;
-        const {
-          snapshot: observation,
-          source,
-          connectivity,
-        } = await readObservation(root, located);
-        const resumeStore = located.resumeStore;
-        const previousLiveStatus = liveStatuses.get(id);
-        const checkedAt = Date.now();
-        liveStatuses.set(id, {
-          connectivity,
-          checkedAt: connectivity === 'unknown' ? null : checkedAt,
-          unreachableSince:
-            connectivity === 'unreachable'
-              ? previousLiveStatus?.connectivity === 'unreachable'
-                ? previousLiveStatus.unreachableSince ?? checkedAt
-                : checkedAt
-              : null,
-        });
-        const previous = state.cursors[id];
-        const next = cursorFor(observation);
-        const reports = collectReports(resumeStore, observation, previous, source)
-          .map((report) => ({
+        return await withStateLock(async () => {
+          const watch = state.watches[id];
+          if (!watch || closed) return 0;
+          let located: LocatedSessionResumeStore | undefined;
+          try {
+            located = await locateSession(id);
+          } catch (error) {
+            if (isAmbiguousResumeStoreError(error)) return 0;
+            throw error;
+          }
+          if (!located) return 0;
+          const binding = bindLocatedSession(id, located);
+          if (!binding.assigned) return 0;
+          const {
+            snapshot: observation,
+            source,
+            connectivity,
+          } = await readObservation(root, located);
+          const resumeStore = located.resumeStore;
+          const previousLiveStatus = liveStatuses.get(id);
+          const checkedAt = Date.now();
+          liveStatuses.set(id, {
+            connectivity,
+            checkedAt: connectivity === 'unknown' ? null : checkedAt,
+            unreachableSince:
+              connectivity === 'unreachable'
+                ? previousLiveStatus?.connectivity === 'unreachable'
+                  ? previousLiveStatus.unreachableSince ?? checkedAt
+                  : checkedAt
+                : null,
+          });
+          const previous = state.cursors[id];
+          const next = cursorFor(observation);
+          const debounceMs = Math.max(
+            watch.debounceMs,
+            state.messageListeners[id]?.messageDebounceMs ?? 0,
+          );
+          const readyAt = Date.now() + debounceMs;
+          const reports = collectReports(
+            resumeStore,
+            observation,
+            previous,
+            source,
+          ).map((report) => ({
             ...report,
             reportId: randomUUID(),
             conductorAgentId: id,
             issueUrl: resumeStore.issueUrl,
-            debounceMs: watch.debounceMs,
+            debounceMs,
+            readyAt,
           }));
-        const cursorChanged = hash(previous ?? null) !== hash(next);
-        if (reports.length > 0) state.pendingReports.push(...reports);
-        state.cursors[id] = next;
-        let persistFailed = false;
-        let persistenceError: unknown;
-        if (reports.length > 0 || cursorChanged) {
-          try {
-            await persist();
-          } catch (error) {
-            persistFailed = true;
-            persistenceError = error;
-          }
-        }
-        options.dispatchQueue.enqueueReports(
-          reports.map((report) => ({
-            type: 'report',
-            reportId: report.reportId,
-            reportType: report.reportType,
-            conductorAgentId: id,
-            issueUrl: resumeStore.issueUrl,
-            text: report.text,
-          })),
-          watch.debounceMs,
-        );
-        if (persistFailed) throw persistenceError;
-        return reports.length;
+          const cursorChanged = hash(previous ?? null) !== hash(next);
+          if (reports.length > 0) state.pendingReports.push(...reports);
+          state.cursors[id] = next;
+          if (reports.length > 0 || cursorChanged) await persist();
+          return reports.length;
+        });
       } finally {
         polling.delete(id);
       }
     },
     async pollConductorMessagesOnce(conductorAgentId) {
       const id = requireNonEmptyString(conductorAgentId, 'conductorAgentId');
-      const listener = state.messageListeners[id];
-      if (!listener || closed || messagePolling.has(id)) return 0;
+      if (closed || messagePolling.has(id)) return 0;
       messagePolling.add(id);
       try {
-        const located = await findSession(id, {
-          root,
-          onDuplicate: onResumeStoreDuplicate,
-        });
-        const resumeStore = located?.resumeStore;
-        if (!resumeStore?.harnessSocketPath) return 0;
-        const cursor = state.messageCursors[id];
-        if (cursor === undefined) {
-          state.messageCursors[id] = await readConductorMessageBaseline(
-            resumeStore.harnessSocketPath,
-          );
-          await persist();
-          return 0;
-        }
-        const readResult = await readConductorMessagePages(
-          resumeStore.harnessSocketPath,
-          cursor,
-        );
-        const messages = readResult.messages;
-        if (
-          messages.length === 0 &&
-          readResult.oversizedSendCounts.length === 0 &&
-          readResult.responseSizeError
-        ) {
-          throw readResult.responseSizeError;
-        }
-        const nextCursor = readResult.cursor;
-        const reports: OperatorWatchState['pendingReports'] = messages.map((message) => ({
-          reportId: randomUUID(),
-          reportType: 'conductor_message' as const,
-          conductorAgentId: id,
-          issueUrl: resumeStore.issueUrl,
-          text: formatConductorMessageReport(resumeStore, message),
-          debounceMs: listener.messageDebounceMs,
-          sendCount: message.sendCount,
-        }));
-        if (readResult.oversizedSendCounts.length > 0) {
-          reports.push({
-            reportId: randomUUID(),
-            reportType: 'conductor_message',
-            conductorAgentId: id,
-            issueUrl: resumeStore.issueUrl,
-            text: formatOversizedConductorMessageWarning(
-              resumeStore.issueUrl,
-              id,
-              readResult.oversizedSendCounts,
-            ),
-            debounceMs: listener.messageDebounceMs,
-            sendCount: readResult.oversizedSendCounts.at(-1)!,
-            oversizedSendCounts: readResult.oversizedSendCounts,
-          });
-        }
-        reports.sort(
-          (left, right) =>
-            (left.sendCount ?? 0) - (right.sendCount ?? 0),
-        );
-        state.messageCursors[id] = nextCursor;
-        if (reports.length > 0) state.pendingReports.push(...reports);
-        let persistFailed = false;
-        let persistenceError: unknown;
-        if (reports.length > 0 || nextCursor !== cursor) {
+        return await withStateLock(async () => {
+          const listener = state.messageListeners[id];
+          if (!listener || closed) return 0;
+          let located: LocatedSessionResumeStore | undefined;
           try {
-            await persist();
+            located = await locateSession(id);
           } catch (error) {
-            persistFailed = true;
-            persistenceError = error;
+            if (isAmbiguousResumeStoreError(error)) return 0;
+            throw error;
           }
-        }
-        options.dispatchQueue.enqueueDebouncedReports(
-          reports.map((report) => ({
-            type: 'report',
-            reportId: report.reportId,
-            reportType: report.reportType,
-            conductorAgentId: id,
-            issueUrl: resumeStore.issueUrl,
-            text: report.text,
-            sendCount: report.sendCount,
-            oversizedSendCounts: report.oversizedSendCounts,
-          })),
-          listener.messageDebounceMs,
-        );
-        if (persistFailed) throw persistenceError;
-        if (readResult.responseSizeError) {
-          throw readResult.responseSizeError;
-        }
-        return reports.length;
+          const resumeStore = located?.resumeStore;
+          if (!resumeStore?.harnessSocketPath) return 0;
+          const binding = bindLocatedSession(id, located!);
+          if (!binding.assigned) return 0;
+          const cursor = state.messageCursors[id];
+          if (cursor === undefined) {
+            state.messageCursors[id] = await readConductorMessageBaseline(
+              resumeStore.harnessSocketPath,
+            );
+            await persist();
+            return 0;
+          }
+          const readResult = await readConductorMessagePages(
+            resumeStore.harnessSocketPath,
+            cursor,
+          );
+          const messages = readResult.messages;
+          if (
+            messages.length === 0 &&
+            readResult.oversizedSendCounts.length === 0 &&
+            readResult.responseSizeError
+          ) {
+            throw readResult.responseSizeError;
+          }
+          const nextCursor = readResult.cursor;
+          const messageEvents = [
+            ...messages.map((message) => ({
+              type: 'message' as const,
+              sendCount: message.sendCount,
+              message,
+            })),
+            ...readResult.oversizedSendCounts.map((sendCount) => ({
+              type: 'oversized' as const,
+              sendCount,
+            })),
+          ].sort((left, right) => left.sendCount - right.sendCount);
+          const reports: OperatorWatchState['pendingReports'] = [];
+          const readyAt = Date.now() + listener.messageDebounceMs;
+          for (let index = 0; index < messageEvents.length; ) {
+            const event = messageEvents[index]!;
+            if (event.type === 'message') {
+              reports.push({
+                reportId: randomUUID(),
+                reportType: 'conductor_message',
+                conductorAgentId: id,
+                issueUrl: resumeStore.issueUrl,
+                text: formatConductorMessageReport(resumeStore, event.message),
+                debounceMs: listener.messageDebounceMs,
+                readyAt,
+                sendCount: event.sendCount,
+              });
+              index += 1;
+              continue;
+            }
+
+            const oversizedSendCounts: number[] = [];
+            while (
+              messageEvents[index]?.type === 'oversized'
+            ) {
+              oversizedSendCounts.push(messageEvents[index]!.sendCount);
+              index += 1;
+            }
+            reports.push({
+              reportId: randomUUID(),
+              reportType: 'conductor_message',
+              conductorAgentId: id,
+              issueUrl: resumeStore.issueUrl,
+              text: formatOversizedConductorMessageWarning(
+                resumeStore.issueUrl,
+                id,
+                oversizedSendCounts,
+              ),
+              debounceMs: listener.messageDebounceMs,
+              readyAt,
+              sendCount: oversizedSendCounts.at(-1)!,
+              oversizedSendCounts,
+            });
+          }
+          reports.sort(
+            (left, right) =>
+              (left.sendCount ?? 0) - (right.sendCount ?? 0),
+          );
+          state.messageCursors[id] = nextCursor;
+          if (reports.length > 0) {
+            for (const pending of state.pendingReports) {
+              if (pending.conductorAgentId === id) pending.readyAt = readyAt;
+            }
+            state.pendingReports.push(...reports);
+          }
+          if (reports.length > 0 || nextCursor !== cursor) await persist();
+          if (readResult.responseSizeError) {
+            throw readResult.responseSizeError;
+          }
+          return reports.length;
+        });
       } finally {
         messagePolling.delete(id);
       }
     },
+    refreshPendingReports,
     async acknowledge(events) {
       const acknowledged = new Set(
         events.flatMap((event) =>
@@ -539,12 +967,15 @@ export async function createOperatorWatchPool(
         ),
       );
       if (acknowledged.size === 0) return;
-      const remaining = state.pendingReports.filter(
-        (report) => !acknowledged.has(report.reportId),
-      );
-      if (remaining.length === state.pendingReports.length) return;
-      state.pendingReports = remaining;
-      await persist();
+      await withStateLock(async () => {
+        const remaining = state.pendingReports.filter(
+          (report) => !acknowledged.has(report.reportId),
+        );
+        if (remaining.length === state.pendingReports.length) return;
+        state.pendingReports = remaining;
+        await persist();
+      });
+      options.dispatchQueue.discardQueuedReports?.([...acknowledged]);
     },
     close() {
       closed = true;
@@ -552,24 +983,23 @@ export async function createOperatorWatchPool(
       timers.clear();
       for (const timer of messageTimers.values()) clearInterval(timer);
       messageTimers.clear();
+      if (pendingReportRefreshTimer) clearInterval(pendingReportRefreshTimer);
+      pendingReportRefreshTimer = undefined;
     },
   };
 
-  for (const report of state.pendingReports) {
-    options.dispatchQueue.enqueueReports(
-      [{
-        type: 'report',
-        reportId: report.reportId,
-        reportType: report.reportType,
-        conductorAgentId: report.conductorAgentId,
-        issueUrl: report.issueUrl,
-        text: report.text,
-        sendCount: report.sendCount,
-        oversizedSendCounts: report.oversizedSendCounts,
-      }],
-      0,
-    );
-  }
+  pendingReportRefreshTimer = setInterval(() => {
+    if (closed || pendingReportRefreshInFlight) return;
+    pendingReportRefreshInFlight = true;
+    void refreshPendingReports().catch((error: unknown) => {
+      options.onError?.(
+        formatPendingReportRefreshError(error),
+      );
+    }).finally(() => {
+      pendingReportRefreshInFlight = false;
+    });
+  }, PENDING_REPORT_REFRESH_INTERVAL_MS);
+  pendingReportRefreshTimer.unref();
   for (const watch of pool.list()) startTimer(watch);
   for (const listener of pool.listConductorMessageListens()) {
     startMessageTimer(listener);
@@ -598,7 +1028,8 @@ export function createRegisterSessionWatchTool(
           type: 'integer',
           minimum: 0,
           maximum: MAX_DEBOUNCE_MS,
-          description: 'Wait after an observation so nearby reports can be batched (default 250).',
+          description:
+            'Watch report quiet window in milliseconds (default 250). When conductor-message listen is active, watch reports also wait for its messageDebounceMs window.',
         },
       },
       required: ['conductorAgentId'],
@@ -646,7 +1077,7 @@ export function createRegisterConductorMessageListenTool(
   return {
     name: 'register_conductor_message_listen',
     description:
-      'Listen for new successful conductor responses from a running Issue session. The first live poll establishes a baseline; subsequent messages are polled over UDS and debounced into one report. No offline fallback is used.',
+      'Listen for new successful conductor responses from a running Issue session. The first live poll establishes a baseline; subsequent messages are polled over UDS and debounced into one report. Related watch reports for the same session share this quiet window. No offline fallback is used.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -1174,6 +1605,76 @@ function emptyWatchState(): OperatorWatchState {
   };
 }
 
+function watchStateSessionIds(state: OperatorWatchState): Set<string> {
+  return new Set([
+    ...Object.keys(state.watches),
+    ...Object.keys(state.cursors),
+    ...Object.keys(state.messageListeners),
+    ...Object.keys(state.messageCursors),
+    ...state.pendingReports.map((report) => report.conductorAgentId),
+  ]);
+}
+
+function extractWatchStateForSession(
+  state: OperatorWatchState,
+  conductorAgentId: string,
+): OperatorWatchState {
+  return {
+    version: WATCH_STATE_VERSION,
+    watches: state.watches[conductorAgentId]
+      ? { [conductorAgentId]: state.watches[conductorAgentId]! }
+      : {},
+    cursors: state.cursors[conductorAgentId]
+      ? { [conductorAgentId]: state.cursors[conductorAgentId]! }
+      : {},
+    messageListeners: state.messageListeners[conductorAgentId]
+      ? { [conductorAgentId]: state.messageListeners[conductorAgentId]! }
+      : {},
+    messageCursors: state.messageCursors[conductorAgentId] !== undefined
+      ? { [conductorAgentId]: state.messageCursors[conductorAgentId]! }
+      : {},
+    pendingReports: state.pendingReports.filter(
+      (report) => report.conductorAgentId === conductorAgentId,
+    ),
+  };
+}
+
+function removeWatchStateForSession(
+  state: OperatorWatchState,
+  conductorAgentId: string,
+): void {
+  delete state.watches[conductorAgentId];
+  delete state.cursors[conductorAgentId];
+  delete state.messageListeners[conductorAgentId];
+  delete state.messageCursors[conductorAgentId];
+  state.pendingReports = state.pendingReports.filter(
+    (report) => report.conductorAgentId !== conductorAgentId,
+  );
+}
+
+function summarizeWatchStateBundles(
+  conductorAgentId: string,
+  bundles: readonly OperatorWatchState[],
+): string {
+  const count = (select: (state: OperatorWatchState) => boolean) =>
+    bundles.filter(select).length;
+  const pendingReportCount = bundles.reduce(
+    (total, bundle) =>
+      total +
+      bundle.pendingReports.filter(
+        (report) => report.conductorAgentId === conductorAgentId,
+      ).length,
+    0,
+  );
+  return [
+    `watches=${count((bundle) => conductorAgentId in bundle.watches)}`,
+    `cursors=${count((bundle) => conductorAgentId in bundle.cursors)}`,
+    `listeners=${count((bundle) => conductorAgentId in bundle.messageListeners)}`,
+    `messageCursors=${count((bundle) => conductorAgentId in bundle.messageCursors)}`,
+    `pendingReports=${pendingReportCount}`,
+  ].join(', ');
+}
+
 function mergeWatchStates(
   preferred: OperatorWatchState,
   fallback: OperatorWatchState,
@@ -1201,7 +1702,6 @@ function partitionWatchState(
   state: OperatorWatchState,
   pathById: ReadonlyMap<string, string>,
   issueUrlById: ReadonlyMap<string, string>,
-  onError?: (message: string) => void,
 ): Map<string, OperatorWatchState> {
   const partitions = new Map<string, OperatorWatchState>();
   const getPartition = (path: string) => {
@@ -1221,10 +1721,9 @@ function partitionWatchState(
     for (const [id, value] of Object.entries(state[field])) {
       const path = pathById.get(id);
       if (!path) {
-        onError?.(
-        `watch state for ${id} cannot be assigned to a verified Issue session and was not saved.`,
+        throw new Error(
+          `Verified watch state for ${id} lost its Issue session mapping before persistence.`,
         );
-        continue;
       }
       (getPartition(path)[field] as Record<string, unknown>)[id] = value;
     }
@@ -1237,10 +1736,9 @@ function partitionWatchState(
       !expectedIssueUrl ||
       issueIdentity(expectedIssueUrl) !== issueIdentity(report.issueUrl)
     ) {
-      onError?.(
-        `pending watch report ${report.reportId} could not be matched to its Issue session and was not saved.`,
+      throw new Error(
+        `Verified pending watch report ${report.reportId} no longer matches its Issue session before persistence.`,
       );
-      continue;
     }
     getPartition(path).pendingReports.push(report);
   }
@@ -1267,6 +1765,13 @@ async function findSession(
     userEnsembleRoot: options.root,
     onDuplicate: options.onDuplicate,
   });
+}
+
+function isAmbiguousResumeStoreError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    error.message.includes('is ambiguous across saved Issues')
+  );
 }
 
 async function loadWatchState(path: string): Promise<OperatorWatchState> {
@@ -1458,14 +1963,33 @@ async function loadWatchState(path: string): Promise<OperatorWatchState> {
           'Invalid operator-agent watch state: pending report debounceMs.',
         );
       }
+      if (
+        report.readyAt !== undefined &&
+        (typeof report.readyAt !== 'number' ||
+          !Number.isSafeInteger(report.readyAt) ||
+          report.readyAt < 0)
+      ) {
+        throw new Error(
+          'Invalid operator-agent watch state: pending report readyAt.',
+        );
+      }
     }
+    const normalizedPendingReports = pendingReports.map((report) => {
+      const record = report as Record<string, unknown>;
+      return {
+        ...record,
+        // Legacy v1 state had no persisted deadline and was replayed
+        // immediately on startup.
+        readyAt: typeof record.readyAt === 'number' ? record.readyAt : 0,
+      };
+    }) as OperatorWatchState['pendingReports'];
     return {
       version: WATCH_STATE_VERSION,
       watches,
       cursors,
       messageListeners,
       messageCursors,
-      pendingReports: pendingReports as OperatorWatchState['pendingReports'],
+      pendingReports: normalizedPendingReports,
     };
   } catch (error) {
     if (isEnoent(error)) {
@@ -1496,6 +2020,92 @@ async function saveWatchState(
   });
   await chmod(temporary, 0o600);
   await rename(temporary, path);
+}
+
+async function withWatchStateLock<T>(
+  root: string,
+  profile: string,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const directory = join(root, 'operator-agents', profile, 'watch');
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  await chmod(directory, 0o700);
+  const canonicalDirectory = await realpath(directory);
+  const database = new DatabaseSync(
+    join(canonicalDirectory, 'watch-state-lock.sqlite'),
+  );
+  let transactionStarted = false;
+  let operationError: unknown;
+  try {
+    await chmod(
+      join(canonicalDirectory, 'watch-state-lock.sqlite'),
+      0o600,
+    );
+    database.exec('PRAGMA busy_timeout = 0');
+    let lastLockError: unknown;
+    for (let attempt = 0; attempt < WATCH_STATE_LOCK_RETRIES; attempt += 1) {
+      try {
+        database.exec('BEGIN IMMEDIATE');
+        transactionStarted = true;
+        break;
+      } catch (error) {
+        if (!isSqliteLockContention(error)) throw error;
+        lastLockError = error;
+        if (attempt + 1 < WATCH_STATE_LOCK_RETRIES) {
+          await new Promise((resolve) =>
+            setTimeout(resolve, WATCH_STATE_LOCK_RETRY_DELAY_MS),
+          );
+        }
+      }
+    }
+    if (!transactionStarted) {
+      throw new Error(
+        `Could not acquire operator watch state profile lock after ${WATCH_STATE_LOCK_RETRIES} attempts.`,
+        { cause: lastLockError },
+      );
+    }
+    return await operation();
+  } catch (error) {
+    operationError = error;
+    throw error;
+  } finally {
+    let releaseError: unknown;
+    try {
+      if (transactionStarted) database.exec('ROLLBACK');
+    } catch (error) {
+      releaseError = error;
+    }
+    try {
+      database.close();
+    } catch (error) {
+      releaseError =
+        releaseError === undefined
+          ? error
+          : new AggregateError([releaseError, error]);
+    }
+    if (releaseError !== undefined) {
+      if (operationError !== undefined) {
+        throw new AggregateError(
+          [operationError, releaseError],
+          'Operator watch state update failed and its profile lock could not be released.',
+        );
+      }
+      throw releaseError;
+    }
+  }
+}
+
+function isSqliteLockContention(error: unknown): boolean {
+  if (
+    typeof error !== 'object' ||
+    error === null ||
+    !('errcode' in error) ||
+    typeof error.errcode !== 'number'
+  ) {
+    return false;
+  }
+  const primaryCode = error.errcode & 0xff;
+  return primaryCode === 5 || primaryCode === 6;
 }
 
 function hash(value: unknown): string {
@@ -1612,4 +2222,10 @@ function formatConductorMessagePollError(
   const errorType =
     error instanceof Error && error.name ? error.name : 'unknown error';
   return `Failed to poll conductor messages for session ${conductorAgentId} (${errorType}).`;
+}
+
+function formatPendingReportRefreshError(error: unknown): string {
+  const errorType =
+    error instanceof Error && error.name ? error.name : 'unknown error';
+  return `Failed to refresh persisted operator watch reports (${errorType}).`;
 }
