@@ -149,6 +149,7 @@ ADR は**合意された設計判断の履歴**を残すもの。一度 `accepte
 | [0075](0075-pi-conductor-default-and-model-selection.md) | Pi conductor の既定化と model 選択 | accepted |
 | [0076](0076-retire-legacy-issue-session-read-fallbacks.md) | Issue session の legacy read fallback 廃止と migration 手順 | accepted |
 | [0077](0077-operator-agent-session-report-coalescing.md) | operator-agent の同一 session report 集約 | accepted |
+| [0078](0078-operator-watch-state-serialization.md) | operator-agent watch state の process 間直列化 | accepted |
 
 ## 追加するとき
 

@@ -82,7 +82,7 @@ list tool の `structuredContent` は UDS の `result`（`{ "questions": [...] }
 
 ## Operator-agent watch state の欠損・破損と復旧
 
-watch pool は選択 profile と Issue URL の canonical repository slug ごとに `~/.ensemble/operator-agents/<profile>/watch/github.com/<owner>/<repo>/watch-state.json` を使い、watch 登録、session ごとの cursor、未 dispatch report を atomic に保存します。旧 user path-hash / slug-keyed watch bundle と列挙 checkout の project-local watch state は明示 migration tool の source で、runtime は読みません。profile state がなければ空の state として扱い、legacy source を自動で統合・変更・削除しません。
+watch pool は選択 profile と Issue URL の canonical repository slug ごとに `~/.ensemble/operator-agents/<profile>/watch/github.com/<owner>/<repo>/watch-state.json` を使い、watch 登録、session ごとの cursor、未 dispatch report を atomic に保存します。同じ profile の複数 operator-agent process は profile 単位の file lock で更新を直列化し、poll / ack / 登録変更の前に state file 群を読み直します。cursor と pending report は同じ lock 内で保存するため、古い全体 snapshot による他 process の更新消失を防ぎます。poll 中も lock を保持するので、同一 profile の poll は session / repository をまたいで直列になります。lock は20秒ごとに heartbeat を更新し、120秒更新されなければ stale として回復対象にします。lock の取得に失敗した更新や、保存前に lock 消失を検知した更新は state を保存せず error とし、poll / retry の次回実行に委ねます。長時間の OS suspend をまたいだ exactly-once delivery は保証しません。旧 user path-hash / slug-keyed watch bundle と列挙 checkout の project-local watch state は明示 migration tool の source で、runtime は読みません。profile state がなければ空の state として扱い、legacy source を自動で統合・変更・削除しません。
 
 profile state 内の ID に対して一意な SessionResumeStore が見つからない、同じ ID の Store が複数ある、state file の repository scope または pending report の Issue URL が Store と一致しない場合、その session bundle（watch / cursor / listener / pending report）は元の state file に残して dispatch しません。原因と field 件数を session 単位で診断し、同じ内容の persist ごとには繰り返しません。Store が後から一意になり、repository path と pending report の Issue identity も一致すれば `register_session_watch` / `register_conductor_message_listen` による再登録時に元の cursor と report ID を復旧します。食い違いが残る間は自動割当・自動破棄を行いません。
 
@@ -317,7 +317,7 @@ UDS response の上限は従来どおり **1,048,576 bytes（1 MiB）** です�
 
 operator-agent の listen は limit 20 の page から読み始め、aggregate response が 1 MiB を超えた場合は同じ exclusive cursor から limit を下げて再試行します。取得できた複数 page はその poll の debounce report にまとめ、sendCount 昇順で通知します。cursor は取得済み page の最後までだけ進めるため、retry で発言を飛ばしたり並べ替えたりしません。
 
-limit 1 でも単独 response が上限を超える発言に達した場合、その発言の `sendCount` を使って listen cursor を安全に進めます。読み取れなかった発言は内容を切り詰めずに読み飛ばし、同じ debounce window に複数 poll で見つかったものも含め、report ごとに件数と `sendCount` を列挙した warning section 1つにまとめます。その後も polling を続け、後続の読み取り可能な発言を順序どおり通知します。先に取得した page、読み飛ばした発言、後続 page は同じ report window にまとめられます。list API はこの動作をせず、単独 oversized record を含む response に対して従来どおり明示的な size error を返します。
+limit 1 でも単独 response が上限を超える発言に達した場合、その発言の `sendCount` を使って listen cursor を安全に進めます。読み取れなかった発言は内容を切り詰めずに読み飛ばし、同じ debounce window の複数 poll で見つかった oversized warning は隣り合うものを1 sectionにまとめます。間に読み取り可能な発言や別 report がある場合は warning を分け、`sendCount` と report の到着順を保ちます。その後も polling を続け、後続の読み取り可能な発言を順序どおり通知します。先に取得した page、読み飛ばした発言、後続 page は同じ report window にまとめられます。list API はこの動作をせず、単独 oversized record を含む response に対して従来どおり明示的な size error を返します。
 
 ### operator-agent の provider history list
 

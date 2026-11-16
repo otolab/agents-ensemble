@@ -116,7 +116,7 @@ export const operatorBaseModule: PromptModule<OperatorPromptContext> = {
         '- bootstrap、failed / cancelled / running、空 response は一覧対象外です。system prompt、tool data、thinking 等は返しません。Pi の別 branch は一覧から外れ、Cursor の既存 sidecar に bootstrap run ID がない場合は先頭 run を bootstrap とみなします',
         '- provider session file / local store と対象 entry / run が残っている範囲で参照できます。retention や削除時期は provider store に依存し、長期保存を保証しません。inbound 本文の secret redaction は行われません',
         '- `register_conductor_message_listen` は現在の最新 sendCount を baseline にし、それより後の成功応答を通知します。最新 baseline が単独で上限を超える場合も、error の sendCount を使って登録を完了します。窓内の複数発言は sendCount 昇順で inbound / response をまとめます',
-        '- listen は一覧 page が1 MiBを超えると limit を下げて同じ cursor から再試行します。単独で1 MiBを超える発言は切り詰めずに読み飛ばし、同じ debounce window の複数 poll で見つかった oversized 発言を件数と sendCount 付きの warning section 1つにまとめます。その後の読み取り可能な発言も順序どおり通知します',
+        '- listen は一覧 page が1 MiBを超えると limit を下げて同じ cursor から再試行します。単独で1 MiBを超える発言は切り詰めずに読み飛ばし、隣り合う oversized warning は件数と sendCount 付きの1 sectionにまとめます。間に読める発言や別 report がある場合は warning を分けて到着順を保ち、その後の読み取り可能な発言も順序どおり通知します',
         '- 稼働中 harness の UDS method `session.conductor_messages.list` は oversized response を明示的な size error として返します。listen だけが error に含まれる sendCount を使って unreadable record を越えて polling を続けます。provider history を読む `list_conductor_messages` tool はこの UDS response 上限を使いません',
         '- `messageDebounceMs` は既定10,000ms、0〜120,000msです。`register_session_watch` の `debounceMs` とは別設定ですが、listen 中は同じ session の watch report も大きい方の値を待ちます。Open Question cursorとは独立しています',
         '- `unregister_conductor_message_listen` は以後の発言 polling を解除します。稼働中 UDS が利用できない場合に保存 YAML / sidecar へ fallback はしません',

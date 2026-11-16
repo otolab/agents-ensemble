@@ -1,5 +1,14 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { access, chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { lock } from 'proper-lockfile';
+import {
+  access,
+  chmod,
+  mkdir,
+  readFile,
+  realpath,
+  rename,
+  writeFile,
+} from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import {
   CONDUCTOR_MESSAGE_PAGE_DEFAULT_LIMIT,
@@ -130,6 +139,7 @@ export async function createOperatorWatchPool(
 ): Promise<OperatorWatchPool> {
   const root = options.userEnsembleRoot ?? resolveUserEnsembleRoot();
   const profile = options.profile ?? 'default';
+  await listOperatorWatchStatePaths(root, profile);
   const stores = (
     await listUserLocatedSessionResumeStoresPage(
       {},
@@ -158,25 +168,12 @@ export async function createOperatorWatchPool(
     }
   }
 
-  const newStatePaths = await listOperatorWatchStatePaths(root, profile);
   const loadedStatesByPath = new Map<string, OperatorWatchState>();
-  for (const path of newStatePaths) {
-    loadedStatesByPath.set(path, await loadWatchState(path));
-  }
-  const statePaths = new Set(newStatePaths);
-  for (const path of pathById.values()) {
-    if (await pathExists(path)) statePaths.add(path);
-  }
+  const statePaths = new Set<string>();
   const stateSourcesById = new Map<string, Set<string>>();
-  for (const [path, loaded] of loadedStatesByPath) {
-    for (const id of watchStateSessionIds(loaded)) {
-      const sourcePaths = stateSourcesById.get(id) ?? new Set<string>();
-      sourcePaths.add(path);
-      stateSourcesById.set(id, sourcePaths);
-    }
-  }
   const unassignedStateByPath = new Map<string, OperatorWatchState>();
   const unassignedDiagnostics = new Map<string, string>();
+  const ambiguousResumeStoreIds = new Set<string>();
   const reportUnassignedBundle = (
     id: string,
     reason: string,
@@ -196,48 +193,74 @@ export async function createOperatorWatchPool(
     );
   };
   let state = emptyWatchState();
-  const allStateIds = new Set(stateSourcesById.keys());
-  for (const id of allStateIds) {
-    const sourcePaths = [...(stateSourcesById.get(id) ?? [])];
-    const sourceBundles = sourcePaths.map((path) =>
-      extractWatchStateForSession(loadedStatesByPath.get(path)!, id),
-    );
-    const targetPath = pathById.get(id);
-    const expectedIssueUrl = issueUrlById.get(id);
-    let reason: string | undefined;
-    if (!targetPath || !expectedIssueUrl) {
-      reason =
-        (storesById.get(id)?.length ?? 0) > 1
-          ? 'multiple SessionResumeStores exist for this conductor ID'
-          : 'no unique verified Issue session is available';
-    } else if (sourcePaths.length !== 1) {
-      reason = 'the session appears in multiple profile state files';
-    } else if (sourcePaths[0] !== targetPath) {
-      reason = 'the source repository scope does not match the saved Issue URL';
-    } else if (
-      sourceBundles.some((bundle) =>
-        bundle.pendingReports.some(
-          (report) =>
-            issueIdentity(report.issueUrl) !== issueIdentity(expectedIssueUrl),
-        ),
-      )
-    ) {
-      reason = 'a pending report Issue URL does not match the saved Issue session';
+  let assertStateLockHeld = () => {};
+  const refreshStateFromDisk = async () => {
+    const paths = new Set([
+      ...statePaths,
+      ...(await listOperatorWatchStatePaths(root, profile)),
+    ]);
+    loadedStatesByPath.clear();
+    statePaths.clear();
+    for (const path of paths) {
+      loadedStatesByPath.set(path, await loadWatchState(path));
+      statePaths.add(path);
     }
-
-    if (reason) {
-      for (const [index, sourcePath] of sourcePaths.entries()) {
-        const retained = unassignedStateByPath.get(sourcePath) ?? emptyWatchState();
-        unassignedStateByPath.set(
-          sourcePath,
-          mergeWatchStates(sourceBundles[index]!, retained),
-        );
+    stateSourcesById.clear();
+    unassignedStateByPath.clear();
+    state = emptyWatchState();
+    for (const [path, loaded] of loadedStatesByPath) {
+      for (const id of watchStateSessionIds(loaded)) {
+        const sourcePaths = stateSourcesById.get(id) ?? new Set<string>();
+        sourcePaths.add(path);
+        stateSourcesById.set(id, sourcePaths);
       }
-      reportUnassignedBundle(id, reason, sourcePaths, sourceBundles);
-      continue;
     }
-    state = mergeWatchStates(state, sourceBundles[0]!);
-  }
+    for (const id of stateSourcesById.keys()) {
+      const sourcePaths = [...(stateSourcesById.get(id) ?? [])];
+      const sourceBundles = sourcePaths.map((path) =>
+        extractWatchStateForSession(loadedStatesByPath.get(path)!, id),
+      );
+      const targetPath = pathById.get(id);
+      const expectedIssueUrl = issueUrlById.get(id);
+      let reason: string | undefined;
+      if (!targetPath || !expectedIssueUrl) {
+        reason =
+          ambiguousResumeStoreIds.has(id) ||
+          (storesById.get(id)?.length ?? 0) > 1
+            ? 'multiple SessionResumeStores exist for this conductor ID'
+            : 'no unique verified Issue session is available';
+      } else if (sourcePaths.length !== 1) {
+        reason = 'the session appears in multiple profile state files';
+      } else if (sourcePaths[0] !== targetPath) {
+        reason = 'the source repository scope does not match the saved Issue URL';
+      } else if (
+        sourceBundles.some((bundle) =>
+          bundle.pendingReports.some(
+            (report) =>
+              issueIdentity(report.issueUrl) !== issueIdentity(expectedIssueUrl),
+          ),
+        )
+      ) {
+        reason = 'a pending report Issue URL does not match the saved Issue session';
+      }
+
+      if (reason) {
+        for (const [index, sourcePath] of sourcePaths.entries()) {
+          const retained =
+            unassignedStateByPath.get(sourcePath) ?? emptyWatchState();
+          unassignedStateByPath.set(
+            sourcePath,
+            mergeWatchStates(sourceBundles[index]!, retained),
+          );
+        }
+        reportUnassignedBundle(id, reason, sourcePaths, sourceBundles);
+        continue;
+      }
+      state = mergeWatchStates(state, sourceBundles[0]!);
+      unassignedDiagnostics.delete(id);
+    }
+  };
+  await withWatchStateLock(root, profile, refreshStateFromDisk);
   const timers = new Map<string, NodeJS.Timeout>();
   const polling = new Set<string>();
   const messageTimers = new Map<string, NodeJS.Timeout>();
@@ -247,6 +270,7 @@ export async function createOperatorWatchPool(
   const onResumeStoreDuplicate = (
     diagnostic: SessionResumeStoreDuplicateDiagnostic,
   ) => {
+    ambiguousResumeStoreIds.add(diagnostic.conductorAgentId);
     const signature = JSON.stringify(diagnostic);
     if (
       reportedResumeStoreDuplicates.get(diagnostic.conductorAgentId) ===
@@ -264,31 +288,45 @@ export async function createOperatorWatchPool(
     }
   };
   let closed = false;
-  let persistQueue = Promise.resolve();
+  let stateOperationQueue = Promise.resolve();
 
   const persist = async () => {
-    const next = persistQueue.then(async () => {
-      const partitions = partitionWatchState(
-        state,
-        pathById,
-        issueUrlById,
+    assertStateLockHeld();
+    const partitions = partitionWatchState(state, pathById, issueUrlById);
+    for (const [path, retained] of unassignedStateByPath) {
+      partitions.set(
+        path,
+        mergeWatchStates(partitions.get(path) ?? emptyWatchState(), retained),
       );
-      for (const [path, retained] of unassignedStateByPath) {
-        partitions.set(
-          path,
-          mergeWatchStates(partitions.get(path) ?? emptyWatchState(), retained),
-        );
+    }
+    for (const [path, partition] of partitions) {
+      statePaths.add(path);
+      await saveWatchState(path, partition, assertStateLockHeld);
+    }
+    for (const path of statePaths) {
+      if (!partitions.has(path)) {
+        await saveWatchState(path, emptyWatchState(), assertStateLockHeld);
       }
-      for (const [path, partition] of partitions) {
-        statePaths.add(path);
-        await saveWatchState(path, partition);
-      }
-      for (const path of statePaths) {
-        if (!partitions.has(path)) await saveWatchState(path, emptyWatchState());
-      }
-    });
-    persistQueue = next.catch(() => {});
-    await next;
+    }
+  };
+  const withStateLock = <T>(operation: () => Promise<T>): Promise<T> => {
+    const next = stateOperationQueue.then(() =>
+      withWatchStateLock(root, profile, async (assertLockHeld) => {
+        await refreshStateFromDisk();
+        const previousAssertStateLockHeld = assertStateLockHeld;
+        assertStateLockHeld = assertLockHeld;
+        try {
+          return await operation();
+        } finally {
+          assertStateLockHeld = previousAssertStateLockHeld;
+        }
+      }),
+    );
+    stateOperationQueue = next.then(
+      () => undefined,
+      () => undefined,
+    );
+    return next;
   };
   const startTimer = (watch: WatchConfig) => {
     if (timers.has(watch.conductorAgentId)) return;
@@ -351,6 +389,7 @@ export async function createOperatorWatchPool(
         root,
         onDuplicate: onResumeStoreDuplicate,
       });
+      if (located) ambiguousResumeStoreIds.delete(id);
       if (!located) {
         quarantineActiveSession(
           id,
@@ -360,6 +399,7 @@ export async function createOperatorWatchPool(
       return located;
     } catch (error) {
       if (isAmbiguousResumeStoreError(error)) {
+        ambiguousResumeStoreIds.add(id);
         quarantineActiveSession(
           id,
           'multiple SessionResumeStores exist for this conductor ID',
@@ -474,40 +514,43 @@ export async function createOperatorWatchPool(
   const pool: OperatorWatchPool = {
     async register(conductorAgentId, input = {}) {
       const id = requireNonEmptyString(conductorAgentId, 'conductorAgentId');
-      const located = await locateSession(id);
-      if (!located) throw new Error(`No saved session found for ${id}.`);
-      const binding = bindLocatedSession(id, located);
-      if (!binding.assigned) {
-        throw new Error(
-          `Watch state for ${id} remains unresolved and was retained: ${binding.reason}.`,
-        );
-      }
-      const watch = {
-        conductorAgentId: id,
-        pollIntervalMs: parseBoundedInteger(
-          input.pollIntervalMs,
-          DEFAULT_POLL_INTERVAL_MS,
-          MIN_POLL_INTERVAL_MS,
-          MAX_POLL_INTERVAL_MS,
-          'pollIntervalMs',
-        ),
-        debounceMs: parseBoundedInteger(
-          input.debounceMs,
-          250,
-          0,
-          MAX_DEBOUNCE_MS,
-          'debounceMs',
-        ),
-      };
-      const previousWatch = state.watches[id];
-      state.watches[id] = watch;
-      try {
-        await persist();
-      } catch (error) {
-        if (previousWatch) state.watches[id] = previousWatch;
-        else delete state.watches[id];
-        throw error;
-      }
+      const watch = await withStateLock(async () => {
+        const located = await locateSession(id);
+        if (!located) throw new Error(`No saved session found for ${id}.`);
+        const binding = bindLocatedSession(id, located);
+        if (!binding.assigned) {
+          throw new Error(
+            `Watch state for ${id} remains unresolved and was retained: ${binding.reason}.`,
+          );
+        }
+        const nextWatch = {
+          conductorAgentId: id,
+          pollIntervalMs: parseBoundedInteger(
+            input.pollIntervalMs,
+            DEFAULT_POLL_INTERVAL_MS,
+            MIN_POLL_INTERVAL_MS,
+            MAX_POLL_INTERVAL_MS,
+            'pollIntervalMs',
+          ),
+          debounceMs: parseBoundedInteger(
+            input.debounceMs,
+            250,
+            0,
+            MAX_DEBOUNCE_MS,
+            'debounceMs',
+          ),
+        };
+        const previousWatch = state.watches[id];
+        state.watches[id] = nextWatch;
+        try {
+          await persist();
+        } catch (error) {
+          if (previousWatch) state.watches[id] = previousWatch;
+          else delete state.watches[id];
+          throw error;
+        }
+        return nextWatch;
+      });
       const existingTimer = timers.get(id);
       if (existingTimer) clearInterval(existingTimer);
       timers.delete(id);
@@ -518,15 +561,19 @@ export async function createOperatorWatchPool(
     },
     async unregister(conductorAgentId) {
       const id = requireNonEmptyString(conductorAgentId, 'conductorAgentId');
-      const previousWatch = state.watches[id];
-      if (!previousWatch) return false;
-      delete state.watches[id];
-      try {
-        await persist();
-      } catch (error) {
-        state.watches[id] = previousWatch;
-        throw error;
-      }
+      const removed = await withStateLock(async () => {
+        const previousWatch = state.watches[id];
+        if (!previousWatch) return false;
+        delete state.watches[id];
+        try {
+          await persist();
+        } catch (error) {
+          state.watches[id] = previousWatch;
+          throw error;
+        }
+        return true;
+      });
+      if (!removed) return false;
       const timer = timers.get(id);
       if (timer) clearInterval(timer);
       timers.delete(id);
@@ -537,14 +584,6 @@ export async function createOperatorWatchPool(
     },
     async registerConductorMessageListen(conductorAgentId, input = {}) {
       const id = requireNonEmptyString(conductorAgentId, 'conductorAgentId');
-      const located = await locateSession(id);
-      if (!located) throw new Error(`No saved session found for ${id}.`);
-      const binding = bindLocatedSession(id, located);
-      if (!binding.assigned) {
-        throw new Error(
-          `Watch state for ${id} remains unresolved and was retained: ${binding.reason}.`,
-        );
-      }
       const listener = {
         conductorAgentId: id,
         messageDebounceMs: parseBoundedInteger(
@@ -555,16 +594,28 @@ export async function createOperatorWatchPool(
           'messageDebounceMs',
         ),
       };
-      const previous = state.messageListeners[id];
-      const previousCursor = state.messageCursors[id];
-      state.messageListeners[id] = listener;
-      try {
-        await persist();
-      } catch (error) {
-        if (previous) state.messageListeners[id] = previous;
-        else delete state.messageListeners[id];
-        throw error;
-      }
+      let previous: ConductorMessageListenConfig | undefined;
+      let previousCursor: number | undefined;
+      await withStateLock(async () => {
+        const located = await locateSession(id);
+        if (!located) throw new Error(`No saved session found for ${id}.`);
+        const binding = bindLocatedSession(id, located);
+        if (!binding.assigned) {
+          throw new Error(
+            `Watch state for ${id} remains unresolved and was retained: ${binding.reason}.`,
+          );
+        }
+        previous = state.messageListeners[id];
+        previousCursor = state.messageCursors[id];
+        state.messageListeners[id] = listener;
+        try {
+          await persist();
+        } catch (error) {
+          if (previous) state.messageListeners[id] = previous;
+          else delete state.messageListeners[id];
+          throw error;
+        }
+      });
       options.dispatchQueue.deferWatchReports?.(
         id,
         Math.max(
@@ -582,13 +633,23 @@ export async function createOperatorWatchPool(
         const timer = messageTimers.get(id);
         if (timer) clearInterval(timer);
         messageTimers.delete(id);
-        if (previous) state.messageListeners[id] = previous;
-        else delete state.messageListeners[id];
-        if (previousCursor === undefined) {
-          delete state.messageCursors[id];
-        }
         try {
-          await persist();
+          await withStateLock(async () => {
+            if (
+              state.messageListeners[id]?.messageDebounceMs !==
+              listener.messageDebounceMs
+            ) {
+              return;
+            }
+            if (previous) state.messageListeners[id] = previous;
+            else delete state.messageListeners[id];
+            if (previousCursor === undefined) {
+              delete state.messageCursors[id];
+            } else {
+              state.messageCursors[id] = previousCursor;
+            }
+            await persist();
+          });
         } catch (rollbackError) {
           options.dispatchQueue.deferWatchReports?.(
             id,
@@ -617,18 +678,22 @@ export async function createOperatorWatchPool(
     },
     async unregisterConductorMessageListen(conductorAgentId) {
       const id = requireNonEmptyString(conductorAgentId, 'conductorAgentId');
-      const previous = state.messageListeners[id];
-      if (!previous) return false;
-      delete state.messageListeners[id];
-      const previousCursor = state.messageCursors[id];
-      delete state.messageCursors[id];
-      try {
-        await persist();
-      } catch (error) {
-        state.messageListeners[id] = previous;
-        if (previousCursor !== undefined) state.messageCursors[id] = previousCursor;
-        throw error;
-      }
+      const removed = await withStateLock(async () => {
+        const previous = state.messageListeners[id];
+        if (!previous) return false;
+        delete state.messageListeners[id];
+        const previousCursor = state.messageCursors[id];
+        delete state.messageCursors[id];
+        try {
+          await persist();
+        } catch (error) {
+          state.messageListeners[id] = previous;
+          if (previousCursor !== undefined) state.messageCursors[id] = previousCursor;
+          throw error;
+        }
+        return true;
+      });
+      if (!removed) return false;
       const timer = messageTimers.get(id);
       if (timer) clearInterval(timer);
       messageTimers.delete(id);
@@ -651,179 +716,169 @@ export async function createOperatorWatchPool(
     },
     async pollOnce(conductorAgentId) {
       const id = requireNonEmptyString(conductorAgentId, 'conductorAgentId');
-      const watch = state.watches[id];
-      if (!watch || closed || polling.has(id)) return 0;
+      if (closed || polling.has(id)) return 0;
       polling.add(id);
       try {
-        let located: LocatedSessionResumeStore | undefined;
-        try {
-          located = await locateSession(id);
-        } catch (error) {
-          if (isAmbiguousResumeStoreError(error)) return 0;
-          throw error;
-        }
-        if (!located) return 0;
-        const binding = bindLocatedSession(id, located);
-        if (!binding.assigned) return 0;
-        const {
-          snapshot: observation,
-          source,
-          connectivity,
-        } = await readObservation(root, located);
-        const resumeStore = located.resumeStore;
-        const previousLiveStatus = liveStatuses.get(id);
-        const checkedAt = Date.now();
-        liveStatuses.set(id, {
-          connectivity,
-          checkedAt: connectivity === 'unknown' ? null : checkedAt,
-          unreachableSince:
-            connectivity === 'unreachable'
-              ? previousLiveStatus?.connectivity === 'unreachable'
-                ? previousLiveStatus.unreachableSince ?? checkedAt
-                : checkedAt
-              : null,
-        });
-        const previous = state.cursors[id];
-        const next = cursorFor(observation);
-        const debounceMs = Math.max(
-          watch.debounceMs,
-          state.messageListeners[id]?.messageDebounceMs ?? 0,
-        );
-        const reports = collectReports(resumeStore, observation, previous, source)
-          .map((report) => ({
+        return await withStateLock(async () => {
+          const watch = state.watches[id];
+          if (!watch || closed) return 0;
+          let located: LocatedSessionResumeStore | undefined;
+          try {
+            located = await locateSession(id);
+          } catch (error) {
+            if (isAmbiguousResumeStoreError(error)) return 0;
+            throw error;
+          }
+          if (!located) return 0;
+          const binding = bindLocatedSession(id, located);
+          if (!binding.assigned) return 0;
+          const {
+            snapshot: observation,
+            source,
+            connectivity,
+          } = await readObservation(root, located);
+          const resumeStore = located.resumeStore;
+          const previousLiveStatus = liveStatuses.get(id);
+          const checkedAt = Date.now();
+          liveStatuses.set(id, {
+            connectivity,
+            checkedAt: connectivity === 'unknown' ? null : checkedAt,
+            unreachableSince:
+              connectivity === 'unreachable'
+                ? previousLiveStatus?.connectivity === 'unreachable'
+                  ? previousLiveStatus.unreachableSince ?? checkedAt
+                  : checkedAt
+                : null,
+          });
+          const previous = state.cursors[id];
+          const next = cursorFor(observation);
+          const debounceMs = Math.max(
+            watch.debounceMs,
+            state.messageListeners[id]?.messageDebounceMs ?? 0,
+          );
+          const reports = collectReports(
+            resumeStore,
+            observation,
+            previous,
+            source,
+          ).map((report) => ({
             ...report,
             reportId: randomUUID(),
             conductorAgentId: id,
             issueUrl: resumeStore.issueUrl,
             debounceMs,
           }));
-        const cursorChanged = hash(previous ?? null) !== hash(next);
-        if (reports.length > 0) state.pendingReports.push(...reports);
-        state.cursors[id] = next;
-        let persistFailed = false;
-        let persistenceError: unknown;
-        if (reports.length > 0 || cursorChanged) {
-          try {
-            await persist();
-          } catch (error) {
-            persistFailed = true;
-            persistenceError = error;
-          }
-        }
-        options.dispatchQueue.enqueueReports(
-          reports.map((report) => ({
-            type: 'report',
-            reportId: report.reportId,
-            reportType: report.reportType,
-            conductorAgentId: id,
-            issueUrl: resumeStore.issueUrl,
-            text: report.text,
-          })),
-          debounceMs,
-        );
-        if (persistFailed) throw persistenceError;
-        return reports.length;
+          const cursorChanged = hash(previous ?? null) !== hash(next);
+          if (reports.length > 0) state.pendingReports.push(...reports);
+          state.cursors[id] = next;
+          if (reports.length > 0 || cursorChanged) await persist();
+          options.dispatchQueue.enqueueReports(
+            reports.map((report) => ({
+              type: 'report',
+              reportId: report.reportId,
+              reportType: report.reportType,
+              conductorAgentId: id,
+              issueUrl: resumeStore.issueUrl,
+              text: report.text,
+            })),
+            debounceMs,
+          );
+          return reports.length;
+        });
       } finally {
         polling.delete(id);
       }
     },
     async pollConductorMessagesOnce(conductorAgentId) {
       const id = requireNonEmptyString(conductorAgentId, 'conductorAgentId');
-      const listener = state.messageListeners[id];
-      if (!listener || closed || messagePolling.has(id)) return 0;
+      if (closed || messagePolling.has(id)) return 0;
       messagePolling.add(id);
       try {
-        let located: LocatedSessionResumeStore | undefined;
-        try {
-          located = await locateSession(id);
-        } catch (error) {
-          if (isAmbiguousResumeStoreError(error)) return 0;
-          throw error;
-        }
-        const resumeStore = located?.resumeStore;
-        if (!resumeStore?.harnessSocketPath) return 0;
-        const binding = bindLocatedSession(id, located!);
-        if (!binding.assigned) return 0;
-        const cursor = state.messageCursors[id];
-        if (cursor === undefined) {
-          state.messageCursors[id] = await readConductorMessageBaseline(
-            resumeStore.harnessSocketPath,
-          );
-          await persist();
-          return 0;
-        }
-        const readResult = await readConductorMessagePages(
-          resumeStore.harnessSocketPath,
-          cursor,
-        );
-        const messages = readResult.messages;
-        if (
-          messages.length === 0 &&
-          readResult.oversizedSendCounts.length === 0 &&
-          readResult.responseSizeError
-        ) {
-          throw readResult.responseSizeError;
-        }
-        const nextCursor = readResult.cursor;
-        const reports: OperatorWatchState['pendingReports'] = messages.map((message) => ({
-          reportId: randomUUID(),
-          reportType: 'conductor_message' as const,
-          conductorAgentId: id,
-          issueUrl: resumeStore.issueUrl,
-          text: formatConductorMessageReport(resumeStore, message),
-          debounceMs: listener.messageDebounceMs,
-          sendCount: message.sendCount,
-        }));
-        if (readResult.oversizedSendCounts.length > 0) {
-          reports.push({
-            reportId: randomUUID(),
-            reportType: 'conductor_message',
-            conductorAgentId: id,
-            issueUrl: resumeStore.issueUrl,
-            text: formatOversizedConductorMessageWarning(
-              resumeStore.issueUrl,
-              id,
-              readResult.oversizedSendCounts,
-            ),
-            debounceMs: listener.messageDebounceMs,
-            sendCount: readResult.oversizedSendCounts.at(-1)!,
-            oversizedSendCounts: readResult.oversizedSendCounts,
-          });
-        }
-        reports.sort(
-          (left, right) =>
-            (left.sendCount ?? 0) - (right.sendCount ?? 0),
-        );
-        state.messageCursors[id] = nextCursor;
-        if (reports.length > 0) state.pendingReports.push(...reports);
-        let persistFailed = false;
-        let persistenceError: unknown;
-        if (reports.length > 0 || nextCursor !== cursor) {
+        return await withStateLock(async () => {
+          const listener = state.messageListeners[id];
+          if (!listener || closed) return 0;
+          let located: LocatedSessionResumeStore | undefined;
           try {
-            await persist();
+            located = await locateSession(id);
           } catch (error) {
-            persistFailed = true;
-            persistenceError = error;
+            if (isAmbiguousResumeStoreError(error)) return 0;
+            throw error;
           }
-        }
-        options.dispatchQueue.enqueueDebouncedReports(
-          reports.map((report) => ({
-            type: 'report',
-            reportId: report.reportId,
-            reportType: report.reportType,
+          const resumeStore = located?.resumeStore;
+          if (!resumeStore?.harnessSocketPath) return 0;
+          const binding = bindLocatedSession(id, located!);
+          if (!binding.assigned) return 0;
+          const cursor = state.messageCursors[id];
+          if (cursor === undefined) {
+            state.messageCursors[id] = await readConductorMessageBaseline(
+              resumeStore.harnessSocketPath,
+            );
+            await persist();
+            return 0;
+          }
+          const readResult = await readConductorMessagePages(
+            resumeStore.harnessSocketPath,
+            cursor,
+          );
+          const messages = readResult.messages;
+          if (
+            messages.length === 0 &&
+            readResult.oversizedSendCounts.length === 0 &&
+            readResult.responseSizeError
+          ) {
+            throw readResult.responseSizeError;
+          }
+          const nextCursor = readResult.cursor;
+          const reports: OperatorWatchState['pendingReports'] = messages.map((message) => ({
+            reportId: randomUUID(),
+            reportType: 'conductor_message' as const,
             conductorAgentId: id,
             issueUrl: resumeStore.issueUrl,
-            text: report.text,
-            sendCount: report.sendCount,
-            oversizedSendCounts: report.oversizedSendCounts,
-          })),
-          listener.messageDebounceMs,
-        );
-        if (persistFailed) throw persistenceError;
-        if (readResult.responseSizeError) {
-          throw readResult.responseSizeError;
-        }
-        return reports.length;
+            text: formatConductorMessageReport(resumeStore, message),
+            debounceMs: listener.messageDebounceMs,
+            sendCount: message.sendCount,
+          }));
+          if (readResult.oversizedSendCounts.length > 0) {
+            reports.push({
+              reportId: randomUUID(),
+              reportType: 'conductor_message',
+              conductorAgentId: id,
+              issueUrl: resumeStore.issueUrl,
+              text: formatOversizedConductorMessageWarning(
+                resumeStore.issueUrl,
+                id,
+                readResult.oversizedSendCounts,
+              ),
+              debounceMs: listener.messageDebounceMs,
+              sendCount: readResult.oversizedSendCounts.at(-1)!,
+              oversizedSendCounts: readResult.oversizedSendCounts,
+            });
+          }
+          reports.sort(
+            (left, right) =>
+              (left.sendCount ?? 0) - (right.sendCount ?? 0),
+          );
+          state.messageCursors[id] = nextCursor;
+          if (reports.length > 0) state.pendingReports.push(...reports);
+          if (reports.length > 0 || nextCursor !== cursor) await persist();
+          options.dispatchQueue.enqueueDebouncedReports(
+            reports.map((report) => ({
+              type: 'report',
+              reportId: report.reportId,
+              reportType: 'conductor_message',
+              conductorAgentId: id,
+              issueUrl: resumeStore.issueUrl,
+              text: report.text,
+              sendCount: report.sendCount,
+              oversizedSendCounts: report.oversizedSendCounts,
+            })),
+            listener.messageDebounceMs,
+          );
+          if (readResult.responseSizeError) {
+            throw readResult.responseSizeError;
+          }
+          return reports.length;
+        });
       } finally {
         messagePolling.delete(id);
       }
@@ -835,12 +890,14 @@ export async function createOperatorWatchPool(
         ),
       );
       if (acknowledged.size === 0) return;
-      const remaining = state.pendingReports.filter(
-        (report) => !acknowledged.has(report.reportId),
-      );
-      if (remaining.length === state.pendingReports.length) return;
-      state.pendingReports = remaining;
-      await persist();
+      await withStateLock(async () => {
+        const remaining = state.pendingReports.filter(
+          (report) => !acknowledged.has(report.reportId),
+        );
+        if (remaining.length === state.pendingReports.length) return;
+        state.pendingReports = remaining;
+        await persist();
+      });
     },
     close() {
       closed = true;
@@ -1856,6 +1913,7 @@ async function loadWatchState(path: string): Promise<OperatorWatchState> {
 async function saveWatchState(
   path: string,
   state: OperatorWatchState,
+  assertLockHeld: () => void,
 ): Promise<void> {
   const directory = dirname(path);
   await mkdir(directory, { recursive: true, mode: 0o700 });
@@ -1866,7 +1924,64 @@ async function saveWatchState(
     mode: 0o600,
   });
   await chmod(temporary, 0o600);
+  assertLockHeld();
   await rename(temporary, path);
+}
+
+async function withWatchStateLock<T>(
+  root: string,
+  profile: string,
+  operation: (assertLockHeld: () => void) => Promise<T>,
+): Promise<T> {
+  const directory = join(root, 'operator-agents', profile, 'watch');
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  await chmod(directory, 0o700);
+  const canonicalDirectory = await realpath(directory);
+  let compromisedError: Error | undefined;
+  const release = await lock(canonicalDirectory, {
+    realpath: false,
+    stale: 120_000,
+    update: 20_000,
+    onCompromised: (error) => {
+      compromisedError = error;
+    },
+    retries: {
+      retries: 100,
+      factor: 1.2,
+      minTimeout: 25,
+      maxTimeout: 500,
+      randomize: true,
+    },
+  });
+  const assertLockHeld = () => {
+    if (compromisedError) {
+      throw new Error('Operator watch state profile lock was lost.', {
+        cause: compromisedError,
+      });
+    }
+  };
+  let operationError: unknown;
+  try {
+    assertLockHeld();
+    const result = await operation(assertLockHeld);
+    assertLockHeld();
+    return result;
+  } catch (error) {
+    operationError = error;
+    throw error;
+  } finally {
+    try {
+      await release();
+    } catch (releaseError) {
+      if (operationError !== undefined) {
+        throw new AggregateError(
+          [operationError, releaseError],
+          'Operator watch state update failed and its profile lock could not be released.',
+        );
+      }
+      throw releaseError;
+    }
+  }
 }
 
 function hash(value: unknown): string {

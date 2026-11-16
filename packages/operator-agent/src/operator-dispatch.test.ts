@@ -228,14 +228,6 @@ describe('operator dispatch batching', () => {
         },
         {
           type: 'report',
-          reportType: 'session_state',
-          reportId: 'status-report',
-          conductorAgentId: 'session-1',
-          issueUrl: 'https://github.com/example/repo/issues/1',
-          text: '状態: 完了',
-        },
-        {
-          type: 'report',
           reportType: 'conductor_message',
           reportId: 'oversized-4',
           conductorAgentId: 'session-1',
@@ -243,6 +235,14 @@ describe('operator dispatch batching', () => {
           text: 'oversized sendCount 4',
           sendCount: 4,
           oversizedSendCounts: [4],
+        },
+        {
+          type: 'report',
+          reportType: 'session_state',
+          reportId: 'status-report',
+          conductorAgentId: 'session-1',
+          issueUrl: 'https://github.com/example/repo/issues/1',
+          text: '状態: 完了',
         },
       ],
       0,
@@ -255,8 +255,8 @@ describe('operator dispatch batching', () => {
     expect(batch.events.map((event) => event.reportId)).toEqual([
       'question-report',
       'oversized-3',
-      'status-report',
       'oversized-4',
+      'status-report',
     ]);
     const formatted = formatOperatorDispatchBatch(batch.events);
     expect(formatted.match(/⚠/g)).toHaveLength(1);
@@ -264,6 +264,75 @@ describe('operator dispatch batching', () => {
     expect(formatted).toContain('sendCount: 3, 4');
     expect(formatted).toContain('解決: inq-1');
     expect(formatted).toContain('状態: 完了');
+  });
+
+  it('does not move grouped oversized warnings across intervening messages or reports', () => {
+    const queue = createOperatorDispatchQueue();
+    queue.enqueueReports(
+      [
+        {
+          type: 'report',
+          reportType: 'open_question',
+          reportId: 'question-report',
+          conductorAgentId: 'session-1',
+          issueUrl: 'https://github.com/example/repo/issues/1',
+          text: '解決: inq-1 / operator の回答',
+        },
+        {
+          type: 'report',
+          reportType: 'conductor_message',
+          reportId: 'oversized-3',
+          conductorAgentId: 'session-1',
+          issueUrl: 'https://github.com/example/repo/issues/1',
+          text: '⚠ oversized sendCount: 3',
+          sendCount: 3,
+          oversizedSendCounts: [3],
+        },
+        {
+          type: 'report',
+          reportType: 'conductor_message',
+          reportId: 'message-4',
+          conductorAgentId: 'session-1',
+          issueUrl: 'https://github.com/example/repo/issues/1',
+          text: 'readable message 4',
+          sendCount: 4,
+        },
+        {
+          type: 'report',
+          reportType: 'session_state',
+          reportId: 'status-report',
+          conductorAgentId: 'session-1',
+          issueUrl: 'https://github.com/example/repo/issues/1',
+          text: '状態: 完了',
+        },
+        {
+          type: 'report',
+          reportType: 'conductor_message',
+          reportId: 'oversized-5',
+          conductorAgentId: 'session-1',
+          issueUrl: 'https://github.com/example/repo/issues/1',
+          text: '⚠ oversized sendCount: 5',
+          sendCount: 5,
+          oversizedSendCounts: [5],
+        },
+      ],
+      0,
+    );
+
+    const batch = queue.takeBatch(
+      { continuationConsumed: false },
+      Date.now(),
+    )!;
+    expect(batch.events).toHaveLength(5);
+    expect(queue.pendingEventCount).toBe(0);
+    const formatted = formatOperatorDispatchBatch(batch.events);
+    const warningThree = formatted.indexOf('sendCount: 3');
+    const readableFour = formatted.indexOf('readable message 4');
+    const warningFive = formatted.indexOf('sendCount: 5');
+    expect(warningThree).toBeGreaterThanOrEqual(0);
+    expect(readableFour).toBeGreaterThan(warningThree);
+    expect(warningFive).toBeGreaterThan(readableFour);
+    expect(formatted.match(/⚠/g)).toHaveLength(2);
   });
 
   it('gives reports from one observation a shared debounce deadline', () => {

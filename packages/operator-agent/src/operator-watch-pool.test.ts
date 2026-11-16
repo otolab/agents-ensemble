@@ -1,6 +1,8 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { fork, type ChildProcess } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   OPEN_QUESTION_CONTROL_METHODS,
@@ -30,6 +32,101 @@ function currentWatchStatePath(_repoRoot: string): string {
     'default',
     DEFAULT_ISSUE_URL,
   );
+}
+
+function startWatchPollProcess(
+  userEnsembleRoot: string,
+  conductorAgentId: string,
+): {
+  child: ChildProcess;
+  ready: Promise<void>;
+  poll: () => void;
+  result: Promise<number>;
+  exit: Promise<void>;
+} {
+  const fixture = fileURLToPath(
+    new URL('../test/fixtures/watch-state-poll-child.mjs', import.meta.url),
+  );
+  const child = fork(fixture, [userEnsembleRoot, conductorAgentId], {
+    execArgv: [],
+    stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
+  });
+  let stderr = '';
+  child.stderr?.setEncoding('utf8');
+  child.stderr?.on('data', (chunk: string) => {
+    stderr += chunk;
+  });
+
+  let resolveReady!: () => void;
+  let rejectReady!: (error: Error) => void;
+  let resolveResult!: (count: number) => void;
+  let rejectResult!: (error: Error) => void;
+  let resultSettled = false;
+  const ready = new Promise<void>((resolve, reject) => {
+    resolveReady = resolve;
+    rejectReady = reject;
+  });
+  const result = new Promise<number>((resolve, reject) => {
+    resolveResult = resolve;
+    rejectResult = reject;
+  });
+  let readySettled = false;
+  child.on('message', (message: unknown) => {
+    if (!message || typeof message !== 'object') return;
+    const payload = message as {
+      type?: string;
+      count?: number;
+      error?: string;
+    };
+    if (payload.type === 'ready') {
+      readySettled = true;
+      resolveReady();
+    } else if (payload.type === 'done' && typeof payload.count === 'number') {
+      resultSettled = true;
+      resolveResult(payload.count);
+    } else if (payload.type === 'error') {
+      const error = new Error(payload.error ?? 'watch poll child failed');
+      if (!readySettled) {
+        readySettled = true;
+        rejectReady(error);
+      }
+      rejectResult(error);
+    }
+  });
+  child.once('error', (error) => {
+    if (!readySettled) {
+      readySettled = true;
+      rejectReady(error);
+    }
+    rejectResult(error);
+  });
+  child.once('exit', (code) => {
+    if (!readySettled) {
+      readySettled = true;
+      rejectReady(new Error(`watch poll child exited before ready (${code}): ${stderr}`));
+    }
+    if (!resultSettled) {
+      rejectResult(
+        new Error(`watch poll child exited before returning a result (${code}): ${stderr}`),
+      );
+    }
+  });
+  const exit = new Promise<void>((resolve, reject) => {
+    child.once('exit', (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(`watch poll child exited with code ${code}: ${stderr}`));
+    });
+  });
+
+  return {
+    child,
+    ready,
+    poll: () => {
+      child.send({ type: 'poll' });
+    },
+    result,
+    exit,
+  };
 }
 
 describe('operator watch pool', () => {
@@ -1504,6 +1601,232 @@ describe('operator watch pool', () => {
     }
   });
 
+  it('serializes concurrent process polls and preserves each cursor and pending report', async () => {
+    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-watch-concurrent-'));
+    await mkdir(join(repoRoot, '.ensemble', 'sessions'), { recursive: true });
+    const sessions = [
+      {
+        id: 'concurrent-session-one',
+        issueUrl: 'https://github.com/example/repo/issues/101',
+        questionId: 'inq-1',
+      },
+      {
+        id: 'concurrent-session-two',
+        issueUrl: 'https://github.com/example/repo/issues/102',
+        questionId: 'inq-1',
+      },
+    ];
+    const observations = new Map(
+      sessions.map((session) => [
+        session.id,
+        {
+          sequence: 1,
+          openQuestions: [],
+          sessionState: {
+            current: { statusLine: 'waiting', reportedAt: 20 },
+            history: [],
+          },
+        } satisfies SessionObservationSnapshot,
+      ]),
+    );
+    for (const session of sessions) {
+      const server = await startOpenQuestionControlServer({
+        listOpenQuestions: () => [],
+        observeSession: async () => {
+          // Make independent processes overlap after they have loaded their
+          // initial state snapshot, reproducing the stale-snapshot write race.
+          await new Promise((resolve) => setTimeout(resolve, 100));
+          return observations.get(session.id)!;
+        },
+      });
+      closeServers.push(() => server.close());
+      await writeResumeStore(
+        session.id,
+        1,
+        server.socketPath,
+        session.issueUrl,
+      );
+    }
+
+    const initialQueue = createOperatorDispatchQueue();
+    const initialPool = await createOperatorWatchPool({
+      repoRoot,
+      dispatchQueue: initialQueue,
+    });
+    const resumedPools: Array<Awaited<ReturnType<typeof createOperatorWatchPool>>> = [];
+    const statePath = currentWatchStatePath(repoRoot);
+    try {
+      for (const session of sessions) {
+        await initialPool.register(session.id, {
+          pollIntervalMs: 60_000,
+          debounceMs: 0,
+        });
+      }
+
+      const afterRegistration = JSON.parse(
+        await readFile(statePath, 'utf8'),
+      ) as { watches: Record<string, unknown> };
+      expect(Object.keys(afterRegistration.watches).sort()).toEqual(
+        sessions.map((session) => session.id).sort(),
+      );
+
+      for (const session of sessions) {
+        await initialPool.pollOnce(session.id);
+      }
+      const afterBaseline = JSON.parse(
+        await readFile(statePath, 'utf8'),
+      ) as {
+        cursors: Record<string, { sequence: number }>;
+        pendingReports: Array<{ conductorAgentId: string }>;
+      };
+      expect(
+        sessions.map((session) => afterBaseline.cursors[session.id]?.sequence),
+      ).toEqual([1, 1]);
+      expect(
+        afterBaseline.pendingReports.map((report) => report.conductorAgentId).sort(),
+      ).toEqual(sessions.map((session) => session.id).sort());
+      let baseline = initialQueue.takeBatch(
+        { continuationConsumed: false },
+        Date.now(),
+      );
+      while (baseline) {
+        await initialPool.acknowledge(baseline.events);
+        baseline = initialQueue.takeBatch(
+          { continuationConsumed: false },
+          Date.now(),
+        );
+      }
+
+      for (const session of sessions) {
+        observations.set(session.id, {
+          sequence: 2,
+          openQuestions: [
+            {
+              id: session.questionId,
+              question: `${session.id} update`,
+              responseType: 'text',
+              source: 'conductor',
+              status: 'open',
+              askedAt: 21,
+            },
+          ],
+          sessionState: {
+            current: { statusLine: 'waiting', reportedAt: 20 },
+            history: [],
+          },
+        });
+      }
+      initialPool.close();
+
+      const userEnsembleRoot = join(homeRoot, '.ensemble');
+      const pollProcesses = sessions.map((session) =>
+        startWatchPollProcess(userEnsembleRoot, session.id),
+      );
+      try {
+        await Promise.all(pollProcesses.map((process) => process.ready));
+        expect(
+          new Set(pollProcesses.map((process) => process.child.pid)).size,
+        ).toBe(2);
+        // Both OS processes have loaded the same cursor/pending snapshot before
+        // either poll is allowed to observe and save its session update.
+        for (const process of pollProcesses) process.poll();
+        expect(await Promise.all(pollProcesses.map((process) => process.result))).toEqual([
+          1,
+          1,
+        ]);
+        await Promise.all(pollProcesses.map((process) => process.exit));
+      } finally {
+        for (const process of pollProcesses) {
+          if (process.child.exitCode === null && process.child.connected) {
+            process.child.kill();
+          }
+        }
+      }
+
+      const beforeRestart = JSON.parse(
+        await readFile(statePath, 'utf8'),
+      ) as {
+        cursors: Record<string, { sequence: number }>;
+        pendingReports: Array<{
+          reportId: string;
+          conductorAgentId: string;
+        }>;
+      };
+      expect({
+        cursorSequences: sessions.map(
+          (session) => beforeRestart.cursors[session.id]?.sequence,
+        ),
+        pendingReportSessions: beforeRestart.pendingReports
+          .map((report) => report.conductorAgentId)
+          .sort(),
+      }).toEqual({
+        cursorSequences: [2, 2],
+        pendingReportSessions: sessions.map((session) => session.id).sort(),
+      });
+
+      const resumedQueue = createOperatorDispatchQueue();
+      const resumedPool = await createOperatorWatchPool({
+        repoRoot,
+        dispatchQueue: resumedQueue,
+      });
+      resumedPools.push(resumedPool);
+      const replayed = [0, 1]
+        .flatMap(() =>
+          resumedQueue.takeBatch(
+            { continuationConsumed: false },
+            Date.now(),
+          )?.events ?? [],
+        )
+        .filter((event) => event.type === 'report');
+      const replayedIds = replayed.map((event) =>
+        event.type === 'report' ? event.reportId : undefined,
+      );
+      expect(replayedIds.sort()).toEqual(
+        beforeRestart.pendingReports.map((report) => report.reportId).sort(),
+      );
+      const acknowledgedReportId =
+        replayed[0]?.type === 'report' ? replayed[0].reportId : undefined;
+      expect(acknowledgedReportId).toBeDefined();
+
+      await resumedPool.acknowledge([replayed[0]!]);
+      const afterAcknowledgement = JSON.parse(
+        await readFile(statePath, 'utf8'),
+      ) as {
+        cursors: Record<string, { sequence: number }>;
+        pendingReports: Array<{ reportId: string }>;
+      };
+      expect(
+        afterAcknowledgement.pendingReports.map((report) => report.reportId),
+      ).toEqual(
+        beforeRestart.pendingReports
+          .map((report) => report.reportId)
+          .filter((reportId) => reportId !== acknowledgedReportId),
+      );
+      expect(
+        sessions.map((session) => afterAcknowledgement.cursors[session.id]?.sequence),
+      ).toEqual([2, 2]);
+
+      const finalQueue = createOperatorDispatchQueue();
+      const finalPool = await createOperatorWatchPool({
+        repoRoot,
+        dispatchQueue: finalQueue,
+      });
+      resumedPools.push(finalPool);
+      expect(finalQueue.pendingEventCount).toBe(1);
+      expect(
+        finalQueue.takeBatch(
+          { continuationConsumed: false },
+          Date.now(),
+        )?.events.map((event) =>
+          event.type === 'report' ? event.reportId : undefined,
+        ),
+      ).toEqual(afterAcknowledgement.pendingReports.map((report) => report.reportId));
+    } finally {
+      initialPool.close();
+      for (const pool of resumedPools) pool.close();
+    }
+  });
+
   it('fails initialization for incomplete or malformed persisted watch state', async () => {
     repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-watch-invalid-'));
     const validState = {
@@ -2756,6 +3079,7 @@ describe('operator watch pool', () => {
   async function writeOfflineSnapshots(
     agentId: string,
     input: {
+      issueUrl?: string;
       sequence: number;
       questions: Array<Record<string, unknown>>;
       statusLine: string;
@@ -2764,11 +3088,11 @@ describe('operator watch pool', () => {
   ) {
     const paths = resolveEnsemblePaths({ repoRoot });
     const openQuestionsPath = paths.canonicalOpenQuestionsPath(
-      DEFAULT_ISSUE_URL,
+      input.issueUrl ?? DEFAULT_ISSUE_URL,
       agentId,
     );
     const sessionStatePath = paths.canonicalSessionStatePath(
-      DEFAULT_ISSUE_URL,
+      input.issueUrl ?? DEFAULT_ISSUE_URL,
       agentId,
     );
     await mkdir(dirname(openQuestionsPath), { recursive: true });
@@ -2778,7 +3102,9 @@ describe('operator watch pool', () => {
       [
         'version: 1',
         `sequence: ${input.sequence}`,
-        'openQuestions:',
+        ...(input.questions.length === 0
+          ? ['openQuestions: []']
+          : ['openQuestions:']),
         ...input.questions.flatMap((question) => [
           `  - id: ${question.id}`,
           `    question: ${JSON.stringify(question.question)}`,

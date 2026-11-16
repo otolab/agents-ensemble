@@ -178,31 +178,7 @@ export function formatOperatorDispatchBatch(
     );
     const reportTypes = new Set(reports.map((event) => event.reportType));
     if (reportTypes.size === 1 && reportTypes.has('conductor_message')) {
-      const oversizedWarnings = reports.filter(
-        (event) => (event.oversizedSendCounts?.length ?? 0) > 0,
-      );
-      const oversizedSendCounts = [
-        ...new Set(
-          oversizedWarnings.flatMap((event) => event.oversizedSendCounts ?? []),
-        ),
-      ].sort((left, right) => left - right);
-      const messages = reports.filter(
-        (event) => (event.oversizedSendCounts?.length ?? 0) === 0,
-      );
-      if (oversizedSendCounts.length > 0) {
-        const warning = oversizedWarnings[0]!;
-        messages.push({
-          ...warning,
-          text: formatOversizedConductorMessageWarning(
-            warning.issueUrl,
-            warning.conductorAgentId,
-            oversizedSendCounts,
-          ),
-          sendCount: oversizedSendCounts.at(-1)!,
-          oversizedSendCounts,
-        });
-      }
-      messages.sort(
+      const messages = aggregateOversizedConductorMessageWarnings(reports).sort(
         (left, right) =>
           (left.sendCount ?? 0) - (right.sendCount ?? 0),
       );
@@ -285,32 +261,43 @@ export function formatOperatorDispatchBatch(
 function aggregateOversizedConductorMessageWarnings(
   reports: readonly Extract<OperatorDispatchEvent, { type: 'report' }>[],
 ): Extract<OperatorDispatchEvent, { type: 'report' }>[] {
-  const warnings = reports.filter(
-    (event) => (event.oversizedSendCounts?.length ?? 0) > 0,
-  );
-  if (warnings.length < 2) return [...reports];
-
-  const warningSet = new Set(warnings);
-  const sendCounts = [
-    ...new Set(warnings.flatMap((event) => event.oversizedSendCounts ?? [])),
-  ].sort((left, right) => left - right);
-  const firstWarningIndex = reports.findIndex((event) => warningSet.has(event));
-  const firstWarning = reports[firstWarningIndex]!;
-  const formattedWarning = {
-    ...firstWarning,
-    text: formatOversizedConductorMessageWarning(
-      firstWarning.issueUrl,
-      firstWarning.conductorAgentId,
-      sendCounts,
-    ),
-    sendCount: sendCounts.at(-1)!,
-    oversizedSendCounts: sendCounts,
+  const result: Extract<
+    OperatorDispatchEvent,
+    { type: 'report' }
+  >[] = [];
+  let adjacentWarnings: Extract<
+    OperatorDispatchEvent,
+    { type: 'report' }
+  >[] = [];
+  const flushWarnings = () => {
+    if (adjacentWarnings.length === 0) return;
+    const firstWarning = adjacentWarnings[0]!;
+    const sendCounts = [
+      ...new Set(
+        adjacentWarnings.flatMap((event) => event.oversizedSendCounts ?? []),
+      ),
+    ].sort((left, right) => left - right);
+    result.push({
+      ...firstWarning,
+      text: formatOversizedConductorMessageWarning(
+        firstWarning.issueUrl,
+        firstWarning.conductorAgentId,
+        sendCounts,
+      ),
+      sendCount: sendCounts.at(-1)!,
+      oversizedSendCounts: sendCounts,
+    });
+    adjacentWarnings = [];
   };
-  const result = reports.filter((event) => !warningSet.has(event));
-  const insertionIndex = reports
-    .slice(0, firstWarningIndex)
-    .filter((event) => !warningSet.has(event)).length;
-  result.splice(insertionIndex, 0, formattedWarning);
+  for (const report of reports) {
+    if ((report.oversizedSendCounts?.length ?? 0) > 0) {
+      adjacentWarnings.push(report);
+      continue;
+    }
+    flushWarnings();
+    result.push(report);
+  }
+  flushWarnings();
   return result;
 }
 
