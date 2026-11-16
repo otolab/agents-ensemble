@@ -49,6 +49,7 @@ const MAX_DEBOUNCE_MS = 10_000;
 const DEFAULT_MESSAGE_DEBOUNCE_MS = 10_000;
 const MAX_MESSAGE_DEBOUNCE_MS = 120_000;
 const MESSAGE_POLL_INTERVAL_MS = 2_000;
+const PENDING_REPORT_REFRESH_INTERVAL_MS = 2_000;
 const WATCH_STATE_LOCK_RETRIES = 40;
 const WATCH_STATE_LOCK_RETRY_DELAY_MS = 25;
 
@@ -92,6 +93,7 @@ interface OperatorWatchState {
     issueUrl: string;
     text: string;
     debounceMs: number;
+    readyAt: number;
     sendCount?: number;
     oversizedSendCounts?: number[];
   }>;
@@ -112,6 +114,7 @@ export interface OperatorWatchPool {
   listConductorMessageListens(): ConductorMessageListenConfig[];
   pollOnce(conductorAgentId: string): Promise<number>;
   pollConductorMessagesOnce(conductorAgentId: string): Promise<number>;
+  refreshPendingReports?(): Promise<void>;
   getLiveStatus(conductorAgentId: string): OperatorSessionLiveStatus | undefined;
   acknowledge(events: readonly OperatorDispatchEvent[]): Promise<void>;
   close(): void;
@@ -195,6 +198,41 @@ export async function createOperatorWatchPool(
     );
   };
   let state = emptyWatchState();
+  const fallbackQueuedReportIds = new Set<string>();
+  const syncPendingReportsToQueue = () => {
+    const reports = state.pendingReports.map((report) => ({
+      event: {
+        type: 'report' as const,
+        reportId: report.reportId,
+        reportType: report.reportType,
+        conductorAgentId: report.conductorAgentId,
+        issueUrl: report.issueUrl,
+        text: report.text,
+        sendCount: report.sendCount,
+        oversizedSendCounts: report.oversizedSendCounts,
+      },
+      readyAt: report.readyAt,
+    }));
+    if (options.dispatchQueue.reconcileReports) {
+      options.dispatchQueue.reconcileReports(reports);
+      return;
+    }
+
+    const pendingIds = new Set(reports.map(({ event }) => event.reportId));
+    const removed = [...fallbackQueuedReportIds].filter(
+      (reportId) => !pendingIds.has(reportId),
+    );
+    options.dispatchQueue.discardQueuedReports?.(removed);
+    for (const reportId of removed) fallbackQueuedReportIds.delete(reportId);
+    for (const { event, readyAt } of reports) {
+      if (fallbackQueuedReportIds.has(event.reportId)) continue;
+      options.dispatchQueue.enqueueReports(
+        [event],
+        Math.max(0, readyAt - Date.now()),
+      );
+      fallbackQueuedReportIds.add(event.reportId);
+    }
+  };
   const refreshStateFromDisk = async () => {
     const paths = new Set([
       ...statePaths,
@@ -260,6 +298,7 @@ export async function createOperatorWatchPool(
       state = mergeWatchStates(state, sourceBundles[0]!);
       unassignedDiagnostics.delete(id);
     }
+    syncPendingReportsToQueue();
   };
   await withWatchStateLock(root, profile, refreshStateFromDisk);
   const timers = new Map<string, NodeJS.Timeout>();
@@ -290,6 +329,8 @@ export async function createOperatorWatchPool(
   };
   let closed = false;
   let stateOperationQueue = Promise.resolve();
+  let pendingReportRefreshTimer: NodeJS.Timeout | undefined;
+  let pendingReportRefreshInFlight = false;
 
   const persist = async () => {
     const partitions = partitionWatchState(state, pathById, issueUrlById);
@@ -309,11 +350,27 @@ export async function createOperatorWatchPool(
       }
     }
   };
+  const deferWatchPendingReports = (
+    conductorAgentId: string,
+    debounceMs: number,
+  ) => {
+    const readyAt = Date.now() + Math.max(0, debounceMs);
+    for (const report of state.pendingReports) {
+      if (
+        report.conductorAgentId === conductorAgentId &&
+        report.reportType !== 'conductor_message'
+      ) {
+        report.readyAt = readyAt;
+      }
+    }
+  };
   const withStateLock = <T>(operation: () => Promise<T>): Promise<T> => {
     const next = stateOperationQueue.then(() =>
       withWatchStateLock(root, profile, async () => {
         await refreshStateFromDisk();
-        return operation();
+        const result = await operation();
+        syncPendingReportsToQueue();
+        return result;
       }),
     );
     stateOperationQueue = next.then(
@@ -321,6 +378,10 @@ export async function createOperatorWatchPool(
       () => undefined,
     );
     return next;
+  };
+  const refreshPendingReports = async () => {
+    if (closed) return;
+    await withStateLock(async () => undefined);
   };
   const startTimer = (watch: WatchConfig) => {
     if (timers.has(watch.conductorAgentId)) return;
@@ -469,21 +530,6 @@ export async function createOperatorWatchPool(
         unassignedStateByPath.delete(retainedPath);
       }
       state = mergeWatchStates(state, promoted);
-      for (const report of promoted.pendingReports) {
-        options.dispatchQueue.enqueueReports(
-          [{
-            type: 'report',
-            reportId: report.reportId,
-            reportType: report.reportType,
-            conductorAgentId: report.conductorAgentId,
-            issueUrl: report.issueUrl,
-            text: report.text,
-            sendCount: report.sendCount,
-            oversizedSendCounts: report.oversizedSendCounts,
-          }],
-          0,
-        );
-      }
     }
 
     const previousPath = pathById.get(id);
@@ -602,11 +648,25 @@ export async function createOperatorWatchPool(
         previous = state.messageListeners[id];
         previousCursor = state.messageCursors[id];
         state.messageListeners[id] = listener;
+        deferWatchPendingReports(
+          id,
+          Math.max(
+            listener.messageDebounceMs,
+            state.watches[id]?.debounceMs ?? 0,
+          ),
+        );
         try {
           await persist();
         } catch (error) {
           if (previous) state.messageListeners[id] = previous;
           else delete state.messageListeners[id];
+          deferWatchPendingReports(
+            id,
+            Math.max(
+              previous?.messageDebounceMs ?? 0,
+              state.watches[id]?.debounceMs ?? 0,
+            ),
+          );
           throw error;
         }
       });
@@ -642,6 +702,13 @@ export async function createOperatorWatchPool(
             } else {
               state.messageCursors[id] = previousCursor;
             }
+            deferWatchPendingReports(
+              id,
+              Math.max(
+                previous?.messageDebounceMs ?? 0,
+                state.watches[id]?.debounceMs ?? 0,
+              ),
+            );
             await persist();
           });
         } catch (rollbackError) {
@@ -678,6 +745,10 @@ export async function createOperatorWatchPool(
         delete state.messageListeners[id];
         const previousCursor = state.messageCursors[id];
         delete state.messageCursors[id];
+        deferWatchPendingReports(
+          id,
+          state.watches[id]?.debounceMs ?? 0,
+        );
         try {
           await persist();
         } catch (error) {
@@ -750,6 +821,7 @@ export async function createOperatorWatchPool(
             watch.debounceMs,
             state.messageListeners[id]?.messageDebounceMs ?? 0,
           );
+          const readyAt = Date.now() + debounceMs;
           const reports = collectReports(
             resumeStore,
             observation,
@@ -761,22 +833,12 @@ export async function createOperatorWatchPool(
             conductorAgentId: id,
             issueUrl: resumeStore.issueUrl,
             debounceMs,
+            readyAt,
           }));
           const cursorChanged = hash(previous ?? null) !== hash(next);
           if (reports.length > 0) state.pendingReports.push(...reports);
           state.cursors[id] = next;
           if (reports.length > 0 || cursorChanged) await persist();
-          options.dispatchQueue.enqueueReports(
-            reports.map((report) => ({
-              type: 'report',
-              reportId: report.reportId,
-              reportType: report.reportType,
-              conductorAgentId: id,
-              issueUrl: resumeStore.issueUrl,
-              text: report.text,
-            })),
-            debounceMs,
-          );
           return reports.length;
         });
       } finally {
@@ -835,6 +897,7 @@ export async function createOperatorWatchPool(
             })),
           ].sort((left, right) => left.sendCount - right.sendCount);
           const reports: OperatorWatchState['pendingReports'] = [];
+          const readyAt = Date.now() + listener.messageDebounceMs;
           for (let index = 0; index < messageEvents.length; ) {
             const event = messageEvents[index]!;
             if (event.type === 'message') {
@@ -845,6 +908,7 @@ export async function createOperatorWatchPool(
                 issueUrl: resumeStore.issueUrl,
                 text: formatConductorMessageReport(resumeStore, event.message),
                 debounceMs: listener.messageDebounceMs,
+                readyAt,
                 sendCount: event.sendCount,
               });
               index += 1;
@@ -869,6 +933,7 @@ export async function createOperatorWatchPool(
                 oversizedSendCounts,
               ),
               debounceMs: listener.messageDebounceMs,
+              readyAt,
               sendCount: oversizedSendCounts.at(-1)!,
               oversizedSendCounts,
             });
@@ -878,21 +943,13 @@ export async function createOperatorWatchPool(
               (left.sendCount ?? 0) - (right.sendCount ?? 0),
           );
           state.messageCursors[id] = nextCursor;
-          if (reports.length > 0) state.pendingReports.push(...reports);
+          if (reports.length > 0) {
+            for (const pending of state.pendingReports) {
+              if (pending.conductorAgentId === id) pending.readyAt = readyAt;
+            }
+            state.pendingReports.push(...reports);
+          }
           if (reports.length > 0 || nextCursor !== cursor) await persist();
-          options.dispatchQueue.enqueueDebouncedReports(
-            reports.map((report) => ({
-              type: 'report',
-              reportId: report.reportId,
-              reportType: 'conductor_message',
-              conductorAgentId: id,
-              issueUrl: resumeStore.issueUrl,
-              text: report.text,
-              sendCount: report.sendCount,
-              oversizedSendCounts: report.oversizedSendCounts,
-            })),
-            listener.messageDebounceMs,
-          );
           if (readResult.responseSizeError) {
             throw readResult.responseSizeError;
           }
@@ -902,6 +959,7 @@ export async function createOperatorWatchPool(
         messagePolling.delete(id);
       }
     },
+    refreshPendingReports,
     async acknowledge(events) {
       const acknowledged = new Set(
         events.flatMap((event) =>
@@ -909,14 +967,24 @@ export async function createOperatorWatchPool(
         ),
       );
       if (acknowledged.size === 0) return;
-      await withStateLock(async () => {
-        const remaining = state.pendingReports.filter(
-          (report) => !acknowledged.has(report.reportId),
-        );
-        if (remaining.length === state.pendingReports.length) return;
-        state.pendingReports = remaining;
-        await persist();
-      });
+      try {
+        await withStateLock(async () => {
+          const remaining = state.pendingReports.filter(
+            (report) => !acknowledged.has(report.reportId),
+          );
+          if (remaining.length === state.pendingReports.length) return;
+          state.pendingReports = remaining;
+          await persist();
+        });
+      } catch (error) {
+        for (const event of events) {
+          if (event.type === 'report') {
+            options.dispatchQueue.requeue(event, 5_000);
+          }
+        }
+        throw error;
+      }
+      options.dispatchQueue.discardQueuedReports?.([...acknowledged]);
     },
     close() {
       closed = true;
@@ -924,24 +992,23 @@ export async function createOperatorWatchPool(
       timers.clear();
       for (const timer of messageTimers.values()) clearInterval(timer);
       messageTimers.clear();
+      if (pendingReportRefreshTimer) clearInterval(pendingReportRefreshTimer);
+      pendingReportRefreshTimer = undefined;
     },
   };
 
-  for (const report of state.pendingReports) {
-    options.dispatchQueue.enqueueReports(
-      [{
-        type: 'report',
-        reportId: report.reportId,
-        reportType: report.reportType,
-        conductorAgentId: report.conductorAgentId,
-        issueUrl: report.issueUrl,
-        text: report.text,
-        sendCount: report.sendCount,
-        oversizedSendCounts: report.oversizedSendCounts,
-      }],
-      0,
-    );
-  }
+  pendingReportRefreshTimer = setInterval(() => {
+    if (closed || pendingReportRefreshInFlight) return;
+    pendingReportRefreshInFlight = true;
+    void refreshPendingReports().catch((error: unknown) => {
+      options.onError?.(
+        formatPendingReportRefreshError(error),
+      );
+    }).finally(() => {
+      pendingReportRefreshInFlight = false;
+    });
+  }, PENDING_REPORT_REFRESH_INTERVAL_MS);
+  pendingReportRefreshTimer.unref();
   for (const watch of pool.list()) startTimer(watch);
   for (const listener of pool.listConductorMessageListens()) {
     startMessageTimer(listener);
@@ -1905,14 +1972,33 @@ async function loadWatchState(path: string): Promise<OperatorWatchState> {
           'Invalid operator-agent watch state: pending report debounceMs.',
         );
       }
+      if (
+        report.readyAt !== undefined &&
+        (typeof report.readyAt !== 'number' ||
+          !Number.isSafeInteger(report.readyAt) ||
+          report.readyAt < 0)
+      ) {
+        throw new Error(
+          'Invalid operator-agent watch state: pending report readyAt.',
+        );
+      }
     }
+    const normalizedPendingReports = pendingReports.map((report) => {
+      const record = report as Record<string, unknown>;
+      return {
+        ...record,
+        // Legacy v1 state had no persisted deadline and was replayed
+        // immediately on startup.
+        readyAt: typeof record.readyAt === 'number' ? record.readyAt : 0,
+      };
+    }) as OperatorWatchState['pendingReports'];
     return {
       version: WATCH_STATE_VERSION,
       watches,
       cursors,
       messageListeners,
       messageCursors,
-      pendingReports: pendingReports as OperatorWatchState['pendingReports'],
+      pendingReports: normalizedPendingReports,
     };
   } catch (error) {
     if (isEnoent(error)) {
@@ -2145,4 +2231,10 @@ function formatConductorMessagePollError(
   const errorType =
     error instanceof Error && error.name ? error.name : 'unknown error';
   return `Failed to poll conductor messages for session ${conductorAgentId} (${errorType}).`;
+}
+
+function formatPendingReportRefreshError(error: unknown): string {
+  const errorType =
+    error instanceof Error && error.name ? error.name : 'unknown error';
+  return `Failed to refresh persisted operator watch reports (${errorType}).`;
 }

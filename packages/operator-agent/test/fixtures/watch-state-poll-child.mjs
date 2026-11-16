@@ -1,16 +1,38 @@
 import { createOperatorDispatchQueue } from '../../dist/operator-dispatch.js';
 import { createOperatorWatchPool } from '../../dist/operator-watch-pool.js';
 
-const [userEnsembleRoot, conductorAgentId] = process.argv.slice(2);
+const [userEnsembleRoot, conductorAgentId, mode] = process.argv.slice(2);
 if (!userEnsembleRoot || !conductorAgentId || !process.send) {
   throw new Error('userEnsembleRoot, conductorAgentId, and IPC are required');
 }
 
 let pool;
 try {
+  const dispatchQueue = createOperatorDispatchQueue();
+  if (mode === 'crash-after-persist') {
+    const crashBeforeQueueHandoff = () => {
+      process.send({ type: 'persisted-before-enqueue' }, () => {
+        process.exit(73);
+      });
+    };
+    if (dispatchQueue.reconcileReports) {
+      dispatchQueue.reconcileReports = (reports) => {
+        if (reports.length > 0) crashBeforeQueueHandoff();
+      };
+    } else {
+      const enqueueReports = dispatchQueue.enqueueReports.bind(dispatchQueue);
+      dispatchQueue.enqueueReports = (events, debounceMs) => {
+        if (events.length > 0) {
+          crashBeforeQueueHandoff();
+          return;
+        }
+        enqueueReports(events, debounceMs);
+      };
+    }
+  }
   pool = await createOperatorWatchPool({
     userEnsembleRoot,
-    dispatchQueue: createOperatorDispatchQueue(),
+    dispatchQueue,
   });
   process.send({ type: 'ready' });
   process.on('message', async (message) => {

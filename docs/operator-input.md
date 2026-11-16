@@ -310,7 +310,7 @@ send の結果が未確定になった後は、agent availability と operator c
 
 auth / transport の reconnect attempt と成否は、`source=automatic|manual`、failure class とともに operator に表示します。auth failure には既存の backend 固有 hint も表示します。認証を直す方法は [Pi conductor セットアップ](pi-conductor-setup.md) を参照してください。
 
-operator-agent の watch report は user input とは別に扱います。report-only の send が未完了なら既存の report ID を保持して再試行し、user input を同じ batch に混ぜたり再キューしたりしません。これは at-least-once retry で、report の内容 dedupe や tool side effect の idempotency は提供しません（[ADR 0037](adr/0037-operator-agent-session-watch-and-dispatch.md)）。
+operator-agent の watch report は user input とは別に扱います。report-only の send または ack 保存が未完了なら既存の report ID を保持して5秒後に再試行し、user input を同じ batch に混ぜたり再キューしたりしません。保存済み pending report は稼働中 peer からも最大2秒周期で回収し、queue refresh の重複 enqueue は report ID で抑えます。複数 process が同じ report を同時に send する競合は残るため at-least-once であり、report 本文の dedupe や tool side effect の idempotency は提供しません（[ADR 0037](adr/0037-operator-agent-session-watch-and-dispatch.md)、[ADR 0081](adr/0081-operator-watch-pending-report-handoff.md)）。
 
 ### `/recovery` — 失敗した operator input の確認
 

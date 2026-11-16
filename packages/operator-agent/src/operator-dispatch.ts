@@ -52,6 +52,15 @@ export interface OperatorDispatchQueue {
     >[],
     debounceMs: number,
   ): void;
+  reconcileReports?(
+    reports: readonly {
+      event: Omit<
+        Extract<OperatorDispatchEvent, { type: 'report' }>,
+        'arrival' | 'readyAt'
+      >;
+      readyAt: number;
+    }[],
+  ): void;
   deferWatchReports?(conductorAgentId: string, debounceMs: number): void;
   discardQueuedReports?(reportIds: readonly string[]): void;
   requeue(event: OperatorDispatchEvent, delayMs: number): void;
@@ -316,9 +325,17 @@ export function createOperatorDispatchQueue(): OperatorDispatchQueue {
   let arrival = 0;
   let held: Extract<OperatorDispatchEvent, { type: 'report' }>[] = [];
   let pending: OperatorDispatchEvent[] = [];
+  const inFlightReportIds = new Set<string>();
+  const retryReadyAtById = new Map<string, number>();
   let conversationHold = false;
   let reportHold = false;
   const isHeld = () => conversationHold || reportHold;
+  const hasReport = (reportId: string) =>
+    inFlightReportIds.has(reportId) ||
+    pending.some(
+      (event) => event.type === 'report' && event.reportId === reportId,
+    ) ||
+    held.some((event) => event.reportId === reportId);
   const updateHold = (
     previousHold: boolean,
   ): { heldEventCount: number; releasedEventCount: number } => {
@@ -376,29 +393,94 @@ export function createOperatorDispatchQueue(): OperatorDispatchQueue {
   enqueueReports(events, debounceMs) {
       if (events.length === 0) return;
       const readyAt = Date.now() + Math.max(0, debounceMs);
+      let added = false;
       for (const event of events) {
+        if (event.reportId && hasReport(event.reportId)) continue;
         const next = { ...event, arrival: arrival++, readyAt };
         if (isHeld()) held.push(next);
         else pending.push(next);
+        added = true;
       }
-      notify();
+      if (added) notify();
     },
     enqueueDebouncedReports(events, debounceMs) {
       if (events.length === 0) return;
       const readyAt = Date.now() + Math.max(0, debounceMs);
       const sourceKeys = new Set(events.map(reportSourceKey));
+      let changed = false;
       for (const event of pending) {
-        if (sourceKeys.has(operatorEventSourceKey(event))) event.readyAt = readyAt;
+        if (sourceKeys.has(operatorEventSourceKey(event))) {
+          event.readyAt = readyAt;
+          changed = true;
+        }
       }
       for (const event of held) {
-        if (sourceKeys.has(operatorEventSourceKey(event))) event.readyAt = readyAt;
+        if (sourceKeys.has(operatorEventSourceKey(event))) {
+          event.readyAt = readyAt;
+          changed = true;
+        }
       }
       for (const event of events) {
+        if (event.reportId && hasReport(event.reportId)) continue;
         const next = { ...event, arrival: arrival++, readyAt };
         if (isHeld()) held.push(next);
         else pending.push(next);
+        changed = true;
       }
-      notify();
+      if (changed) notify();
+    },
+    reconcileReports(reports) {
+      const desired = new Map(
+        reports.flatMap(({ event, readyAt }) =>
+          event.reportId ? [[event.reportId, { event, readyAt }] as const] : [],
+        ),
+      );
+      const pendingBefore = pending.length;
+      const heldBefore = held.length;
+      pending = pending.filter(
+        (event) =>
+          event.type !== 'report' ||
+          !event.reportId ||
+          desired.has(event.reportId),
+      );
+      held = held.filter(
+        (event) => !event.reportId || desired.has(event.reportId),
+      );
+      let changed = pending.length !== pendingBefore || held.length !== heldBefore;
+
+      for (const [reportId, persisted] of desired) {
+        const readyAt = Math.max(
+          persisted.readyAt,
+          retryReadyAtById.get(reportId) ?? 0,
+        );
+        const queued = [...pending, ...held].find(
+          (event) =>
+            event.type === 'report' && event.reportId === reportId,
+        );
+        if (queued) {
+          if (queued.readyAt !== readyAt) {
+            queued.readyAt = readyAt;
+            changed = true;
+          }
+          continue;
+        }
+        if (inFlightReportIds.has(reportId)) continue;
+
+        const next = {
+          ...persisted.event,
+          arrival: arrival++,
+          readyAt,
+        };
+        if (isHeld()) held.push(next);
+        else pending.push(next);
+        changed = true;
+      }
+      for (const reportId of retryReadyAtById.keys()) {
+        if (!desired.has(reportId) && !inFlightReportIds.has(reportId)) {
+          retryReadyAtById.delete(reportId);
+        }
+      }
+      if (changed) notify();
     },
     deferWatchReports(conductorAgentId, debounceMs) {
       const readyAt = Date.now() + Math.max(0, debounceMs);
@@ -418,6 +500,7 @@ export function createOperatorDispatchQueue(): OperatorDispatchQueue {
       if (ids.size === 0) return;
       const pendingBefore = pending.length;
       const heldBefore = held.length;
+      let changed = false;
       pending = pending.filter(
         (event) =>
           event.type !== 'report' ||
@@ -427,16 +510,38 @@ export function createOperatorDispatchQueue(): OperatorDispatchQueue {
       held = held.filter(
         (event) => event.reportId === undefined || !ids.has(event.reportId),
       );
-      if (pending.length !== pendingBefore || held.length !== heldBefore) notify();
+      changed =
+        pending.length !== pendingBefore ||
+        held.length !== heldBefore;
+      for (const reportId of ids) {
+        if (inFlightReportIds.delete(reportId)) changed = true;
+        if (retryReadyAtById.delete(reportId)) changed = true;
+      }
+      if (changed) notify();
     },
     requeue(event, delayMs) {
       if (event.type === 'user') {
         pending.push({ ...event, arrival: arrival++, readyAt: Date.now() });
       } else {
+        const readyAt = Date.now() + Math.max(0, delayMs);
+        const reportId = event.reportId;
+        if (reportId) {
+          inFlightReportIds.delete(reportId);
+          retryReadyAtById.set(reportId, readyAt);
+          const queued = [...pending, ...held].find(
+            (candidate) =>
+              candidate.type === 'report' && candidate.reportId === reportId,
+          );
+          if (queued) {
+            queued.readyAt = Math.max(queued.readyAt, readyAt);
+            notify();
+            return;
+          }
+        }
         const next = {
           ...event,
           arrival: arrival++,
-          readyAt: Date.now() + Math.max(0, delayMs),
+          readyAt,
         };
         if (isHeld()) held.push(next);
         else pending.push(next);
@@ -462,6 +567,12 @@ export function createOperatorDispatchQueue(): OperatorDispatchQueue {
       const previousLength = pending.length;
       pending = pending.filter((event) => !selected.has(event));
       if (pending.length === previousLength) return false;
+      for (const event of batch.events) {
+        if (event.type === 'report' && event.reportId) {
+          inFlightReportIds.add(event.reportId);
+          retryReadyAtById.delete(event.reportId);
+        }
+      }
       notify();
       return true;
     },

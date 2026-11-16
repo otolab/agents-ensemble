@@ -7,6 +7,7 @@ import {
   utimes,
   writeFile,
 } from 'node:fs/promises';
+import { DatabaseSync } from 'node:sqlite';
 import { fork, type ChildProcess } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -45,20 +46,26 @@ function currentWatchStatePath(_repoRoot: string): string {
 function startWatchPollProcess(
   userEnsembleRoot: string,
   conductorAgentId: string,
+  mode?: 'crash-after-persist',
 ): {
   child: ChildProcess;
   ready: Promise<void>;
   poll: () => void;
   result: Promise<number>;
+  persistedBeforeEnqueue: Promise<void>;
   exit: Promise<void>;
 } {
   const fixture = fileURLToPath(
     new URL('../test/fixtures/watch-state-poll-child.mjs', import.meta.url),
   );
-  const child = fork(fixture, [userEnsembleRoot, conductorAgentId], {
+  const child = fork(
+    fixture,
+    [userEnsembleRoot, conductorAgentId, ...(mode ? [mode] : [])],
+    {
     execArgv: [],
     stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
-  });
+    },
+  );
   let stderr = '';
   child.stderr?.setEncoding('utf8');
   child.stderr?.on('data', (chunk: string) => {
@@ -69,7 +76,13 @@ function startWatchPollProcess(
   let rejectReady!: (error: Error) => void;
   let resolveResult!: (count: number) => void;
   let rejectResult!: (error: Error) => void;
+  let resolvePersistedBeforeEnqueue!: () => void;
+  let rejectPersistedBeforeEnqueue!: (error: Error) => void;
   let resultSettled = false;
+  const persistedBeforeEnqueue = new Promise<void>((resolve, reject) => {
+    resolvePersistedBeforeEnqueue = resolve;
+    rejectPersistedBeforeEnqueue = reject;
+  });
   const ready = new Promise<void>((resolve, reject) => {
     resolveReady = resolve;
     rejectReady = reject;
@@ -89,6 +102,8 @@ function startWatchPollProcess(
     if (payload.type === 'ready') {
       readySettled = true;
       resolveReady();
+    } else if (payload.type === 'persisted-before-enqueue') {
+      resolvePersistedBeforeEnqueue();
     } else if (payload.type === 'done' && typeof payload.count === 'number') {
       resultSettled = true;
       resolveResult(payload.count);
@@ -98,7 +113,8 @@ function startWatchPollProcess(
         readySettled = true;
         rejectReady(error);
       }
-      rejectResult(error);
+      if (mode) rejectPersistedBeforeEnqueue(error);
+      if (!mode) rejectResult(error);
     }
   });
   child.once('error', (error) => {
@@ -106,14 +122,15 @@ function startWatchPollProcess(
       readySettled = true;
       rejectReady(error);
     }
-    rejectResult(error);
+    if (mode) rejectPersistedBeforeEnqueue(error);
+    if (!mode) rejectResult(error);
   });
   child.once('exit', (code) => {
     if (!readySettled) {
       readySettled = true;
       rejectReady(new Error(`watch poll child exited before ready (${code}): ${stderr}`));
     }
-    if (!resultSettled) {
+    if (!resultSettled && !mode) {
       rejectResult(
         new Error(`watch poll child exited before returning a result (${code}): ${stderr}`),
       );
@@ -133,6 +150,7 @@ function startWatchPollProcess(
       child.send({ type: 'poll' });
     },
     result,
+    persistedBeforeEnqueue,
     exit,
   };
 }
@@ -1609,6 +1627,195 @@ describe('operator watch pool', () => {
     }
   });
 
+  it('hands off a persisted pending batch to an active peer after the producer exits before enqueue', async () => {
+    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-watch-handoff-'));
+    await mkdir(join(repoRoot, '.ensemble', 'sessions'), { recursive: true });
+    const agentId = 'handoff-session';
+    const issueUrl = 'https://github.com/example/repo/issues/103';
+    let observation: SessionObservationSnapshot = {
+      sequence: 1,
+      openQuestions: [],
+      sessionState: {
+        current: { statusLine: 'baseline', reportedAt: 20 },
+        history: [],
+      },
+    };
+    const server = await startOpenQuestionControlServer({
+      listOpenQuestions: () => [],
+      observeSession: async () => observation,
+    });
+    closeServers.push(() => server.close());
+    await writeResumeStore(agentId, 1, server.socketPath, issueUrl);
+
+    const peerQueue = createOperatorDispatchQueue();
+    const peerPool = await createOperatorWatchPool({
+      repoRoot,
+      dispatchQueue: peerQueue,
+    });
+    const statePath = currentWatchStatePath(repoRoot);
+    const stateOnDisk = async () =>
+      JSON.parse(await readFile(statePath, 'utf8')) as {
+        cursors: Record<string, { sequence: number }>;
+        pendingReports: Array<{
+          reportId: string;
+          reportType: string;
+          conductorAgentId: string;
+        }>;
+      };
+    let producer: ReturnType<typeof startWatchPollProcess> | undefined;
+    try {
+      await peerPool.register(agentId, {
+        pollIntervalMs: 60_000,
+        debounceMs: 0,
+      });
+      expect(await peerPool.pollOnce(agentId)).toBe(1);
+      const baseline = peerQueue.takeBatch(
+        { continuationConsumed: false },
+        Date.now(),
+      )!;
+      await peerPool.acknowledge(baseline.events);
+      expect((await stateOnDisk()).pendingReports).toEqual([]);
+
+      observation = {
+        sequence: 2,
+        openQuestions: [
+          {
+            id: 'inq-2',
+            question: 'First persisted update?',
+            responseType: 'text',
+            source: 'conductor',
+            status: 'open',
+            askedAt: 21,
+          },
+          {
+            id: 'inq-3',
+            question: 'Second persisted update?',
+            responseType: 'text',
+            source: 'conductor',
+            status: 'open',
+            askedAt: 22,
+          },
+        ],
+        sessionState: {
+          current: { statusLine: 'updated', reportedAt: 21 },
+          history: [],
+        },
+      };
+
+      producer = startWatchPollProcess(
+        join(homeRoot, '.ensemble'),
+        agentId,
+        'crash-after-persist',
+      );
+      await producer.ready;
+      producer.poll();
+      await producer.persistedBeforeEnqueue;
+      await expect(producer.exit).rejects.toThrow(/code 73/u);
+
+      const persisted = await stateOnDisk();
+      expect(persisted.cursors[agentId]?.sequence).toBe(2);
+      expect(persisted.pendingReports.map((report) => report.reportType)).toEqual([
+        'open_question',
+        'open_question',
+        'session_state',
+      ]);
+      const persistedIds = persisted.pendingReports.map((report) => report.reportId);
+      expect(new Set(persistedIds).size).toBe(3);
+      expect(peerQueue.pendingEventCount).toBe(0);
+
+      peerQueue.setHold(true);
+      // This is the next normal poll by the already-running peer. Its disk
+      // refresh must recover the saved IDs even though its cursor has advanced.
+      expect(await peerPool.pollOnce(agentId)).toBe(0);
+      expect(peerQueue.heldEventCount).toBe(3);
+      expect(peerQueue.pendingEventCount).toBe(0);
+      await peerPool.refreshPendingReports?.();
+      await peerPool.refreshPendingReports?.();
+      expect(peerQueue.heldEventCount).toBe(3);
+
+      peerQueue.setHold(false);
+      const failedAttempt = peerQueue.takeBatch(
+        { continuationConsumed: false },
+        Date.now() + 1_000,
+      )!;
+      expect(failedAttempt.events.map((event) =>
+        event.type === 'report' ? event.reportId : undefined,
+      )).toEqual(persistedIds);
+      expect(failedAttempt.events.map((event) =>
+        event.type === 'report' ? event.text : '',
+      )).toEqual([
+        expect.stringContaining('First persisted update?'),
+        expect.stringContaining('Second persisted update?'),
+        expect.stringContaining('updated'),
+      ]);
+
+      for (const event of failedAttempt.events) peerQueue.requeue(event, 5_000);
+      await peerPool.refreshPendingReports?.();
+      expect(peerQueue.pendingEventCount).toBe(3);
+      expect(
+        peerQueue.takeBatch(
+          { continuationConsumed: false },
+          Date.now() + 1_000,
+        ),
+      ).toBeUndefined();
+
+      const retry = peerQueue.takeBatch(
+        { continuationConsumed: false },
+        Date.now() + 6_000,
+      )!;
+      expect(retry.events.map((event) =>
+        event.type === 'report' ? event.reportId : undefined,
+      )).toEqual(persistedIds);
+
+      const stateLock = new DatabaseSync(
+        join(
+          homeRoot,
+          '.ensemble',
+          'operator-agents',
+          'default',
+          'watch',
+          'watch-state-lock.sqlite',
+        ),
+      );
+      stateLock.exec('BEGIN IMMEDIATE');
+      try {
+        await expect(peerPool.acknowledge(retry.events)).rejects.toThrow(
+          /Could not acquire operator watch state profile lock/u,
+        );
+      } finally {
+        stateLock.exec('ROLLBACK');
+        stateLock.close();
+      }
+      expect((await stateOnDisk()).pendingReports.map((report) => report.reportId))
+        .toEqual(persistedIds);
+      expect(peerQueue.pendingEventCount).toBe(3);
+      await peerPool.refreshPendingReports?.();
+      expect(
+        peerQueue.takeBatch(
+          { continuationConsumed: false },
+          Date.now() + 1_000,
+        ),
+      ).toBeUndefined();
+
+      const ackRetry = peerQueue.takeBatch(
+        { continuationConsumed: false },
+        Date.now() + 6_000,
+      )!;
+      expect(ackRetry.events.map((event) =>
+        event.type === 'report' ? event.reportId : undefined,
+      )).toEqual(persistedIds);
+      await peerPool.acknowledge(ackRetry.events);
+      await peerPool.acknowledge(ackRetry.events);
+      expect(peerQueue.pendingEventCount).toBe(0);
+      expect((await stateOnDisk()).pendingReports).toEqual([]);
+    } finally {
+      peerPool.close();
+      if (producer && producer.child.exitCode === null) {
+        producer.child.kill();
+      }
+    }
+  });
+
   it('serializes concurrent process polls and preserves each cursor and pending report', async () => {
     repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-watch-concurrent-'));
     await mkdir(join(repoRoot, '.ensemble', 'sessions'), { recursive: true });
@@ -2131,7 +2338,7 @@ describe('operator watch pool', () => {
     }
   });
 
-  it('rejects duplicate pending report IDs and invalid persisted debounce values', async () => {
+  it('rejects duplicate pending report IDs and invalid persisted timing values', async () => {
     repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-watch-reports-'));
     const validReport = {
       reportId: 'report-1',
@@ -2154,6 +2361,8 @@ describe('operator watch pool', () => {
       [{ ...validReport, debounceMs: 1.5 }],
       [{ ...validReport, debounceMs: -1 }],
       [{ ...validReport, debounceMs: 10_001 }],
+      [{ ...validReport, readyAt: 1.5 }],
+      [{ ...validReport, readyAt: -1 }],
     ];
     const statePath = currentWatchStatePath(repoRoot);
     await mkdir(dirname(statePath), { recursive: true });
