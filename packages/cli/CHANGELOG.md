@@ -1,5 +1,23 @@
 # @agents-ensemble/cli
 
+## 0.23.0
+
+### Minor Changes
+
+- 2a94481: Add non-interactive `ensemble doctor check` diagnostics with an optional one-turn read-only agent mode.
+- c7ae0ef: `session workers messages` で Cursor Agent CLI が保存した ACP transcript を読み取れるようになりました。
+- 9f7fe53: Add one-time operator-approved secret input for worker commands.
+
+### Patch Changes
+
+- bfee2d4: Batch related watch reports without losing event order, recover pending reports in active peers, retry completed-report acknowledgements without replaying the conductor turn, and preserve unresolved watch state for safe recovery.
+- Updated dependencies [c7ae0ef]
+- Updated dependencies [bfee2d4]
+- Updated dependencies [feedf32]
+- Updated dependencies [9f7fe53]
+  - @agents-ensemble/core@0.23.0
+  - @agents-ensemble/operator-agent@0.6.0
+
 ## 0.22.0
 
 ### Minor Changes

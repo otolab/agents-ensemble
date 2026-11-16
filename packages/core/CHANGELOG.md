@@ -1,5 +1,13 @@
 # @agents-ensemble/core
 
+## 0.23.0
+
+### Minor Changes
+
+- c7ae0ef: `session workers messages` で Cursor Agent CLI が保存した ACP transcript を読み取れるようになりました。
+- feedf32: Allow operator-agent profiles to explicitly select MCP servers from the user MCP config.
+- 9f7fe53: Add one-time operator-approved secret input for worker commands.
+
 ## 0.22.0
 
 ### Minor Changes

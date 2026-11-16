@@ -1,5 +1,20 @@
 # @agents-ensemble/operator-agent
 
+## 0.6.0
+
+### Minor Changes
+
+- feedf32: Allow operator-agent profiles to explicitly select MCP servers from the user MCP config.
+
+### Patch Changes
+
+- c7ae0ef: `session workers messages` で Cursor Agent CLI が保存した ACP transcript を読み取れるようになりました。
+- bfee2d4: Batch related watch reports without losing event order, recover pending reports in active peers, retry completed-report acknowledgements without replaying the conductor turn, and preserve unresolved watch state for safe recovery.
+- Updated dependencies [c7ae0ef]
+- Updated dependencies [feedf32]
+- Updated dependencies [9f7fe53]
+  - @agents-ensemble/core@0.23.0
+
 ## 0.5.0
 
 ### Minor Changes
