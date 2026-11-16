@@ -1295,7 +1295,14 @@ describe('runOperatorAgent', () => {
     );
   });
 
-  it('sends multiple same-source watch reports in one operator-agent dispatch', async () => {
+  it('sends Open Question, status, and conductor-message reports for one session in one dispatch', async () => {
+    let messages: Array<{
+      text: string;
+      inbound: string;
+      at: number;
+      sendCount: number;
+      dispatchSource: string;
+    }> = [];
     let liveSnapshot: SessionObservationSnapshot = {
       sequence: 0,
       openQuestions: [],
@@ -1303,6 +1310,7 @@ describe('runOperatorAgent', () => {
     const liveServer = await startOpenQuestionControlServer({
       listOpenQuestions: () => [],
       observeSession: async () => liveSnapshot,
+      listConductorMessages: () => messages,
       answerOpenQuestion: async () => {
         throw new Error('unused');
       },
@@ -1333,6 +1341,10 @@ describe('runOperatorAgent', () => {
             pollIntervalMs: 250,
             debounceMs: 0,
           });
+          await agentOptions!.customTools!.register_conductor_message_listen!.execute({
+            conductorAgentId: 'conductor-one',
+            messageDebounceMs: 5_000,
+          });
           setTimeout(() => {
             liveSnapshot = {
               sequence: 2,
@@ -1354,7 +1366,18 @@ describe('runOperatorAgent', () => {
                   askedAt: 3,
                 },
               ],
+              sessionState: {
+                current: { statusLine: 'レビュー確認済み', reportedAt: 4 },
+                history: [],
+              },
             };
+            messages = [1, 2].map((sendCount) => ({
+              text: `conductor reply ${sendCount}`,
+              inbound: `operator message ${sendCount}`,
+              at: 1_700_000_000_000 + sendCount,
+              sendCount,
+              dispatchSource: 'operator',
+            }));
           }, 350);
         }
         return {
@@ -1384,7 +1407,10 @@ describe('runOperatorAgent', () => {
         expect(output.capturedText()).toContain('\u001b[2muser>\u001b[0m '),
       );
       input.write('start watching\n');
-      await vi.waitFor(() => expect(sentPrompts).toHaveLength(2));
+      await vi.waitFor(
+        () => expect(sentPrompts).toHaveLength(2),
+        { timeout: 15_000, interval: 50 },
+      );
       input.write('/exit\n');
       await run;
     } finally {
@@ -1392,9 +1418,15 @@ describe('runOperatorAgent', () => {
     }
 
     expect(sentPrompts).toHaveLength(2);
-    expect(sentPrompts[1]).toContain('## Open Question 追加（2 件）');
+    expect(sentPrompts[1]).toContain('## セッション報告（5 件）');
+    expect(sentPrompts[1]).toContain('— Open Question');
+    expect(sentPrompts[1]).toContain('— セッション状態');
+    expect(sentPrompts[1]).toContain('— Conductor の発言');
     expect(sentPrompts[1]).toContain('Review the implementation?');
     expect(sentPrompts[1]).toContain('Confirm the test result?');
+    expect(sentPrompts[1]).toContain('レビュー確認済み');
+    expect(sentPrompts[1]).toContain('conductor reply 1');
+    expect(sentPrompts[1]).toContain('conductor reply 2');
   });
 
   it('retains a cancelled watch report across restart and acknowledges it only after a completed retry', async () => {

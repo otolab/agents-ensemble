@@ -369,6 +369,383 @@ describe('operator watch pool', () => {
     }
   });
 
+  it('preserves unassigned watch bundles and emits one diagnostic per unresolved session', async () => {
+    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-watch-unassigned-'));
+    const issueUrl = DEFAULT_ISSUE_URL;
+    const userRoot = join(homeRoot, '.ensemble');
+    const defaultPath = operatorWatchStatePath(userRoot, 'default', issueUrl);
+    const wrongScopeIssueUrl =
+      'https://github.com/other/repo/issues/99';
+    const wrongScopePath = operatorWatchStatePath(
+      userRoot,
+      'default',
+      wrongScopeIssueUrl,
+    );
+    const cursor = {
+      sequence: 7,
+      questionFingerprints: { 'inq-1': 'question-fingerprint' },
+      questionSnapshots: {
+        'inq-1': {
+          question: 'Keep this cursor?',
+          status: 'open',
+          askedAt: 1,
+        },
+      },
+      statusFingerprints: { '2': 'status-fingerprint' },
+    };
+    const ids = [
+      'missing-store-session',
+      'ambiguous-store-session',
+      'report-url-mismatch-session',
+    ];
+    const unassignedState = {
+      version: 1,
+      watches: Object.fromEntries(
+        ids.map((id) => [
+          id,
+          { conductorAgentId: id, pollIntervalMs: 60_000, debounceMs: 0 },
+        ]),
+      ),
+      cursors: Object.fromEntries(ids.map((id) => [id, cursor])),
+      messageListeners: Object.fromEntries(
+        ids.map((id) => [
+          id,
+          { conductorAgentId: id, messageDebounceMs: 1_000 },
+        ]),
+      ),
+      messageCursors: Object.fromEntries(ids.map((id) => [id, 17])),
+      pendingReports: ids.map((id, index) => ({
+        reportId: `unassigned-report-${index + 1}`,
+        reportType: 'open_question',
+        conductorAgentId: id,
+        issueUrl:
+          id === 'report-url-mismatch-session'
+            ? 'https://github.com/example/repo/issues/89'
+            : issueUrl,
+        text: `pending text ${index + 1}`,
+        debounceMs: 0,
+      })),
+    };
+    const wrongScopeState = {
+      ...unassignedState,
+      watches: {
+        'wrong-scope-session': {
+          conductorAgentId: 'wrong-scope-session',
+          pollIntervalMs: 60_000,
+          debounceMs: 0,
+        },
+      },
+      cursors: { 'wrong-scope-session': cursor },
+      messageListeners: {},
+      messageCursors: {},
+      pendingReports: [
+        {
+          reportId: 'wrong-scope-report',
+          reportType: 'open_question',
+          conductorAgentId: 'wrong-scope-session',
+          issueUrl: 'https://github.com/example/repo/issues/99',
+          text: 'keep source scope',
+          debounceMs: 0,
+        },
+      ],
+    };
+    await writeResumeStore('verified-session', 1, undefined, issueUrl);
+    await writeResumeStore(
+      'ambiguous-store-session',
+      2,
+      undefined,
+      'https://github.com/example-one/repo/issues/20',
+    );
+    await writeResumeStore(
+      'ambiguous-store-session',
+      3,
+      undefined,
+      'https://github.com/example-two/repo/issues/21',
+    );
+    await writeResumeStore(
+      'report-url-mismatch-session',
+      4,
+      undefined,
+      'https://github.com/example/repo/issues/88',
+    );
+    await writeResumeStore(
+      'wrong-scope-session',
+      5,
+      undefined,
+      'https://github.com/example/repo/issues/99',
+    );
+    await mkdir(dirname(defaultPath), { recursive: true });
+    await mkdir(dirname(wrongScopePath), { recursive: true });
+    await writeFile(defaultPath, JSON.stringify(unassignedState));
+    await writeFile(wrongScopePath, JSON.stringify(wrongScopeState));
+    const warnings: string[] = [];
+    const dispatchQueue = createOperatorDispatchQueue();
+    const pool = await createOperatorWatchPool({
+      repoRoot,
+      dispatchQueue,
+      onError: (message) => warnings.push(message),
+    });
+    try {
+      // Unverified reports must not be dispatched merely because the source
+      // watch-state file contains an Issue URL.
+      expect(dispatchQueue.pendingEventCount).toBe(0);
+      expect(warnings).toHaveLength(4);
+      for (const id of [
+        ...ids,
+        'wrong-scope-session',
+      ]) {
+        expect(warnings.filter((warning) => warning.includes(`for ${id} `)))
+          .toHaveLength(1);
+      }
+      expect(
+        warnings.find((warning) =>
+          warning.includes('for ambiguous-store-session '),
+        ),
+      ).toContain('multiple SessionResumeStores');
+      expect(
+        warnings.find((warning) => warning.includes('for missing-store-session ')),
+      ).toContain('no unique verified Issue session');
+
+      await pool.register('verified-session', {
+        pollIntervalMs: 60_000,
+        debounceMs: 0,
+      });
+      await pool.register('verified-session', {
+        pollIntervalMs: 60_000,
+        debounceMs: 0,
+      });
+      // Repeated persist calls do not repeat warnings or discard unresolved
+      // cursors, listeners, watches, or pending reports.
+      expect(warnings).toHaveLength(4);
+      const storedDefault = JSON.parse(
+        await readFile(defaultPath, 'utf8'),
+      ) as typeof unassignedState & {
+        watches: Record<string, unknown>;
+        cursors: Record<string, unknown>;
+        messageListeners: Record<string, unknown>;
+        messageCursors: Record<string, number>;
+        pendingReports: Array<{ reportId: string }>;
+      };
+      expect(storedDefault.watches['verified-session']).toMatchObject({
+        conductorAgentId: 'verified-session',
+      });
+      for (const id of ids) {
+        expect(storedDefault.watches[id]).toBeDefined();
+        expect(storedDefault.cursors[id]).toEqual(cursor);
+        expect(storedDefault.messageListeners[id]).toBeDefined();
+        expect(storedDefault.messageCursors[id]).toBe(17);
+      }
+      expect(storedDefault.pendingReports.map((report) => report.reportId)).toEqual([
+        'unassigned-report-1',
+        'unassigned-report-2',
+        'unassigned-report-3',
+      ]);
+
+      const storedWrongScope = JSON.parse(
+        await readFile(wrongScopePath, 'utf8'),
+      ) as typeof wrongScopeState;
+      expect(storedWrongScope.watches['wrong-scope-session']).toBeDefined();
+      expect(storedWrongScope.pendingReports[0]?.reportId).toBe(
+        'wrong-scope-report',
+      );
+      await expect(
+        readFile(
+          operatorWatchStatePath(userRoot, 'default', issueUrl),
+          'utf8',
+        ).then((text) => JSON.parse(text).watches['wrong-scope-session']),
+      ).resolves.toBeUndefined();
+    } finally {
+      pool.close();
+    }
+
+    // Once the missing Store becomes uniquely discoverable with the same
+    // Issue identity, its exact pending report and cursors can be restored.
+    await writeResumeStore('missing-store-session', 6, undefined, issueUrl);
+    const recoveryQueue = createOperatorDispatchQueue();
+    const recoveryWarnings: string[] = [];
+    const recoveryPool = await createOperatorWatchPool({
+      repoRoot,
+      dispatchQueue: recoveryQueue,
+      onError: (message) => recoveryWarnings.push(message),
+    });
+    try {
+      expect(recoveryWarnings).toHaveLength(3);
+      expect(recoveryQueue.pendingEventCount).toBe(1);
+      expect(recoveryPool.list()).toContainEqual({
+        conductorAgentId: 'missing-store-session',
+        pollIntervalMs: 60_000,
+        debounceMs: 0,
+      });
+      const retry = recoveryQueue.takeBatch(
+        { continuationConsumed: false },
+        Date.now(),
+      )!;
+      expect(retry.events).toMatchObject([
+        {
+          reportId: 'unassigned-report-1',
+          conductorAgentId: 'missing-store-session',
+          issueUrl,
+          text: 'pending text 1',
+        },
+      ]);
+      const stored = JSON.parse(
+        await readFile(defaultPath, 'utf8'),
+      ) as {
+        cursors: Record<string, unknown>;
+        messageListeners: Record<string, unknown>;
+        messageCursors: Record<string, number>;
+        pendingReports: Array<{ reportId: string }>;
+      };
+      expect(stored.cursors['missing-store-session']).toEqual(cursor);
+      expect(stored.messageListeners['missing-store-session']).toBeDefined();
+      expect(stored.messageCursors['missing-store-session']).toBe(17);
+      await recoveryPool.acknowledge(retry.events);
+      expect(
+        JSON.parse(await readFile(defaultPath, 'utf8')).pendingReports,
+      ).toMatchObject([
+        { reportId: 'unassigned-report-2' },
+        { reportId: 'unassigned-report-3' },
+      ]);
+    } finally {
+      recoveryPool.close();
+    }
+  });
+
+  it('refreshes the Issue mapping when a Store appears after pool startup', async () => {
+    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-watch-late-store-'));
+    const dispatchQueue = createOperatorDispatchQueue();
+    const warnings: string[] = [];
+    const pool = await createOperatorWatchPool({
+      repoRoot,
+      dispatchQueue,
+      onError: (message) => warnings.push(message),
+    });
+    try {
+      await writeResumeStore('late-session', 1);
+      await pool.register('late-session', {
+        pollIntervalMs: 60_000,
+        debounceMs: 0,
+      });
+
+      const stored = JSON.parse(
+        await readFile(currentWatchStatePath(repoRoot), 'utf8'),
+      ) as {
+        watches: Record<string, unknown>;
+      };
+      expect(stored.watches['late-session']).toMatchObject({
+        conductorAgentId: 'late-session',
+        pollIntervalMs: 60_000,
+      });
+      expect(warnings).toEqual([]);
+    } finally {
+      pool.close();
+    }
+  });
+
+  it('quarantines a previously verified bundle if its Store becomes ambiguous or moves Issues', async () => {
+    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-watch-changed-issue-'));
+    const oldIssueUrl = DEFAULT_ISSUE_URL;
+    const newIssueUrl = 'https://github.com/other/repo/issues/10';
+    const userRoot = join(homeRoot, '.ensemble');
+    const oldStatePath = operatorWatchStatePath(
+      userRoot,
+      'default',
+      oldIssueUrl,
+    );
+    const newStatePath = operatorWatchStatePath(
+      userRoot,
+      'default',
+      newIssueUrl,
+    );
+    const reportId = 'pending-before-issue-change';
+    await writeResumeStore('changed-session', 1, undefined, oldIssueUrl);
+    await mkdir(dirname(oldStatePath), { recursive: true });
+    await writeFile(
+      oldStatePath,
+      JSON.stringify({
+        version: 1,
+        watches: {
+          'changed-session': {
+            conductorAgentId: 'changed-session',
+            pollIntervalMs: 60_000,
+            debounceMs: 0,
+          },
+        },
+        cursors: {
+          'changed-session': {
+            sequence: 1,
+            questionFingerprints: {},
+            statusFingerprints: {},
+          },
+        },
+        messageListeners: {},
+        messageCursors: {},
+        pendingReports: [
+          {
+            reportId,
+            reportType: 'open_question',
+            conductorAgentId: 'changed-session',
+            issueUrl: oldIssueUrl,
+            text: 'Keep the old Issue report unassigned',
+            debounceMs: 0,
+          },
+        ],
+      }),
+    );
+
+    const dispatchQueue = createOperatorDispatchQueue();
+    const warnings: string[] = [];
+    const pool = await createOperatorWatchPool({
+      repoRoot,
+      dispatchQueue,
+      onError: (message) => warnings.push(message),
+    });
+    try {
+      expect(dispatchQueue.pendingEventCount).toBe(1);
+      const oldStorePath = resolveEnsemblePaths({
+        repoRoot,
+      }).canonicalSessionResumeStorePath(oldIssueUrl, 'changed-session');
+      await writeResumeStore('changed-session', 2, undefined, newIssueUrl);
+
+      expect(await pool.pollOnce('changed-session')).toBe(0);
+      expect(dispatchQueue.pendingEventCount).toBe(0);
+      expect(pool.list()).toEqual([]);
+      await expect(
+        pool.register('changed-session'),
+      ).rejects.toThrow('ambiguous across saved Issues');
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain('multiple SessionResumeStores');
+
+      await rm(oldStorePath);
+      await expect(
+        pool.register('changed-session'),
+      ).rejects.toThrow('source repository scope does not match');
+      expect(warnings).toHaveLength(2);
+
+      await writeResumeStore(
+        'unrelated-session',
+        3,
+        undefined,
+        'https://github.com/another/repo/issues/11',
+      );
+      await pool.register('unrelated-session', {
+        pollIntervalMs: 60_000,
+        debounceMs: 0,
+      });
+      const preserved = JSON.parse(
+        await readFile(oldStatePath, 'utf8'),
+      ) as { pendingReports: Array<{ reportId: string }> };
+      expect(preserved.pendingReports).toMatchObject([{ reportId }]);
+      await expect(
+        readFile(newStatePath, 'utf8').then((text) =>
+          JSON.parse(text).pendingReports,
+        ),
+      ).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      pool.close();
+    }
+  });
+
   it('watches multiple sessions through live UDS and persists cursors without replay', async () => {
     repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-watch-'));
     await mkdir(join(repoRoot, '.ensemble', 'sessions'), { recursive: true });
@@ -438,6 +815,20 @@ describe('operator watch pool', () => {
         unreachableSince: expect.any(Number),
       });
       expect(dispatchQueue.pendingEventCount).toBe(2);
+      for (const sessionId of ['live-one', 'offline-two']) {
+        const baseline = dispatchQueue.takeBatch(
+          { continuationConsumed: false },
+          Date.now(),
+        )!;
+        expect(baseline.sourceKey).toBe(`session:${sessionId}`);
+        expect(baseline.events).toHaveLength(1);
+        expect(baseline.events[0]).toMatchObject({
+          type: 'report',
+          reportType: 'session_state',
+        });
+        await pool.acknowledge(baseline.events);
+      }
+      expect(dispatchQueue.pendingEventCount).toBe(0);
 
       liveSnapshot = {
         ...liveSnapshot,
@@ -453,6 +844,10 @@ describe('operator watch pool', () => {
             askedAt: 11,
           },
         ],
+        sessionState: {
+          current: { statusLine: 'CI 完了', reportedAt: 21 },
+          history: [],
+        },
       };
       await writeOfflineSnapshots('offline-two', {
         sequence: 2,
@@ -477,17 +872,25 @@ describe('operator watch pool', () => {
         statusLine: 'レビュー中',
         reportedAt: 40,
       });
-      expect(await pool.pollOnce('live-one')).toBe(1);
+      expect(await pool.pollOnce('live-one')).toBe(2);
       expect(await pool.pollOnce('offline-two')).toBe(1);
-      expect(dispatchQueue.pendingEventCount).toBe(4);
+      expect(dispatchQueue.pendingEventCount).toBe(3);
 
       const firstBatch = dispatchQueue.takeBatch(
         { continuationConsumed: false },
         Date.now(),
       );
-      expect(firstBatch?.sourceKey).toBe('open_question:live-one');
-      expect(firstBatch?.events[0]?.text).toContain('New live question?');
-      expect(dispatchQueue.pendingEventCount).toBe(3);
+      expect(firstBatch?.sourceKey).toBe('session:live-one');
+      expect(firstBatch?.events.map((event) =>
+        event.type === 'report' ? event.reportType : event.type,
+      )).toEqual(['open_question', 'session_state']);
+      expect(firstBatch?.events.map((event) => event.text).join('\n')).toContain(
+        'New live question?',
+      );
+      expect(firstBatch?.events.map((event) => event.text).join('\n')).toContain(
+        'CI 完了',
+      );
+      expect(dispatchQueue.pendingEventCount).toBe(1);
       await pool.acknowledge(firstBatch!.events);
 
       expect(await pool.pollOnce('live-one')).toBe(0);
@@ -505,10 +908,119 @@ describe('operator watch pool', () => {
         dispatchQueue: resumedQueue,
       });
       try {
-        expect(resumedQueue.pendingEventCount).toBe(3);
+        expect(resumedQueue.pendingEventCount).toBe(1);
+        expect(
+          resumedQueue.takeBatch(
+            { continuationConsumed: false },
+            Date.now(),
+          )?.sourceKey,
+        ).toBe('session:offline-two');
       } finally {
         resumedPool.close();
       }
+    } finally {
+      pool.close();
+    }
+  });
+
+  it('holds an answered question and status update together until both holds release', async () => {
+    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-watch-held-answer-'));
+    await mkdir(join(repoRoot, '.ensemble', 'sessions'), { recursive: true });
+    let snapshot: SessionObservationSnapshot = {
+      sequence: 1,
+      openQuestions: [
+        {
+          id: 'inq-1',
+          question: 'Continue the release?',
+          responseType: 'yes_no',
+          source: 'conductor',
+          status: 'open',
+          askedAt: 10,
+        },
+      ],
+      sessionState: {
+        current: { statusLine: 'operator response pending', reportedAt: 20 },
+        history: [],
+      },
+    };
+    const liveServer = await startOpenQuestionControlServer({
+      listOpenQuestions: () => [],
+      observeSession: async () => snapshot,
+      answerOpenQuestion: async () => {
+        throw new Error('unused');
+      },
+    });
+    closeServers.push(() => liveServer.close());
+    await writeResumeStore('held-answer-session', 1, liveServer.socketPath);
+
+    const dispatchQueue = createOperatorDispatchQueue();
+    dispatchQueue.setConversationHold(true);
+    dispatchQueue.setHold(true);
+    const pool = await createOperatorWatchPool({
+      repoRoot,
+      dispatchQueue,
+    });
+    try {
+      await pool.register('held-answer-session', {
+        pollIntervalMs: 60_000,
+        debounceMs: 0,
+      });
+      expect(await pool.pollOnce('held-answer-session')).toBe(1);
+      expect(dispatchQueue.heldEventCount).toBe(1);
+
+      snapshot = {
+        sequence: 2,
+        openQuestions: [
+          {
+            id: 'inq-1',
+            question: 'Continue the release?',
+            responseType: 'yes_no',
+            source: 'conductor',
+            status: 'answered',
+            answer: 'yes',
+            answeredBy: 'operator',
+            askedAt: 10,
+            answeredAt: 30,
+          },
+        ],
+        sessionState: {
+          current: { statusLine: 'release resumed', reportedAt: 31 },
+          history: [],
+        },
+      };
+      expect(await pool.pollOnce('held-answer-session')).toBe(2);
+      expect(dispatchQueue.heldEventCount).toBe(3);
+
+      expect(dispatchQueue.setHold(false)).toEqual({
+        heldEventCount: 3,
+        releasedEventCount: 0,
+      });
+      expect(dispatchQueue.conversationHold).toBe(true);
+      expect(dispatchQueue.pendingEventCount).toBe(0);
+      expect(dispatchQueue.setConversationHold(false)).toEqual({
+        heldEventCount: 0,
+        releasedEventCount: 3,
+      });
+
+      const batch = dispatchQueue.takeBatch(
+        { continuationConsumed: false },
+        Date.now(),
+      )!;
+      expect(batch.sourceKey).toBe('session:held-answer-session');
+      expect(batch.events.map((event) =>
+        event.type === 'report' ? event.reportType : event.type,
+      )).toEqual(['session_state', 'open_question', 'session_state']);
+      const text = formatOperatorDispatchBatch(batch.events);
+      expect(text).toContain('回答: yes');
+      expect(text).toContain('answeredBy: operator');
+      expect(text).toContain('release resumed');
+      expect(await pool.pollOnce('held-answer-session')).toBe(0);
+      await pool.acknowledge(batch.events);
+      expect(
+        JSON.parse(
+          await readFile(currentWatchStatePath(repoRoot), 'utf8'),
+        ).pendingReports,
+      ).toEqual([]);
     } finally {
       pool.close();
     }
@@ -863,14 +1375,16 @@ describe('operator watch pool', () => {
       { continuationConsumed: false },
       Date.now(),
     )!;
-    expect(firstAttempt.events[0]?.type).toBe('report');
-    if (firstAttempt.events[0]?.type === 'report') {
-      expect(firstAttempt.events[0].reportType).toBe('open_question');
-      expect(firstAttempt.events[0].text).toContain('New report to retry?');
-    }
-    const firstReportId = firstAttempt.events[0]!.reportId;
-    expect(firstReportId).toBeTruthy();
-    expect(firstQueue.pendingEventCount).toBe(1);
+    expect(firstAttempt.events).toHaveLength(2);
+    expect(firstAttempt.events.map((event) =>
+      event.type === 'report' ? event.reportType : event.type,
+    )).toEqual(['session_state', 'open_question']);
+    expect(firstAttempt.events[1]?.text).toContain('New report to retry?');
+    const firstReportIds = firstAttempt.events.map((event) =>
+      event.type === 'report' ? event.reportId : undefined,
+    );
+    expect(firstReportIds.every(Boolean)).toBe(true);
+    expect(firstQueue.pendingEventCount).toBe(0);
     firstPool.close();
 
     const resumedQueue = createOperatorDispatchQueue();
@@ -884,16 +1398,41 @@ describe('operator watch pool', () => {
         { continuationConsumed: false },
         Date.now(),
       )!;
-      expect(retry.events[0]?.reportId).toBe(firstReportId);
+      expect(retry.events.map((event) =>
+        event.type === 'report' ? event.reportId : undefined,
+      )).toEqual(firstReportIds);
 
-      await resumedPool.acknowledge(retry.events);
+      const remainingReportId = firstReportIds[1]!;
+      await resumedPool.acknowledge([retry.events[0]!]);
       const stored = JSON.parse(
         await readFile(currentWatchStatePath(repoRoot), 'utf8'),
       ) as { pendingReports: Array<{ reportId: string }> };
       expect(stored.pendingReports).toHaveLength(1);
-      expect(stored.pendingReports[0]?.reportId).not.toBe(firstReportId);
+      expect(stored.pendingReports[0]?.reportId).toBe(remainingReportId);
     } finally {
       resumedPool.close();
+    }
+
+    const finalQueue = createOperatorDispatchQueue();
+    const finalPool = await createOperatorWatchPool({
+      repoRoot,
+      dispatchQueue: finalQueue,
+    });
+    try {
+      expect(finalQueue.pendingEventCount).toBe(1);
+      const remaining = finalQueue.takeBatch(
+        { continuationConsumed: false },
+        Date.now(),
+      )!;
+      expect(remaining.events[0]?.reportId).toBe(firstReportIds[1]);
+      await finalPool.acknowledge(remaining.events);
+      expect(
+        JSON.parse(
+          await readFile(currentWatchStatePath(repoRoot), 'utf8'),
+        ).pendingReports,
+      ).toEqual([]);
+    } finally {
+      finalPool.close();
     }
   });
 
@@ -1498,6 +2037,64 @@ describe('operator watch pool', () => {
       ).resolves.toBe(true);
       expect(pool.listConductorMessageListens()).toEqual([]);
     } finally {
+      pool.close();
+    }
+  });
+
+  it('uses the configured message debounce for pending watch reports in the same session', async () => {
+    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-watch-message-window-'));
+    await mkdir(join(repoRoot, '.ensemble', 'sessions'), { recursive: true });
+    const liveServer = await startOpenQuestionControlServer({
+      listOpenQuestions: () => [],
+      observeSession: async () => ({
+        sequence: 1,
+        openQuestions: [],
+        sessionState: {
+          current: { statusLine: 'waiting for review', reportedAt: 10 },
+          history: [],
+        },
+      }),
+      listConductorMessages: () => [],
+      answerOpenQuestion: async () => {
+        throw new Error('unused');
+      },
+    });
+    closeServers.push(() => liveServer.close());
+    await writeResumeStore('watch-message-window', 1, liveServer.socketPath);
+
+    const dispatchQueue = createOperatorDispatchQueue();
+    dispatchQueue.setHold(true);
+    const pool = await createOperatorWatchPool({ repoRoot, dispatchQueue });
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_000);
+    try {
+      await pool.register('watch-message-window', {
+        pollIntervalMs: 60_000,
+        debounceMs: 0,
+      });
+      expect(await pool.pollOnce('watch-message-window')).toBe(1);
+      expect(dispatchQueue.heldEventCount).toBe(1);
+      await pool.registerConductorMessageListen('watch-message-window', {
+        messageDebounceMs: 3_000,
+      });
+      expect(dispatchQueue.setHold(false)).toEqual({
+        heldEventCount: 0,
+        releasedEventCount: 1,
+      });
+      const releaseAt = Date.now();
+      expect(
+        dispatchQueue.takeBatch(
+          { continuationConsumed: false },
+          releaseAt + 2_999,
+        ),
+      ).toBeUndefined();
+      expect(
+        dispatchQueue.takeBatch(
+          { continuationConsumed: false },
+          releaseAt + 3_000,
+        )?.events[0]?.text,
+      ).toContain('waiting for review');
+    } finally {
+      now.mockRestore();
       pool.close();
     }
   });

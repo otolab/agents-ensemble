@@ -84,6 +84,8 @@ list tool の `structuredContent` は UDS の `result`（`{ "questions": [...] }
 
 watch pool は選択 profile と Issue URL の canonical repository slug ごとに `~/.ensemble/operator-agents/<profile>/watch/github.com/<owner>/<repo>/watch-state.json` を使い、watch 登録、session ごとの cursor、未 dispatch report を atomic に保存します。旧 user path-hash / slug-keyed watch bundle と列挙 checkout の project-local watch state は明示 migration tool の source で、runtime は読みません。profile state がなければ空の state として扱い、legacy source を自動で統合・変更・削除しません。
 
+profile state 内の ID に対して一意な SessionResumeStore が見つからない、同じ ID の Store が複数ある、state file の repository scope または pending report の Issue URL が Store と一致しない場合、その session bundle（watch / cursor / listener / pending report）は元の state file に残して dispatch しません。原因と field 件数を session 単位で診断し、同じ内容の persist ごとには繰り返しません。Store が後から一意になり、repository path と pending report の Issue identity も一致すれば `register_session_watch` / `register_conductor_message_listen` による再登録時に元の cursor と report ID を復旧します。食い違いが残る間は自動割当・自動破棄を行いません。
+
 - **state file が存在しない場合:** empty state として起動し、watch pool は空です。保存済み watch 登録・cursor・未 dispatch report は復元されません。監視を再開するには対象 session ごとに `register_session_watch` を実行してください。cursor がないため、再登録後の最初の成功した snapshot は既存 Open Question ID の silent baseline になります。その snapshot にすでに含まれる質問（state 欠損中に追加された質問も含む）は新規通知として replay されません。baseline 後に追加された ID は通常どおり通知されます。
 - **JSON または state schema が不正な場合:** operator-agent の初期化は失敗し、empty state へ黙って置き換えません。保存ファイルを退避してから、有効な backup を戻すか、version と必須 field を修復して再起動してください。state を意図的に破棄する場合も、まず必要ならコピーを保全してください。ファイルを取り除いて再起動すると empty state から始まり、上記の再登録と silent baseline が必要です。
 - **report hold:** hold は watch state には保存されない会話中の状態です。再起動後は解除状態で始まります。
@@ -140,7 +142,9 @@ Response:
 
 live UDS を使った report には稼働中 UDS、UDS が到達不能または未対応で保存 snapshot に切り替えた report には保存済み SessionResumeStore / YAML という観測元を付けます。session-state report の変更検出には各質問 fingerprint とは独立した `reportedAt` cursor を使います。初回 poll では snapshot に session-state があれば最新の status を1件報告し、以後は `reportedAt` ごとに内容の変化を検出して報告します。この method は読み取り専用で、各 poll は独立した短い JSON-RPC 接続です。
 
-watch report は既存 operator-agent queue の `open_question:${conductorAgentId}` source と debounce / batch / report hold を通ります。質問本文を含む report は operator-agent への入力であり、複数 session は session ごとに別の batch として Issue URL・conductor ID 付きで整形されます。
+Open Question / session-state / conductor-message report は、同じ `conductorAgentId` の source にまとめます。各 report の ID と到着順は保ち、質問・status・発言を本文付きの別 section として同じ `agent.send` に渡します。Open Question を含む session は通常の status report より優先され、別 session の report は混ぜません。cursor が同じ間は同じ Open Question / status 変化を再生成しませんが、送信成功後に ack を永続化する前に終了すると同じ report ID が再送される at-least-once 配送です。
+
+watch の poll interval は既定 2,000ms、`debounceMs` は既定 250ms（0〜10,000ms）です。conductor message listen は別の既定 2,000ms poll と `messageDebounceMs` 既定 10,000ms（0〜120,000ms）を持ちます。message listen 中は watch report も `max(debounceMs, messageDebounceMs)` の期限を待ちます。message report が届くたび同一 session の未 dispatch report 全体を最新 message の quiet window まで延長するため、短いやり取りの report をまとめやすくなります。message listen がある場合、message が来なくても watch report は最大設定値まで待ち、message が続けば quiet window がその都度延びます。遅延を抑えたい場合は `register_conductor_message_listen` の `messageDebounceMs` を短くしてください。hold 中も report は個別に保存され、両 hold 解除後に到着順で batch されます。
 
 ### `open_questions.list`
 

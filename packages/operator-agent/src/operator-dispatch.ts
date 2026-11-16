@@ -52,6 +52,8 @@ export interface OperatorDispatchQueue {
     >[],
     debounceMs: number,
   ): void;
+  deferWatchReports?(conductorAgentId: string, debounceMs: number): void;
+  discardQueuedReports?(reportIds: readonly string[]): void;
   requeue(event: OperatorDispatchEvent, delayMs: number): void;
   setConversationHold(hold: boolean): {
     heldEventCount: number;
@@ -86,12 +88,6 @@ function reportSourceKey(
     'reportType' | 'conductorAgentId'
   >,
 ): string {
-  if (event.reportType === 'open_question') {
-    return `open_question:${event.conductorAgentId}`;
-  }
-  if (event.reportType === 'conductor_message') {
-    return `conductor_message:${event.conductorAgentId}`;
-  }
   return `session:${event.conductorAgentId}`;
 }
 
@@ -101,7 +97,17 @@ export function selectOperatorDispatchBatch(
   now = Date.now(),
   maxUserInputBytes = CONDUCTOR_RECOVERY_INPUT_BYTE_LIMIT,
 ): { batch: OperatorDispatchBatch; remaining: OperatorDispatchEvent[] } | undefined {
-  const ready = queue.filter((event) => event.readyAt <= now);
+  const ready = queue.filter((event) => {
+    if (event.readyAt > now) return false;
+    if (event.type === 'user') return true;
+    return queue
+      .filter(
+        (candidate) =>
+          candidate.type === 'report' &&
+          operatorEventSourceKey(candidate) === operatorEventSourceKey(event),
+      )
+      .every((candidate) => candidate.readyAt <= now);
+  });
   if (ready.length === 0) return undefined;
 
   const user = ready.find((event) => event.type === 'user');
@@ -164,77 +170,95 @@ export function formatOperatorDispatchBatch(
     return events[0]!.text.trim();
   }
   if (
-    events.every(
-      (event) => event.type === 'report' && event.reportType === 'conductor_message',
-    )
+    events.every((event) => event.type === 'report')
   ) {
     const reports = events.filter(
       (event): event is Extract<OperatorDispatchEvent, { type: 'report' }> =>
-        event.type === 'report' && event.reportType === 'conductor_message',
+        event.type === 'report',
     );
-    const oversizedWarnings = reports.filter(
-      (event) => (event.oversizedSendCounts?.length ?? 0) > 0,
-    );
-    const oversizedSendCounts = [
-      ...new Set(
-        oversizedWarnings.flatMap((event) => event.oversizedSendCounts ?? []),
-      ),
-    ].sort((left, right) => left - right);
-    const messages = reports.filter(
-      (event) => (event.oversizedSendCounts?.length ?? 0) === 0,
-    );
-    if (oversizedSendCounts.length > 0) {
-      const warning = oversizedWarnings[0]!;
-      messages.push({
-        ...warning,
-        text: formatOversizedConductorMessageWarning(
-          warning.issueUrl,
-          warning.conductorAgentId,
-          oversizedSendCounts,
+    const reportTypes = new Set(reports.map((event) => event.reportType));
+    if (reportTypes.size === 1 && reportTypes.has('conductor_message')) {
+      const oversizedWarnings = reports.filter(
+        (event) => (event.oversizedSendCounts?.length ?? 0) > 0,
+      );
+      const oversizedSendCounts = [
+        ...new Set(
+          oversizedWarnings.flatMap((event) => event.oversizedSendCounts ?? []),
         ),
-        sendCount: oversizedSendCounts.at(-1)!,
-        oversizedSendCounts,
-      });
+      ].sort((left, right) => left - right);
+      const messages = reports.filter(
+        (event) => (event.oversizedSendCounts?.length ?? 0) === 0,
+      );
+      if (oversizedSendCounts.length > 0) {
+        const warning = oversizedWarnings[0]!;
+        messages.push({
+          ...warning,
+          text: formatOversizedConductorMessageWarning(
+            warning.issueUrl,
+            warning.conductorAgentId,
+            oversizedSendCounts,
+          ),
+          sendCount: oversizedSendCounts.at(-1)!,
+          oversizedSendCounts,
+        });
+      }
+      messages.sort(
+        (left, right) =>
+          (left.sendCount ?? 0) - (right.sendCount ?? 0),
+      );
+      if (messages.length === 1) {
+        return ['## Conductor の発言', '', messages[0]!.text].join('\n');
+      }
+      return [
+        `## Conductor の発言（${messages.length} 件）`,
+        ...messages.map((event, index) =>
+          [`### ${index + 1}/${messages.length}`, '', event.text].join('\n'),
+        ),
+      ].join('\n\n');
     }
-    messages.sort(
-      (left, right) =>
-        (left.type === 'report' ? left.sendCount ?? 0 : 0) -
-        (right.type === 'report' ? right.sendCount ?? 0 : 0),
-    );
-    if (messages.length === 1) {
-      return ['## Conductor の発言', '', messages[0]!.text].join('\n');
+    if (reportTypes.size === 1 && reportTypes.has('open_question')) {
+      const hasLifecycleChange = reports.some(
+        (event) =>
+          event.text.includes('\n解決:') ||
+          event.text.includes('\n一覧から消失:'),
+      );
+      const title = hasLifecycleChange
+        ? 'Open Question の変化'
+        : 'Open Question 追加';
+      if (reports.length === 1) {
+        return [`## ${title}`, '', reports[0]!.text].join('\n');
+      }
+      return [
+        `## ${title}（${reports.length} 件）`,
+        '',
+        ...reports.map((event, index) =>
+          [`### ${index + 1}/${reports.length}`, '', event.text].join('\n'),
+        ),
+      ].join('\n\n');
     }
-    return [
-      `## Conductor の発言（${messages.length} 件）`,
-      ...messages.map((event, index) =>
-        [`### ${index + 1}/${messages.length}`, '', event.text].join('\n'),
-      ),
-    ].join('\n\n');
-  }
-  if (
-    events.every(
-      (event) => event.type === 'report' && event.reportType === 'open_question',
-    )
-  ) {
-    const hasLifecycleChange = events.some(
-      (event) =>
-        event.type === 'report' &&
-        (event.text.includes('\n解決:') ||
-          event.text.includes('\n一覧から消失:')),
-    );
-    const title = hasLifecycleChange
-      ? 'Open Question の変化'
-      : 'Open Question 追加';
-    if (events.length === 1) {
-      return [`## ${title}`, '', events[0]!.text].join('\n');
+    if (reportTypes.size > 1) {
+      const typeLabels: Record<
+        Extract<OperatorDispatchEvent, { type: 'report' }>['reportType'],
+        string
+      > = {
+        session_state: 'セッション状態',
+        open_question: 'Open Question',
+        conductor_message: 'Conductor の発言',
+      };
+      const formattedReports = aggregateOversizedConductorMessageWarnings(
+        reports,
+      );
+      return [
+        `## セッション報告（${reports.length} 件）`,
+        ...formattedReports.map((event, index) =>
+          [
+            `### ${index + 1}/${formattedReports.length} — ${typeLabels[event.reportType]}`,
+            '',
+            event.text,
+          ].join('\n'),
+        ),
+      ].join('\n\n');
     }
-    return [
-      `## ${title}（${events.length} 件）`,
-      '',
-      ...events.map((event, index) =>
-        [`### ${index + 1}/${events.length}`, '', event.text].join('\n'),
-      ),
-    ].join('\n\n');
   }
   if (events.length === 1) {
     const event = events[0]!;
@@ -256,6 +280,38 @@ export function formatOperatorDispatchBatch(
       [`### ${index + 1}/${events.length}`, '', event.text].join('\n'),
     ),
   ].join('\n\n');
+}
+
+function aggregateOversizedConductorMessageWarnings(
+  reports: readonly Extract<OperatorDispatchEvent, { type: 'report' }>[],
+): Extract<OperatorDispatchEvent, { type: 'report' }>[] {
+  const warnings = reports.filter(
+    (event) => (event.oversizedSendCounts?.length ?? 0) > 0,
+  );
+  if (warnings.length < 2) return [...reports];
+
+  const warningSet = new Set(warnings);
+  const sendCounts = [
+    ...new Set(warnings.flatMap((event) => event.oversizedSendCounts ?? [])),
+  ].sort((left, right) => left - right);
+  const firstWarningIndex = reports.findIndex((event) => warningSet.has(event));
+  const firstWarning = reports[firstWarningIndex]!;
+  const formattedWarning = {
+    ...firstWarning,
+    text: formatOversizedConductorMessageWarning(
+      firstWarning.issueUrl,
+      firstWarning.conductorAgentId,
+      sendCounts,
+    ),
+    sendCount: sendCounts.at(-1)!,
+    oversizedSendCounts: sendCounts,
+  };
+  const result = reports.filter((event) => !warningSet.has(event));
+  const insertionIndex = reports
+    .slice(0, firstWarningIndex)
+    .filter((event) => !warningSet.has(event)).length;
+  result.splice(insertionIndex, 0, formattedWarning);
+  return result;
 }
 
 export function formatOversizedConductorMessageWarning(
@@ -357,6 +413,35 @@ export function createOperatorDispatchQueue(): OperatorDispatchQueue {
       }
       notify();
     },
+    deferWatchReports(conductorAgentId, debounceMs) {
+      const readyAt = Date.now() + Math.max(0, debounceMs);
+      for (const event of [...pending, ...held]) {
+        if (
+          event.type === 'report' &&
+          event.conductorAgentId === conductorAgentId &&
+          event.reportType !== 'conductor_message'
+        ) {
+          event.readyAt = readyAt;
+        }
+      }
+      notify();
+    },
+    discardQueuedReports(reportIds) {
+      const ids = new Set(reportIds);
+      if (ids.size === 0) return;
+      const pendingBefore = pending.length;
+      const heldBefore = held.length;
+      pending = pending.filter(
+        (event) =>
+          event.type !== 'report' ||
+          event.reportId === undefined ||
+          !ids.has(event.reportId),
+      );
+      held = held.filter(
+        (event) => event.reportId === undefined || !ids.has(event.reportId),
+      );
+      if (pending.length !== pendingBefore || held.length !== heldBefore) notify();
+    },
     requeue(event, delayMs) {
       if (event.type === 'user') {
         pending.push({ ...event, arrival: arrival++, readyAt: Date.now() });
@@ -400,11 +485,27 @@ export function createOperatorDispatchQueue(): OperatorDispatchQueue {
       return batch;
     },
     nextReadyAt() {
-      return pending.reduce<number | undefined>(
-        (minimum, event) =>
-          minimum === undefined ? event.readyAt : Math.min(minimum, event.readyAt),
-        undefined,
-      );
+      const nextBySource = new Map<string, number>();
+      let nextUserReadyAt: number | undefined;
+      for (const event of pending) {
+        if (event.type === 'user') {
+          nextUserReadyAt =
+            nextUserReadyAt === undefined
+              ? event.readyAt
+              : Math.min(nextUserReadyAt, event.readyAt);
+          continue;
+        }
+        const sourceKey = operatorEventSourceKey(event);
+        nextBySource.set(
+          sourceKey,
+          Math.max(nextBySource.get(sourceKey) ?? Number.NEGATIVE_INFINITY, event.readyAt),
+        );
+      }
+      const deadlines = [
+        ...(nextUserReadyAt === undefined ? [] : [nextUserReadyAt]),
+        ...nextBySource.values(),
+      ];
+      return deadlines.length > 0 ? Math.min(...deadlines) : undefined;
     },
     waitForChange(timeoutMs) {
       return new Promise((resolve) => {
