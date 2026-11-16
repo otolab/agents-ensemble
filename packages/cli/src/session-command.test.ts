@@ -19,9 +19,11 @@ import {
 } from 'vitest';
 import { resolveEnsemblePaths } from '@agents-ensemble/core/operator-runtime';
 import {
+  copyCursorAcpStoreFixture,
   CURSOR_ACP_FIXTURE_CWD,
   CURSOR_ACP_FIXTURE_SESSION_ID,
   hasCursorAcpSqliteSupport,
+  readCursorAcpStoreFixtureIdentity,
   writeCursorAcpSessionMetadataFixture,
   writeCursorAcpWorkerSessionFixture,
 } from '../../core/test/fixtures/cursor-acp-worker-session.js';
@@ -1610,18 +1612,19 @@ describe('ensemble session commands', () => {
   });
 
   itWithCursorSqlite('reads Cursor worker messages and supports session show', async () => {
+    const fixtureIdentity = await readCursorAcpStoreFixtureIdentity();
     await writeResumeStore({
       preset: 'cursor',
-      acpCwd: WORKER_CURSOR_CWD,
-      acpSessionId: WORKER_CURSOR_SESSION_ID,
+      acpCwd: fixtureIdentity.cwd,
+      acpSessionId: fixtureIdentity.sessionId,
     });
     const sessionDirectory = join(
       homeRoot,
       '.cursor',
       'acp-sessions',
-      WORKER_CURSOR_SESSION_ID,
+      fixtureIdentity.sessionId,
     );
-    await writeCursorAcpWorkerSessionFixture(sessionDirectory);
+    await copyCursorAcpStoreFixture(sessionDirectory);
     const cursorConfigEnvironment = {
       CURSOR_CONFIG_DIR: '',
       XDG_CONFIG_HOME: '',
@@ -1642,29 +1645,27 @@ describe('ensemble session commands', () => {
       cursorConfigEnvironment,
     );
     expect(json.status).toBe(0);
-    expect(JSON.parse(json.stdout)).toMatchObject({
+    const jsonOutput = JSON.parse(json.stdout);
+    expect(jsonOutput).toMatchObject({
       conductorAgentId,
       worker: 'implementer',
       preset: 'cursor',
       reader: 'cursor-acp-sqlite',
       status: 'supported',
-      messages: [
-        {
-          source: 'worker:implementer',
-          providerId: 'cursor:0:user',
-          role: 'user',
-          text: 'Cursor ACP fixture user message.',
-        },
-        {
-          source: 'worker:implementer',
-          providerId: 'cursor:0:assistant:2',
-          role: 'assistant',
-          text: 'Cursor ACP fixture assistant reply.',
-        },
-      ],
     });
-    expect(json.stdout).not.toContain('TOOL_SECRET');
-    expect(json.stdout).not.toContain('THINKING_SECRET');
+    expect(jsonOutput.messages.map((message: { role: string }) => message.role))
+      .toEqual(['user', 'assistant']);
+    expect(jsonOutput.messages).toHaveLength(2);
+    for (const message of jsonOutput.messages as Array<{
+      at?: number;
+      source: string;
+      text: string;
+    }>) {
+      expect(message.source).toBe('worker:implementer');
+      expect(message.text.trim().length).toBeGreaterThan(0);
+      expect(message.at).toEqual(expect.any(Number));
+      expect(Number.isFinite(message.at)).toBe(true);
+    }
 
     const text = runCli(
       [
@@ -1681,7 +1682,9 @@ describe('ensemble session commands', () => {
     );
     expect(text.status).toBe(0);
     expect(text.stdout).toContain('(cursor-acp-sqlite)');
-    expect(text.stdout).toContain('Cursor ACP fixture assistant reply.');
+    for (const message of jsonOutput.messages as Array<{ text: string }>) {
+      expect(text.stdout).toContain(message.text);
+    }
 
     const show = runCli(
       [

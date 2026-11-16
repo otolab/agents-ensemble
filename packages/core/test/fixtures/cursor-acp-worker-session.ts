@@ -1,12 +1,21 @@
 import { createHash } from 'node:crypto';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const SESSION_ID = 'cursor-acp-worker-fixture-session';
 const ROOT_BLOB_ID = makeBlobId('root');
+const SCRUBBED_STORE_FIXTURE_DIRECTORY = fileURLToPath(
+  new URL('./cursor-acp-worker-session-store/', import.meta.url),
+);
 
 export const CURSOR_ACP_FIXTURE_SESSION_ID = SESSION_ID;
 export const CURSOR_ACP_FIXTURE_CWD = '/tmp/cursor-acp-worker-fixture';
+
+export interface CursorAcpStoreFixtureIdentity {
+  sessionId: string;
+  cwd: string;
+}
 
 export async function hasCursorAcpSqliteSupport(): Promise<boolean> {
   try {
@@ -15,6 +24,68 @@ export async function hasCursorAcpSqliteSupport(): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+export async function readCursorAcpStoreFixtureIdentity(): Promise<
+  CursorAcpStoreFixtureIdentity
+> {
+  const metadata = JSON.parse(
+    await readFile(
+      join(SCRUBBED_STORE_FIXTURE_DIRECTORY, 'meta.json'),
+      'utf8',
+    ),
+  ) as { cwd?: unknown };
+  if (typeof metadata.cwd !== 'string' || !metadata.cwd.startsWith('/')) {
+    throw new Error('Scrubbed Cursor fixture has no absolute cwd.');
+  }
+
+  const { DatabaseSync } = await import('node:sqlite');
+  const database = new DatabaseSync(
+    join(SCRUBBED_STORE_FIXTURE_DIRECTORY, 'store.db'),
+    { readOnly: true },
+  );
+  try {
+    const row = database
+      .prepare('SELECT value FROM meta WHERE key = ?')
+      .get('0');
+    const value = row?.value;
+    if (typeof value !== 'string') {
+      throw new Error('Scrubbed Cursor fixture has no store metadata.');
+    }
+    const serialized = value.trimStart().startsWith('{')
+      ? value
+      : /^[0-9a-f]+$/iu.test(value) && value.length % 2 === 0
+        ? Buffer.from(value, 'hex').toString('utf8')
+        : undefined;
+    if (serialized === undefined) {
+      throw new Error('Scrubbed Cursor fixture store metadata is invalid.');
+    }
+    const storeMetadata = JSON.parse(serialized) as { agentId?: unknown };
+    if (
+      typeof storeMetadata.agentId !== 'string' ||
+      !storeMetadata.agentId.trim() ||
+      /[/\\\0]/u.test(storeMetadata.agentId)
+    ) {
+      throw new Error('Scrubbed Cursor fixture has no valid session ID.');
+    }
+    return { sessionId: storeMetadata.agentId, cwd: metadata.cwd };
+  } finally {
+    database.close();
+  }
+}
+
+export async function copyCursorAcpStoreFixture(
+  sessionDirectory: string,
+): Promise<void> {
+  await mkdir(sessionDirectory, { recursive: true });
+  await Promise.all(
+    (['meta.json', 'store.db'] as const).map((name) =>
+      copyFile(
+        join(SCRUBBED_STORE_FIXTURE_DIRECTORY, name),
+        join(sessionDirectory, name),
+      ),
+    ),
+  );
 }
 
 export async function writeCursorAcpSessionMetadataFixture(

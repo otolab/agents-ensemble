@@ -23,9 +23,11 @@ import {
   type SessionResumeStore,
 } from './session-resume-store.js';
 import {
+  copyCursorAcpStoreFixture,
   CURSOR_ACP_FIXTURE_CWD,
   CURSOR_ACP_FIXTURE_SESSION_ID,
   hasCursorAcpSqliteSupport,
+  readCursorAcpStoreFixtureIdentity,
   writeCursorAcpSessionMetadataFixture,
   writeCursorAcpWorkerSessionFixture,
 } from '../../test/fixtures/cursor-acp-worker-session.js';
@@ -191,6 +193,46 @@ describe('worker session history', () => {
     expect(JSON.stringify(result)).not.toContain('TOOL_SECRET');
     expect(JSON.stringify(result)).not.toContain('THINKING_SECRET');
   });
+
+  itWithCursorSqlite(
+    'reads user and assistant messages from the scrubbed Cursor store fixture',
+    async () => {
+      const fixtureIdentity = await readCursorAcpStoreFixtureIdentity();
+      await writeResumeStore('cursor', {
+        acpSessionId: fixtureIdentity.sessionId,
+        acpCwd: fixtureIdentity.cwd,
+      });
+      const sessionDirectory = join(
+        homeRoot,
+        '.cursor',
+        'acp-sessions',
+        fixtureIdentity.sessionId,
+      );
+      await copyCursorAcpStoreFixture(sessionDirectory);
+
+      const result = await readHistory();
+
+      expect(result).toMatchObject({
+        preset: 'cursor',
+        status: 'supported',
+        reader: 'cursor-acp-sqlite',
+      });
+      expect(result.messages.map((message) => message.role)).toEqual([
+        'user',
+        'assistant',
+      ]);
+      expect(result.messages).toHaveLength(2);
+      for (const message of result.messages) {
+        expect(message.source).toBe(`worker:${WORKER_NAME}`);
+        expect(message.text.trim().length).toBeGreaterThan(0);
+        expect(message.at).toEqual(expect.any(Number));
+        expect(Number.isFinite(message.at)).toBe(true);
+      }
+      expect(result.messages[0]?.at).toBeLessThan(
+        result.messages[1]?.at ?? Number.NEGATIVE_INFINITY,
+      );
+    },
+  );
 
   it('returns unavailable when the Cursor ACP store is missing', async () => {
     await writeResumeStore('cursor', {
