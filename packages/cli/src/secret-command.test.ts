@@ -12,6 +12,7 @@ import {
 import {
   runSecretExec,
   runSecretPush,
+  formatSecretApprovalSummary,
 } from './secret-command.js';
 
 const requestId = 'r'.repeat(43);
@@ -29,6 +30,44 @@ const controlEnvironment = {
 };
 
 describe('one-time secret CLI commands', () => {
+  it('escapes terminal and bidi controls in the approval summary without changing field order', () => {
+    const summary = formatSecretApprovalSummary({
+      requestId,
+      socketPath,
+      workerName: 'worker\u202e: forged',
+      label: 'label\u001b[2J\u2066hidden',
+      envName: 'API_TOKEN',
+      command: 'curl\u009b2J',
+      args: ['first', '\u202e--forged', 'last'],
+      cwd: '/tmp/worktree\u2029forged',
+      expiresAt: 1_800_000_000_000,
+    });
+
+    expect(summary).not.toContain('\u202e');
+    expect(summary).not.toContain('\u2066');
+    expect(summary).not.toContain('\u2029');
+    expect(summary).not.toContain('\u001b');
+    expect(summary).not.toContain('\u009b');
+    expect(summary).toContain('worker\\u202e: forged');
+    expect(summary).toContain('label\\u001b[2J\\u2066hidden');
+    expect(summary).toContain('\\u009b2J');
+    expect(summary).toContain('\\u202e--forged');
+    expect(summary).toContain('worktree\\u2029forged');
+    expect(summary.indexOf('  worker:')).toBeLessThan(
+      summary.indexOf('  secret:'),
+    );
+    expect(summary.indexOf('  secret:')).toBeLessThan(summary.indexOf('  env:'));
+    expect(summary.indexOf('  env:')).toBeLessThan(
+      summary.indexOf('  command:'),
+    );
+    expect(summary.indexOf('  command:')).toBeLessThan(
+      summary.indexOf('  cwd:'),
+    );
+    expect(summary.indexOf('  cwd:')).toBeLessThan(
+      summary.indexOf('  expires:'),
+    );
+  });
+
   it('waits for a value and injects it only into the target child env', async () => {
     const secret = 'operator-only-token\n';
     const child = new EventEmitter() as ChildProcess;

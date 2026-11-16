@@ -173,7 +173,9 @@ harness の `[harness] secret.request` 行に worker、secret の表示名、環
 credential-source-command | ensemble secret push '<socket path>' '<request ID>'
 ```
 
-`secret push` は `/dev/tty` に対象情報を再表示し、`y` の入力を受けるまで stdin を読みません。この操作が worker、secret の表示名、env 名、command / argv、cwd と、一回だけの投入を承認します。`y` 以外で断ると待機 request も消費し、worker の command は実行されません。もう一度試す場合は worker に新しい `secret exec` request を作らせてください。これは secret の投入に対する明示的な operator approval です。Bash command 自体には、既存 ACP backend の permission 処理も引き続き適用されます。TTY が使えない場合は失敗し、予約済み request を消費します。値を shell argument、Issue、PR、モデルへの指示、通常の shell variable や `SEC=$(...)` の出力へ置かないでください。
+`secret push` は `/dev/tty` に対象情報を再表示し、`y` の入力を受けるまで stdin を読みません。worker が渡した表示値は harness log と同じ terminal control / bidi escape を適用してから出すため、制御文字で項目順や画面表示を偽装できません。この操作が worker、secret の表示名、env 名、command / argv、cwd と、一回だけの投入を承認します。`y` 以外で断ると待機 request も消費し、worker の command は実行されません。もう一度試す場合は worker に新しい `secret exec` request を作らせてください。これは secret の投入に対する明示的な operator approval です。Bash command 自体には、既存 ACP backend の permission 処理も引き続き適用されます。TTY が使えない場合は失敗し、予約済み request を消費します。値を shell argument、Issue、PR、モデルへの指示、通常の shell variable や `SEC=$(...)` の出力へ置かないでください。
+
+この保証は push CLI が stdin を読む時点についてのものです。shell は pipeline を作るときに上流の `credential-source-command` も起動するため、TTY 承認より先に値を取得・出力したり、副作用を起こしたりする場合があります。承認前の起動や pipe buffer への出力を避ける必要がある source command は、この形で実行しないでください。上流 source の実行時期と副作用を理解し、信頼できるものだけを使ってください。
 
 入力は **空でない UTF-8、最大 64 KiB、NUL byte なし**に限ります。改行や末尾改行はそのまま保持し、trim しません。binary 値、NUL、空値、上限超過、期限切れ、不正 ID、二重投入、worker 切断時は command を実行しません。request は120秒で失効し、同じ worker の待機は同時に一件まで、session 全体では最大8件です。secret の投入後に起動確認が届かない場合は結果が不明です。その場合は再投入せず、target の状態を調べてください。起動前の失敗は固定の generic error として表示し、backend の例外本文は出しません。
 

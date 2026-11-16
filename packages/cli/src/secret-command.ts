@@ -7,6 +7,7 @@ import {
   ONE_TIME_SECRET_REQUEST_TTL_MS,
   sendOneTimeSecretControlRequest,
   validateOneTimeSecretBytes,
+  escapeTerminalControlCharacters,
   type OneTimeSecretRequestInfo,
   type SecretPushOutcome,
 } from '@agents-ensemble/core';
@@ -445,18 +446,7 @@ function confirmOnControllingTerminal(
   }
 
   try {
-    const summary = [
-      '',
-      'Secret request approval',
-      `  worker:  ${JSON.stringify(request.workerName)}`,
-      `  secret:  ${JSON.stringify(request.label)}`,
-      `  env:     ${JSON.stringify(request.envName)}`,
-      `  command: ${JSON.stringify([request.command, ...request.args])}`,
-      `  cwd:     ${JSON.stringify(request.cwd)}`,
-      `  expires: ${new Date(request.expiresAt).toISOString()}`,
-      'Type y to approve this exact request; anything else cancels: ',
-    ].join('\n');
-    writeSync(ttyFd, summary);
+    writeSync(ttyFd, formatSecretApprovalSummary(request));
 
     const chunks: Buffer[] = [];
     let totalBytes = 0;
@@ -483,6 +473,24 @@ function confirmOnControllingTerminal(
   } finally {
     closeSync(ttyFd);
   }
+}
+
+export function formatSecretApprovalSummary(
+  request: OneTimeSecretRequestInfo,
+): string {
+  const escapeJson = (value: unknown) =>
+    escapeTerminalControlCharacters(JSON.stringify(value));
+  return [
+    '',
+    'Secret request approval',
+    `  worker:  ${escapeJson(request.workerName)}`,
+    `  secret:  ${escapeJson(request.label)}`,
+    `  env:     ${escapeJson(request.envName)}`,
+    `  command: ${escapeJson([request.command, ...request.args])}`,
+    `  cwd:     ${escapeJson(request.cwd)}`,
+    `  expires: ${new Date(request.expiresAt).toISOString()}`,
+    'Type y to approve this exact request; anything else cancels: ',
+  ].join('\n');
 }
 
 function registerCancellationSignals(
