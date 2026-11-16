@@ -80,7 +80,7 @@ function createFakeSpawn(): ResolvedAcpSpawn {
   return { preset: 'cursor', command: '/tmp/fake-agent', args: [] };
 }
 
-function createFakeAgent(result = 'Configuration looks consistent.') {
+function createFakeAgent(result = 'no_matching_diagnosis') {
   return {
     agentId: 'fake-doctor-agent',
     send: vi.fn().mockResolvedValue({
@@ -125,6 +125,7 @@ describe('runDoctorCheckCommand', () => {
         started: false,
         turns: 0,
         answer: null,
+        answerCode: null,
         answerStatus: 'not_requested',
       },
       exitCode: 0,
@@ -159,6 +160,7 @@ describe('runDoctorCheckCommand', () => {
       started: false,
       turns: 0,
       answer: null,
+      answerCode: null,
       answerStatus: 'unavailable',
     });
     expect(report.nextActions).toEqual([
@@ -169,10 +171,9 @@ describe('runDoctorCheckCommand', () => {
     expect(createAgentFactory).not.toHaveBeenCalled();
   });
 
-  it('runs exactly one read-only turn and withholds arbitrary model output', async () => {
+  it('maps an allowed diagnostic code to a fixed answer for the natural-language request', async () => {
     const output = createOutput();
-    const answer = 'opaque-secret-sentinel-123; this is arbitrary model output';
-    const agent = createFakeAgent(answer);
+    const agent = createFakeAgent('config.acp.defaultPreset');
     const context = createContext();
     context.config.acp.env = {
       PRIVATE_CONFIG_SENTINEL: 'acp-env-secret-sentinel',
@@ -187,16 +188,10 @@ describe('runDoctorCheckCommand', () => {
     };
     const createAgentFactory = vi.fn(() => factory);
     const report = await runDoctorCheckCommand({
-      request: [
-        'check',
-        'auth',
-        'API_KEY=prompt-secret-sentinel',
-        'ghp_abcdefghijklmnopqrstuvwxyz123456',
-        'opaque-secret-sentinel-123',
-      ],
+      request: 'which worker preset is configured?',
       json: true,
       stdout: output.stdout,
-      resolveContext: vi.fn(async () => createContext()),
+      resolveContext: vi.fn(async () => context),
       authCheck: vi.fn(() => true),
       createAgentFactory,
       readSettings: vi.fn(async () => snapshot),
@@ -209,18 +204,17 @@ describe('runDoctorCheckCommand', () => {
       agent: {
         started: true,
         turns: 1,
-        answer: null,
-        answerStatus: 'withheld',
+        answer:
+          'acp.defaultPreset は cursor です（source: project）。',
+        answerCode: 'config.acp.defaultPreset',
+        answerStatus: 'mapped',
       },
       exitCode: 0,
     });
     expect(agent.send).toHaveBeenCalledOnce();
-    expect(agent.send.mock.calls[0]?.[0]).toContain('[redacted]');
     expect(agent.send.mock.calls[0]?.[0]).toContain(
-      'opaque-secret-sentinel-123',
+      'which worker preset is configured?',
     );
-    expect(agent.send.mock.calls[0]?.[0]).not.toContain('prompt-secret-sentinel');
-    expect(agent.send.mock.calls[0]?.[0]).not.toContain('ghp_');
     expect(createAgentFactory).toHaveBeenCalledOnce();
     expect(createdOptions).toMatchObject({
       builtinTools: false,
@@ -229,19 +223,84 @@ describe('runDoctorCheckCommand', () => {
       piExtensions: false,
       piInternalExtensions: false,
     });
+    expect(createdOptions?.systemPrompt).toContain(
+      'config.acp.defaultPreset',
+    );
     expect(Object.keys(createdOptions?.customTools ?? {})).toEqual([
       'doctor_read_config',
     ]);
     expect(createdOptions).not.toHaveProperty('mcpServers');
     expect(agent.close).toHaveBeenCalledOnce();
-    expect(output.text()).not.toContain('opaque-secret-sentinel-123');
-    expect(output.text()).not.toContain('plain-secret-sentinel');
-    expect(output.text()).not.toContain('prompt-secret-sentinel');
+    expect(output.text()).toContain('acp.defaultPreset は cursor');
     expect(output.text()).not.toContain('acp-env-secret-sentinel');
     expect(output.text()).not.toContain('PRIVATE_CONFIG_SENTINEL');
-    expect(output.text()).not.toContain('ghp_');
-    expect(JSON.stringify(report)).not.toContain('opaque-secret-sentinel-123');
     expect(JSON.stringify(report)).not.toContain('acp-env-secret-sentinel');
+  });
+
+  it('maps a worker diagnosis code to the failed prerequisite and fixed next step', async () => {
+    const output = createOutput();
+    const agent = createFakeAgent('worker.spawn');
+    const factory: ConductorAgentFactory = {
+      create: vi.fn().mockResolvedValue(agent),
+      resume: vi.fn(),
+    };
+    const report = await runDoctorCheckCommand({
+      request: 'why is the worker preset unavailable?',
+      stdout: output.stdout,
+      resolveContext: vi.fn(async () => createContext()),
+      authCheck: vi.fn(() => true),
+      createAgentFactory: vi.fn(() => factory),
+      readSettings: vi.fn(async () => snapshot),
+      resolveWorkerSpawn: vi.fn(() => createFakeSpawn()),
+      validateWorkerSpawn: vi.fn(() => {
+        throw new Error('private adapter failure');
+      }),
+    });
+
+    expect(report.agent.answerCode).toBe('worker.spawn');
+    expect(report.agent.answerStatus).toBe('mapped');
+    expect(report.agent.answer).toContain(
+      'worker adapter / CLI の spawn 前提を確認できませんでした。',
+    );
+    expect(report.agent.answer).toContain('PATH');
+    expect(output.text()).toContain('設定済み worker preset');
+    expect(output.text()).not.toContain('private adapter failure');
+    expect(agent.send).toHaveBeenCalledOnce();
+  });
+
+  it('replaces arbitrary response text and secrets with a fixed generic answer', async () => {
+    const output = createOutput();
+    const secret = 'opaque-secret-sentinel-123';
+    const agent = createFakeAgent(
+      `${secret}; unexpected free-form diagnostic text`,
+    );
+    const factory: ConductorAgentFactory = {
+      create: vi.fn().mockResolvedValue(agent),
+      resume: vi.fn(),
+    };
+    const report = await runDoctorCheckCommand({
+      request: `check this value ${secret}`,
+      json: true,
+      stdout: output.stdout,
+      resolveContext: vi.fn(async () => createContext()),
+      authCheck: vi.fn(() => true),
+      createAgentFactory: vi.fn(() => factory),
+      readSettings: vi.fn(async () => snapshot),
+      resolveWorkerSpawn: vi.fn(() => createFakeSpawn()),
+      validateWorkerSpawn: vi.fn(),
+    });
+
+    expect(report.agent).toMatchObject({
+      started: true,
+      turns: 1,
+      answerCode: 'no_matching_diagnosis',
+      answerStatus: 'generic',
+    });
+    expect(report.agent.answer).toContain('安全な診断項目');
+    expect(agent.send).toHaveBeenCalledOnce();
+    expect(output.text()).not.toContain(secret);
+    expect(JSON.stringify(report)).not.toContain(secret);
+    expect(JSON.parse(output.text())).toEqual(report);
   });
 
   it('fails closed for Cursor natural-language requests without creating an agent', async () => {
@@ -265,12 +324,46 @@ describe('runDoctorCheckCommand', () => {
         started: false,
         turns: 0,
         answer: null,
+        answerCode: null,
         answerStatus: 'unavailable',
       },
       error: { code: 'backend_unsupported' },
       exitCode: 2,
     });
     expect(report.nextActions[0]).toContain('Pi backend');
+    expect(JSON.parse(output.text())).toEqual(report);
+    expect(createAgentFactory).not.toHaveBeenCalled();
+  });
+
+  it('prioritizes Cursor unsupported status while preserving missing auth details', async () => {
+    const output = createOutput();
+    const createAgentFactory = vi.fn();
+    const report = await runDoctorCheckCommand({
+      request: 'diagnose GitHub access',
+      json: true,
+      stdout: output.stdout,
+      resolveContext: vi.fn(async () => createContext(undefined, 'cursor')),
+      authCheck: vi.fn(() => false),
+      createAgentFactory,
+      readSettings: vi.fn(async () => snapshot),
+      resolveWorkerSpawn: vi.fn(() => createFakeSpawn()),
+      validateWorkerSpawn: vi.fn(),
+    });
+
+    expect(report.exitCode).toBe(2);
+    expect(report.error).toMatchObject({ code: 'backend_unsupported' });
+    expect(report.checks.find(({ id }) => id === 'conductor.auth')).toMatchObject({
+      status: 'fail',
+      action: expect.stringContaining('ensemble auth login'),
+    });
+    expect(report.nextActions).toEqual(
+      expect.arrayContaining([
+        'ensemble auth status',
+        'ensemble auth login',
+        'ensemble setup',
+        expect.stringContaining('Pi backend'),
+      ]),
+    );
     expect(JSON.parse(output.text())).toEqual(report);
     expect(createAgentFactory).not.toHaveBeenCalled();
   });
@@ -294,9 +387,12 @@ describe('runDoctorCheckCommand', () => {
     expect(createAgentFactory).not.toHaveBeenCalled();
   });
 
-  it('keeps natural-language text output secret-free', async () => {
+  it('keeps invalid secret-bearing responses out of text output', async () => {
     const output = createOutput();
-    const agent = createFakeAgent('opaque-secret-sentinel-456');
+    const secret = 'opaque-secret-sentinel-456';
+    const agent = createFakeAgent(
+      `config.acp.defaultPreset\n${secret}`,
+    );
     const factory: ConductorAgentFactory = {
       create: vi.fn().mockResolvedValue(agent),
       resume: vi.fn(),
@@ -313,11 +409,11 @@ describe('runDoctorCheckCommand', () => {
       validateWorkerSpawn: vi.fn(),
     });
 
-    expect(report.agent.answer).toBeNull();
-    expect(report.agent.answerStatus).toBe('withheld');
+    expect(report.agent.answerCode).toBe('no_matching_diagnosis');
+    expect(report.agent.answerStatus).toBe('generic');
     expect(output.text()).toContain('Doctor check (agent)');
-    expect(output.text()).toContain('response withheld');
-    expect(output.text()).not.toContain('opaque-secret-sentinel-456');
+    expect(output.text()).toContain('安全な診断項目');
+    expect(output.text()).not.toContain(secret);
   });
 
   it('uses the non-zero report code when a local prerequisite fails', async () => {

@@ -196,23 +196,63 @@ describe('ensemble doctor check e2e', () => {
         started: boolean;
         turns: number;
         answer: null;
+        answerCode: string | null;
         answerStatus: string;
       };
       nextActions: string[];
+      checks: Array<{ id: string; status: string }>;
+      error?: { code: string };
       exitCode: number;
     };
-    expect(requestResult.exitCode).toBe(1);
+    expect(requestResult.exitCode).toBe(2);
     expect(requestReport).toMatchObject({
       mode: 'agent',
       agent: {
         started: false,
         turns: 0,
         answer: null,
+        answerCode: null,
         answerStatus: 'unavailable',
       },
-      exitCode: 1,
+      checks: expect.arrayContaining([
+        expect.objectContaining({ id: 'conductor.auth', status: 'fail' }),
+      ]),
+      error: { code: 'backend_unsupported' },
+      exitCode: 2,
     });
+    expect(requestReport.nextActions).toContain('ensemble auth status');
     expect(requestReport.nextActions).toContain('ensemble auth login');
+    expect(requestReport.nextActions).toContain('ensemble setup');
+    expect(requestReport.nextActions).toEqual(
+      expect.arrayContaining([expect.stringContaining('Pi backend')]),
+    );
+    await expect(readFile(markerPath, 'utf8')).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+
+    const unauthenticatedTextResult = await runEnsembleCli(
+      [
+        'doctor',
+        'check',
+        '--repo-root',
+        repoRoot,
+        'check',
+        'the',
+        'worker',
+        'configuration',
+      ],
+      { env: unauthenticatedEnv, timeoutMs: 30_000 },
+    );
+    expect(unauthenticatedTextResult.exitCode).toBe(2);
+    expect(unauthenticatedTextResult.stdout).toContain('[fail] conductor.auth');
+    expect(unauthenticatedTextResult.stdout).toContain(
+      'Cursor backend の自然言語診断は未対応です',
+    );
+    expect(unauthenticatedTextResult.stdout).toContain('ensemble auth login');
+    expect(unauthenticatedTextResult.stdout).toContain('Pi backend');
+    expect(unauthenticatedTextResult.stdout).not.toContain(
+      'do-not-print-this-value',
+    );
     await expect(readFile(markerPath, 'utf8')).rejects.toMatchObject({
       code: 'ENOENT',
     });
@@ -223,7 +263,8 @@ describe('ensemble doctor check e2e', () => {
     );
     expect(helpResult.exitCode).toBe(0);
     expect(helpResult.stdout).toContain('[request...]');
-    expect(helpResult.stdout).toContain('Pi backend');
+    expect(helpResult.stdout).toContain('Pi only');
+    expect(helpResult.stdout).toContain('exit 2');
 
     const usageResult = await runEnsembleCli(
       ['doctor', 'check', '--unknown'],

@@ -656,7 +656,7 @@ const doctorCheck = doctor
   )
   .argument(
     '[request...]',
-    'Natural-language request; runs one read-only agent turn when supported (Pi backend)',
+    'Natural-language request; Pi only (one turn); Cursor is unsupported (exit 2)',
   )
   .option('--json', 'Output the structured diagnostic report as JSON')
   .option(

@@ -19,7 +19,11 @@ import {
 import type { Writable } from 'node:stream';
 import { resolveConductorAuthContext } from './conductor-auth-command.js';
 import { createDoctorReadConfigTool } from './doctor/doctor-config-tools.js';
-import { DOCTOR_CHECK_SYSTEM_PROMPT } from './doctor/doctor-materials.js';
+import {
+  DOCTOR_CHECK_SYSTEM_PROMPT,
+  DOCTOR_DIAGNOSTIC_RESPONSE_CODES,
+  type DoctorDiagnosticResponseCode,
+} from './doctor/doctor-materials.js';
 
 export type DoctorCheckMode = 'basic' | 'agent';
 export type DoctorCheckStatus = 'ok' | 'fail' | 'skipped';
@@ -42,8 +46,9 @@ export interface DoctorCheckReport {
   agent: {
     started: boolean;
     turns: number;
-    answer: null;
-    answerStatus: 'not_requested' | 'unavailable' | 'withheld';
+    answer: string | null;
+    answerCode: DoctorDiagnosticResponseCode | null;
+    answerStatus: 'not_requested' | 'unavailable' | 'mapped' | 'generic';
   };
   nextActions: string[];
   error?: {
@@ -83,7 +88,21 @@ const AUTH_ACTIONS = [
 const CONFIG_ACTION = '設定ファイルの構文と読み取り権限を確認してください。';
 const WORKER_ACTION =
   '設定済み worker preset の adapter / CLI をインストールし、PATH を確認してください。';
+const GENERIC_DIAGNOSTIC_ANSWER =
+  '今回の安全な診断項目では、依頼に対応する情報を特定できませんでした。表示された checks と nextActions を確認してください。';
 const MAX_REQUEST_LENGTH = 4_000;
+const DIAGNOSTIC_RESPONSE_CODE_SET = new Set<string>(
+  DOCTOR_DIAGNOSTIC_RESPONSE_CODES,
+);
+const CONFIG_RESPONSE_SETTINGS: Partial<
+  Record<DoctorDiagnosticResponseCode, DoctorConfigSnapshot['settings'][number]['key']>
+> = {
+  'config.acp.defaultPreset': 'acp.defaultPreset',
+  'config.session.worktree': 'session.worktree',
+  'config.session.lazyWorkers': 'session.lazyWorkers',
+  'config.github.auth.allowGhAuthTokenFallback':
+    'github.auth.allowGhAuthTokenFallback',
+};
 
 export async function runDoctorCheckCommand(
   options: DoctorCheckCommandOptions = {},
@@ -100,6 +119,7 @@ export async function runDoctorCheckCommand(
       started: false,
       turns: 0,
       answer: null,
+      answerCode: null,
       answerStatus: request ? 'unavailable' : 'not_requested',
     },
     nextActions: [],
@@ -202,14 +222,19 @@ export async function runDoctorCheckCommand(
     }
   }
 
-  if (request && context && authReady) {
-    await runDiagnosticTurn({
-      report,
-      request,
-      context,
-      snapshot,
-      createAgentFactory: options.createAgentFactory ?? createConductorAgentFactory,
-    });
+  if (request && context) {
+    if (context.auth.backend === 'cursor') {
+      rejectCursorRequest(report);
+    } else if (authReady) {
+      await runDiagnosticTurn({
+        report,
+        request,
+        context,
+        snapshot,
+        createAgentFactory:
+          options.createAgentFactory ?? createConductorAgentFactory,
+      });
+    }
   }
 
   const checkOrder: DoctorCheck['id'][] = [
@@ -259,14 +284,7 @@ async function runDiagnosticTurn(options: {
   const { report, request, context } = options;
   const backend = context.auth.backend;
   if (backend === 'cursor') {
-    report.error = {
-      code: 'backend_unsupported',
-      message:
-        'Cursor backend では doctor 専用 system prompt を保証できないため、自然言語による agent 診断を実行できません。',
-    };
-    report.nextActions.push(
-      'Pi backend に切り替えて再実行するか、request を省略して基本診断を実行してください。',
-    );
+    rejectCursorRequest(report);
     return;
   }
   if (backend !== 'pi') {
@@ -325,7 +343,14 @@ async function runDiagnosticTurn(options: {
       };
       return;
     }
-    report.agent.answerStatus = 'withheld';
+    const mappedAnswer = mapDiagnosticResponse(
+      result.result,
+      report,
+      options.snapshot,
+    );
+    report.agent.answerCode = mappedAnswer.code;
+    report.agent.answer = mappedAnswer.answer;
+    report.agent.answerStatus = mappedAnswer.status;
   } catch (error) {
     const message = error instanceof Error ? error.message : '';
     if (isConductorAuthError(message)) {
@@ -355,6 +380,100 @@ async function runDiagnosticTurn(options: {
   }
 }
 
+function rejectCursorRequest(report: DoctorCheckReport): void {
+  report.error = {
+    code: 'backend_unsupported',
+    message:
+      'Cursor backend の自然言語診断は未対応です。診断 agent は起動していません。',
+  };
+  report.nextActions.push(
+    'Pi backend を設定・認証して request を再実行するか、request を省略して基本診断を実行してください。',
+  );
+}
+
+function mapDiagnosticResponse(
+  rawResponse: string | undefined,
+  report: DoctorCheckReport,
+  snapshot?: DoctorConfigSnapshot,
+): {
+  code: DoctorDiagnosticResponseCode;
+  answer: string;
+  status: 'mapped' | 'generic';
+} {
+  const candidate =
+    typeof rawResponse === 'string' ? rawResponse.trim() : '';
+  const selectedCode = DIAGNOSTIC_RESPONSE_CODE_SET.has(candidate)
+    ? (candidate as DoctorDiagnosticResponseCode)
+    : undefined;
+  if (!selectedCode) {
+    return {
+      code: 'no_matching_diagnosis',
+      answer: GENERIC_DIAGNOSTIC_ANSWER,
+      status: 'generic',
+    };
+  }
+
+  const answer = formatDiagnosticResponseCode(
+    selectedCode,
+    report,
+    snapshot,
+  );
+  if (!answer) {
+    return {
+      code: 'no_matching_diagnosis',
+      answer: GENERIC_DIAGNOSTIC_ANSWER,
+      status: 'generic',
+    };
+  }
+  return {
+    code: selectedCode,
+    answer,
+    status:
+      selectedCode === 'no_matching_diagnosis' ? 'generic' : 'mapped',
+  };
+}
+
+function formatDiagnosticResponseCode(
+  code: DoctorDiagnosticResponseCode,
+  report: DoctorCheckReport,
+  snapshot?: DoctorConfigSnapshot,
+): string | undefined {
+  if (code === 'checks.summary') {
+    const succeeded = report.checks.filter(({ status }) => status === 'ok').length;
+    const failed = report.checks.filter(({ status }) => status === 'fail').length;
+    const skipped = report.checks.filter(
+      ({ status }) => status === 'skipped',
+    ).length;
+    return `基本チェックは成功 ${succeeded} 件、失敗 ${failed} 件、未確認 ${skipped} 件です。`;
+  }
+
+  if (
+    code === 'conductor.auth' ||
+    code === 'worker.spawn' ||
+    code === 'config.read'
+  ) {
+    const check = report.checks.find(({ id }) => id === code);
+    if (!check) return undefined;
+    return check.action
+      ? `${check.summary} 次の対応: ${check.action}`
+      : check.summary;
+  }
+
+  if (code === 'github.connectivity') {
+    return 'この診断では GitHub API への接続や GitHub のログイン状態を確認していません。';
+  }
+
+  if (code === 'no_matching_diagnosis') {
+    return GENERIC_DIAGNOSTIC_ANSWER;
+  }
+
+  const key = CONFIG_RESPONSE_SETTINGS[code];
+  if (!key || !snapshot) return undefined;
+  const setting = snapshot.settings.find((entry) => entry.key === key);
+  if (!setting) return undefined;
+  return `${setting.key} は ${String(setting.value)} です（source: ${setting.source}）。`;
+}
+
 function formatDiagnosticRequest(
   request: string,
   report: DoctorCheckReport,
@@ -377,6 +496,8 @@ function formatDiagnosticRequest(
     '',
     'Allowlisted effective config:',
     settings,
+    '',
+    'Return exactly one allowed diagnostic response code from your system instructions. The harness will map it to a fixed answer.',
   ].join('\n');
 }
 
@@ -426,12 +547,13 @@ function formatDoctorCheckText(report: DoctorCheckReport): string {
     ),
     `Agent: ${
       report.agent.started
-        ? report.agent.answerStatus === 'withheld'
-          ? `started (${report.agent.turns} turn; response withheld)`
-          : `started (${report.agent.turns} turn; response unavailable)`
+        ? `started (${report.agent.turns} turn; ${report.agent.answerStatus === 'mapped' ? 'diagnostic mapped' : 'generic diagnostic'})`
         : 'not started'
     }`,
   ];
+  if (report.agent.answer) {
+    lines.push('', `診断: ${escapeTerminalControlCharacters(report.agent.answer)}`);
+  }
   if (report.error) lines.push(`Error: ${report.error.message}`);
   if (report.nextActions.length > 0) {
     lines.push('', 'Next actions:', ...report.nextActions.map((action) => `- ${action}`));
