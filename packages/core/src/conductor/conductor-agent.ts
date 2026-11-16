@@ -29,6 +29,11 @@ export interface ConductorAgentCreateOptions {
    * extensions; omitted means enabled.
    */
   piInternalExtensions?: boolean;
+  /**
+   * Operator-agent Pi only: publish MCP tools directly and omit the Codemode extension.
+   * Omitted for Issue conductors, which keep the existing MCP exposure policy.
+   */
+  operatorPiMcpMode?: 'direct';
   /** Pi backend only: called when `compaction_end` reports a successful compaction. */
   onContextCompaction?: () => void;
   apiKey?: string;

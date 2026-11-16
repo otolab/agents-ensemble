@@ -841,7 +841,13 @@ async function createPiConductorSession(
 ): Promise<PiConductorAgent> {
   const sessionDir = resolvePiConductorSessionDir(options);
   const piInternalExtensions = options.piInternalExtensions !== false;
-  const piMcpResolution = { cwd: options.cwd };
+  const operatorDirectMcp = options.operatorPiMcpMode === 'direct';
+  const piMcpResolution = {
+    cwd: options.cwd,
+    ...(operatorDirectMcp
+      ? { exposure: 'direct' as const, autoEnableCodemode: false }
+      : {}),
+  };
   const mcpLifecycleState: PiMcpLifecycleState = {
     enabled:
       piInternalExtensions && Object.keys(options.mcpServers ?? {}).length > 0,
@@ -949,7 +955,9 @@ async function createPiConductorSession(
                   piMcpResolution,
                 ),
             }),
-            createCodemodeExtension({ mode: 'on' }),
+            ...(operatorDirectMcp
+              ? []
+              : [createCodemodeExtension({ mode: 'on' })]),
             createToolSearchExtension(),
           ]
         : []),
@@ -1190,11 +1198,11 @@ export function loadPiMcpConfig(
   return {
     servers: Object.entries(resolvedServers).map(([name, config]) => ({
       name,
-      config: toPiMcpServerConfig(name, config),
+      config: toPiMcpServerConfig(name, config, options.exposure),
       source: '<agents-ensemble-resolved-mcp.json>',
       scope: 'project' as const,
     })),
-    autoEnableCodemode: true,
+    autoEnableCodemode: options.autoEnableCodemode ?? true,
     errors: [],
   };
 }
@@ -1204,11 +1212,16 @@ export interface PiMcpConfigResolutionOptions {
   cwd?: string;
   /** Environment used for Cursor's `${env:NAME}` placeholders. */
   env?: NodeJS.ProcessEnv;
+  /** Pi MCP tool exposure override. Operator-agent uses direct exposure. */
+  exposure?: 'direct';
+  /** Whether Pi should activate Codemode for MCP servers with Codemode exposure. */
+  autoEnableCodemode?: boolean;
 }
 
 function toPiMcpServerConfig(
   name: string,
   config: McpServerConfigMap[string],
+  exposure?: 'direct',
 ): PiMcpServerConfig {
   if (config.type === 'sse') {
     throw new Error(
@@ -1225,6 +1238,7 @@ function toPiMcpServerConfig(
         : {}),
       ...(config.env ? { env: config.env } : {}),
       ...(config.cwd ? { cwd: config.cwd } : {}),
+      ...(exposure ? { exposure } : {}),
     };
   }
   if (config.url) {
@@ -1232,6 +1246,7 @@ function toPiMcpServerConfig(
       type: 'http',
       url: config.url,
       ...(config.headers ? { headers: config.headers } : {}),
+      ...(exposure ? { exposure } : {}),
       ...(config.auth
         ? {
             oauth: {

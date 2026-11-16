@@ -469,6 +469,7 @@ describe('runOperatorAgent', () => {
     expect(agentOptions).toMatchObject({
       builtinTools: false,
       piExtensions: false,
+      operatorPiMcpMode: 'direct',
     });
     expect(agentOptions).not.toHaveProperty('disableCursorAmbientSettings');
     expect(agentOptions?.customTools).toHaveProperty('read_operator_workspace_file');
@@ -518,6 +519,7 @@ describe('runOperatorAgent', () => {
         },
       },
     });
+    expect(agentOptions).not.toHaveProperty('operatorPiMcpMode');
   });
 
   it('reports configured MCP server names and the cause when conductor startup fails', async () => {
@@ -696,10 +698,20 @@ describe('runOperatorAgent', () => {
       expect(resumedOptions).toMatchObject({
         modelId: backend === 'pi' ? 'smoke-model' : 'cursor-model',
         reasoning: expectedReasoning,
+        ...(backend === 'pi'
+          ? {
+              operatorPiMcpMode: 'direct',
+              builtinTools: false,
+              piExtensions: false,
+            }
+          : {}),
         mcpServers: {
           'resume-server': { type: 'stdio', command: 'resume-mcp' },
         },
       });
+      if (backend === 'cursor') {
+        expect(resumedOptions).not.toHaveProperty('operatorPiMcpMode');
+      }
     },
   );
 
@@ -2468,12 +2480,20 @@ describe('runOperatorAgent', () => {
     expect(createdOptions?.mcpServers).toEqual({
       'reconnect-server': { type: 'stdio', command: 'reconnect-mcp' },
     });
+    expect(createdOptions).toMatchObject({
+      operatorPiMcpMode: 'direct',
+      builtinTools: false,
+      piExtensions: false,
+    });
     expect(resume).toHaveBeenNthCalledWith(
       1,
       'operator-agent-id',
       expect.objectContaining({
         cwd: join(repoRoot, '.ensemble', 'operator-agents', 'smoke'),
         modelId: 'smoke-model',
+        operatorPiMcpMode: 'direct',
+        builtinTools: false,
+        piExtensions: false,
         mcpServers: {
           'reconnect-server': { type: 'stdio', command: 'reconnect-mcp' },
         },
@@ -2485,6 +2505,9 @@ describe('runOperatorAgent', () => {
       expect.objectContaining({
         cwd: join(repoRoot, '.ensemble', 'operator-agents', 'smoke'),
         modelId: 'smoke-model',
+        operatorPiMcpMode: 'direct',
+        builtinTools: false,
+        piExtensions: false,
         mcpServers: {
           'reconnect-server': { type: 'stdio', command: 'reconnect-mcp' },
         },

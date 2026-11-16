@@ -118,6 +118,12 @@ profiles:
 
 Cursor SDK backend は SDK が受け付ける stdio / HTTP / SSE を使います。Cursor には `local.settingSources: []` を渡すため、SDK は明示した inline MCP server のみを読み込みます（[Cursor SDK の設定 source](https://cursor.com/docs/sdk/typescript#what-gets-loaded)）。Pi backend は stdio と Streamable HTTP を使い、Pi 公式 MCP extension が未対応の SSE は server 名を含むエラーにします。`${env:NAME}` は operator process の環境変数、`${workspaceFolder}` と `${workspaceFolderBasename}` は選択 profile の workspace（`~/.ensemble/operator-agents/<profile>/`）へ展開します。未定義の環境変数は、値をそのまま渡さず server 名・項目名とともにエラーにします。トークンなどの値は config に直接書かず、権限を絞った環境変数で渡してください。
 
+Pi backend の operator-agent は、選択した各 server の MCP tool を [Pi 1.2.0 の MCP extension](https://github.com/earendil-works/pi/blob/v1.2.0/packages/coding-agent/docs/mcp.md) の `direct` exposure で公開します。server が提示する tool は `mcp__<server>__<tool>` 名（名前の変換後に衝突または長さ制限がある場合は hash suffix 付き）でモデル向け tool declaration に載り、Pi の通常の tool call 経路で実行されます。server が提示する全 tool が対象なので、read-only が必要なら server 側の read-only mode と認証権限を設定してください。operator-agent の Pi 経路では Codemode extension を登録しないため、JavaScript 実行 tool と `models.*` API は利用できません。Pi の MCP `resources` は server が提供していれば `list_mcp_resources`、`list_mcp_resource_templates`、`read_mcp_resource` で公開されます。Pi 1.2.0 の MCP extension は MCP `prompts` を公開しません。
+
+Pi は初回 prompt の前に direct tool server の接続を最大 10 秒待ちます。direct MCP text result が 20 KiB を超えると、Pi はモデル向け本文を中央で切り詰め、全体を一時ファイルに保存した path を結果へ含めます。operator-agent には一般的な filesystem reader がなく、workspace file tool も active profile workspace 内に限定されるため、その一時ファイルを必ず読み戻せるとは限りません。大きな結果は server 側で検索・ページングして取得してください。
+
+MCP server は接続先の認証情報と server process / service が持つ権限で処理します。profile で選択した server の限定は server 単位で、Pi の direct exposure 自体は tool の副作用を制限せず、workspace file tool の path 検査も MCP server には適用されません。ローカル stdio server は operator と同じ OS user で動き、HTTP server は渡された token の権限で操作します。MCP は一般的な OS sandbox ではないため、信頼できる server と最小権限の認証情報を選んでください。
+
 ##### GitHub official MCP server（read-only）
 
 GitHub official MCP server は stdio で起動し、Issue と Pull Request の read/list/search を使えるよう `issues,pull_requests` toolset を選びます。`GITHUB_READ_ONLY=1` は toolset に書き込み系 tool が含まれる場合も read-only で除外する server 側の制御です。

@@ -4,13 +4,13 @@ import { basename, join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import {
   createAgentSession,
-  createCodemodeExtension,
   createMcpExtension,
   DefaultResourceLoader,
   ModelRuntime,
   SessionManager,
   SettingsManager,
 } from '@earendil-works/pi-coding-agent';
+import type { ToolDefinition } from '@earendil-works/pi-coding-agent';
 import type { Model } from '@earendil-works/pi-ai';
 import { PiConductorAgent, loadPiMcpConfig } from './pi-conductor-agent.js';
 import { resolveMcpServers } from '../mcp/load-mcp-config.js';
@@ -226,7 +226,19 @@ describe('shared mcp.json backend path', () => {
         args: ['-e', serverScript],
       },
     };
-    const piConfig = loadPiMcpConfig(mcpServers);
+    const piConfig = loadPiMcpConfig(mcpServers, {
+      exposure: 'direct',
+      autoEnableCodemode: false,
+    });
+    expect(piConfig).toMatchObject({
+      autoEnableCodemode: false,
+      servers: [
+        {
+          name: 'representative',
+          config: { exposure: 'direct' },
+        },
+      ],
+    });
     const runtime = await ModelRuntime.create({
       authPath: join(agentDir, 'auth.json'),
       modelsPath: null,
@@ -262,7 +274,6 @@ describe('shared mcp.json backend path', () => {
           logPath: join(cwd, 'mcp.log'),
           startupWaitMs: 2_000,
         }),
-        createCodemodeExtension({ mode: 'on' }),
       ],
     });
     await resourceLoader.reload();
@@ -275,6 +286,17 @@ describe('shared mcp.json backend path', () => {
       settingsManager,
       resourceLoader,
       noTools: 'builtin',
+      customTools: [
+        {
+          name: 'read_operator_workspace_file',
+          label: 'read_operator_workspace_file',
+          description: 'Read an operator workspace file',
+          parameters: { type: 'object', properties: {} } as ToolDefinition['parameters'],
+          execute: async () => ({
+            content: [{ type: 'text', text: 'workspace-file-result' }],
+          }),
+        },
+      ],
     });
     await session.bindExtensions({});
 
@@ -284,10 +306,40 @@ describe('shared mcp.json backend path', () => {
       echo = session.getToolDefinition('mcp__representative__echo');
     }
     expect(echo).toBeDefined();
+    const registeredTools = session.getAllTools();
+    expect(registeredTools.find((tool) => tool.name === echo!.name)).toMatchObject({
+      exposure: 'direct',
+    });
+    const modelTools = session.getActiveToolNames();
+    const callableTools = session.getCallableToolNames();
+    expect(modelTools).toContain(echo!.name);
+    expect(modelTools).toContain('read_operator_workspace_file');
+    expect(session.getToolDefinition('codemode')).toBeUndefined();
+    expect(modelTools).not.toContain('read');
+    expect(modelTools).not.toContain('bash');
+    expect(modelTools).not.toContain('edit');
+    expect(modelTools).not.toContain('write');
+    expect(callableTools).not.toContain('read');
+    expect(callableTools).not.toContain('bash');
+    expect(callableTools).not.toContain('edit');
+    expect(callableTools).not.toContain('write');
+    const workspaceFile = session.getToolDefinition(
+      'read_operator_workspace_file',
+    );
+    expect(workspaceFile).toBeDefined();
     await expect(
       echo!.execute('call-1', { text: 'shared-result' }, new AbortController().signal),
     ).resolves.toMatchObject({
       content: [{ type: 'text', text: 'shared-result' }],
+    });
+    await expect(
+      workspaceFile!.execute(
+        'workspace-call',
+        {},
+        new AbortController().signal,
+      ),
+    ).resolves.toMatchObject({
+      content: [{ type: 'text', text: 'workspace-file-result' }],
     });
 
     session.dispose();

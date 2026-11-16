@@ -274,6 +274,7 @@ export async function runOperatorAgent(
           ),
           piSkills: runtime.profile.pi?.skills !== false,
           piExtensions: false,
+          operatorPiMcpMode: 'direct' as const,
         }
       : {}),
     customTools: {
