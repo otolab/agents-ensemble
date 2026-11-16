@@ -23,6 +23,15 @@ import {
   type SessionResumeStore,
 } from './session-resume-store.js';
 import {
+  copyCursorAcpStoreFixture,
+  CURSOR_ACP_FIXTURE_CWD,
+  CURSOR_ACP_FIXTURE_SESSION_ID,
+  hasCursorAcpSqliteSupport,
+  readCursorAcpStoreFixtureIdentity,
+  writeCursorAcpSessionMetadataFixture,
+  writeCursorAcpWorkerSessionFixture,
+} from '../../test/fixtures/cursor-acp-worker-session.js';
+import {
   getWorkerSessionHistoryReaderSupport,
   readWorkerSessionHistory,
 } from './worker-session-history.js';
@@ -41,6 +50,7 @@ const CODEX_FILENAME_TIMESTAMP = '2026-11-09T14-03-00';
 const CODEX_FIXTURE_PATH = fileURLToPath(
   new URL('../../test/fixtures/codex-cli-worker-rollout.jsonl', import.meta.url),
 );
+const itWithCursorSqlite = (await hasCursorAcpSqliteSupport()) ? it : it.skip;
 
 describe('worker session history', () => {
   let tempRoot = '';
@@ -58,6 +68,8 @@ describe('worker session history', () => {
     vi.stubEnv('HOME', homeRoot);
     vi.stubEnv('ENSEMBLE_USER_ROOT', userRoot);
     vi.stubEnv('CODEX_HOME', '');
+    vi.stubEnv('CURSOR_CONFIG_DIR', '');
+    vi.stubEnv('XDG_CONFIG_HOME', '');
     await writeResumeStore('pi');
   });
 
@@ -70,7 +82,7 @@ describe('worker session history', () => {
     userRoot = '';
   });
 
-  it('registers Pi as supported and reports other or missing presets', () => {
+  it('registers the Pi, Codex, and Cursor readers and reports other presets', () => {
     expect(getWorkerSessionHistoryReaderSupport('pi')).toEqual({
       preset: 'pi',
       status: 'supported',
@@ -80,6 +92,11 @@ describe('worker session history', () => {
       preset: 'codex',
       status: 'supported',
       reader: 'codex-cli-rollout-jsonl',
+    });
+    expect(getWorkerSessionHistoryReaderSupport('cursor')).toEqual({
+      preset: 'cursor',
+      status: 'supported',
+      reader: 'cursor-acp-sqlite',
     });
     expect(getWorkerSessionHistoryReaderSupport(undefined)).toMatchObject({
       preset: null,
@@ -129,6 +146,244 @@ describe('worker session history', () => {
     ]) {
       expect(JSON.stringify(result)).not.toContain(hiddenContent);
     }
+  });
+
+  itWithCursorSqlite('reads Cursor text and excludes tool / thinking steps', async () => {
+    await writeResumeStore('cursor', {
+      acpSessionId: CURSOR_ACP_FIXTURE_SESSION_ID,
+      acpCwd: CURSOR_ACP_FIXTURE_CWD,
+    });
+    const sessionDirectory = join(
+      homeRoot,
+      '.cursor',
+      'acp-sessions',
+      CURSOR_ACP_FIXTURE_SESSION_ID,
+    );
+    await writeCursorAcpWorkerSessionFixture(sessionDirectory);
+
+    const result = await readHistory({ includeSourceFiles: true });
+
+    expect(result).toMatchObject({
+      conductorAgentId: CONDUCTOR_AGENT_ID,
+      worker: WORKER_NAME,
+      preset: 'cursor',
+      status: 'supported',
+      reader: 'cursor-acp-sqlite',
+      sourceFiles: [
+        join(sessionDirectory, 'meta.json'),
+        join(sessionDirectory, 'store.db'),
+      ],
+      messages: [
+        {
+          source: 'worker:implementer',
+          providerId: 'cursor:0:user',
+          role: 'user',
+          at: Date.parse('2026-11-11T10:00:01.000Z'),
+          text: 'Cursor ACP fixture user message.',
+        },
+        {
+          source: 'worker:implementer',
+          providerId: 'cursor:0:assistant:2',
+          role: 'assistant',
+          at: Date.parse('2026-11-11T10:00:02.000Z'),
+          text: 'Cursor ACP fixture assistant reply.',
+        },
+      ],
+    });
+    expect(JSON.stringify(result)).not.toContain('TOOL_SECRET');
+    expect(JSON.stringify(result)).not.toContain('THINKING_SECRET');
+  });
+
+  itWithCursorSqlite(
+    'reads user and assistant messages from the scrubbed Cursor store fixture',
+    async () => {
+      const fixtureIdentity = await readCursorAcpStoreFixtureIdentity();
+      await writeResumeStore('cursor', {
+        acpSessionId: fixtureIdentity.sessionId,
+        acpCwd: fixtureIdentity.cwd,
+      });
+      const sessionDirectory = join(
+        homeRoot,
+        '.cursor',
+        'acp-sessions',
+        fixtureIdentity.sessionId,
+      );
+      await copyCursorAcpStoreFixture(sessionDirectory);
+
+      const result = await readHistory();
+
+      expect(result).toMatchObject({
+        preset: 'cursor',
+        status: 'supported',
+        reader: 'cursor-acp-sqlite',
+      });
+      expect(result.messages.map((message) => message.role)).toEqual([
+        'user',
+        'assistant',
+      ]);
+      expect(result.messages).toHaveLength(2);
+      for (const message of result.messages) {
+        expect(message.source).toBe(`worker:${WORKER_NAME}`);
+        expect(message.text.trim().length).toBeGreaterThan(0);
+        expect(message.at).toEqual(expect.any(Number));
+        expect(Number.isFinite(message.at)).toBe(true);
+      }
+      expect(result.messages[0]?.at).toBeLessThan(
+        result.messages[1]?.at ?? Number.NEGATIVE_INFINITY,
+      );
+    },
+  );
+
+  it('returns unavailable when the Cursor ACP store is missing', async () => {
+    await writeResumeStore('cursor', {
+      acpSessionId: CURSOR_ACP_FIXTURE_SESSION_ID,
+      acpCwd: CURSOR_ACP_FIXTURE_CWD,
+    });
+    const sessionDirectory = join(
+      homeRoot,
+      '.cursor',
+      'acp-sessions',
+      CURSOR_ACP_FIXTURE_SESSION_ID,
+    );
+    await writeCursorAcpSessionMetadataFixture(sessionDirectory);
+
+    const result = await readHistory();
+
+    expect(result).toMatchObject({
+      preset: 'cursor',
+      status: 'unavailable',
+      reason: expect.stringContaining('store.db が見つかりません'),
+      messages: [],
+    });
+  });
+
+  for (const malformed of [
+    {
+      shape: 'empty-messages',
+      expectedReason: 'user / assistant 本文がありません',
+      description: 'contains no readable user or assistant text',
+    },
+    {
+      shape: 'missing-root-blob',
+      expectedReason: 'transcript blob が見つからない',
+      description: 'root blob is missing',
+    },
+    {
+      shape: 'missing-root-turns',
+      expectedReason: 'root に turn 参照がありません',
+      description: 'root has no turn references',
+    },
+    {
+      shape: 'missing-turn-blob',
+      expectedReason: 'transcript blob が見つからない',
+      description: 'referenced turn blob is missing',
+    },
+    {
+      shape: 'unrecognized-turn',
+      expectedReason: 'turn に agent turn がありません',
+      description: 'turn has no readable agent turn structure',
+    },
+  ] as const) {
+    itWithCursorSqlite(
+      `returns unavailable when the Cursor ${malformed.description}`,
+      async () => {
+        await writeResumeStore('cursor', {
+          acpSessionId: CURSOR_ACP_FIXTURE_SESSION_ID,
+          acpCwd: CURSOR_ACP_FIXTURE_CWD,
+        });
+        const sessionDirectory = join(
+          homeRoot,
+          '.cursor',
+          'acp-sessions',
+          CURSOR_ACP_FIXTURE_SESSION_ID,
+        );
+        await writeCursorAcpWorkerSessionFixture(sessionDirectory, {
+          transcriptShape: malformed.shape,
+        });
+
+        const result = await readHistory();
+
+        expect(result).toMatchObject({
+          preset: 'cursor',
+          status: 'unavailable',
+          reason: expect.stringContaining(malformed.expectedReason),
+          messages: [],
+        });
+      },
+    );
+  }
+
+  it('returns unavailable when the Cursor ACP session metadata is missing', async () => {
+    await writeResumeStore('cursor', {
+      acpSessionId: CURSOR_ACP_FIXTURE_SESSION_ID,
+      acpCwd: CURSOR_ACP_FIXTURE_CWD,
+    });
+    const sessionDirectory = join(
+      homeRoot,
+      '.cursor',
+      'acp-sessions',
+      CURSOR_ACP_FIXTURE_SESSION_ID,
+    );
+    await mkdir(sessionDirectory, { recursive: true });
+
+    const result = await readHistory();
+
+    expect(result).toMatchObject({
+      preset: 'cursor',
+      status: 'unavailable',
+      reason: expect.stringContaining('meta.json が見つかりません'),
+      messages: [],
+    });
+  });
+
+  itWithCursorSqlite('rejects a mismatched Cursor store session ID', async () => {
+    await writeResumeStore('cursor', {
+      acpSessionId: CURSOR_ACP_FIXTURE_SESSION_ID,
+      acpCwd: CURSOR_ACP_FIXTURE_CWD,
+    });
+    const sessionDirectory = join(
+      homeRoot,
+      '.cursor',
+      'acp-sessions',
+      CURSOR_ACP_FIXTURE_SESSION_ID,
+    );
+    await writeCursorAcpWorkerSessionFixture(sessionDirectory, {
+      storeSessionId: 'another-cursor-session',
+    });
+
+    const result = await readHistory();
+
+    expect(result).toMatchObject({
+      preset: 'cursor',
+      status: 'unavailable',
+      reason: expect.stringContaining('session ID が SessionResumeStore と一致しません'),
+      messages: [],
+    });
+  });
+
+  itWithCursorSqlite('rejects a mismatched Cursor metadata cwd', async () => {
+    await writeResumeStore('cursor', {
+      acpSessionId: CURSOR_ACP_FIXTURE_SESSION_ID,
+      acpCwd: CURSOR_ACP_FIXTURE_CWD,
+    });
+    const sessionDirectory = join(
+      homeRoot,
+      '.cursor',
+      'acp-sessions',
+      CURSOR_ACP_FIXTURE_SESSION_ID,
+    );
+    await writeCursorAcpWorkerSessionFixture(sessionDirectory, {
+      cwd: '/tmp/another-cursor-worker',
+    });
+
+    const result = await readHistory();
+
+    expect(result).toMatchObject({
+      preset: 'cursor',
+      status: 'unavailable',
+      reason: expect.stringContaining('metadata の cwd'),
+      messages: [],
+    });
   });
 
   it('returns unavailable when the Codex rollout is missing', async () => {
@@ -795,7 +1050,7 @@ describe('worker session history', () => {
   }
 
   async function writeResumeStore(
-    preset: 'pi' | 'codex' | 'custom' | undefined,
+    preset: 'pi' | 'codex' | 'cursor' | 'custom' | undefined,
     workerSession: {
       acpSessionId?: string;
       acpCwd?: string;
@@ -833,7 +1088,9 @@ describe('worker session history', () => {
                       ? 'pi-acp'
                       : preset === 'codex'
                         ? 'codex-acp'
-                        : 'fixture-acp',
+                        : preset === 'cursor'
+                          ? 'agent'
+                          : 'fixture-acp',
                   args: [],
                   ...(workerSession.piRuntime
                     ? { piRuntime: workerSession.piRuntime }

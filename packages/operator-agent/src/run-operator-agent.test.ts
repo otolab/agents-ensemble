@@ -877,6 +877,9 @@ describe('runOperatorAgent', () => {
     expect(agentOptions?.systemPrompt).toContain('get_last_conductor_message');
     expect(agentOptions?.systemPrompt).toContain('list_conductor_messages');
     expect(agentOptions?.systemPrompt).toContain('list_worker_messages');
+    expect(agentOptions?.systemPrompt).toContain(
+      'Pi / Codex / Cursor ACP transcript',
+    );
     expect(agentOptions?.systemPrompt).toContain('openQuestionHistory');
     expect(agentOptions?.systemPrompt).toContain('register_conductor_message_listen');
     expect(agentOptions?.systemPrompt).toContain('shutdown_issue_session');

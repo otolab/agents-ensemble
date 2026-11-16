@@ -13,6 +13,7 @@ import { parseIssueUrl } from '../issue/issue-ref.js';
 import { resolveEnsemblePaths } from '../ensemble-paths.js';
 import { resolvePiAcpSessionMapPaths } from '../acp/pi-session-map.js';
 import type { PiAcpRuntimeMarker } from '../acp/resolve-acp-spawn.js';
+import { resolveCursorConfigRoot } from './cursor-config-root.js';
 import {
   findSessionResumeStoreBySelector,
   listUserLocatedSessionResumeStoresPage,
@@ -82,6 +83,7 @@ interface WorkerSessionHistoryReaderWithSources
 
 const PI_ACP_JSONL_READER_ID = 'pi-acp-jsonl';
 const CODEX_CLI_ROLLOUT_READER_ID = 'codex-cli-rollout-jsonl';
+const CURSOR_ACP_SQLITE_READER_ID = 'cursor-acp-sqlite';
 const CODEX_UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 
@@ -107,6 +109,16 @@ const workerSessionHistoryReaders = new Map<
       read: async (input) =>
         (await readCodexAcpSessionHistoryWithSources(input)).messages,
       readWithSources: readCodexAcpSessionHistoryWithSources,
+    },
+  ],
+  [
+    'cursor',
+    {
+      id: CURSOR_ACP_SQLITE_READER_ID,
+      preset: 'cursor',
+      read: async (input) =>
+        (await readCursorAcpSessionHistoryWithSources(input)).messages,
+      readWithSources: readCursorAcpSessionHistoryWithSources,
     },
   ],
 ]);
@@ -664,6 +676,456 @@ async function readCodexAcpSessionHistoryWithSources(
     decompressor?.destroy();
     sourceStream.destroy();
   }
+}
+
+interface CursorAcpSessionMetadata {
+  schemaVersion: number;
+  cwd: string;
+}
+
+interface CursorStoreMetadata {
+  agentId: string;
+  latestRootBlobId: string;
+}
+
+interface CursorProtobufField {
+  number: number;
+  wireType: number;
+  bytes?: Uint8Array;
+  integer?: bigint;
+}
+
+async function readCursorAcpSessionHistoryWithSources(
+  input: WorkerSessionHistoryReaderInput,
+): Promise<{
+  messages: WorkerSessionHistoryMessage[];
+  sourceFiles: string[];
+}> {
+  const sessionId = input.acpSessionId.trim();
+  if (
+    !sessionId ||
+    /[/\\\0]/u.test(sessionId) ||
+    sessionId === '.' ||
+    sessionId === '..'
+  ) {
+    throw new WorkerSessionHistoryUnavailableError(
+      'SessionResumeStore に有効な Cursor ACP session ID がありません。',
+    );
+  }
+  if (!isAbsolute(input.acpCwd)) {
+    throw new WorkerSessionHistoryUnavailableError(
+      'SessionResumeStore に有効な Cursor ACP cwd がありません。',
+    );
+  }
+
+  const sessionDirectory = join(
+    resolveCursorConfigRoot({
+      acpCwd: input.acpCwd,
+      platform: process.platform,
+      cursorConfigDir: process.env.CURSOR_CONFIG_DIR,
+      xdgConfigHome: process.env.XDG_CONFIG_HOME,
+      homeDirectory: homedir(),
+    }),
+    'acp-sessions',
+    sessionId,
+  );
+  const metadataPath = join(sessionDirectory, 'meta.json');
+  let metadata: CursorAcpSessionMetadata;
+  try {
+    metadata = parseCursorAcpSessionMetadata(
+      await readFile(metadataPath, 'utf8'),
+    );
+  } catch (error) {
+    if (error instanceof WorkerSessionHistoryUnavailableError) throw error;
+    if (isEnoent(error)) {
+      throw new WorkerSessionHistoryUnavailableError(
+        'Cursor ACP session の meta.json が見つかりません。',
+      );
+    }
+    throw new WorkerSessionHistoryUnavailableError(
+      'Cursor ACP session の meta.json を読み取れませんでした。',
+    );
+  }
+  if (metadata.schemaVersion !== 1) {
+    throw new WorkerSessionHistoryUnavailableError(
+      'Cursor ACP session の保存形式に対応していません。',
+    );
+  }
+  if (
+    !isAbsolute(metadata.cwd) ||
+    resolve(metadata.cwd) !== resolve(input.acpCwd)
+  ) {
+    throw new WorkerSessionHistoryUnavailableError(
+      'Cursor ACP session metadata の cwd が SessionResumeStore と一致しません。',
+    );
+  }
+
+  const storePath = join(sessionDirectory, 'store.db');
+  try {
+    if (!(await stat(storePath)).isFile()) {
+      throw new WorkerSessionHistoryUnavailableError(
+        'Cursor ACP session の store.db が file ではありません。',
+      );
+    }
+  } catch (error) {
+    if (error instanceof WorkerSessionHistoryUnavailableError) throw error;
+    if (isEnoent(error)) {
+      throw new WorkerSessionHistoryUnavailableError(
+        'Cursor ACP session の store.db が見つかりません。',
+      );
+    }
+    throw new WorkerSessionHistoryUnavailableError(
+      'Cursor ACP session の store.db を確認できませんでした。',
+    );
+  }
+
+  let sqlite: typeof import('node:sqlite');
+  try {
+    sqlite = await import('node:sqlite');
+  } catch {
+    throw new WorkerSessionHistoryUnavailableError(
+      'Cursor ACP store の SQLite 読み取りには node:sqlite が必要です。Node.js 22.13.0 以降は標準で利用でき、22.5.0〜22.12.x では --experimental-sqlite を付けて起動してください。22.0.0〜22.4.x では利用できません。',
+    );
+  }
+
+  let database: InstanceType<typeof sqlite.DatabaseSync> | undefined;
+  try {
+    database = new sqlite.DatabaseSync(storePath, { readOnly: true });
+    const metadataRow = database
+      .prepare('SELECT value FROM meta WHERE key = ?')
+      .get('0');
+    const storeMetadata = parseCursorStoreMetadata(metadataRow?.value);
+    if (storeMetadata.agentId !== sessionId) {
+      throw new WorkerSessionHistoryUnavailableError(
+        'Cursor ACP store の session ID が SessionResumeStore と一致しません。',
+      );
+    }
+
+    const blobStatement = database.prepare(
+      'SELECT data FROM blobs WHERE id = ?',
+    );
+    const readBlob = (blobId: string): Uint8Array => {
+      const row = blobStatement.get(`agentKv:blob:${blobId}`);
+      const data = row?.data;
+      if (!(data instanceof Uint8Array)) {
+        throw new WorkerSessionHistoryUnavailableError(
+          'Cursor ACP store の transcript blob が見つからないか、読み取れません。',
+        );
+      }
+      return data;
+    };
+    const messages = readCursorConversation(
+      readBlob,
+      storeMetadata.latestRootBlobId,
+      input.workerName,
+    );
+    return {
+      messages,
+      sourceFiles: [metadataPath, storePath],
+    };
+  } catch (error) {
+    if (error instanceof WorkerSessionHistoryUnavailableError) throw error;
+    throw new WorkerSessionHistoryUnavailableError(
+      'Cursor ACP store を読み取れませんでした。',
+    );
+  } finally {
+    database?.close();
+  }
+}
+
+function parseCursorAcpSessionMetadata(raw: string): CursorAcpSessionMetadata {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new WorkerSessionHistoryUnavailableError(
+      'Cursor ACP session の meta.json が不正な JSON です。',
+    );
+  }
+  if (!isRecord(parsed) || typeof parsed.cwd !== 'string') {
+    throw new WorkerSessionHistoryUnavailableError(
+      'Cursor ACP session の meta.json に cwd がありません。',
+    );
+  }
+  return {
+    schemaVersion:
+      typeof parsed.schemaVersion === 'number' ? parsed.schemaVersion : -1,
+    cwd: parsed.cwd,
+  };
+}
+
+function parseCursorStoreMetadata(value: unknown): CursorStoreMetadata {
+  let serialized: string;
+  if (typeof value === 'string') {
+    if (value.trimStart().startsWith('{')) {
+      serialized = value;
+    } else if (/^(?:[0-9a-f]{2})+$/iu.test(value)) {
+      serialized = Buffer.from(value, 'hex').toString('utf8');
+    } else {
+      throw new WorkerSessionHistoryUnavailableError(
+        'Cursor ACP store に有効な metadata がありません。',
+      );
+    }
+  } else if (value instanceof Uint8Array) {
+    serialized = new TextDecoder('utf-8', { fatal: true }).decode(value);
+  } else {
+    throw new WorkerSessionHistoryUnavailableError(
+      'Cursor ACP store に metadata がありません。',
+    );
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(serialized);
+  } catch {
+    throw new WorkerSessionHistoryUnavailableError(
+      'Cursor ACP store の metadata が不正です。',
+    );
+  }
+  if (!isRecord(parsed)) {
+    throw new WorkerSessionHistoryUnavailableError(
+      'Cursor ACP store の metadata が不正です。',
+    );
+  }
+  const agentId = parsed.agentId;
+  const latestRootBlobId = parsed.latestRootBlobId;
+  if (
+    typeof agentId !== 'string' ||
+    typeof latestRootBlobId !== 'string' ||
+    !/^[0-9a-f]{64}$/iu.test(latestRootBlobId)
+  ) {
+    throw new WorkerSessionHistoryUnavailableError(
+      'Cursor ACP store の session metadata または transcript root が不正です。',
+    );
+  }
+  return { agentId, latestRootBlobId: latestRootBlobId.toLowerCase() };
+}
+
+function readCursorConversation(
+  readBlob: (blobId: string) => Uint8Array,
+  rootBlobId: string,
+  workerName: string,
+): WorkerSessionHistoryMessage[] {
+  const messages: WorkerSessionHistoryMessage[] = [];
+  const root = parseCursorProtobuf(readBlob(rootBlobId));
+  const turnBlobIds = cursorProtobufBytes(root, 8);
+  if (turnBlobIds.length === 0) {
+    throw new WorkerSessionHistoryUnavailableError(
+      'Cursor ACP transcript root に turn 参照がありません。',
+    );
+  }
+
+  for (const [turnIndex, turnBlobId] of turnBlobIds.entries()) {
+    const turn = parseCursorProtobuf(
+      readBlob(readCursorBlobReference(turnBlobId)),
+    );
+    const agentTurns = cursorProtobufBytes(turn, 1);
+    if (agentTurns.length === 0) {
+      throw new WorkerSessionHistoryUnavailableError(
+        'Cursor ACP transcript の turn に agent turn がありません。',
+      );
+    }
+    for (const agentTurnBytes of agentTurns) {
+      const agentTurn = parseCursorProtobuf(agentTurnBytes);
+      const userMessageBlobId = cursorProtobufBytes(agentTurn, 1)[0];
+      if (!userMessageBlobId) {
+        throw new WorkerSessionHistoryUnavailableError(
+          'Cursor ACP transcript の user message 参照がありません。',
+        );
+      }
+      const userMessage = parseCursorProtobuf(
+        readBlob(readCursorBlobReference(userMessageBlobId)),
+      );
+      const userText = cursorProtobufString(userMessage, 1);
+      if (userText === undefined) {
+        throw new WorkerSessionHistoryUnavailableError(
+          'Cursor ACP transcript の user message に本文 field がありません。',
+        );
+      }
+      if (userText?.trim()) {
+        const at = cursorProtobufTimestamp(userMessage, 25);
+        messages.push({
+          source: `worker:${workerName}`,
+          providerId: `cursor:${turnIndex}:user`,
+          role: 'user',
+          ...(at !== undefined ? { at } : {}),
+          text: userText,
+        });
+      }
+
+      const stepBlobIds = cursorProtobufBytes(agentTurn, 2);
+      for (const [stepIndex, stepBlobId] of stepBlobIds.entries()) {
+        const step = parseCursorProtobuf(
+          readBlob(readCursorBlobReference(stepBlobId)),
+        );
+        const hasKnownStepContent = [1, 2, 3].some((fieldNumber) =>
+          step.some((field) => field.number === fieldNumber),
+        );
+        if (!hasKnownStepContent) {
+          throw new WorkerSessionHistoryUnavailableError(
+            'Cursor ACP transcript の step に既知の会話構造がありません。',
+          );
+        }
+        cursorProtobufBytes(step, 2);
+        cursorProtobufBytes(step, 3);
+        const assistantMessages = cursorProtobufBytes(step, 1);
+        for (const assistantMessageBytes of assistantMessages) {
+          const assistantMessage = parseCursorProtobuf(assistantMessageBytes);
+          const assistantText = cursorProtobufString(assistantMessage, 1);
+          if (!assistantText?.trim()) continue;
+          const at = cursorProtobufTimestamp(assistantMessage, 2);
+          messages.push({
+            source: `worker:${workerName}`,
+            providerId: `cursor:${turnIndex}:assistant:${stepIndex}`,
+            role: 'assistant',
+            ...(at !== undefined ? { at } : {}),
+            text: assistantText,
+          });
+        }
+      }
+    }
+  }
+  if (messages.length === 0) {
+    throw new WorkerSessionHistoryUnavailableError(
+      'Cursor ACP transcript に user / assistant 本文がありません。',
+    );
+  }
+  return messages;
+}
+
+function readCursorBlobReference(bytes: Uint8Array): string {
+  if (bytes.byteLength !== 32) {
+    throw new WorkerSessionHistoryUnavailableError(
+      'Cursor ACP transcript の blob 参照が不正です。',
+    );
+  }
+  return Buffer.from(bytes).toString('hex');
+}
+
+function parseCursorProtobuf(bytes: Uint8Array): CursorProtobufField[] {
+  const fields: CursorProtobufField[] = [];
+  let offset = 0;
+  while (offset < bytes.byteLength) {
+    const tag = readCursorVarint(bytes, offset);
+    offset = tag.nextOffset;
+    const fieldNumber = Number(tag.value >> 3n);
+    const wireType = Number(tag.value & 7n);
+    if (fieldNumber < 1 || fieldNumber > 0x1fffffff) {
+      throw new WorkerSessionHistoryUnavailableError(
+        'Cursor ACP transcript の protobuf field が不正です。',
+      );
+    }
+
+    if (wireType === 0) {
+      const value = readCursorVarint(bytes, offset);
+      fields.push({ number: fieldNumber, wireType, integer: value.value });
+      offset = value.nextOffset;
+    } else if (wireType === 1 || wireType === 5) {
+      const width = wireType === 1 ? 8 : 4;
+      if (offset + width > bytes.byteLength) {
+        throw new WorkerSessionHistoryUnavailableError(
+          'Cursor ACP transcript の protobuf field が途中で終わっています。',
+        );
+      }
+      fields.push({ number: fieldNumber, wireType });
+      offset += width;
+    } else if (wireType === 2) {
+      const length = readCursorVarint(bytes, offset);
+      offset = length.nextOffset;
+      if (length.value > BigInt(Number.MAX_SAFE_INTEGER)) {
+        throw new WorkerSessionHistoryUnavailableError(
+          'Cursor ACP transcript の protobuf field が大きすぎます。',
+        );
+      }
+      const end = offset + Number(length.value);
+      if (end > bytes.byteLength) {
+        throw new WorkerSessionHistoryUnavailableError(
+          'Cursor ACP transcript の protobuf field が途中で終わっています。',
+        );
+      }
+      fields.push({
+        number: fieldNumber,
+        wireType,
+        bytes: bytes.subarray(offset, end),
+      });
+      offset = end;
+    } else {
+      throw new WorkerSessionHistoryUnavailableError(
+        'Cursor ACP transcript に未対応の protobuf wire type があります。',
+      );
+    }
+  }
+  return fields;
+}
+
+function readCursorVarint(
+  bytes: Uint8Array,
+  startOffset: number,
+): { value: bigint; nextOffset: number } {
+  let value = 0n;
+  let shift = 0n;
+  let offset = startOffset;
+  while (offset < bytes.byteLength && shift < 70n) {
+    const next = bytes[offset]!;
+    offset += 1;
+    value |= BigInt(next & 0x7f) << shift;
+    if ((next & 0x80) === 0) return { value, nextOffset: offset };
+    shift += 7n;
+  }
+  throw new WorkerSessionHistoryUnavailableError(
+    'Cursor ACP transcript の protobuf varint が不正です。',
+  );
+}
+
+function cursorProtobufBytes(
+  fields: readonly CursorProtobufField[],
+  fieldNumber: number,
+): Uint8Array[] {
+  return fields
+    .filter((field) => field.number === fieldNumber)
+    .map((field) => {
+      if (field.wireType !== 2 || !field.bytes) {
+        throw new WorkerSessionHistoryUnavailableError(
+          'Cursor ACP transcript の protobuf bytes field が不正です。',
+        );
+      }
+      return field.bytes;
+    });
+}
+
+function cursorProtobufString(
+  fields: readonly CursorProtobufField[],
+  fieldNumber: number,
+): string | undefined {
+  const bytes = cursorProtobufBytes(fields, fieldNumber).at(-1);
+  if (!bytes) return undefined;
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  } catch {
+    throw new WorkerSessionHistoryUnavailableError(
+      'Cursor ACP transcript の文字列 field が不正な UTF-8 です。',
+    );
+  }
+}
+
+function cursorProtobufTimestamp(
+  fields: readonly CursorProtobufField[],
+  fieldNumber: number,
+): number | undefined {
+  const field = fields
+    .filter((candidate) => candidate.number === fieldNumber)
+    .at(-1);
+  if (!field) return undefined;
+  if (
+    field.wireType !== 0 ||
+    field.integer === undefined ||
+    field.integer > BigInt(Number.MAX_SAFE_INTEGER)
+  ) {
+    throw new WorkerSessionHistoryUnavailableError(
+      'Cursor ACP transcript の timestamp が不正です。',
+    );
+  }
+  return Number(field.integer);
 }
 
 function resolveCodexHome(acpCwd: string): string {

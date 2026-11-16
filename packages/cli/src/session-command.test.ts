@@ -18,6 +18,15 @@ import {
   it,
 } from 'vitest';
 import { resolveEnsemblePaths } from '@agents-ensemble/core/operator-runtime';
+import {
+  copyCursorAcpStoreFixture,
+  CURSOR_ACP_FIXTURE_CWD,
+  CURSOR_ACP_FIXTURE_SESSION_ID,
+  hasCursorAcpSqliteSupport,
+  readCursorAcpStoreFixtureIdentity,
+  writeCursorAcpSessionMetadataFixture,
+  writeCursorAcpWorkerSessionFixture,
+} from '../../core/test/fixtures/cursor-acp-worker-session.js';
 
 const PI_HISTORY_ENTRY_TYPE = 'agents-ensemble/conductor-message-history/v1';
 const ISSUE_URL = 'https://github.com/otolab/agents-ensemble/issues/653';
@@ -27,8 +36,11 @@ const WORKER_PI_CWD = '/tmp/pi-acp-worker-fixture';
 const WORKER_CODEX_SESSION_ID = '019a4b21-9c0e-7a44-b9ad-6a8df4fa7720';
 const WORKER_CODEX_CWD = '/tmp/codex-acp-worker-fixture';
 const WORKER_CODEX_FILENAME_TIMESTAMP = '2026-11-09T14-03-00';
+const WORKER_CURSOR_SESSION_ID = CURSOR_ACP_FIXTURE_SESSION_ID;
+const WORKER_CURSOR_CWD = CURSOR_ACP_FIXTURE_CWD;
 const CODEX_MODEL_PROVIDER_DIGEST_SECRET = 'a'.repeat(64);
 const ACP_MODEL_CONFIG_DIGEST_SECRET = 'b'.repeat(64);
+const itWithCursorSqlite = (await hasCursorAcpSqliteSupport()) ? it : it.skip;
 
 describe('ensemble session commands', () => {
   let tempRoot = '';
@@ -949,7 +961,7 @@ describe('ensemble session commands', () => {
     const help = result.stdout.replace(/\s+/gu, ' ');
     expect(help).toContain('--worker <name>');
     expect(help).toContain('--json');
-    expect(help).toContain('currently Pi and Codex');
+    expect(help).toContain('currently Pi, Codex, and Cursor');
     expect(help).toContain('may contain secrets');
   });
 
@@ -1599,6 +1611,234 @@ describe('ensemble session commands', () => {
     expect(show.stdout).not.toContain('SESSION_ENV_SECRET');
   });
 
+  itWithCursorSqlite('reads Cursor worker messages and supports session show', async () => {
+    const fixtureIdentity = await readCursorAcpStoreFixtureIdentity();
+    await writeResumeStore({
+      preset: 'cursor',
+      acpCwd: fixtureIdentity.cwd,
+      acpSessionId: fixtureIdentity.sessionId,
+    });
+    const sessionDirectory = join(
+      homeRoot,
+      '.cursor',
+      'acp-sessions',
+      fixtureIdentity.sessionId,
+    );
+    await copyCursorAcpStoreFixture(sessionDirectory);
+    const cursorConfigEnvironment = {
+      CURSOR_CONFIG_DIR: '',
+      XDG_CONFIG_HOME: '',
+    };
+
+    const json = runCli(
+      [
+        'session',
+        'workers',
+        'messages',
+        conductorAgentId,
+        '--worker',
+        'implementer',
+        '--repo-root',
+        repoRoot,
+        '--json',
+      ],
+      cursorConfigEnvironment,
+    );
+    expect(json.status).toBe(0);
+    const jsonOutput = JSON.parse(json.stdout);
+    expect(jsonOutput).toMatchObject({
+      conductorAgentId,
+      worker: 'implementer',
+      preset: 'cursor',
+      reader: 'cursor-acp-sqlite',
+      status: 'supported',
+    });
+    expect(jsonOutput.messages.map((message: { role: string }) => message.role))
+      .toEqual(['user', 'assistant']);
+    expect(jsonOutput.messages).toHaveLength(2);
+    for (const message of jsonOutput.messages as Array<{
+      at?: number;
+      source: string;
+      text: string;
+    }>) {
+      expect(message.source).toBe('worker:implementer');
+      expect(message.text.trim().length).toBeGreaterThan(0);
+      expect(message.at).toEqual(expect.any(Number));
+      expect(Number.isFinite(message.at)).toBe(true);
+    }
+
+    const text = runCli(
+      [
+        'session',
+        'workers',
+        'messages',
+        conductorAgentId,
+        '--worker',
+        'implementer',
+        '--repo-root',
+        repoRoot,
+      ],
+      cursorConfigEnvironment,
+    );
+    expect(text.status).toBe(0);
+    expect(text.stdout).toContain('(cursor-acp-sqlite)');
+    for (const message of jsonOutput.messages as Array<{ text: string }>) {
+      expect(text.stdout).toContain(message.text);
+    }
+
+    const show = runCli(
+      [
+        'session',
+        'show',
+        conductorAgentId,
+        '--repo-root',
+        repoRoot,
+        '--json',
+      ],
+      cursorConfigEnvironment,
+    );
+    expect(show.status).toBe(0);
+    expect(JSON.parse(show.stdout).workerReaders).toMatchObject([
+      {
+        worker: 'implementer',
+        preset: 'cursor',
+        status: 'supported',
+        reader: 'cursor-acp-sqlite',
+      },
+    ]);
+  });
+
+  it('returns unavailable JSON with exit code 1 when the Cursor store is missing', async () => {
+    await writeResumeStore({
+      preset: 'cursor',
+      acpCwd: WORKER_CURSOR_CWD,
+      acpSessionId: WORKER_CURSOR_SESSION_ID,
+    });
+    const sessionDirectory = join(
+      homeRoot,
+      '.cursor',
+      'acp-sessions',
+      WORKER_CURSOR_SESSION_ID,
+    );
+    await writeCursorAcpSessionMetadataFixture(sessionDirectory, {
+      cwd: WORKER_CURSOR_CWD,
+    });
+    const cursorConfigEnvironment = {
+      CURSOR_CONFIG_DIR: '',
+      XDG_CONFIG_HOME: '',
+    };
+    const result = runCli(
+      [
+        'session',
+        'workers',
+        'messages',
+        conductorAgentId,
+        '--worker',
+        'implementer',
+        '--repo-root',
+        repoRoot,
+        '--json',
+      ],
+      cursorConfigEnvironment,
+    );
+
+    expect(result.status).toBe(1);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      preset: 'cursor',
+      status: 'unavailable',
+      reason: expect.stringContaining('store.db が見つかりません'),
+      messages: [],
+    });
+  });
+
+  itWithCursorSqlite(
+    'returns unavailable JSON with exit code 1 when the Cursor root blob is missing',
+    async () => {
+      await writeResumeStore({
+        preset: 'cursor',
+        acpCwd: WORKER_CURSOR_CWD,
+        acpSessionId: WORKER_CURSOR_SESSION_ID,
+      });
+      const sessionDirectory = join(
+        homeRoot,
+        '.cursor',
+        'acp-sessions',
+        WORKER_CURSOR_SESSION_ID,
+      );
+      await writeCursorAcpWorkerSessionFixture(sessionDirectory, {
+        transcriptShape: 'missing-root-blob',
+      });
+
+      const result = runCli(
+        [
+          'session',
+          'workers',
+          'messages',
+          conductorAgentId,
+          '--worker',
+          'implementer',
+          '--repo-root',
+          repoRoot,
+          '--json',
+        ],
+        { CURSOR_CONFIG_DIR: '', XDG_CONFIG_HOME: '' },
+      );
+
+      expect(result.status).toBe(1);
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        preset: 'cursor',
+        status: 'unavailable',
+        reason: expect.stringContaining('transcript blob が見つからない'),
+        messages: [],
+      });
+    },
+  );
+
+  itWithCursorSqlite(
+    'returns unavailable JSON with exit code 1 when node:sqlite is unavailable',
+    async () => {
+      await writeResumeStore({
+        preset: 'cursor',
+        acpCwd: WORKER_CURSOR_CWD,
+        acpSessionId: WORKER_CURSOR_SESSION_ID,
+      });
+      const sessionDirectory = join(
+        homeRoot,
+        '.cursor',
+        'acp-sessions',
+        WORKER_CURSOR_SESSION_ID,
+      );
+      await writeCursorAcpWorkerSessionFixture(sessionDirectory);
+
+      const result = runCli(
+        [
+          'session',
+          'workers',
+          'messages',
+          conductorAgentId,
+          '--worker',
+          'implementer',
+          '--repo-root',
+          repoRoot,
+          '--json',
+        ],
+        {
+          CURSOR_CONFIG_DIR: '',
+          XDG_CONFIG_HOME: '',
+          NODE_OPTIONS: '--no-experimental-sqlite',
+        },
+      );
+
+      expect(result.status).toBe(1);
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        preset: 'cursor',
+        status: 'unavailable',
+        reason: expect.stringContaining('22.13.0 以降'),
+        messages: [],
+      });
+    },
+  );
+
   it('returns unsupported JSON with exit code 2 for an unhandled preset', () => {
     const result = runCli([
       'session',
@@ -1692,7 +1932,7 @@ describe('ensemble session commands', () => {
 
   async function writeResumeStore(
     options: {
-      preset?: 'pi' | 'codex' | 'custom';
+      preset?: 'pi' | 'codex' | 'cursor' | 'custom';
       acpCwd?: string;
       acpSessionId?: string;
       piRuntime?: 'builtin';
@@ -1736,7 +1976,9 @@ describe('ensemble session commands', () => {
                     ? 'pi-acp'
                     : preset === 'codex'
                       ? 'codex-acp'
-                      : 'fixture-acp',
+                      : preset === 'cursor'
+                        ? 'agent'
+                        : 'fixture-acp',
                 args: [],
                 env: { API_TOKEN: 'SESSION_ENV_SECRET' },
                 ...(preset === 'codex'
