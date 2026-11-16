@@ -43,7 +43,25 @@ backend を選んだ後の主経路は共通です。リポジトリのディレ
 
 ## 認証後の設定調整 — `ensemble doctor`
 
-`ensemble setup` は conductor backend の選択と conductor 認証を準備する入口です。認証後の `ensemble doctor` は、同じ conductor backend を使う独立した対話 configurator として、worker preset や Issue 実行時の設定を確認・提案します。Issue session、team profile の実行、worker の起動は行いません。doctor が読める・変更できるのは、secret を含まない許可済み config 項目だけです。Pi backend では Pi user/project の prompt template と skill 本文を読み込まず、`/name`・`/skill:name` の展開も無効にします。doctor 専用の role/materials は引き続き system prompt として使います。書き込み前には変更内容と保存先を TTY に表示して同意を確認します。現時点では TTY 対話モードのみで、`doctor check --json` などの非対話診断は未提供です。
+`ensemble setup` は conductor backend の選択と conductor 認証を準備する入口です。認証後の `ensemble doctor` は、同じ conductor backend を使う独立した対話 configurator として、worker preset や Issue 実行時の設定を確認・提案します。Issue session、team profile の実行、worker の起動は行いません。doctor が読める・変更できるのは、secret を含まない許可済み config 項目だけです。Pi backend では Pi user/project の prompt template と skill 本文を読み込まず、`/name`・`/skill:name` の展開も無効にします。doctor 専用の role/materials は引き続き system prompt として使います。書き込み前には変更内容と保存先を TTY に表示して同意を確認します。
+
+`ensemble doctor check` は設定を変更しない非対話診断です。team profile や Issue session を読み込まず、conductor backend / 認証情報の有無、worker adapter / CLI の PATH 前提、secret を含まない許可済み config 項目を確認します。worker CLI の認証や GitHub のログイン状態は検証しません。
+
+```bash
+# 引数なし: harness が把握できる基本情報のみ。agent / model は起動しない
+ensemble doctor check
+ensemble doctor check --json
+
+# 自然言語の依頼を指定した場合だけ、read-only diagnostic agent が1 turn動く
+ensemble doctor check "why is the worker preset unavailable?"
+ensemble doctor check --json "review the effective worker and GitHub config"
+```
+
+自然言語 request は positional arguments を空白で結合して渡します。option のように始まる request は `--` の後ろに置いてください。`--repo-root <path>` で対象 repository を指定できます。request を省略すると、どの backend でもモデル解釈・agent/model 起動・model catalog を含む追加 network 操作はありません。request がある経路は Pi backend のみで受け付け、既存 conductor auth context を使って read-only 診断 agent を1 turnだけ実行します。Cursor backend では認証の有無にかかわらず agent を起動せず、`backend_unsupported` / exit code 2 を返します。auth がない場合も、report には auth failure と `ensemble auth` / `ensemble setup` の next action を残したうえで exit code 2 を優先します。どちらの backend でも、設定書き込み、TTY prompt、worker 起動は行いません。Pi backend では Pi user/project prompt、skill、extension、internal MCP、Codemode、Tool Search を診断 agent に渡しません。
+
+`--json` は harness が組み立てる固定 schema の report を出力します。`schemaVersion`、`mode`、機械診断の `checks`、agent の `started` / `turns` / `answerCode` / `answer` / `answerStatus`、`nextActions`、`exitCode` を含みます。agent は最終応答として有限な診断コードを1つだけ返します。harness はコードを完全一致で検証し、チェック状態または secret を含まない allowlist 設定値から固定文を生成します。モデル出力を JSON schema や check status として解釈せず、自由文を直接出力することもありません。未知・不正な応答は固定の generic 診断文に置き換えます。`answerStatus` は、request なしなら `not_requested`、request を実行できないか完了できなければ `unavailable`、既知コードから診断文を生成した場合は `mapped`、未知・不正な応答を generic 文に置き換えた場合は `generic` です。自然言語 request 自体は report に含めず、credential、token、`acp.env` などの secret-bearing 値も出力しません。終了コードは `0` が check 成功、`1` が check failure（Pi backend の auth 不在を含む）、`2` が CLI usage error、Cursor backend の自然言語 request、または診断を完了できない実行エラーです。認証がない場合は非ゼロで終了し、`ensemble auth status` / `ensemble auth login` / `ensemble setup` を次の action として示します。
+
+例えば request が worker preset の値を尋ね、agent が `config.acp.defaultPreset` を選ぶと、harness は allowlist snapshot から実際の値と source を取り出して固定文にします。自由文やモデルが返した設定値をそのまま表示することはありません。
 
 設定の保存先は user config が既定です。対象 repository の `.ensemble/config.yaml` に保存する場合だけ `--project` を明示します。doctor は secret を尋ねたり表示・保存したりしません。worker CLI の認証は [ADR 0028](../adr/0028-authentication-delegation-and-ensemble-auth.md) に従って各 CLI に移譲されるため、必要な場合はその CLI 側で準備してください。
 

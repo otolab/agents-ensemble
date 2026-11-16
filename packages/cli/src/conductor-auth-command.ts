@@ -65,37 +65,65 @@ export async function resolveConductorCommandContext(
       config,
     })
   ).profile;
+  const auth = resolveConductorAuthContext({
+    repoRoot,
+    config,
+    profile,
+    backend: options.backend,
+    provider: options.provider,
+    modelId: options.modelId,
+    piAgentDir: options.piAgentDir,
+  });
+
+  return { repoRoot, config, profile, auth };
+}
+
+/** Resolve the shared conductor auth context without loading a team profile. */
+export function resolveConductorAuthContext(options: {
+  repoRoot: string;
+  config: EnsembleConfig;
+  profile?: ResolvedProfile;
+  backend?: ConductorBackend;
+  provider?: string;
+  modelId?: string;
+  piAgentDir?: string;
+}): ConductorAuthOptions & { backend: ConductorBackend } {
   const backend =
-    options.backend ?? resolveConductorAuthBackend({ profile, config });
+    options.backend ??
+    resolveConductorAuthBackend({
+      ...(options.profile ? { profile: options.profile } : {}),
+      config: options.config,
+    });
   const configuredModel =
-    config.conductor.model !== 'default' && config.conductor.model !== 'auto'
-      ? config.conductor.model
+    options.config.conductor.model !== 'default' &&
+    options.config.conductor.model !== 'auto'
+      ? options.config.conductor.model
       : undefined;
   const pi =
     backend === 'pi'
       ? {
-          cwd: repoRoot,
+          cwd: options.repoRoot,
           pi: {
-            ...resolveConductorPiResourcePaths({ repoRoot, config }),
-            ...(options.piAgentDir ? { agentDir: options.piAgentDir } : {}),
+            ...resolveConductorPiResourcePaths({
+              repoRoot: options.repoRoot,
+              config: options.config,
+            }),
+            ...(options.piAgentDir
+              ? { agentDir: options.piAgentDir }
+              : {}),
           },
         }
       : undefined;
 
   return {
-    repoRoot,
-    config,
-    profile,
-    auth: {
-      backend,
-      profile,
-      config,
-      ...(pi ? { pi } : {}),
-      ...(options.provider ? { provider: options.provider } : {}),
-      ...(options.modelId ?? configuredModel
-        ? { modelId: options.modelId ?? configuredModel }
-        : {}),
-    },
+    backend,
+    config: options.config,
+    ...(options.profile ? { profile: options.profile } : {}),
+    ...(pi ? { pi } : {}),
+    ...(options.provider ? { provider: options.provider } : {}),
+    ...(options.modelId ?? configuredModel
+      ? { modelId: options.modelId ?? configuredModel }
+      : {}),
   };
 }
 

@@ -919,14 +919,6 @@ describe('PiConductorAgent', () => {
             content: [{ type: 'text' as const, text: 'settings' }],
           }),
         },
-        doctor_write_config: {
-          name: 'doctor_write_config',
-          description: 'Write one approved setting',
-          inputSchema: { type: 'object', properties: {} },
-          execute: async () => ({
-            content: [{ type: 'text' as const, text: 'written' }],
-          }),
-        },
       },
     });
 
@@ -935,7 +927,7 @@ describe('PiConductorAgent', () => {
     expect(sessionOptions.resourceLoader.getSkills().skills).toEqual([]);
     expect(
       sessionOptions.customTools?.map((tool: { name: string }) => tool.name),
-    ).toEqual(['doctor_read_config', 'doctor_write_config']);
+    ).toEqual(['doctor_read_config']);
     expect(mockCreateMcpExtension).not.toHaveBeenCalled();
     expect(mockCreateExtension).not.toHaveBeenCalled();
     expect(mcpLoadConfig).toBeUndefined();
