@@ -228,6 +228,197 @@ describe('one-time secret control', () => {
     }
   });
 
+  it('clears server request fragments when the receive timeout fires', async () => {
+    const secretMarker = 'c2VjcmV0';
+    const watched = watchSecretConcats(secretMarker);
+    const accepted = captureAcceptedSocket();
+    const timeout = shortenServerSocketTimeouts();
+    server = await startOneTimeSecretControlServer({
+      workerTokens: new Map([[workerName, workerToken]]),
+      onRequest: () => {},
+    });
+    const socket = net.createConnection(server.socketPath);
+    socket.on('error', () => {});
+
+    try {
+      await new Promise<void>((resolve) => socket.once('connect', resolve));
+      socket.write(`{"action":"submit","secretBase64":"${secretMarker}`);
+      await watched.seen;
+      const acceptedSocket = await accepted.socket;
+      await timeout.waitFor(acceptedSocket);
+
+      expect(timeout.firedTimeouts).toContainEqual({
+        socket: acceptedSocket,
+        registration: 1,
+      });
+      expectBuffersCleared(watched.buffers);
+    } finally {
+      socket.destroy();
+      await server.close();
+      server = undefined;
+      accepted.restore();
+      timeout.restore();
+      watched.restore();
+    }
+  });
+
+  it('clears server request fragments when the receiving socket emits an error', async () => {
+    const secretMarker = 'c2VjcmV0';
+    const watched = watchSecretConcats(secretMarker);
+    const accepted = captureAcceptedSocket();
+    server = await startOneTimeSecretControlServer({
+      workerTokens: new Map([[workerName, workerToken]]),
+      onRequest: () => {},
+    });
+    const client = net.createConnection(server.socketPath);
+    client.on('error', () => {});
+
+    try {
+      await new Promise<void>((resolve) => client.once('connect', resolve));
+      client.write(`{"action":"submit","secretBase64":"${secretMarker}`);
+      await watched.seen;
+      const acceptedSocket = await accepted.socket;
+      const error = deferred<Error>();
+      acceptedSocket.once('error', error.resolve);
+      acceptedSocket.destroy(new Error('test server receive socket error'));
+
+      expect(await error.promise).toBeInstanceOf(Error);
+      expectBuffersCleared(watched.buffers);
+    } finally {
+      client.destroy();
+      await server.close();
+      server = undefined;
+      accepted.restore();
+      watched.restore();
+    }
+  });
+
+  it('clears client response fragments when the receiving socket emits an error', async () => {
+    const secretMarker = 'c2VjcmV0';
+    const watched = watchSecretConcats(secretMarker);
+    const client = captureClientSocket();
+    const fakeServer = net.createServer((socket) => {
+      socket.on('error', () => {});
+      socket.once('data', () => {
+        socket.write(
+          `{"ok":true,"result":{"secretBase64":"${secretMarker}`,
+        );
+      });
+    });
+    const directory = await mkdtemp(join(tmpdir(), 'ens-secret-client-error-'));
+    const socketPath = join(directory, 's.sock');
+
+    try {
+      await new Promise<void>((resolve, reject) => {
+        fakeServer.once('error', reject);
+        fakeServer.listen(socketPath, resolve);
+      });
+      const pending = sendOneTimeSecretControlRequest(
+        socketPath,
+        { action: 'inspect' },
+        { timeoutMs: 2_000 },
+      );
+      const clientSocket = await client.socket;
+      const error = deferred<Error>();
+      clientSocket.once('error', error.resolve);
+      await watched.seen;
+      clientSocket.destroy(new Error('test client receive socket error'));
+
+      expect(await error.promise).toBeInstanceOf(Error);
+      await expect(pending).rejects.toThrow();
+      expectBuffersCleared(watched.buffers);
+    } finally {
+      await new Promise<void>((resolve) => fakeServer.close(() => resolve()));
+      await rm(directory, { recursive: true, force: true });
+      client.restore();
+      watched.restore();
+    }
+  });
+
+  it('clears a secret response body when its socket send times out', async () => {
+    const pendingEvent = deferred<OneTimeSecretRequestInfo>();
+    const secretBase64 = Buffer.from('timeout-response-secret').toString('base64');
+    const markerBytes = Buffer.from(secretBase64);
+    const responseBodies: Buffer[] = [];
+    const responseSockets: net.Socket[] = [];
+    const responseWriteStarted = deferred<void>();
+    const timeout = shortenServerSocketTimeouts();
+    server = await startOneTimeSecretControlServer({
+      workerTokens: new Map([[workerName, workerToken]]),
+      onRequest: pendingEvent.resolve,
+    });
+    const originalEnd = net.Socket.prototype.end;
+    const endSpy = vi
+      .spyOn(net.Socket.prototype, 'end')
+      .mockImplementation(function (
+        this: net.Socket,
+        ...args: Parameters<net.Socket['end']>
+      ) {
+        const body = args[0];
+        if (Buffer.isBuffer(body) && body.includes(markerBytes)) {
+          responseBodies.push(body);
+          responseSockets.push(this);
+          responseWriteStarted.resolve();
+          // Leave this owned body queued at the IPC layer until the real
+          // socket timeout fires. Do not call Node's write path.
+          return this;
+        }
+        return originalEnd.apply(this, args);
+      });
+
+    let workerWaitRejected: Promise<boolean> | undefined;
+    let submitSettled: Promise<void> | undefined;
+    try {
+      const workerWait = sendOneTimeSecretControlRequest<{
+        requestId: string;
+        secretBase64: string;
+      }>(server.socketPath, requestInput, { timeoutMs: 2_000 });
+      workerWaitRejected = workerWait.then(
+        () => false,
+        () => true,
+      );
+      const pending = await pendingEvent.promise;
+      const reservation = await sendOneTimeSecretControlRequest<{
+        requestId: string;
+        reservationToken: string;
+      }>(server.socketPath, {
+        action: 'reserve',
+        requestId: pending.requestId,
+      });
+      const submit = sendOneTimeSecretControlRequest<{ status: string }>(
+        server.socketPath,
+        {
+          action: 'submit',
+          requestId: pending.requestId,
+          reservationToken: reservation.reservationToken,
+          secretBase64,
+        },
+        { timeoutMs: 2_000 },
+      );
+      submitSettled = submit.then(
+        () => {},
+        () => {},
+      );
+
+      await responseWriteStarted.promise;
+      expect(responseSockets).toHaveLength(1);
+      await timeout.waitFor(responseSockets[0]!);
+      expect(await workerWaitRejected).toBe(true);
+      expect(responseBodies).toHaveLength(1);
+      expect(timeout.firedTimeouts).toContainEqual({
+        socket: responseSockets[0],
+        registration: 2,
+      });
+      expectBuffersCleared(responseBodies);
+    } finally {
+      endSpy.mockRestore();
+      await server.close();
+      server = undefined;
+      await submitSettled;
+      timeout.restore();
+    }
+  });
+
   it.each(['disconnect', 'timeout', 'abort'] as const)(
     'clears partial response buffers after client %s',
     async (failureMode) => {
@@ -489,6 +680,86 @@ function watchSecretConcats(marker: string): {
     return result;
   });
   return { buffers, seen, restore: () => spy.mockRestore() };
+}
+
+function captureAcceptedSocket(): {
+  socket: Promise<net.Socket>;
+  restore: () => void;
+} {
+  const accepted = deferred<net.Socket>();
+  const originalCreateServer = net.createServer;
+  const spy = vi.spyOn(net, 'createServer').mockImplementation(
+    ((...args: Parameters<typeof net.createServer>) => {
+      const created = Reflect.apply(originalCreateServer, net, args) as net.Server;
+      created.once('connection', (socket) => accepted.resolve(socket));
+      return created;
+    }) as typeof net.createServer,
+  );
+  return { socket: accepted.promise, restore: () => spy.mockRestore() };
+}
+
+function captureClientSocket(): {
+  socket: Promise<net.Socket>;
+  restore: () => void;
+} {
+  const connected = deferred<net.Socket>();
+  const originalCreateConnection = net.createConnection;
+  const spy = vi.spyOn(net, 'createConnection').mockImplementation(
+    ((...args: Parameters<typeof net.createConnection>) => {
+      const socket = Reflect.apply(
+        originalCreateConnection,
+        net,
+        args,
+      ) as net.Socket;
+      connected.resolve(socket);
+      return socket;
+    }) as typeof net.createConnection,
+  );
+  return { socket: connected.promise, restore: () => spy.mockRestore() };
+}
+
+function shortenServerSocketTimeouts(): {
+  waitFor: (socket: net.Socket) => Promise<void>;
+  firedTimeouts: Array<{ socket: net.Socket; registration: number }>;
+  restore: () => void;
+} {
+  const firedTimeouts: Array<{ socket: net.Socket; registration: number }> = [];
+  const registrationCounts = new Map<net.Socket, number>();
+  const waiting = new Map<net.Socket, Array<() => void>>();
+  const originalSetTimeout = net.Socket.prototype.setTimeout;
+  const spy = vi
+    .spyOn(net.Socket.prototype, 'setTimeout')
+    .mockImplementation(function (
+      this: net.Socket,
+      timeout?: number,
+      callback?: () => void,
+    ) {
+      if (timeout === 10_000 && !this.connecting) {
+        const registration = (registrationCounts.get(this) ?? 0) + 1;
+        registrationCounts.set(this, registration);
+        return originalSetTimeout.call(this, 25, () => {
+          firedTimeouts.push({ socket: this, registration });
+          callback?.();
+          for (const resolve of waiting.get(this) ?? []) resolve();
+          waiting.delete(this);
+        });
+      }
+      return originalSetTimeout.call(this, timeout, callback);
+    });
+  return {
+    waitFor: (socket) => {
+      if (firedTimeouts.some((event) => event.socket === socket)) {
+        return Promise.resolve();
+      }
+      return new Promise<void>((resolve) => {
+        const socketWaiters = waiting.get(socket) ?? [];
+        socketWaiters.push(resolve);
+        waiting.set(socket, socketWaiters);
+      });
+    },
+    firedTimeouts,
+    restore: () => spy.mockRestore(),
+  };
 }
 
 function expectBuffersCleared(buffers: Buffer[]): void {
