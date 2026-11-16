@@ -99,6 +99,8 @@ profile は `--profile` > `ENSEMBLE_OPERATOR_AGENT_PROFILE` > 再開対象 conve
 
 operator-agent は profile ごとに `mcp.servers` で MCP server 名を選びます。定義は `~/.ensemble/mcp.json` から選択名の分だけ読み込み、起動した repository の `.agents/mcp.json` や `.ensemble/` は参照しません。profile の `mcp.servers` があれば `common.mcp.servers` 全体を置き換え、未指定なら common の選択を使います。profile に `servers: []` を指定すると common の選択も無効になります。どちらにも選択がなければ `mcp.json` 自体を読みません。
 
+この operator-agent 固有の選択方針は [ADR 0077](adr/0077-operator-agent-mcp-server-selection.md) に記録しています。Issue conductor の MCP 解決には適用しません。
+
 ```yaml
 version: 1
 common:
