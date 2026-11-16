@@ -24,6 +24,7 @@ export type {
   HarnessWorkerPromptFailedEvent,
   HarnessWorkerAcpUpdateEvent,
   HarnessWorkerStateEvent,
+  WorkerSecretRequestedEvent,
   HarnessSessionWorkersEvent,
   OperatorInputEvent,
   ConductorInboundEvent,

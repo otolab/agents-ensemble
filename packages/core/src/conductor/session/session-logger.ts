@@ -71,6 +71,7 @@ export class SessionLogger {
       case 'harness.worker.prompt.failed':
       case 'harness.worker.acp.update':
       case 'harness.worker.state':
+      case 'worker.secret.requested':
       case 'harness.session.workers':
       case 'operator.input':
       case 'operator.queue.changed':

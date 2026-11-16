@@ -1,5 +1,6 @@
 import { stat } from 'node:fs/promises';
-import { resolve as resolvePath } from 'node:path';
+import { randomBytes } from 'node:crypto';
+import { isAbsolute, resolve as resolvePath } from 'node:path';
 import type { WorkerDispatchResult } from '../dispatch/worker-dispatch.js';
 import {
   computeAcpModelConfigDigest,
@@ -40,6 +41,7 @@ import type { Profile, ResolvedProfile } from '../profile/types.js';
 import type { DefaultAcpResolutionOptions, AcpSpawnFingerprint } from '../acp/resolve-acp-spawn.js';
 import {
   acpSpawnFingerprint,
+  isBuiltinAcpPresetId,
   resolveWorkerAcpSpawn,
   resolvedAcpSpawnToOptions,
 } from '../acp/resolve-acp-spawn.js';
@@ -173,6 +175,12 @@ import {
   type OpenQuestionControlServer,
   type OperatorSessionShutdownMode,
 } from '../session/open-question-control.js';
+import {
+  isOneTimeSecretPlatformSupported,
+  ONE_TIME_SECRET_ENV,
+  startOneTimeSecretControlServer,
+  type OneTimeSecretControlServer,
+} from '../session/one-time-secret-control.js';
 import type { SessionUsageSummary } from '../usage/types.js';
 import type { PendingPermission } from '../permission/pending-permission.js';
 import { formatPermissionSummaryForOperator } from '../permission/format-permission-summary-for-operator.js';
@@ -235,6 +243,8 @@ export interface RunConductorSessionOptions {
   resumeAgentId?: string;
   /** 新規 Store に記録する CLI package version。resume 時は保存済み値を使う。 */
   cliPackageVersion?: string;
+  /** Absolute CLI entrypoint supplied by `ensemble issue` for local worker shells. */
+  secretCliEntrypoint?: string;
   /** Optional factory override. Without it, `conductor.backend` selects the factory. */
   conductorAgentFactory?: ConductorAgentFactory;
   apiKey?: string;
@@ -491,6 +501,8 @@ async function runConductorSessionWithStartupGuard(
     active: boolean,
   ) => void = () => {};
   let openQuestionControlServer: OpenQuestionControlServer | undefined;
+  let oneTimeSecretControlServer: OneTimeSecretControlServer | undefined;
+  const secretWorkerTokens = new Map<string, string>();
   let lastConductorMessage: OpenQuestionControlLastConductorMessage | null =
     null;
   const conductorMessages: OpenQuestionControlConductorMessage[] = [];
@@ -2176,8 +2188,55 @@ async function runConductorSessionWithStartupGuard(
         mode: 'init',
       });
     }
+    const secretCliReady =
+      isOneTimeSecretPlatformSupported() &&
+      !options.connectAcp &&
+      options.secretCliEntrypoint !== undefined &&
+      isAbsolute(options.secretCliEntrypoint) &&
+      (await pathExists(options.secretCliEntrypoint).catch(() => false));
+    if (secretCliReady) {
+      for (const worker of workers) {
+        const preset = worker.acpFingerprint?.preset;
+        if (!preset || !isBuiltinAcpPresetId(preset)) continue;
+        secretWorkerTokens.set(
+          worker.name,
+          randomBytes(32).toString('base64url'),
+        );
+      }
+    }
+    if (secretWorkerTokens.size > 0) {
+      try {
+        oneTimeSecretControlServer =
+          await startOneTimeSecretControlServer({
+            workerTokens: secretWorkerTokens,
+            onRequest: (request) =>
+              sessionLogger.emit({
+                type: 'worker.secret.requested',
+                ...request,
+              }),
+          });
+        startupCleanup.add(async () => {
+          await oneTimeSecretControlServer?.close();
+          clearOneTimeSecretWorkerEnvironment(workers);
+          secretWorkerTokens.clear();
+        });
+      } catch {
+        secretWorkerTokens.clear();
+        sessionLogger.emit({
+          type: 'harness.warning',
+          message:
+            'One-time secret IPC is unavailable; secret exec will fail closed for this session.',
+        });
+      }
+    }
+    configureOneTimeSecretWorkerEnvironment({
+      workers,
+      workerTokens: secretWorkerTokens,
+      socketPath: oneTimeSecretControlServer?.socketPath,
+      cliEntrypoint: options.secretCliEntrypoint,
+    });
     // Keep startup cleanup active through startup logging and the final
-    // shutdown check. No await follows before workers start.
+    // shutdown check. No await follows this check before workers start.
     shutdownSignal.throwIfAborted();
     startupCleanup.handoff();
     workerSession.startWorkers();
@@ -2734,6 +2793,23 @@ async function runConductorSessionWithStartupGuard(
     };
 
     try {
+      const activeSecretControlServer = oneTimeSecretControlServer;
+      oneTimeSecretControlServer = undefined;
+      if (activeSecretControlServer) {
+        emitTeardownPhase('oneTimeSecretControl');
+        const phaseStart = Date.now();
+        try {
+          await activeSecretControlServer.close();
+        } catch {
+          sessionLogger.emit({
+            type: 'harness.warning',
+            message: 'One-time secret IPC cleanup failed.',
+          });
+        }
+        clearOneTimeSecretWorkerEnvironment(workers);
+        secretWorkerTokens.clear();
+        teardownPhases.oneTimeSecretControl = Date.now() - phaseStart;
+      }
       const activeControlServer = openQuestionControlServer;
       openQuestionControlServer = undefined;
       harnessSocketPath = undefined;
@@ -3031,6 +3107,48 @@ function finalizeSessionWorkerSpecs(
     const finalized = finalizeResolvedAcpSpawn(sessionSpawn);
     worker.spawn = resolvedAcpSpawnToOptions(finalized, worker.spawn);
     worker.acpFingerprint = acpSpawnFingerprint(finalized);
+  }
+}
+
+function configureOneTimeSecretWorkerEnvironment(input: {
+  workers: SessionWorkerSpec[];
+  workerTokens: ReadonlyMap<string, string>;
+  socketPath?: string;
+  cliEntrypoint?: string;
+}): void {
+  for (const worker of input.workers) {
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      ...(worker.spawn?.env ?? {}),
+    };
+    for (const name of Object.values(ONE_TIME_SECRET_ENV)) {
+      delete env[name];
+    }
+
+    const token = input.workerTokens.get(worker.name);
+    if (token && input.socketPath && input.cliEntrypoint) {
+      env[ONE_TIME_SECRET_ENV.active] = '1';
+      env[ONE_TIME_SECRET_ENV.socket] = input.socketPath;
+      env[ONE_TIME_SECRET_ENV.worker] = worker.name;
+      env[ONE_TIME_SECRET_ENV.token] = token;
+      env[ONE_TIME_SECRET_ENV.node] = process.execPath;
+      env[ONE_TIME_SECRET_ENV.cli] = input.cliEntrypoint;
+    }
+    worker.spawn = {
+      ...worker.spawn,
+      env,
+    };
+  }
+}
+
+function clearOneTimeSecretWorkerEnvironment(
+  workers: SessionWorkerSpec[],
+): void {
+  for (const worker of workers) {
+    if (!worker.spawn?.env) continue;
+    for (const name of Object.values(ONE_TIME_SECRET_ENV)) {
+      delete worker.spawn.env[name];
+    }
   }
 }
 

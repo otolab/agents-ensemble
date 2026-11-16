@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { Command, CommanderError, Option } from 'commander';
 import {
   DEFAULT_DISPATCH_HOLD_REMINDER_MS,
@@ -56,13 +57,50 @@ import {
   type PiModelsSyncTarget,
 } from './pi-model-catalog-command.js';
 import { runOperatorAgent } from '@agents-ensemble/operator-agent';
+import { runSecretExec, runSecretPush } from './secret-command.js';
 
 const program = new Command();
+const cliEntrypoint = fileURLToPath(import.meta.url);
 
 program
   .name('ensemble')
   .description('Issue-based agent orchestration')
   .version(readCliPackageVersion());
+
+const secret = program
+  .command('secret')
+  .description('One-time operator-approved secret input for a waiting worker command');
+
+secret
+  .command('exec')
+  .description('Wait for one secret value, then run a command with it in one env variable')
+  .requiredOption('--label <label>', 'Operator-facing name of the secret target')
+  .requiredOption('--env <name>', 'Environment variable name for the one-time value')
+  .argument('<command>', 'Target executable')
+  .argument('[args...]', 'Target argv; put -- before target options')
+  .action(
+    async (
+      command: string,
+      args: string[],
+      options: { label: string; env: string },
+    ) => {
+      process.exitCode = await runSecretExec({
+        label: options.label,
+        envName: options.env,
+        command,
+        args: args ?? [],
+      });
+    },
+  );
+
+secret
+  .command('push')
+  .description('Approve a displayed one-time request and submit its value from stdin')
+  .argument('<socketPath>', 'Live session secret IPC socket')
+  .argument('<requestId>', 'One-time request capability shown by the harness')
+  .action(async (socketPath: string, requestId: string) => {
+    process.exitCode = await runSecretPush(socketPath, requestId);
+  });
 
 program
   .command('operator-agent')
@@ -556,6 +594,7 @@ program
           configPath: options.config,
           initialOperatorMessage: normalizeInitialOperatorMessage(messageParts),
           defaultAcpArgs: options.defaultAcpArg,
+          secretCliEntrypoint: cliEntrypoint,
         });
 
         writeIssueSessionSummary(result, {

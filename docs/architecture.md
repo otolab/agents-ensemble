@@ -307,6 +307,21 @@ worker は **agents-ensemble の `.cursor/` を読まない**。Skill 名と起�
 
 起動プロンプトのパターン例は [prompts/worker-bootstrap.md](prompts/worker-bootstrap.md)。**どの種別をいつ dispatch するか、どの Skill・起動文書を渡すかはプロファイルが決める。** profile の `workers[].workspace` で worker ごとに ACP cwd を上書きできる（[elements.md](elements.md)）。
 
+### 一回限りの secret を target process に渡す
+
+`ensemble secret exec --label <表示名> --env <ENV> -- <command> [args...]` は worker の Bash から呼び出し、harness が作る一時 Unix socket 上で値を待ちます。operator はログの request metadata を確認してから、別の operator terminal で credential source の stdin を `ensemble secret push <socket> <request-id>` へ接続します。push CLI は TTY で同じ metadata を表示し、明示的な `y` の後にだけ stdin を読みます。受理した byte 列は helper process を経由し、指定 env 名を追加した target child だけに渡します。Bash output へ値を返す経路はありません。
+
+harness は macOS / Linux 上の既知 builtin ACP preset（Cursor / Claude / Codex / Pi）の process environment に absolute Node / CLI path と per-worker token を渡します。ACP 接続後の各 Bash spawn に共通して割り込む API はなく、secret 値は worker process の environment へは置きません。backend adapter から coding CLI への起動経路と helper environment の扱いは次のとおりです。
+
+| preset / adapter | ACP → coding CLI の起動経路 | Bash までの確認 |
+|------------------|----------------------------|-----------------|
+| Cursor `agent acp` | harness が外部 CLI を `spawn(command, args, { cwd, env })` で起動。[公式 ACP docs](https://cursor.com/docs/cli/acp) は stdio の ACP server として起動することを説明しています | Shell tool が任意の parent environment を保持する契約は公開 docs で確認できません。helper が `ENSEMBLE_SECRET_ACTIVE` を受け取れない場合、target 起動前に「unavailable」で失敗します |
+| Claude `@agentclientprotocol/claude-agent-acp@0.70.0` | adapter が Claude CLI を `spawn(..., { stdio: 'inherit' })` し、Node の既定どおり親 `process.env` を継承 | Bash child 内で marker が欠ければ target 起動前に失敗します |
+| Codex `@agentclientprotocol/codex-acp@2.3.0` | adapter が Codex CLI を `spawn(..., { env: process.env })` で起動 | Bash child 内で marker が欠ければ target 起動前に失敗します |
+| Pi BYO `pi-acp@0.0.33` / builtin `pi-acp@0.0.34` | どちらの `PiRpcProcess.spawn` も Pi CLI に `env: process.env` を設定 | Pi の Bash tool child 内で marker が欠ければ target 起動前に失敗します |
+
+Claude / Codex / Pi の確認は現在 lock されている adapter package の起動コードに基づき、live backend を使った end-to-end 実行ではありません。Cursor は外部 `agent acp` CLI の内部動作に依存します。custom ACP、Windows、他 OS は対象外で、CLI から直接 Bash に使える機能ではありません。全 preset で helper 自身が必要な環境値を検査し、欠けていれば target は spawn しません。詳細な利用手順、方式比較、脅威モデル、残余リスクは [CLI の secret exec](cli/README.md#worker-の-bash-command-に一度だけ-secret-を渡す) を参照してください。
+
 ### Worker の前提
 
 profile の worker modelTag は `high` / `default` / `low` / `lite` の推奨 tier 名のほか、空文字・空白のみを含む任意の文字列を受け付ける。tag は trim せずそのまま照合する。`default` 以外の未登録 tag は harness warning を出して `default` mapping を試し、そこにも mapping がなければ model を注入せず ACP preset の既定に委ねる。worker が `modelTag` を省略した場合は暗黙の `default` から warning なしで preset 既定を使う。`modelTag: default` を明示して mapping がない場合は warning を出して preset 既定を使う。`lite` は team tier 名で、Cursor ACP fast mode の `cursorFast` とは別概念である。

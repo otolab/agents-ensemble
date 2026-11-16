@@ -156,6 +156,47 @@ ensemble issue https://github.com/OWNER/REPOSITORY/issues/123 --reasoning high
 ensemble issue https://github.com/OWNER/REPOSITORY/issues/123 --config ~/.ensemble/litellm.config.yaml
 ```
 
+## worker の Bash command に一度だけ secret を渡す
+
+Issue session 中、worker の Bash から待機 command を起動します。secret 値は worker や conductor への指示に書かず、`ENSEMBLE_SECRET_*` の実行 helper から target process の環境変数へ渡します。
+
+```bash
+# worker が実行する command。値を含めず、対象だけを指定する
+"$ENSEMBLE_SECRET_NODE" "$ENSEMBLE_SECRET_CLI" secret exec \
+  --label staging-api --env API_TOKEN -- \
+  curl -fsS https://api.example.test/
+```
+
+harness の `[harness] secret.request` 行に worker、secret の表示名、環境変数名、実行 command と引数、cwd、有効期限、socket path、request ID が出ます。全項目を確認した上で、オペレータ自身が管理する信頼済み credential source の stdin を `ensemble secret push` へ接続してください。
+
+```bash
+credential-source-command | ensemble secret push '<socket path>' '<request ID>'
+```
+
+`secret push` は `/dev/tty` に対象情報を再表示し、`y` の入力を受けるまで stdin を読みません。worker が渡した表示値は harness log と同じ terminal control / bidi escape を適用してから出すため、制御文字で項目順や画面表示を偽装できません。この操作が worker、secret の表示名、env 名、command / argv、cwd と、一回だけの投入を承認します。`y` 以外で断ると待機 request も消費し、worker の command は実行されません。もう一度試す場合は worker に新しい `secret exec` request を作らせてください。これは secret の投入に対する明示的な operator approval です。Bash command 自体には、既存 ACP backend の permission 処理も引き続き適用されます。TTY が使えない場合は失敗し、予約済み request を消費します。値を shell argument、Issue、PR、モデルへの指示、通常の shell variable や `SEC=$(...)` の出力へ置かないでください。
+
+この保証は push CLI が stdin を読む時点についてのものです。shell は pipeline を作るときに上流の `credential-source-command` も起動するため、TTY 承認より先に値を取得・出力したり、副作用を起こしたりする場合があります。承認前の起動や pipe buffer への出力を避ける必要がある source command は、この形で実行しないでください。上流 source の実行時期と副作用を理解し、信頼できるものだけを使ってください。
+
+入力は **空でない UTF-8、最大 64 KiB、NUL byte なし**に限ります。改行や末尾改行はそのまま保持し、trim しません。binary 値、NUL、空値、上限超過、期限切れ、不正 ID、二重投入、worker 切断時は command を実行しません。request は120秒で失効し、同じ worker の待機は同時に一件まで、session 全体では最大8件です。secret の投入後に起動確認が届かない場合は結果が不明です。その場合は再投入せず、target の状態を調べてください。起動前の失敗は固定の generic error として表示し、backend の例外本文は出しません。
+
+承認画面・stdin 読取中に SIGINT / SIGTERM で中断すると、CLI は予約を abort して待機 request を消費してから終了します。abort の応答を確認できない場合はその旨を表示し、request は最大120秒の期限切れまで残る可能性があります。submit を始めた後は安全に取り消せません。中断や接続切断で応答が得られない場合は「結果不明」と表示します。target がすでに起動している可能性があるため、再投入せず target の状態を確認してください。submit 開始後に起動確認を受け取れた場合は、その確認を優先して起動成功を表示します。
+
+この機能は macOS / Linux 上の組み込み `cursor` / `claude` / `codex` / `pi` ACP preset を対象にし、custom ACP と Windows / 他 OS では有効にしません。harness は Issue worker の ACP process に CLI と Node の絶対 path、worker token、owner-only Unix socket を設定します。Pi BYO / builtin はどちらも ACP process の environment から Pi CLI の child process へ継承します。Claude ACP / Codex ACP の現行 adapter も process environment を child に継承します。Cursor は外部 `agent acp` CLI の内部実装に依存します。Bash tool が helper 用 environment を引き継がない環境では helper は target を起動せず失敗します。`ensemble` が worker の Bash `PATH` にあることには依存しません。custom backend で動かすために環境を手動追加する設定はありません。
+
+対象は、利用者が環境変数で credential を受け取ると確認できる信頼済み command 一回分です。credential を argv / stdin で受け取る CLI、対話的なログイン、長時間または複数 command にまたがる credential 利用には使わず、それぞれの既存の認証経路を使ってください。特に command が credential を標準出力・標準エラーへ書くと worker の会話に漏れるため、その動作をしない target を選びます。
+
+### 選択肢と信頼境界
+
+| 方式 | secret の流れ | 向いている用途 / 残る制約 |
+|------|----------------|----------------------------|
+| `SEC=$(ensemble secret ...)` | 値が CLI stdout、shell command substitution と変数を通る | 採用しません。Bash tool の出力・trace・後続展開へ値が混ざり、モデルやログへ出る可能性があります。CLI が Bash 内にある保証にも依存します |
+| harness が各 Bash 呼び出しの env に直接注入 | 値を ACP backend ごとの Bash 起動時に注入 | 理想的ですが、現行 ACP API と `cursor` / `claude` / `codex` / `pi` の組み込み adapter に共通する per-command spawn hook がありません。adapter ごとの fork / hook が必要になり、現時点では実装できません |
+| `secret exec` helper | オペレータ stdin → harness の一時 IPC → helper process → 指定 target child の env | 上の例のように、固定 command 一回だけに secret を渡す用途。Bash runtime 自体へ値を返さず、absolute CLI path で backend Bash の PATH に依存しません。target とその子孫は値を読めます |
+
+socket directory / socket の mode は `0700` / `0600`、request ID と worker token はそれぞれ暗号学的乱数 256 bit です。ID は request を照会する locator であり、単独では人間の承認や OS 身元の証明になりません。request 作成時は per-worker token を検証し、label / env / command / argv / cwd をその request に固定します。Node の portable Unix socket API は peer PID / UID を検証しないため、同じ OS user の process は trust boundary 内です。同じ user の悪意ある process は socket に直接接続し、`secret push` の TTY 確認を経ずに任意値を submit して待機 command を起動したり、request を先取り・失効させたりできます。また worker は同一 user の権限で動くため、process environment / memory を調べて値を漏らす可能性があります。したがって `y` 確認は通常の operator workflow を守るゲートであり、同一 UID の敵対 process に対する認証ではありません。この機能は OS sandbox ではなく、そのような process から値や実行権限を隔離する保証はありません。
+
+secret byte 列を SessionResumeStore、SessionSummary、SessionLogEvent、Issue / PR、command argument へ保存・出力しません。session log には request metadata、socket path、request ID が出るため、session 中に収集した stderr / TUI capture は有効中の request へ接続可能な情報を含みます。harness は secret を JavaScript memory、IPC message、target environment に一時的に保持します。IPC の受信 fragment、連結前の application-owned Buffer、応答 body Buffer は、連結・close・timeout・error 時に best-effort で上書きします。socket から Node が渡す chunk、JSON parse が作る string、Node / OS 内部のコピーを完全消去する保証はありません。Buffer の上書きも OS process memory まで及ぶ保証ではありません。target program は secret を保存・出力・送信でき、target の stdout / stderr は worker の Bash 経由でモデルに見えることがあります。子孫 process は通常 target の environment を継承します。信頼できる target と credential source に限って使い、secret を表示しない target を選んでください。
+
 ### operator-agent
 
 複数の Issue session を TTY から監督する場合は `ensemble operator-agent` を使います。起動元 directory、repository の `.ensemble/`、generic team profile、`~/.ensemble/config.yaml` には依存せず、設定は `~/.ensemble/operator-agents.config.yaml`、選択 profile の workspace は `~/.ensemble/operator-agents/<profile>/` に置きます。operator-agent に `--repo-root` / `--config` はありません。`ensemble issue --repo-root` と `ensemble issue --config` は従来どおりです。

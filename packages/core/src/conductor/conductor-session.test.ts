@@ -49,6 +49,10 @@ import {
   SESSION_RESUME_STORE_VERSION,
   type SessionResumeStore,
 } from '../session/session-resume-store.js';
+import {
+  isOneTimeSecretPlatformSupported,
+  ONE_TIME_SECRET_ENV,
+} from '../session/one-time-secret-control.js';
 import { WorkerSession } from '../runtime/worker-session.js';
 import * as sessionResumeStoreModule from '../session/session-resume-store.js';
 import { loadSessionStateStore } from '../session/session-state-store.js';
@@ -1704,6 +1708,85 @@ describe('runConductorSession resume / shutdown', () => {
       expect(connectAcp).toHaveBeenCalledTimes(lazyWorkers ? 0 : 2);
     },
   );
+
+  it('keeps one-time secret helper credentials out of worker fingerprints and resume state', async () => {
+    if (!isOneTimeSecretPlatformSupported()) return;
+    stubUnusedControlServer();
+    vi.spyOn(acpBinModule, 'resolveBundledAcpBin')
+      .mockReturnValue(process.execPath);
+    mockSend.mockResolvedValue({
+      runId: 'run-one-time-secret-env',
+      status: 'finished',
+      result: 'done',
+    });
+
+    const config = {
+      ...DEFAULT_ENSEMBLE_CONFIG,
+      acp: { ...DEFAULT_ENSEMBLE_CONFIG.acp, defaultPreset: 'codex' as const },
+      session: { ...DEFAULT_ENSEMBLE_CONFIG.session, lazyWorkers: true },
+    };
+    let observedEnvironment: NodeJS.ProcessEnv | undefined;
+    let observedFingerprint: unknown;
+    const startWorkers = WorkerSession.prototype.startWorkers;
+    vi.spyOn(WorkerSession.prototype, 'startWorkers').mockImplementation(
+      function (this: WorkerSession) {
+        const options = (
+          this as unknown as {
+            options: {
+              workers: Array<{
+                spawn?: { env?: NodeJS.ProcessEnv };
+                acpFingerprint?: unknown;
+              }>;
+            };
+          }
+        ).options;
+        observedEnvironment = { ...options.workers[0]?.spawn?.env };
+        observedFingerprint = options.workers[0]?.acpFingerprint;
+        startWorkers.call(this);
+      },
+    );
+
+    const result = await runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: {
+        workers: [{ name: 'implementer', kind: 'implementer' }],
+      },
+      ensembleConfig: config,
+      defaultAcp: { config, env: {} },
+      secretCliEntrypoint: process.execPath,
+      workerWorktree: {
+        path: repoRoot,
+        branch: 'ensemble/issue-1',
+        issue: TEST_ISSUE,
+        inRepo: true,
+      },
+      permissionPipeline: new PermissionPipeline({}),
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: false,
+    });
+
+    expect(result.stopReason).toBe('completed');
+    expect(observedEnvironment).toMatchObject({
+      [ONE_TIME_SECRET_ENV.active]: '1',
+      [ONE_TIME_SECRET_ENV.worker]: 'implementer',
+      [ONE_TIME_SECRET_ENV.node]: process.execPath,
+      [ONE_TIME_SECRET_ENV.cli]: process.execPath,
+    });
+    expect(observedEnvironment?.[ONE_TIME_SECRET_ENV.socket]).toMatch(/^\/.+\/s\.sock$/);
+    const workerToken = observedEnvironment?.[ONE_TIME_SECRET_ENV.token];
+    expect(workerToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(JSON.stringify(observedFingerprint)).not.toContain(workerToken);
+
+    const resumeStore = await readFile(
+      sessionResumeStorePath({ repoRoot, conductorAgentId: result.agentId }),
+      'utf8',
+    );
+    expect(resumeStore).not.toContain(workerToken);
+    expect(resumeStore).not.toContain(ONE_TIME_SECRET_ENV.active);
+    expect(resumeStore).not.toContain(ONE_TIME_SECRET_ENV.socket);
+    expect(resumeStore).not.toContain('ens-secret-');
+  });
 
   it.each([undefined, 'reported-on-error'])(
     'returns model configuration when the failed conductor send reports %s',

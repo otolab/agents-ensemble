@@ -83,6 +83,20 @@ export interface HarnessWorkerStateEvent {
   state: WorkerHarnessState;
 }
 
+/** Operator-visible request metadata; this event never contains the submitted value. */
+export interface WorkerSecretRequestedEvent {
+  type: 'worker.secret.requested';
+  requestId: string;
+  socketPath: string;
+  workerName: string;
+  label: string;
+  envName: string;
+  command: string;
+  args: string[];
+  cwd: string;
+  expiresAt: number;
+}
+
 export interface HarnessSessionWorkersEvent {
   type: 'harness.session.workers';
   workers: Array<{ name: string; kind: string }>;
@@ -296,6 +310,7 @@ export type SessionLogEvent =
   | HarnessWorkerPromptFailedEvent
   | HarnessWorkerAcpUpdateEvent
   | HarnessWorkerStateEvent
+  | WorkerSecretRequestedEvent
   | HarnessSessionWorkersEvent
   | OperatorInputEvent
   | OperatorQueueChangedEvent

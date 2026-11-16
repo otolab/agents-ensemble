@@ -53,6 +53,7 @@ stderr 整形: core の SessionLogEvent representation（`packages/core/src/repr
 | `harness.worktree.remove_skipped` | post-loop `/exit` の isolated worktree cleanup で未コミット変更あり等により削除拒否 | `[harness] worktree.remove_skipped path=... branch=... reason=dirty` に加え、利用者向け `[worktree] ⚠️` warning（TTY 活動ログ / 非 TTY stderr） | なし |
 | `harness.worktree.remove_failed` | post-loop `/exit` の isolated worktree cleanup で `git worktree remove` の限定リトライ後も失敗 | `[harness] worktree.remove_failed path=... branch=... error=...` に加え、利用者向け `[worktree] ⚠️` warning（TTY 活動ログ / 非 TTY stderr） | なし |
 | `operator.input` | オペレータ発話をキューに受理したとき | verbose 時のみ `[harness] operator.input delivery=idle\|next\|interrupt turn=N bytes=...` | なし |
+| `worker.secret.requested` | worker の `secret exec` が一回限りの値を待ち始めたとき | `[harness] secret.request worker=... label=... env=... command=... cwd=... expiresIn=... socket=... request=...` | なし。secret 値は含めない。request ID / socket path は有効中の接続情報として capture log に残る |
 | `operator.queue.changed` | waiter から operator message をキューに戻したとき | TUI のキューを更新 | なし |
 | `operator.dispatched` | operator message を conductor へ dispatch するとき | TUI 活動ログに本文を表示 | なし |
 | `conductor.inbound` | harness が `agent.send` へ渡す trigger 束を確定した直前 | `[harness] conductor.deliver triggers=N sources=...` | なし |

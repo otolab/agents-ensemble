@@ -319,6 +319,7 @@ export type {
   PermissionPendingConductorPayload,
   PermissionPendingHarnessPayload,
   PermissionCleanupEvent,
+  WorkerSecretRequestedEvent,
   WorkerPromptLifecycleSource,
 } from './session/events/index.js';
 
