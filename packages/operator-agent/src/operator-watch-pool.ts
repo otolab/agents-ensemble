@@ -967,23 +967,14 @@ export async function createOperatorWatchPool(
         ),
       );
       if (acknowledged.size === 0) return;
-      try {
-        await withStateLock(async () => {
-          const remaining = state.pendingReports.filter(
-            (report) => !acknowledged.has(report.reportId),
-          );
-          if (remaining.length === state.pendingReports.length) return;
-          state.pendingReports = remaining;
-          await persist();
-        });
-      } catch (error) {
-        for (const event of events) {
-          if (event.type === 'report') {
-            options.dispatchQueue.requeue(event, 5_000);
-          }
-        }
-        throw error;
-      }
+      await withStateLock(async () => {
+        const remaining = state.pendingReports.filter(
+          (report) => !acknowledged.has(report.reportId),
+        );
+        if (remaining.length === state.pendingReports.length) return;
+        state.pendingReports = remaining;
+        await persist();
+      });
       options.dispatchQueue.discardQueuedReports?.([...acknowledged]);
     },
     close() {

@@ -1788,7 +1788,9 @@ describe('operator watch pool', () => {
       }
       expect((await stateOnDisk()).pendingReports.map((report) => report.reportId))
         .toEqual(persistedIds);
-      expect(peerQueue.pendingEventCount).toBe(3);
+      // The completed send is still in-flight locally. The pool does not put
+      // it back on the normal dispatch queue, which would send it again.
+      expect(peerQueue.pendingEventCount).toBe(0);
       await peerPool.refreshPendingReports?.();
       expect(
         peerQueue.takeBatch(
@@ -1797,15 +1799,10 @@ describe('operator watch pool', () => {
         ),
       ).toBeUndefined();
 
-      const ackRetry = peerQueue.takeBatch(
-        { continuationConsumed: false },
-        Date.now() + 6_000,
-      )!;
-      expect(ackRetry.events.map((event) =>
-        event.type === 'report' ? event.reportId : undefined,
-      )).toEqual(persistedIds);
-      await peerPool.acknowledge(ackRetry.events);
-      await peerPool.acknowledge(ackRetry.events);
+      // Retry the same ack after the profile lock is released. It is
+      // idempotent and removes the durable report without another send.
+      await peerPool.acknowledge(retry.events);
+      await peerPool.acknowledge(retry.events);
       expect(peerQueue.pendingEventCount).toBe(0);
       expect((await stateOnDisk()).pendingReports).toEqual([]);
     } finally {

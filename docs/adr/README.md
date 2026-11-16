@@ -153,6 +153,7 @@ ADR は**合意された設計判断の履歴**を残すもの。一度 `accepte
 | [0079](0079-operator-watch-state-serialization.md) | operator-agent watch state の process 間直列化 | superseded in part → [0080](0080-operator-watch-state-lock-transaction.md)（lock lease と stale takeover の扱い） |
 | [0080](0080-operator-watch-state-lock-transaction.md) | operator-agent watch state を SQLite transaction lock で保護 | accepted |
 | [0081](0081-operator-watch-pending-report-handoff.md) | operator-agent の pending report を稼働中 peer へ引き渡す | accepted |
+| [0082](0082-operator-watch-acknowledgement-retry.md) | operator-agent の watch report ack を send retry から分離 | accepted |
 
 ## 追加するとき
 
