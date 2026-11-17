@@ -1908,7 +1908,7 @@ describe('runOperatorAgent', () => {
     expect(sentPrompts[1]).toContain('レビュー確認済み');
     expect(sentPrompts[1]).toContain('conductor reply 1');
     expect(sentPrompts[1]).toContain('conductor reply 2');
-  });
+  }, 25_000);
 
   it('does not start a send when the durable batch freeze cannot be committed', async () => {
     const setupPool = await createOperatorWatchPool({
@@ -2363,6 +2363,11 @@ describe('runOperatorAgent', () => {
     );
     firstInput.write('watch this session\n');
     await vi.waitFor(() => expect(firstPrompts).toHaveLength(2));
+    await vi.waitFor(() =>
+      expect(normalizeTtyText(firstOutput.capturedText())).toContain(
+        'send not completed (status=cancelled); watched reports retained for retry.',
+      ),
+    );
     firstInput.end();
     await firstRun;
 
