@@ -3940,7 +3940,7 @@ describe('operator watch pool', () => {
     try {
       await pool.register('watch-message-window', {
         pollIntervalMs: 60_000,
-        debounceMs: 0,
+        debounceMs: 1_000,
       });
       expect(await pool.pollOnce('watch-message-window')).toBe(1);
       expect(dispatchQueue.heldEventCount).toBe(1);
@@ -3964,6 +3964,70 @@ describe('operator watch pool', () => {
           releaseAt + 3_000,
         )?.events[0]?.text,
       ).toContain('waiting for review');
+    } finally {
+      now.mockRestore();
+      pool.close();
+    }
+  });
+
+  it('retains a ready held watch batch after message append and restart', async () => {
+    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-ready-replay-'));
+    await mkdir(join(repoRoot, '.ensemble', 'sessions'), { recursive: true });
+    let messages: Array<{ text: string; inbound: string; at: number; sendCount: number; dispatchSource: string }> = [];
+    const server = await startOpenQuestionControlServer({
+      listOpenQuestions: () => [],
+      observeSession: async () => ({
+        sequence: 1,
+        openQuestions: [],
+        sessionState: { current: { statusLine: 'watch first', reportedAt: 1 }, history: [] },
+      }),
+      listConductorMessages: () => messages,
+      answerOpenQuestion: async () => { throw new Error('unused'); },
+    });
+    closeServers.push(() => server.close());
+    await writeResumeStore('ready-replay', 1, server.socketPath);
+    const queue = createOperatorDispatchQueue();
+    queue.setHold(true);
+    queue.setConversationHold(true);
+    const pool = await createOperatorWatchPool({ repoRoot, dispatchQueue: queue });
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_000);
+    try {
+      await pool.registerConductorMessageListen('ready-replay', { messageDebounceMs: 10_000 });
+      await pool.register('ready-replay', { pollIntervalMs: 60_000, debounceMs: 0 });
+      expect(await pool.pollOnce('ready-replay')).toBe(1);
+      now.mockReturnValue(12_000);
+      messages = [{ text: 'message later', inbound: 'input', at: 12_000, sendCount: 1, dispatchSource: 'operator' }];
+      expect(await pool.pollConductorMessagesOnce('ready-replay')).toBe(1);
+      queue.setHold(false);
+      expect(queue.selectBatch({ continuationConsumed: false })).toBeUndefined();
+      queue.setConversationHold(false);
+      const batch = queue.selectBatch({ continuationConsumed: false })!;
+      expect(batch.events.map((event) => event.type === 'report' ? event.reportType : 'user'))
+        .toEqual(['session_state', 'conductor_message']);
+      expect(batch.events[0]).toMatchObject({ batchReadyAt: 11_000 });
+
+      pool.close();
+      const replayQueue = createOperatorDispatchQueue();
+      const replayPool = await createOperatorWatchPool({ repoRoot, dispatchQueue: replayQueue });
+      try {
+        const replay = replayQueue.selectBatch({ continuationConsumed: false })!;
+        expect(replay.events.map((event) => event.type === 'report' ? event.reportType : 'user'))
+          .toEqual(['session_state', 'conductor_message']);
+        expect(replay.events[0]).toMatchObject({ batchReadyAt: 11_000 });
+        expect(await replayPool.commitBatch(replay)).toBe(true);
+        await replayPool.recordRetry!(replay.events, 17_000);
+      } finally {
+        replayPool.close();
+      }
+      const retryQueue = createOperatorDispatchQueue();
+      const retryPool = await createOperatorWatchPool({ repoRoot, dispatchQueue: retryQueue });
+      try {
+        expect(retryQueue.selectBatch({ continuationConsumed: false }, 16_999)).toBeUndefined();
+        expect(retryQueue.selectBatch({ continuationConsumed: false }, 17_000)?.events)
+          .toHaveLength(2);
+      } finally {
+        retryPool.close();
+      }
     } finally {
       now.mockRestore();
       pool.close();

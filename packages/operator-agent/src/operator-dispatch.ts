@@ -28,6 +28,7 @@ export type OperatorDispatchEvent =
       arrivalOrder?: number;
       firstQueuedAt?: number;
       eligibleAt?: number;
+      batchReadyAt?: number;
       retryReadyAt?: number;
       frozenBatchId?: string;
       frozenPayload?: string;
@@ -121,6 +122,7 @@ export interface OperatorDispatchQueue {
   readonly reportHold: boolean;
   readonly hold: boolean;
   readonly focusSessionId: string | undefined;
+  readonly batchMaxWaitMs: number;
 }
 
 export function operatorEventSourceKey(event: OperatorDispatchEvent): string {
@@ -192,6 +194,7 @@ export function selectOperatorDispatchBatch(
           ),
         )
       : Math.min(
+          ...events.map((event) => event.batchReadyAt ?? Infinity),
           Math.max(...events.map((event) => event.readyAt)),
           Math.min(
             ...events.map(
@@ -511,6 +514,27 @@ export function createOperatorDispatchQueue(
   const orderReports = (
     reports: Extract<OperatorDispatchEvent, { type: 'report' }>[],
   ) => reports.sort(compareDispatchEvents);
+  const latchReadyBeforeUpdate = (sourceKeys: Set<string>, now: number) => {
+    for (const sourceKey of sourceKeys) {
+      const reports = orderReports(
+        [...pending, ...held].filter(
+          (event): event is Extract<OperatorDispatchEvent, { type: 'report' }> =>
+            event.type === 'report' &&
+            !event.frozenBatchId &&
+            operatorEventSourceKey(event) === sourceKey,
+        ),
+      );
+      const first = reports[0];
+      if (!first) continue;
+      const readyAt = Math.min(
+        ...reports.map((event) => event.batchReadyAt ?? Infinity),
+        Math.max(...reports.map((event) => event.readyAt)),
+        Math.min(...reports.map((event) =>
+          (event.firstQueuedAt ?? event.readyAt) + scheduling.batchMaxWaitMs)),
+      );
+      if (readyAt <= now) readyHeads.add(first);
+    }
+  };
   const updateHold = (
     previousHold: boolean,
   ): { heldEventCount: number; releasedEventCount: number } => {
@@ -568,6 +592,7 @@ export function createOperatorDispatchQueue(
     enqueueReports(events, debounceMs) {
       if (events.length === 0) return;
       const now = Date.now();
+      latchReadyBeforeUpdate(new Set(events.map(reportSourceKey)), now);
       const readyAt = now + Math.max(0, debounceMs);
       let added = false;
       for (const event of events) {
@@ -601,6 +626,7 @@ export function createOperatorDispatchQueue(
       const now = Date.now();
       const readyAt = now + Math.max(0, debounceMs);
       const sourceKeys = new Set(events.map(reportSourceKey));
+      latchReadyBeforeUpdate(sourceKeys, now);
       let changed = false;
       for (const event of pending) {
         if (
@@ -687,6 +713,7 @@ export function createOperatorDispatchQueue(
             queued.arrivalOrder !== persisted.event.arrivalOrder ||
             queued.firstQueuedAt !== persisted.event.firstQueuedAt ||
             queued.eligibleAt !== persisted.event.eligibleAt ||
+            queued.batchReadyAt !== persisted.event.batchReadyAt ||
             queued.priority !== persisted.event.priority ||
             queued.frozenBatchId !== persisted.event.frozenBatchId ||
             queued.frozenPayload !== persisted.event.frozenPayload ||
@@ -720,6 +747,7 @@ export function createOperatorDispatchQueue(
     },
     deferWatchReports(conductorAgentId, debounceMs) {
       const readyAt = Date.now() + Math.max(0, debounceMs);
+      latchReadyBeforeUpdate(new Set([`session:${conductorAgentId}`]), Date.now());
       for (const event of [...pending, ...held]) {
         if (
           event.type === 'report' &&
@@ -985,6 +1013,7 @@ export function createOperatorDispatchQueue(
               ),
             )
           : Math.min(
+              ...batch.map((event) => event.batchReadyAt ?? Infinity),
               Math.max(...batch.map((event) => event.readyAt)),
               Math.min(
                 ...batch.map(
@@ -1049,6 +1078,9 @@ export function createOperatorDispatchQueue(
     get focusSessionId() {
       clearExpiredFocus(Date.now());
       return focusSessionId;
+    },
+    get batchMaxWaitMs() {
+      return scheduling.batchMaxWaitMs;
     },
   };
 }

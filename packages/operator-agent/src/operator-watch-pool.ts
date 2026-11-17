@@ -161,6 +161,7 @@ interface OperatorWatchState {
     firstQueuedAt: number;
     priority: 'open_question' | 'normal' | 'idle';
     eligibleAt?: number;
+    batchReadyAt?: number;
     retryReadyAt?: number;
     frozenBatchId?: string;
     frozenPayload?: string;
@@ -456,11 +457,27 @@ export async function createOperatorWatchPool(
       repositoryState,
     );
   };
+  const retainReadyBatch = (conductorAgentId: string, now: number) => {
+    const reports = state.pendingReports
+      .filter((report) =>
+        report.conductorAgentId === conductorAgentId && !report.frozenBatchId)
+      .sort((left, right) => left.arrivalOrder - right.arrivalOrder);
+    if (reports.length === 0) return;
+    const readyAt = Math.min(
+      ...reports.map((report) => report.batchReadyAt ?? Infinity),
+      Math.max(...reports.map((report) => report.readyAt)),
+      Math.min(...reports.map((report) =>
+        report.firstQueuedAt + options.dispatchQueue.batchMaxWaitMs)),
+    );
+    if (readyAt <= now) reports[0]!.batchReadyAt = readyAt;
+  };
   const deferWatchPendingReports = (
     conductorAgentId: string,
     debounceMs: number,
   ) => {
-    const readyAt = Date.now() + Math.max(0, debounceMs);
+    const now = Date.now();
+    retainReadyBatch(conductorAgentId, now);
+    const readyAt = now + Math.max(0, debounceMs);
     for (const report of state.pendingReports) {
       if (
         report.conductorAgentId === conductorAgentId &&
@@ -1537,7 +1554,10 @@ export async function createOperatorWatchPool(
                 : 'normal' as const,
           }));
           const cursorChanged = hash(previous ?? null) !== hash(next);
-          if (reports.length > 0) state.pendingReports.push(...reports);
+          if (reports.length > 0) {
+            retainReadyBatch(id, queuedAt);
+            state.pendingReports.push(...reports);
+          }
           state.cursors[id] = next;
           if (reports.length > 0 || cursorChanged) await persist();
           return reports.length;
@@ -1652,6 +1672,7 @@ export async function createOperatorWatchPool(
           );
           state.messageCursors[id] = nextCursor;
           if (reports.length > 0) {
+            retainReadyBatch(id, queuedAt);
             for (const pending of state.pendingReports) {
               if (
                 pending.conductorAgentId === id &&
@@ -1703,6 +1724,7 @@ export async function createOperatorWatchPool(
       const reportId = randomUUID();
       await withStateLock(async (nextArrivalOrder) => {
         const queuedAt = Date.now();
+        retainReadyBatch(conductorAgentId, queuedAt);
         state.pendingReports.push({
           reportId,
           reportType: 'idle_candidate',
@@ -2995,6 +3017,7 @@ async function loadWatchState(path: string): Promise<OperatorWatchState> {
         'arrivalOrder',
         'firstQueuedAt',
         'eligibleAt',
+        'batchReadyAt',
         'retryReadyAt',
       ] as const) {
         const timestamp = report[field];
