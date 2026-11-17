@@ -286,3 +286,52 @@ describe('resize while shutdown is waiting', () => {
     } finally { if (!stopped) await host.dispose(); terminal.dispose(); stdin.destroy(); stdout.destroy(); }
   });
 });
+
+it('finishes shutdown while resize continues and retains the final activity', async () => {
+  const terminal = new Terminal({ cols: 40, rows: 12, scrollback: 1000, allowProposedApi: true, convertEol: true });
+  const stdin = Object.assign(new PassThrough(), { isTTY: true, setRawMode: vi.fn(), ref: vi.fn(), unref: vi.fn() });
+  const stdout = Object.assign(new PassThrough(), { isTTY: true, columns: 40, rows: 12 });
+  let output = '';
+  stdout.on('data', (chunk: Buffer) => { output += chunk.toString(); terminal.write(chunk); });
+  const host = createOperatorAgentTuiHost({ stdin, stdout, colorEnabled: false, onSubmit: vi.fn(), onInterrupt: vi.fn() });
+  const history = () => Array.from({ length: terminal.buffer.active.length }, (_, i) => terminal.buffer.active.getLine(i)?.translateToString(true) ?? '').join('\n');
+  let resizeInterval: ReturnType<typeof setInterval> | undefined;
+  let shutdownTimeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await vi.waitFor(() => expect(history()).toContain('user>'));
+    host.appendChannel('harness', 'LOG-A');
+    await vi.waitFor(() => expect(history()).toContain('LOG-A'));
+    stdin.write('draft-XYZ');
+    await vi.waitFor(() => expect(history()).toContain('draft-XYZ'));
+    stdout.columns = 30; stdout.rows = 10; terminal.resize(30, 10); stdout.emit('resize');
+    host.appendChannel('observation', 'LOG-B');
+    const started = Date.now();
+    const stopped = host.dispose();
+    let index = 0;
+    resizeInterval = setInterval(() => {
+      const width = 30 + (++index % 2);
+      stdout.columns = width; terminal.resize(width, 10); stdout.emit('resize');
+    }, 50);
+    await Promise.race([
+      stopped,
+      new Promise<never>((_, reject) => { shutdownTimeout = setTimeout(() => reject(new Error('shutdown did not finish')), 1800); }),
+    ]);
+    clearTimeout(shutdownTimeout); shutdownTimeout = undefined;
+    expect(Date.now() - started).toBeLessThan(1800);
+    clearInterval(resizeInterval); resizeInterval = undefined;
+    await new Promise<void>((resolve) => terminal.write('', resolve));
+    const result = history();
+    expect(result.split('LOG-A')).toHaveLength(2);
+    expect(result.split('LOG-B')).toHaveLength(2);
+    expect(result.indexOf('LOG-A')).toBeLessThan(result.indexOf('LOG-B'));
+    expect(result.split('draft-XYZ')).toHaveLength(2);
+    expect(result.split('user>')).toHaveLength(2);
+    expect(stdin.setRawMode).toHaveBeenLastCalledWith(false);
+    expect(output.lastIndexOf('\u001b[?25h')).toBeGreaterThan(output.lastIndexOf('\u001b[?25l'));
+    expect(stdout.listenerCount('resize')).toBe(0);
+  } finally {
+    if (resizeInterval) clearInterval(resizeInterval);
+    if (shutdownTimeout) clearTimeout(shutdownTimeout);
+    terminal.dispose(); stdin.destroy(); stdout.destroy();
+  }
+});

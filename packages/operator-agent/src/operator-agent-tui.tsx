@@ -153,6 +153,7 @@ class OperatorAgentTuiModel {
 const ANSI_RED = '\u001b[31m';
 const MAX_INPUT_DISPLAY_LINES = 6;
 const RESIZE_SETTLE_MS = 150;
+const SHUTDOWN_RESIZE_LIMIT_MS = 1_000;
 
 function OperatorAgentTui({
   model,
@@ -311,12 +312,15 @@ export function createOperatorAgentTuiHost(
   // Move the initial compact frame to the bottom; subsequent Static output
   // scrolls the terminal naturally and remains visible above the input.
   options.stdout.write('\n'.repeat(Math.max(0, size.rows - 3)));
-  const ink = render(
+  const frame = (
     <OperatorAgentTui
       model={model}
       onSubmit={options.onSubmit}
       onInterrupt={options.onInterrupt}
-    />,
+    />
+  );
+  const ink = render(
+    frame,
     {
       stdin: options.stdin as NodeJS.ReadStream,
       stdout: options.stdout as NodeJS.WriteStream,
@@ -368,20 +372,37 @@ export function createOperatorAgentTuiHost(
         clearTimeout(resizeTimer);
         resizeTimer = undefined;
       }
+      const deadline = performance.now() + SHUTDOWN_RESIZE_LIMIT_MS;
       try {
-        // Keep listening until the last resize has settled and its replay has
-        // flushed. A new resize while waiting restarts the recovery.
-        while (true) {
+        // Prefer a settled final frame, but never delay terminal restoration
+        // indefinitely when the terminal keeps resizing.
+        while (performance.now() < deadline) {
           if (recoveryNeeded) {
             const revision = resizeRevision;
-            await new Promise<void>((resolve) => setTimeout(resolve, RESIZE_SETTLE_MS));
+            const remaining = deadline - performance.now();
+            await new Promise<void>((resolve) => setTimeout(resolve, Math.min(RESIZE_SETTLE_MS, remaining)));
+            if (performance.now() >= deadline) break;
             if (revision !== resizeRevision) continue;
             recoverResize();
           }
           const revision = resizeRevision;
-          await ink.waitUntilRenderFlush();
-          if (revision === resizeRevision) break;
+          let timeout: ReturnType<typeof setTimeout> | undefined;
+          const flushed = await Promise.race([
+            ink.waitUntilRenderFlush().then(() => true),
+            new Promise<false>((resolve) => {
+              timeout = setTimeout(() => resolve(false), Math.max(0, deadline - performance.now()));
+            }),
+          ]);
+          if (timeout) clearTimeout(timeout);
+          if (!flushed) break;
+          if (revision === resizeRevision) return;
         }
+        // At the deadline, replay once at the last observed size. Further
+        // terminal resizes can reflow this final frame after restoration.
+        const size = readTerminalSize(options.stdout);
+        model.setTerminalSize(size.columns, size.rows);
+        recoverResize();
+        ink.rerender(frame);
       } finally {
         options.stdout.off('resize', handleResize);
         ink.unmount();
