@@ -108,6 +108,7 @@ export interface OperatorDispatchQueue {
     now?: number,
   ): OperatorDispatchBatch | undefined;
   commitBatch(batch: OperatorDispatchBatch): boolean;
+  rollbackBatchCommit(batch: OperatorDispatchBatch): void;
   takeBatch(state: OperatorDispatchState, now?: number): OperatorDispatchBatch | undefined;
   nextReadyAt(): number | undefined;
   waitForChange(timeoutMs?: number): Promise<void>;
@@ -474,6 +475,8 @@ export function createOperatorDispatchQueue(
   let reportHold = false;
   let focusSessionId: string | undefined;
   let focusLastInputAt: number | undefined;
+  let lastOperatorInputAt: number | undefined;
+  let firstFocusActivationAt: number | undefined;
   const isHeld = () => conversationHold || reportHold;
   const hasReport = (reportId: string) =>
     inFlightReportIds.has(reportId) ||
@@ -555,18 +558,22 @@ export function createOperatorDispatchQueue(
       const readyAt = now + Math.max(0, debounceMs);
       let added = false;
       for (const event of events) {
+        const priority =
+          event.priority ??
+          (event.reportType === 'idle_candidate'
+            ? 'idle'
+            : event.reportType === 'open_question'
+              ? 'open_question'
+              : 'normal');
         if (event.reportId && hasReport(event.reportId)) continue;
         const next = {
           ...event,
-          priority:
-            event.priority ??
-            (event.reportType === 'idle_candidate'
-              ? 'idle'
-              : event.reportType === 'open_question'
-                ? 'open_question'
-                : 'normal'),
+          priority,
           arrivalOrder: event.arrivalOrder ?? arrival,
           firstQueuedAt: event.firstQueuedAt ?? now,
+          ...(priority === 'idle'
+            ? { eligibleAt: now }
+            : {}),
           arrival: arrival++,
           readyAt,
         };
@@ -602,19 +609,23 @@ export function createOperatorDispatchQueue(
         }
       }
       for (const event of events) {
+        const priority =
+          event.priority ??
+          (event.reportType === 'idle_candidate'
+            ? 'idle'
+            : event.reportType === 'open_question'
+              ? 'open_question'
+              : 'normal');
         if (event.reportId && hasReport(event.reportId)) continue;
         const sourceKey = reportSourceKey(event);
         const next = {
           ...event,
-          priority:
-            event.priority ??
-            (event.reportType === 'idle_candidate'
-              ? 'idle'
-              : event.reportType === 'open_question'
-                ? 'open_question'
-                : 'normal'),
+          priority,
           arrivalOrder: event.arrivalOrder ?? arrival,
           firstQueuedAt: event.firstQueuedAt ?? now,
+          ...(priority === 'idle'
+            ? { eligibleAt: now }
+            : {}),
           arrival: arrival++,
           readyAt,
         };
@@ -779,11 +790,21 @@ export function createOperatorDispatchQueue(
       const previous = focusSessionId;
       const normalized = conductorAgentId?.trim();
       focusSessionId = normalized || undefined;
-      focusLastInputAt = focusSessionId ? now : undefined;
+      if (!focusSessionId) {
+        focusLastInputAt = undefined;
+      } else if (!previous) {
+        // The TTY input handler records its human input before applying the
+        // focus command. Tool calls can activate or switch focus, but cannot
+        // move an existing human-input deadline forward. If no human input
+        // has been observed, seed a one-time fallback from first activation.
+        firstFocusActivationAt ??= now;
+        focusLastInputAt = lastOperatorInputAt ?? firstFocusActivationAt;
+      }
       notify();
       return previous;
     },
     noteOperatorInput(now = Date.now()) {
+      lastOperatorInputAt = now;
       if (!focusSessionId) return;
       focusLastInputAt = now;
       notify();
@@ -859,6 +880,22 @@ export function createOperatorDispatchQueue(
       }
       notify();
       return true;
+    },
+    rollbackBatchCommit(batch) {
+      if (batch.sourceKey === 'user') return;
+      for (const event of batch.events) {
+        if (event.type !== 'report') continue;
+        if (event.reportId) inFlightReportIds.delete(event.reportId);
+        if (batch.batchId && event.frozenBatchId === batch.batchId) {
+          delete event.frozenBatchId;
+          delete event.frozenPayload;
+        }
+        if (!pending.includes(event)) pending.push(event);
+      }
+      pending.sort(compareDispatchEvents);
+      delete batch.batchId;
+      delete batch.payload;
+      notify();
     },
     takeBatch(state, now = Date.now()) {
       const batch = this.selectBatch(state, now);

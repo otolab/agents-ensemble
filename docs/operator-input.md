@@ -146,7 +146,7 @@ focus は既定で off です。TTY では `/focus <conductorAgentId>` で対象
 
 focus は「今、認知リソースを割いて解決する対象」を示す短期の操作です。focus 対象との対話ターンを終え、その session が Open Question など人間応答待ちに入るときは、focus を手動で切り替えるか解除してください。live Open Question を観測しただけでは自動解除しません。また、一般的な worker wait や長時間処理を推測して自動解除することもありません。
 
-focus は最後の operator / user 入力から10分の sliding inactivity timeout を持ちます。人間が入力するたびに時計が更新され、worker report や watch update などの自動イベントでは更新されません。この timeout は手動解除を忘れた場合の failsafe です。既定10分は調整可能で、初期設定範囲は3〜30分です。focus は再起動後 off になります。scheduler の値と profile override は [`operator-agents.config.yaml` の scheduler 設定](config.md#operator-agent-専用設定) を参照してください。
+focus は最後の operator / user 入力から10分の sliding inactivity timeout を持ちます。TTYで `/focus` を入力したときなど、人間の入力を operator-agent が受け取るたびに時計が更新されます。`set_session_focus` のtool invocation、worker report、watch update などの自動イベントでは更新されません。この timeout は手動解除を忘れた場合の failsafe です。既定10分は調整可能で、初期設定範囲は3〜30分です。focus は再起動後 off になります。scheduler の値と profile override は [`operator-agents.config.yaml` の scheduler 設定](config.md#operator-agent-専用設定) を参照してください。
 
 同一 session の report は到着順を保ち、一つの batch / send にまとめます。Open Question は同一 session 内の先行 report を追い越しません。session 間では TTY input の後、focus 中なら focus session、focus が off なら Open Question を含む session、直前 session の一回限りの continuation、通常 FIFO の順で選びます。ready 化した batch は agent send の期限を保証せず、hold・停止・優先通知などで待つ場合があります。
 

@@ -198,9 +198,10 @@ export interface OperatorWatchPool {
   enqueueIdleCandidate?(input: {
     conductorAgentId: string;
     text: string;
+    /** Requested by the producer; the pool records its actual admission time instead. */
     eligibleAt: number;
   }): Promise<string>;
-  persistCommittedBatch?(batch: OperatorDispatchBatch): Promise<void>;
+  commitBatch(batch: OperatorDispatchBatch): Promise<boolean>;
   recordRetry?(
     events: readonly OperatorDispatchEvent[],
     retryReadyAt: number,
@@ -1705,39 +1706,76 @@ export async function createOperatorWatchPool(
           arrivalOrder: nextArrivalOrder(),
           firstQueuedAt: queuedAt,
           priority: 'idle',
-          eligibleAt: input.eligibleAt,
+          // Eligibility begins when this process can actually admit the
+          // candidate to the shared scheduler, after acquiring the profile
+          // state lock. A caller-supplied timestamp must not age it while it
+          // waits outside the scheduler.
+          eligibleAt: queuedAt,
         });
         await persist();
       });
       return reportId;
     },
-    async persistCommittedBatch(batch) {
+    async commitBatch(batch) {
+      const alreadyFrozen = batch.batchId !== undefined;
+      if (!options.dispatchQueue.commitBatch(batch)) return false;
+
       const reports = batch.events.filter(
         (event): event is Extract<OperatorDispatchEvent, { type: 'report' }> =>
           event.type === 'report' && event.reportId !== undefined,
       );
-      if (reports.length === 0) return;
+      if (reports.length === 0 || alreadyFrozen) return true;
       if (!batch.batchId || !batch.payload) {
+        options.dispatchQueue.rollbackBatchCommit(batch);
         throw new Error('A committed report batch must have a frozen id and payload.');
       }
-      await withStateLock(async () => {
-        const reportsById = new Map(
-          state.pendingReports.map((report) => [report.reportId, report]),
-        );
-        for (const event of reports) {
-          const stored = reportsById.get(event.reportId!);
-          if (!stored) continue;
-          stored.arrivalOrder = event.arrivalOrder ?? stored.arrivalOrder;
-          stored.firstQueuedAt = event.firstQueuedAt ?? stored.firstQueuedAt;
-          stored.readyAt = event.readyAt;
-          stored.priority = event.priority ?? stored.priority;
-          stored.eligibleAt = event.eligibleAt ?? stored.eligibleAt;
-          stored.frozenBatchId = batch.batchId;
-          stored.frozenPayload = batch.payload;
-          delete stored.retryReadyAt;
-        }
-        await persist();
-      });
+
+      try {
+        // The dispatch queue freezes its local membership synchronously above,
+        // before this method first awaits the durable profile lock. No
+        // same-session report arriving during lock wait can join this payload.
+        await withStateLock(async () => {
+          const reportsById = new Map(
+            state.pendingReports.map((report) => [report.reportId, report]),
+          );
+          const previous = new Map<
+            string,
+            (typeof state.pendingReports)[number]
+          >();
+          try {
+            for (const event of reports) {
+              const stored = reportsById.get(event.reportId!);
+              if (!stored) {
+                throw new Error(
+                  `Pending report ${event.reportId} disappeared before its batch could be frozen.`,
+                );
+              }
+              previous.set(event.reportId!, { ...stored });
+              stored.arrivalOrder = event.arrivalOrder ?? stored.arrivalOrder;
+              stored.firstQueuedAt = event.firstQueuedAt ?? stored.firstQueuedAt;
+              stored.readyAt = event.readyAt;
+              stored.priority = event.priority ?? stored.priority;
+              stored.eligibleAt = event.eligibleAt ?? stored.eligibleAt;
+              stored.frozenBatchId = batch.batchId;
+              stored.frozenPayload = batch.payload;
+              delete stored.retryReadyAt;
+            }
+            await persist();
+          } catch (error) {
+            for (const [reportId, snapshot] of previous) {
+              const stored = reportsById.get(reportId);
+              if (stored) Object.assign(stored, snapshot);
+            }
+            throw error;
+          }
+        });
+      } catch (error) {
+        // Persistence failed before send. Restore the captured local members
+        // so a later attempt can commit them again without losing IDs.
+        options.dispatchQueue.rollbackBatchCommit(batch);
+        throw error;
+      }
+      return true;
     },
     async recordRetry(events, retryReadyAt) {
       const reports = events.filter(

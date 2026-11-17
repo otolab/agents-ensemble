@@ -990,6 +990,47 @@ describe('operator dispatch batching', () => {
     }
   });
 
+  it('restores a captured batch after durable commit failure without losing arrival order', () => {
+    const queue = createOperatorDispatchQueue();
+    queue.enqueueReport(
+      {
+        type: 'report',
+        reportType: 'session_state',
+        reportId: 'first',
+        conductorAgentId: 'one',
+        issueUrl: 'https://github.com/example/repo/issues/1',
+        text: 'first',
+      },
+      0,
+    );
+    const batch = queue.selectBatch({ continuationConsumed: false })!;
+    expect(queue.commitBatch(batch)).toBe(true);
+
+    queue.enqueueReport(
+      {
+        type: 'report',
+        reportType: 'open_question',
+        reportId: 'arrived-during-persist',
+        conductorAgentId: 'one',
+        issueUrl: 'https://github.com/example/repo/issues/1',
+        text: 'later arrival',
+      },
+      0,
+    );
+    queue.rollbackBatchCommit(batch);
+
+    expect(batch.batchId).toBeUndefined();
+    expect(batch.payload).toBeUndefined();
+    expect(queue.pendingEventCount).toBe(2);
+    const retry = queue.selectBatch({ continuationConsumed: false })!;
+    expect(retry.events.map((event) =>
+      event.type === 'report' ? event.reportId : undefined,
+    )).toEqual(['first', 'arrived-during-persist']);
+    expect(retry.events.every(
+      (event) => event.type !== 'report' || event.frozenBatchId === undefined,
+    )).toBe(true);
+  });
+
   it('keeps a frozen batch ahead of later reports on retry and after ack', () => {
     const now = vi.spyOn(Date, 'now').mockReturnValue(1_000);
     const queue = createOperatorDispatchQueue();
@@ -1136,6 +1177,9 @@ describe('operator dispatch batching', () => {
       queue.setFocus('focus', 1_000);
       queue.noteOperatorInput(5_000);
       now.mockReturnValue(8_000);
+      // A tool invocation may set the same focus, but it is not a human input
+      // event and therefore must not move the sliding deadline.
+      queue.setFocus('focus', 8_000);
       queue.enqueueReport(
         {
           type: 'report',
@@ -1154,6 +1198,83 @@ describe('operator dispatch batching', () => {
         queue.selectBatch({ continuationConsumed: false }, 15_000)?.sourceKey,
       ).toBe('session:outside');
       expect(queue.focusSessionId).toBeUndefined();
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it('starts a TTY-selected focus from the preceding human input timestamp', () => {
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_000);
+    const queue = createOperatorDispatchQueue({
+      ...DEFAULT_OPERATOR_DISPATCH_SCHEDULING,
+      focusInactivityTimeoutMs: 10_000,
+    });
+    try {
+      queue.noteOperatorInput();
+      now.mockReturnValue(1_500);
+      queue.setFocus('focus');
+      queue.enqueueReport(
+        {
+          type: 'report',
+          reportType: 'session_state',
+          conductorAgentId: 'focus',
+          issueUrl: 'https://github.com/example/repo/issues/1',
+          text: 'focused',
+        },
+        0,
+      );
+      queue.enqueueReport(
+        {
+          type: 'report',
+          reportType: 'open_question',
+          conductorAgentId: 'outside',
+          issueUrl: 'https://github.com/example/repo/issues/2',
+          text: 'outside OQ',
+        },
+        0,
+      );
+
+      expect(
+        queue.selectBatch({ continuationConsumed: false }, 10_999)?.sourceKey,
+      ).toBe('session:focus');
+      expect(
+        queue.selectBatch({ continuationConsumed: false }, 11_000)?.sourceKey,
+      ).toBe('session:outside');
+      expect(queue.focusSessionId).toBeUndefined();
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it('does not let caller-supplied stale eligibility predate queue admission', () => {
+    const now = vi.spyOn(Date, 'now').mockReturnValue(50_000);
+    const queue = createOperatorDispatchQueue({
+      ...DEFAULT_OPERATOR_DISPATCH_SCHEDULING,
+      idleAgingMs: 5_000,
+    });
+    try {
+      queue.enqueueReport(
+        {
+          type: 'report',
+          reportType: 'idle_candidate',
+          conductorAgentId: 'idle',
+          issueUrl: 'https://github.com/example/repo/issues/1',
+          text: 'idle candidate',
+          priority: 'idle',
+          eligibleAt: 1_000,
+        },
+        0,
+      );
+
+      const batch = queue.selectBatch({ continuationConsumed: false }, 50_000)!;
+      expect(batch.events[0]).toMatchObject({
+        type: 'report',
+        eligibleAt: 50_000,
+      });
+      expect(queue.selectBatch({ continuationConsumed: false }, 54_999)?.priority)
+        .toBe('idle');
+      expect(queue.selectBatch({ continuationConsumed: false }, 55_000)?.priority)
+        .toBe('normal');
     } finally {
       now.mockRestore();
     }

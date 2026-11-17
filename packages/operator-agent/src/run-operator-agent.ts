@@ -1032,13 +1032,25 @@ async function runTtyConversation(options: {
         if (reservation) options.recoveryInbox.release(reservation);
         continue;
       }
-      if (!options.dispatchQueue.commitBatch(batch)) {
+      let committed: boolean;
+      try {
+        committed = await options.watchPool.commitBatch(batch);
+      } catch (error) {
+        if (reservation) options.recoveryInbox.release(reservation);
+        options.dispatchLifecycle.settleSend(lease, {
+          completed: false,
+          requiresConfirmation: false,
+        });
+        throw error;
+      }
+      if (!committed) {
         if (reservation) options.recoveryInbox.release(reservation);
         options.dispatchLifecycle.settleSend(lease, { completed: true });
         continue;
       }
-      await options.watchPool.persistCommittedBatch?.(batch);
 
+      // The watch pool resolves only after the frozen manifest is durable.
+      // Keep this path synchronous until sendConductorWithReconnect is invoked.
       const prompt =
         options.backend === 'cursor' && !cursorBootstrapComplete
           ? `${options.systemPrompt}\n\n## User message\n\n${batch.payload ?? formatOperatorDispatchBatch(batch.events)}`

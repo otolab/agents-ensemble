@@ -1910,6 +1910,81 @@ describe('runOperatorAgent', () => {
     expect(sentPrompts[1]).toContain('conductor reply 2');
   });
 
+  it('does not start a send when the durable batch freeze cannot be committed', async () => {
+    const setupPool = await createOperatorWatchPool({
+      repoRoot,
+      userEnsembleRoot: join(repoRoot, '.ensemble'),
+      profile: 'smoke',
+      dispatchQueue: createOperatorDispatchQueue(),
+    });
+    try {
+      await setupPool.enqueueIdleCandidate!({
+        conductorAgentId: 'conductor-one',
+        text: 'candidate waits for a durable batch commit',
+        eligibleAt: Date.now(),
+      });
+    } finally {
+      setupPool.close();
+    }
+
+    const lockPath = join(
+      repoRoot,
+      '.ensemble',
+      'operator-agents',
+      'smoke',
+      'watch',
+      'watch-state-lock.sqlite',
+    );
+    const send = vi.fn(async () => ({
+      runId: 'must-not-send',
+      status: 'finished' as const,
+      result: 'unexpected send',
+    }));
+    const input = createInteractiveInput();
+    const output = createOutput();
+    let stateLock: DatabaseSync | undefined;
+    const fakeAgent = createFakeAgent({ send });
+    const run = runOperatorAgent(
+      { repoRoot, newSession: true },
+      {
+        stdin: input,
+        stdout: output,
+        agentFactory: {
+          create: async () => {
+            stateLock = new DatabaseSync(lockPath);
+            stateLock.exec('BEGIN IMMEDIATE');
+            return fakeAgent;
+          },
+          resume: async () => fakeAgent,
+        },
+      },
+    );
+
+    try {
+      await expect(run).rejects.toThrow(
+        /Could not acquire operator watch state profile lock/u,
+      );
+    } finally {
+      stateLock?.exec('ROLLBACK');
+      stateLock?.close();
+      input.end();
+    }
+
+    expect(send).not.toHaveBeenCalled();
+    const persisted = JSON.parse(
+      await readFile(baseWatchStatePath(repoRoot), 'utf8'),
+    ) as {
+      pendingReports: Array<{
+        reportId: string;
+        frozenBatchId?: string;
+        frozenPayload?: string;
+      }>;
+    };
+    expect(persisted.pendingReports).toHaveLength(1);
+    expect(persisted.pendingReports[0]).not.toHaveProperty('frozenBatchId');
+    expect(persisted.pendingReports[0]).not.toHaveProperty('frozenPayload');
+  });
+
   it('retries a completed report acknowledgement in the same runner without resending the turn', async () => {
     let liveSnapshot: SessionObservationSnapshot = {
       sequence: 1,

@@ -2365,8 +2365,22 @@ describe('operator watch pool', () => {
       expect(first.events.map((event) => event.reportId)).toEqual([
         'frozen-open-question',
       ]);
-      expect(firstQueue.commitBatch(first)).toBe(true);
+      expect(await firstPool.commitBatch(first)).toBe(true);
       frozenPayload = first.payload!;
+      const frozenAtCommit = JSON.parse(
+        await readFile(statePath, 'utf8'),
+      ) as {
+        pendingReports: Array<{
+          reportId: string;
+          frozenBatchId?: string;
+          frozenPayload?: string;
+        }>;
+      };
+      expect(frozenAtCommit.pendingReports[0]).toMatchObject({
+        reportId: 'frozen-open-question',
+        frozenBatchId: first.batchId,
+        frozenPayload,
+      });
       idleReportId = await firstPool.enqueueIdleCandidate!({
         conductorAgentId: sessionId,
         text: '中立的な idle 確認候補',
@@ -2387,7 +2401,6 @@ describe('operator watch pool', () => {
       expect(postCommitReport.firstQueuedAt).toBeGreaterThan(queuedAt);
       expect(postCommitReport.arrivalOrder).toBeGreaterThan(arrivalOrder);
 
-      await firstPool.persistCommittedBatch?.(first);
       retryAt = Date.now() + 5_000;
       await firstPool.recordRetry?.(first.events, retryAt);
       const persisted = JSON.parse(await readFile(statePath, 'utf8')) as {
@@ -2430,8 +2443,7 @@ describe('operator watch pool', () => {
         'frozen-open-question',
       ]);
       expect(retry.payload).toBe(frozenPayload);
-      resumedQueue.commitBatch(retry);
-      await resumedPool.persistCommittedBatch?.(retry);
+      expect(await resumedPool.commitBatch(retry)).toBe(true);
       await resumedPool.acknowledge(retry.events);
 
       const idleOnly = resumedQueue.selectBatch(
@@ -2445,6 +2457,138 @@ describe('operator watch pool', () => {
       await resumedPool.acknowledge(idleOnly.events);
     } finally {
       resumedPool.close();
+    }
+  });
+
+  it('freezes the local membership before waiting for persistence and starts idle age at admission', async () => {
+    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-watch-commit-cutoff-'));
+    await mkdir(join(repoRoot, '.ensemble', 'sessions'), { recursive: true });
+    const sessionId = 'commit-cutoff-session';
+    await writeResumeStore(sessionId, 1, undefined, DEFAULT_ISSUE_URL);
+
+    const dispatchQueue = createOperatorDispatchQueue();
+    const userEnsembleRoot = process.env.ENSEMBLE_USER_ROOT!;
+    const pool = await createOperatorWatchPool({
+      repoRoot,
+      userEnsembleRoot,
+      dispatchQueue,
+    });
+    const lockPath = join(
+      userEnsembleRoot,
+      'operator-agents',
+      'default',
+      'watch',
+      'watch-state-lock.sqlite',
+    );
+    const statePath = operatorWatchStatePath(
+      userEnsembleRoot,
+      'default',
+      DEFAULT_ISSUE_URL,
+    );
+    let stateLock: DatabaseSync | undefined;
+    let lockHeld = false;
+    try {
+      const firstReportId = await pool.enqueueIdleCandidate!({
+        conductorAgentId: sessionId,
+        text: 'first candidate',
+        eligibleAt: Date.now(),
+      });
+      const batch = dispatchQueue.selectBatch(
+        { continuationConsumed: false },
+        Date.now(),
+      )!;
+      expect(batch.events.map((event) =>
+        event.type === 'report' ? event.reportId : undefined,
+      )).toEqual([firstReportId]);
+
+      stateLock = new DatabaseSync(lockPath);
+      stateLock.exec('BEGIN IMMEDIATE');
+      lockHeld = true;
+
+      // commitBatch captures and removes its current local membership before
+      // it starts waiting for the durable profile lock.
+      let commitSettled = false;
+      const commitPromise = pool.commitBatch(batch).finally(() => {
+        commitSettled = true;
+      });
+      expect(batch.events.map((event) =>
+        event.type === 'report' ? event.reportId : undefined,
+      )).toEqual([firstReportId]);
+      expect(batch.batchId).toBeTypeOf('string');
+
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      expect(commitSettled).toBe(false);
+      dispatchQueue.enqueueReport(
+        {
+          type: 'report',
+          reportType: 'session_state',
+          reportId: 'local-arrival-during-lock-wait',
+          conductorAgentId: sessionId,
+          issueUrl: DEFAULT_ISSUE_URL,
+          text: 'local arrival during lock wait',
+        },
+        0,
+      );
+      const staleEligibility = Date.now() - 60 * 60_000;
+      const laterCandidatePromise = pool.enqueueIdleCandidate!({
+        conductorAgentId: sessionId,
+        text: 'arrived during lock wait',
+        eligibleAt: staleEligibility,
+      });
+
+      const lockReleasedAt = Date.now();
+      stateLock.exec('ROLLBACK');
+      stateLock.close();
+      stateLock = undefined;
+      lockHeld = false;
+
+      expect(await commitPromise).toBe(true);
+      const laterReportId = await laterCandidatePromise;
+      expect(batch.events.map((event) =>
+        event.type === 'report' ? event.reportId : undefined,
+      )).toEqual([firstReportId]);
+      expect(batch.payload).not.toContain('arrived during lock wait');
+      expect(batch.payload).not.toContain('local arrival during lock wait');
+
+      const persisted = JSON.parse(await readFile(statePath, 'utf8')) as {
+        pendingReports: Array<{
+          reportId: string;
+          eligibleAt?: number;
+          frozenBatchId?: string;
+          frozenPayload?: string;
+        }>;
+      };
+      expect(persisted.pendingReports).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            reportId: firstReportId,
+            frozenBatchId: batch.batchId,
+            frozenPayload: batch.payload,
+          }),
+          expect.objectContaining({
+            reportId: laterReportId,
+            eligibleAt: expect.any(Number),
+          }),
+        ]),
+      );
+      const laterCandidate = persisted.pendingReports.find(
+        (report) => report.reportId === laterReportId,
+      )!;
+      expect(laterCandidate.eligibleAt).toBeGreaterThanOrEqual(lockReleasedAt);
+      expect(laterCandidate.frozenBatchId).toBeUndefined();
+
+      await pool.acknowledge(batch.events);
+      const next = dispatchQueue.selectBatch(
+        { continuationConsumed: false },
+        Date.now(),
+      )!;
+      expect(next.events.map((event) =>
+        event.type === 'report' ? event.reportId : undefined,
+      )).toEqual([laterReportId]);
+    } finally {
+      if (lockHeld) stateLock?.exec('ROLLBACK');
+      stateLock?.close();
+      pool.close();
     }
   });
 
