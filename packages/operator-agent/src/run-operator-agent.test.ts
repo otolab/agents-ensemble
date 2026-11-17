@@ -1018,7 +1018,7 @@ describe('runOperatorAgent', () => {
     await run;
   });
 
-  it('submits a multiline paste once and preserves its newline', async () => {
+  it('submits a multiline paste once and preserves its whitespace', async () => {
     const input = createInteractiveInput();
     const output = createOutput();
     const sentPrompts: string[] = [];
@@ -1044,7 +1044,7 @@ describe('runOperatorAgent', () => {
       },
     );
 
-    input.write('\u001b[200~first line\nsecond line\u001b[201~');
+    input.write('\u001b[200~  first line\n    second line  \u001b[201~');
     await vi.waitFor(() =>
       expect(output.capturedText()).toContain('second line'),
     );
@@ -1052,7 +1052,7 @@ describe('runOperatorAgent', () => {
 
     input.write('\r');
     await vi.waitFor(() =>
-      expect(sentPrompts).toEqual(['first line\nsecond line']),
+      expect(sentPrompts).toEqual(['  first line\n    second line  ']),
     );
     input.write('/resume-watch');
     await vi.waitFor(() =>
@@ -1074,10 +1074,131 @@ describe('runOperatorAgent', () => {
     input.end();
     await run;
 
-    expect(sentPrompts).toEqual(['first line\nsecond line']);
+    expect(sentPrompts).toEqual(['  first line\n    second line  ']);
     expect(output.capturedText()).toContain('/resume-watch');
     expect(output.capturedText()).toContain('[observation]');
     expect(input.isRaw).toBe(false);
+  });
+
+  it('routes Ctrl+C through runner shutdown while waiting for input', async () => {
+    const previousExitCode = process.exitCode;
+    const previousSigintListeners = process.listenerCount('SIGINT');
+    const input = createInteractiveInput();
+    const output = createOutput();
+    const agent = createFakeAgent({
+      send: async () => ({ runId: 'unused', status: 'completed' }),
+    });
+    const close = vi.spyOn(agent, 'close');
+    const run = runOperatorAgent(
+      { repoRoot },
+      {
+        stdin: input,
+        stdout: output,
+        agentFactory: {
+          create: async () => agent,
+          resume: async () => agent,
+        },
+      },
+    );
+
+    try {
+      await vi.waitFor(() => expect(output.capturedText()).toContain('user>'));
+      input.write('\u0003');
+      await run;
+
+      expect(process.exitCode).toBe(130);
+      expect(close).toHaveBeenCalledOnce();
+      expect(input.isRaw).toBe(false);
+      expect(input.listenerCount('readable')).toBe(0);
+      expect(output.listenerCount('resize')).toBe(0);
+      expect(process.listenerCount('SIGINT')).toBe(previousSigintListeners);
+    } finally {
+      process.exitCode = previousExitCode;
+      input.end();
+      await run.catch(() => {});
+    }
+  });
+
+  it('routes Ctrl+C through runner shutdown while a send is pending', async () => {
+    const previousExitCode = process.exitCode;
+    const previousSigintListeners = process.listenerCount('SIGINT');
+    const input = createInteractiveInput();
+    const output = createOutput();
+    let sendStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      sendStarted = resolve;
+    });
+    const agent = createFakeAgent({
+      send: async () => {
+        sendStarted();
+        return await new Promise<Awaited<ReturnType<ConductorAgent['send']>>>(
+          () => {},
+        );
+      },
+    });
+    const close = vi.spyOn(agent, 'close');
+    const run = runOperatorAgent(
+      { repoRoot },
+      {
+        stdin: input,
+        stdout: output,
+        agentFactory: {
+          create: async () => agent,
+          resume: async () => agent,
+        },
+      },
+    );
+
+    try {
+      await vi.waitFor(() => expect(output.capturedText()).toContain('user>'));
+      input.write('start send');
+      input.write('\r');
+      await started;
+      input.write('\u0003');
+      await run;
+
+      expect(process.exitCode).toBe(130);
+      expect(close).toHaveBeenCalledOnce();
+      expect(input.isRaw).toBe(false);
+      expect(input.listenerCount('readable')).toBe(0);
+      expect(output.listenerCount('resize')).toBe(0);
+      expect(process.listenerCount('SIGINT')).toBe(previousSigintListeners);
+    } finally {
+      process.exitCode = previousExitCode;
+      input.end();
+      await run.catch(() => {});
+    }
+  });
+
+  it('keeps terminal scrollback when the TUI exits', async () => {
+    const input = createInteractiveInput();
+    const output = createOutput();
+    const agent = createFakeAgent({
+      send: async () => ({ runId: 'unused', status: 'completed' }),
+    });
+    const run = runOperatorAgent(
+      { repoRoot },
+      {
+        stdin: input,
+        stdout: output,
+        agentFactory: {
+          create: async () => agent,
+          resume: async () => agent,
+        },
+      },
+    );
+
+    await vi.waitFor(() => expect(output.capturedText()).toContain('user>'));
+    input.write('/exit');
+    input.write('\r');
+    await run;
+
+    const transcript = output.capturedText();
+    expect(transcript).toContain('ready — enter /exit');
+    expect(transcript).toContain('session ended.');
+    expect(transcript).not.toContain('\u001b[3J');
+    expect(input.isRaw).toBe(false);
+    expect(output.listenerCount('resize')).toBe(0);
   });
 
   it('preserves a draft cursor through async logs and terminal resize while responding', async () => {

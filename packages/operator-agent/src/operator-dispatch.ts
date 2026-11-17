@@ -176,7 +176,7 @@ export function formatOperatorDispatchBatch(
 ): string {
   if (events.length === 0) return '';
   if (events.length === 1 && events[0]!.type === 'user') {
-    return events[0]!.text.trim();
+    return events[0]!.text;
   }
   if (
     events.every((event) => event.type === 'report')
@@ -371,16 +371,16 @@ export function createOperatorDispatchQueue(): OperatorDispatchQueue {
       return () => listeners.delete(listener);
     },
     enqueueUser(text) {
-      const trimmed = text.trim();
+      const normalizedText = text.trim();
       if (
-        !trimmed ||
-        Buffer.byteLength(trimmed, 'utf8') > CONDUCTOR_RECOVERY_INPUT_BYTE_LIMIT
+        !normalizedText ||
+        Buffer.byteLength(text, 'utf8') > CONDUCTOR_RECOVERY_INPUT_BYTE_LIMIT
       ) {
         return false;
       }
       pending.push({
         type: 'user',
-        text: trimmed,
+        text,
         arrival: arrival++,
         readyAt: 0,
       });

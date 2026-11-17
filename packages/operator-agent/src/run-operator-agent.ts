@@ -801,11 +801,12 @@ async function runTtyConversation(options: {
     options.dispatchQueue.wake();
   };
   const handleSubmittedInput = (rawMessage: string) => {
-    const message = rawMessage.trim();
-    if (!message || inputEnded) return;
+    const message = rawMessage;
+    const normalizedMessage = message.trim();
+    if (!normalizedMessage || inputEnded) return;
     tui.appendUserMessage(message);
-    if (handleRecoveryCommand(message)) return;
-    if (isOperatorCommand(message, 'exit')) {
+    if (handleRecoveryCommand(normalizedMessage)) return;
+    if (isOperatorCommand(normalizedMessage, 'exit')) {
       exitContinuity = true;
       inputEnded = true;
       tui.setInputEnabled(false);
@@ -813,12 +814,12 @@ async function runTtyConversation(options: {
       options.dispatchQueue.wake();
       return;
     }
-    if (isOperatorCommand(message, 'reconnect')) {
+    if (isOperatorCommand(normalizedMessage, 'reconnect')) {
       pendingReconnects += 1;
       options.dispatchQueue.wake();
       return;
     }
-    if (isResumeWatchCommand(message)) {
+    if (isResumeWatchCommand(normalizedMessage)) {
       options.dispatchQueue.setConversationHold(false);
       return;
     }
