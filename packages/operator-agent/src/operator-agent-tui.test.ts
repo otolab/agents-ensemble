@@ -24,7 +24,7 @@ describe('operator agent terminal', () => {
       }
       stdin.write('\u001a');
       await vi.waitFor(() => expect(screen().join('\n')).not.toContain('undo-me'));
-    } finally { host.dispose(); terminal.dispose(); stdin.destroy(); stdout.destroy(); }
+    } finally { await host.dispose(); terminal.dispose(); stdin.destroy(); stdout.destroy(); }
   });
 
   it('preserves visible activity, scrollback and the draft cursor across updates', async () => {
@@ -87,7 +87,7 @@ describe('operator agent terminal', () => {
       expect(history()).toContain('first activity');
       expect(history().match(/entry-7/g)).toHaveLength(1);
     } finally {
-      host.dispose();
+      await host.dispose();
       terminal.dispose();
       stdin.destroy();
       stdout.destroy();
@@ -144,7 +144,7 @@ it('replays activity once in order and anchors a wrapped draft through each resi
     check();
     stdin.write('\r');
     await vi.waitFor(() => expect(submit).toHaveBeenCalledWith('ab日本\n123456789012345678901234567890END'));
-  } finally { host.dispose(); terminal.dispose(); stdin.destroy(); stdout.destroy(); }
+  } finally { await host.dispose(); terminal.dispose(); stdin.destroy(); stdout.destroy(); }
 });
 
 it('clears prior scrollback on resize and restores terminal state on exit', async () => {
@@ -167,9 +167,60 @@ it('clears prior scrollback on resize and restores terminal state on exit', asyn
     await vi.waitFor(() => expect(output).toContain('/exit'));
     stdin.write('\r');
     await vi.waitFor(() => expect(submit).toHaveBeenCalledWith('/exit'));
-    host.dispose();
+    await host.dispose();
     expect(stdin.setRawMode).toHaveBeenLastCalledWith(false);
     expect(output.lastIndexOf('\u001b[?25h')).toBeGreaterThan(output.lastIndexOf('\u001b[?25l'));
     expect(stdout.listenerCount('resize')).toBe(0);
   } finally { terminal.dispose(); stdin.destroy(); stdout.destroy(); }
+});
+
+describe('shutdown during resize recovery', () => {
+  it.each([
+    { columns: 30, rows: 10, input: '\u0003', multiline: true, delay: 30 },
+    { columns: 30, rows: 10, input: '\u0003', multiline: true, delay: 155 },
+    { columns: 50, rows: 16, input: '\r', multiline: false, delay: 30 },
+  ])('retains a clean final terminal for $columns x $rows', async ({ columns, rows, input, multiline, delay }) => {
+    const terminal = new Terminal({ cols: 40, rows: 12, scrollback: 1000, allowProposedApi: true, convertEol: true });
+    const stdin = Object.assign(new PassThrough(), { isTTY: true, setRawMode: vi.fn(), ref: vi.fn(), unref: vi.fn() });
+    const stdout = Object.assign(new PassThrough(), { isTTY: true, columns: 40, rows: 12 });
+    let output = '';
+    stdout.on('data', (chunk: Buffer) => { output += chunk.toString(); terminal.write(chunk); });
+    let stopped: Promise<void> | undefined;
+    const stop = () => { stopped = Promise.resolve(host.dispose()); };
+    const host = createOperatorAgentTuiHost({ stdin, stdout, colorEnabled: false, onSubmit: stop, onInterrupt: stop });
+    const history = () => Array.from({ length: terminal.buffer.active.length }, (_, i) => terminal.buffer.active.getLine(i)?.translateToString(true) ?? '').join('\n');
+    try {
+      await vi.waitFor(() => expect(history()).toContain('user>'));
+      host.appendChannel('harness', 'LOG-A');
+      await vi.waitFor(() => expect(history()).toContain('LOG-A'));
+      stdin.write(multiline ? 'draft-XYZ' : '/exit');
+      await vi.waitFor(() => expect(history()).toContain(multiline ? 'draft-XYZ' : '/exit'));
+      if (multiline) {
+        stdin.write('\u001b[27;2;13~');
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        stdin.write('second-line');
+        await vi.waitFor(() => expect(history()).toContain('second-line'));
+      }
+      terminal.resize(columns, rows); stdout.columns = columns; stdout.rows = rows; stdout.emit('resize');
+      host.appendChannel('observation', 'LOG-B');
+      await new Promise((resolve) => setTimeout(resolve, delay));
+      stdin.write(input);
+      await vi.waitFor(() => expect(stopped).toBeDefined());
+      await stopped;
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      await new Promise<void>((resolve) => terminal.write('', resolve));
+      const result = history();
+      expect(result.split('LOG-A')).toHaveLength(2);
+      expect(result.split('LOG-B')).toHaveLength(2);
+      expect(result.indexOf('LOG-A')).toBeLessThan(result.indexOf('LOG-B'));
+      expect(result.split('user>')).toHaveLength(2);
+      if (multiline) {
+        expect(result.split('draft-XYZ')).toHaveLength(2);
+        expect(result.split('second-line')).toHaveLength(2);
+      }
+      expect(stdin.setRawMode).toHaveBeenLastCalledWith(false);
+      expect(output.lastIndexOf('\u001b[?25h')).toBeGreaterThan(output.lastIndexOf('\u001b[?25l'));
+      expect(stdout.listenerCount('resize')).toBe(0);
+    } finally { if (!stopped) await await host.dispose(); terminal.dispose(); stdin.destroy(); stdout.destroy(); }
+  });
 });

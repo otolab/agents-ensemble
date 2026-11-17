@@ -29,7 +29,7 @@ export interface OperatorAgentTuiHost {
   appendUserMessage: (message: string) => void;
   appendOperatorResponse: (response: string) => void;
   setInputEnabled: (enabled: boolean) => void;
-  dispose: () => void;
+  dispose: () => Promise<void>;
 }
 
 export interface CreateOperatorAgentTuiHostOptions {
@@ -337,6 +337,7 @@ export function createOperatorAgentTuiHost(
     // Let Ink and TextArea settle their new widths before replaying. Remount
     // only Static, preserving the editor's undo and kill ring state.
     resizeTimer = setTimeout(() => {
+      resizeTimer = undefined;
       ink.clear();
       options.stdout.write('\u001b[3J\u001b[2J\u001b[H');
       model.replay();
@@ -351,10 +352,23 @@ export function createOperatorAgentTuiHost(
     appendOperatorResponse: (response) =>
       model.appendDialogue('operator', response),
     setInputEnabled: (enabled) => model.setInputEnabled(enabled),
-    dispose: () => {
+    dispose: async () => {
       options.stdout.off('resize', handleResize);
-      if (resizeTimer) clearTimeout(resizeTimer);
-      ink.unmount();
+      if (resizeTimer) {
+        clearTimeout(resizeTimer);
+        resizeTimer = undefined;
+        // Settle the pending width/layout changes before the final replay.
+        await new Promise<void>((resolve) => setTimeout(resolve, RESIZE_SETTLE_MS));
+        ink.clear();
+        options.stdout.write('\u001b[3J\u001b[2J\u001b[H');
+        model.replay();
+      }
+      // A recovery timer may already have fired without its render committing.
+      try {
+        await ink.waitUntilRenderFlush();
+      } finally {
+        ink.unmount();
+      }
     },
   };
 }
