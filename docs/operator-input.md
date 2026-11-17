@@ -140,6 +140,16 @@ operator-agent の応答が `finished` / `completed` で返り、次の user 入
 
 `set_report_hold({ hold: true })` / `release_reports` による手動 report hold は会話 hold と独立しています。どちらか一方が有効なら report を保留し、両方が解除されたときに保留分を既存の batching 規則で dispatch queue に戻します。`/resume-watch` は手動 report hold を解除しません。TTY では hold の状態・理由・保留件数を `[harness] 監視報告: 保留（理由: …、保留件数: N 件）` または `[harness] 監視報告: 解除（理由: なし、保留件数: 0 件）` と表示します。会話 hold / 手動 hold の有効状態、理由、保留件数が変わった時点で同じ形式の行を更新します。
 
+### operator-agent の session focus
+
+focus は既定で off です。TTY では `/focus <conductorAgentId>` で対象を選び、`/focus` で現在の対象を確認し、`/focus-off` で解除できます。`set_session_focus` tool でも設定・解除できます。focus は選択対象の session report 全体を他 session より優先します。TTY の user input が先に処理される契約は維持されます。focus 外の Open Question は待つことがあるため、作業対象が変わったら focus を切り替えるか off に戻してください。
+
+focus は「今、認知リソースを割いて解決する対象」を示す短期の操作です。focus 対象との対話ターンを終え、その session が Open Question など人間応答待ちに入るときは、focus を手動で切り替えるか解除してください。live Open Question を観測しただけでは自動解除しません。また、一般的な worker wait や長時間処理を推測して自動解除することもありません。
+
+focus は最後の operator / user 入力から10分の sliding inactivity timeout を持ちます。人間が入力するたびに時計が更新され、worker report や watch update などの自動イベントでは更新されません。この timeout は手動解除を忘れた場合の failsafe です。既定10分は調整可能で、初期設定範囲は3〜30分です。focus は再起動後 off になります。scheduler の値と profile override は [`operator-agents.config.yaml` の scheduler 設定](config.md#operator-agent-専用設定) を参照してください。
+
+同一 session の report は到着順を保ち、一つの batch / send にまとめます。Open Question は同一 session 内の先行 report を追い越しません。session 間では TTY input の後、focus 中なら focus session、focus が off なら Open Question を含む session、直前 session の一回限りの continuation、通常 FIFO の順で選びます。ready 化した batch は agent send の期限を保証せず、hold・停止・優先通知などで待つ場合があります。
+
 ## TTY TUI レイアウト
 
 端末ごとの確認済み・未確認・既知制限と、実端末確認結果の更新手順は [TUI 端末互換性マトリクス](tui-terminal-compatibility.md) に記載します。

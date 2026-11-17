@@ -9,6 +9,7 @@ import {
   SESSION_RESUME_STORE_VERSION,
 } from '../../core/src/session/session-resume-store.js';
 import { createOperatorDispatchQueue } from './operator-dispatch.js';
+import { createSetSessionFocusTool } from './operator-control-tools.js';
 import { createSendOperatorMessageTool } from './open-question-control-tools.js';
 
 describe('operator control tools', () => {
@@ -81,5 +82,22 @@ describe('operator control tools', () => {
     });
     expect(queue.heldEventCount).toBe(1);
     expect(queue.pendingEventCount).toBe(0);
+  });
+
+  it('sets and clears explicit session focus through the operator tool', async () => {
+    const queue = createOperatorDispatchQueue();
+    const tool = createSetSessionFocusTool(queue);
+
+    await tool.execute({ conductorAgentId: 'session-17' });
+    expect(queue.focusSessionId).toBe('session-17');
+    expect(tool.description).toContain('Open Question outside focus can wait');
+    expect(tool.description).toContain('failsafe');
+    expect(tool.description).toContain(
+      'common.scheduling.focusInactivityTimeoutMs',
+    );
+    expect(tool.description).toContain('3–30 minutes');
+
+    await tool.execute({});
+    expect(queue.focusSessionId).toBeUndefined();
   });
 });

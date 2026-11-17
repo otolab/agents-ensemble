@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   createOperatorDispatchQueue,
+  DEFAULT_OPERATOR_DISPATCH_SCHEDULING,
   formatOperatorDispatchBatch,
   selectOperatorDispatchBatch,
   type OperatorDispatchEvent,
@@ -9,7 +10,11 @@ import { CONDUCTOR_RECOVERY_INPUT_BYTE_LIMIT } from '@agents-ensemble/core/opera
 
 function report(
   conductorAgentId: string,
-  reportType: 'session_state' | 'open_question' | 'conductor_message' =
+  reportType:
+    | 'session_state'
+    | 'open_question'
+    | 'conductor_message'
+    | 'idle_candidate' =
     'session_state',
   text = conductorAgentId,
   arrival = 0,
@@ -49,7 +54,11 @@ describe('operator dispatch batching', () => {
     };
     const userFirst = selectOperatorDispatchBatch(
       [...queue, user],
-      { lastDispatchedSourceKey: 'session:one', continuationConsumed: false },
+      {
+        lastDispatchedSourceKey: 'session:one',
+        continuationConsumed: false,
+        focusSessionId: 'two',
+      },
       0,
     );
     expect(userFirst?.batch.events).toEqual([user]);
@@ -425,11 +434,11 @@ describe('operator dispatch batching', () => {
           '',
           '### 1/2',
           '',
-          'send 11\n#### inbound\ncontext 11\n#### response\nreply 11',
+          'send 12\n#### inbound\ncontext 12\n#### response\nreply 12',
           '',
           '### 2/2',
           '',
-          'send 12\n#### inbound\ncontext 12\n#### response\nreply 12',
+          'send 11\n#### inbound\ncontext 11\n#### response\nreply 11',
         ].join('\n'),
       );
     } finally {
@@ -573,7 +582,7 @@ describe('operator dispatch batching', () => {
     );
 
     try {
-      expect(queue.nextReadyAt()).toBe(2_000);
+      expect(queue.nextReadyAt()).toBe(7_000);
       expect(
         queue.takeBatch({ continuationConsumed: false }, 2_000)?.sourceKey,
       ).toBe('session:session-2');
@@ -869,5 +878,325 @@ describe('operator dispatch batching', () => {
     );
     expect(queue.takeBatch({ continuationConsumed: false }, Date.now())).toBeUndefined();
     expect(queue.nextReadyAt()).toBeGreaterThan(Date.now());
+  });
+
+  it('uses the earlier quiet deadline or first-report batch cap', () => {
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_000);
+    const queue = createOperatorDispatchQueue({
+      ...DEFAULT_OPERATOR_DISPATCH_SCHEDULING,
+      batchMaxWaitMs: 30_000,
+    });
+    try {
+      queue.enqueueReport(
+        {
+          type: 'report',
+          reportType: 'session_state',
+          reportId: 'first',
+          conductorAgentId: 'one',
+          issueUrl: 'https://github.com/example/repo/issues/1',
+          text: 'first',
+        },
+        120_000,
+      );
+      now.mockReturnValue(20_000);
+      queue.enqueueDebouncedReports(
+        [
+          {
+            type: 'report',
+            reportType: 'session_state',
+            reportId: 'second',
+            conductorAgentId: 'one',
+            issueUrl: 'https://github.com/example/repo/issues/1',
+            text: 'second',
+          },
+        ],
+        120_000,
+      );
+
+      expect(queue.nextReadyAt()).toBe(31_000);
+      expect(
+        queue.selectBatch({ continuationConsumed: false }, 30_999),
+      ).toBeUndefined();
+      expect(
+        queue.selectBatch({ continuationConsumed: false }, 31_000)?.events.map(
+          (event) => event.reportId,
+        ),
+      ).toEqual(['first', 'second']);
+      expect(
+        queue.selectBatch({ continuationConsumed: false }, 31_000)?.events.map(
+          (event) =>
+            event.type === 'report' ? event.firstQueuedAt : undefined,
+        ),
+      ).toEqual([1_000, 20_000]);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it('appends same-session reports through commit and freezes one payload', () => {
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_000);
+    const queue = createOperatorDispatchQueue();
+    try {
+      queue.enqueueReport(
+        {
+          type: 'report',
+          reportType: 'session_state',
+          reportId: 'first',
+          conductorAgentId: 'one',
+          issueUrl: 'https://github.com/example/repo/issues/1',
+          text: 'first',
+        },
+        0,
+      );
+      const batch = queue.selectBatch({ continuationConsumed: false }, 1_000)!;
+      now.mockReturnValue(2_000);
+      queue.enqueueReport(
+        {
+          type: 'report',
+          reportType: 'open_question',
+          reportId: 'question',
+          conductorAgentId: 'one',
+          issueUrl: 'https://github.com/example/repo/issues/1',
+          text: 'question',
+        },
+        90_000,
+      );
+      expect(queue.commitBatch(batch)).toBe(true);
+      expect(batch.events.map((event) => event.reportId)).toEqual([
+        'first',
+        'question',
+      ]);
+      expect(batch.priority).toBe('open_question');
+      expect(batch.payload).toContain('first');
+      expect(batch.payload).toContain('question');
+      expect(queue.pendingEventCount).toBe(0);
+
+      for (const event of batch.events) queue.requeue(event, 5_000);
+      expect(
+        queue.selectBatch({ continuationConsumed: false }, 6_999),
+      ).toBeUndefined();
+      const retry = queue.selectBatch(
+        { continuationConsumed: false },
+        7_000,
+      )!;
+      expect(retry.events.map((event) => event.reportId)).toEqual([
+        'first',
+        'question',
+      ]);
+      expect(retry.batchId).toBe(batch.batchId);
+      expect(retry.payload).toBe(batch.payload);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it('keeps a frozen batch ahead of later reports on retry and after ack', () => {
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_000);
+    const queue = createOperatorDispatchQueue();
+    try {
+      queue.enqueueReport(
+        {
+          type: 'report',
+          reportType: 'session_state',
+          reportId: 'frozen',
+          conductorAgentId: 'one',
+          issueUrl: 'https://github.com/example/repo/issues/1',
+          text: 'frozen payload member',
+        },
+        0,
+      );
+      const initial = queue.selectBatch({ continuationConsumed: false }, 1_000)!;
+      queue.commitBatch(initial);
+      const frozenPayload = initial.payload;
+      now.mockReturnValue(2_000);
+      queue.enqueueReport(
+        {
+          type: 'report',
+          reportType: 'open_question',
+          reportId: 'later',
+          conductorAgentId: 'one',
+          issueUrl: 'https://github.com/example/repo/issues/1',
+          text: 'later batch',
+        },
+        0,
+      );
+      queue.requeue(initial.events[0]!, 5_000);
+      expect(
+        queue.selectBatch({ continuationConsumed: false }, 6_999),
+      ).toBeUndefined();
+      const retry = queue.selectBatch(
+        { continuationConsumed: false },
+        7_000,
+      )!;
+      expect(retry.events.map((event) => event.reportId)).toEqual(['frozen']);
+      expect(retry.payload).toBe(frozenPayload);
+      queue.commitBatch(retry);
+      queue.discardQueuedReports?.(['frozen']);
+      expect(
+        queue.selectBatch({ continuationConsumed: false }, 7_000)?.events.map(
+          (event) => event.reportId,
+        ),
+      ).toEqual(['later']);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it('replays a frozen batch without waiting for member quiet deadlines', () => {
+    const event = {
+      type: 'report' as const,
+      reportType: 'session_state' as const,
+      reportId: 'frozen',
+      conductorAgentId: 'one',
+      issueUrl: 'https://github.com/example/repo/issues/1',
+      text: 'frozen payload',
+      arrivalOrder: 1,
+      firstQueuedAt: 1_000,
+      frozenBatchId: 'batch-1',
+      frozenPayload: 'frozen payload',
+      arrival: 0,
+      readyAt: 120_000,
+    };
+
+    const selected = selectOperatorDispatchBatch(
+      [event],
+      { continuationConsumed: false },
+      2_000,
+    );
+
+    expect(selected?.batch).toMatchObject({
+      batchId: 'batch-1',
+      payload: 'frozen payload',
+      events: [event],
+    });
+  });
+
+  it('uses highest member priority without changing same-session order', () => {
+    const queue = createOperatorDispatchQueue();
+    queue.enqueueReports(
+      [
+        {
+          type: 'report',
+          reportType: 'idle_candidate',
+          reportId: 'idle',
+          conductorAgentId: 'one',
+          issueUrl: 'https://github.com/example/repo/issues/1',
+          text: 'idle evidence',
+          priority: 'idle',
+          eligibleAt: Date.now(),
+        },
+        {
+          type: 'report',
+          reportType: 'open_question',
+          reportId: 'question',
+          conductorAgentId: 'one',
+          issueUrl: 'https://github.com/example/repo/issues/1',
+          text: 'OQ',
+          priority: 'open_question',
+        },
+      ],
+      0,
+    );
+    const batch = queue.takeBatch({ continuationConsumed: false })!;
+    expect(batch.priority).toBe('open_question');
+    expect(batch.events.map((event) => event.reportId)).toEqual([
+      'idle',
+      'question',
+    ]);
+    expect(batch.payload).toContain('稼働 session の確認候補');
+  });
+
+  it('prefers every focused-session batch over outside OQ and expires only on human inactivity', () => {
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_000);
+    const queue = createOperatorDispatchQueue({
+      ...DEFAULT_OPERATOR_DISPATCH_SCHEDULING,
+      focusInactivityTimeoutMs: 10_000,
+    });
+    try {
+      queue.enqueueReport(
+        {
+          type: 'report',
+          reportType: 'session_state',
+          conductorAgentId: 'focus',
+          issueUrl: 'https://github.com/example/repo/issues/1',
+          text: 'focused report',
+        },
+        0,
+      );
+      queue.enqueueReport(
+        {
+          type: 'report',
+          reportType: 'open_question',
+          conductorAgentId: 'outside',
+          issueUrl: 'https://github.com/example/repo/issues/2',
+          text: 'outside OQ',
+        },
+        0,
+      );
+      queue.setFocus('focus', 1_000);
+      queue.noteOperatorInput(5_000);
+      now.mockReturnValue(8_000);
+      queue.enqueueReport(
+        {
+          type: 'report',
+          reportType: 'session_state',
+          conductorAgentId: 'automated',
+          issueUrl: 'https://github.com/example/repo/issues/3',
+          text: 'automatic watch update',
+        },
+        0,
+      );
+      expect(
+        queue.selectBatch({ continuationConsumed: false }, 14_999)?.sourceKey,
+      ).toBe('session:focus');
+      expect(queue.focusSessionId).toBe('focus');
+      expect(
+        queue.selectBatch({ continuationConsumed: false }, 15_000)?.sourceKey,
+      ).toBe('session:outside');
+      expect(queue.focusSessionId).toBeUndefined();
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it('promotes only idle-only batches after aging and carries the age across holds', () => {
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_000);
+    const queue = createOperatorDispatchQueue({
+      ...DEFAULT_OPERATOR_DISPATCH_SCHEDULING,
+      idleAgingMs: 5_000,
+    });
+    try {
+      queue.setHold(true);
+      queue.enqueueReport(
+        {
+          type: 'report',
+          reportType: 'idle_candidate',
+          reportId: 'idle',
+          conductorAgentId: 'idle-session',
+          issueUrl: 'https://github.com/example/repo/issues/1',
+          text: 'idle only',
+          priority: 'idle',
+          eligibleAt: 1_000,
+        },
+        0,
+      );
+      now.mockReturnValue(7_000);
+      queue.setConversationHold(true);
+      queue.setHold(false);
+      expect(
+        queue.selectBatch({ continuationConsumed: false }, 7_000),
+      ).toBeUndefined();
+      queue.setConversationHold(false);
+      expect(queue.nextReadyAt()).toBeUndefined();
+      const batch = queue.selectBatch(
+        { continuationConsumed: false },
+        7_000,
+      )!;
+      expect(batch.events.map((event) => event.reportId)).toEqual(['idle']);
+      expect(batch.priority).toBe('normal');
+      expect(batch.events[0]).toMatchObject({ eligibleAt: 1_000, priority: 'idle' });
+    } finally {
+      now.mockRestore();
+    }
   });
 });

@@ -945,6 +945,7 @@ describe('runOperatorAgent', () => {
       'unregister_conductor_message_listen',
       'set_report_hold',
       'release_reports',
+      'set_session_focus',
       'send_operator_message',
       'shutdown_issue_session',
       'read_operator_workspace_file',
@@ -2292,8 +2293,13 @@ describe('runOperatorAgent', () => {
 
     const afterCancelledSend = JSON.parse(
       await readFile(statePath, 'utf8'),
-    ) as { pendingReports: Array<{ reportId: string }> };
+    ) as {
+      pendingReports: Array<{ reportId: string; retryReadyAt?: number }>;
+    };
     expect(afterCancelledSend.pendingReports).toHaveLength(1);
+    expect(afterCancelledSend.pendingReports[0]?.retryReadyAt).toBeGreaterThan(
+      Date.now(),
+    );
     expect(normalizeTtyText(firstOutput.capturedText())).toContain(
       'send not completed (status=cancelled); watched reports retained for retry.',
     );
@@ -2326,7 +2332,10 @@ describe('runOperatorAgent', () => {
       },
     );
 
-    await vi.waitFor(() => expect(retryPrompts).toHaveLength(1));
+    await vi.waitFor(
+      () => expect(retryPrompts).toHaveLength(1),
+      { timeout: 8_000, interval: 50 },
+    );
     expect(retryPrompts[0]).toContain('Should this report be retried?');
     await vi.waitFor(async () => {
       const saved = JSON.parse(await readFile(statePath, 'utf8')) as {
@@ -2336,7 +2345,7 @@ describe('runOperatorAgent', () => {
     });
     retryInput.write('/exit\n');
     await retryRun;
-  });
+  }, 15_000);
 
   it('keeps the TTY transcript free of ANSI escapes when NO_COLOR is set', async () => {
     process.env.NO_COLOR = '1';

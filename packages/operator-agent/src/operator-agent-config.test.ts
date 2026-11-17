@@ -8,6 +8,7 @@ import {
   operatorAgentConfigPath,
   parseOperatorAgentConfiguration,
   repositoryMatchesPatterns,
+  resolveOperatorAgentScheduling,
   resolveOperatorPath,
   validateProfileName,
 } from './operator-agent-config.js';
@@ -136,5 +137,83 @@ describe('operator-agent config', () => {
     expect(
       resolveOperatorPath('~/shared-pi', '/home/user/.ensemble'),
     ).toBe(join(process.env.HOME ?? '/home/user', 'shared-pi'));
+  });
+
+  it('resolves scheduling defaults with field-wise profile overrides', () => {
+    expect(
+      resolveOperatorAgentScheduling(
+        {
+          batchMaxWaitMs: 45_000,
+          focusInactivityTimeoutMs: 12 * 60_000,
+        },
+        {
+          idleAgingMs: 7 * 60_000,
+        },
+      ),
+    ).toEqual({
+      batchMaxWaitMs: 45_000,
+      idlePhaseThresholdMs: 30 * 60_000,
+      staleRunningThresholdMs: 60 * 60_000,
+      idleAgingMs: 7 * 60_000,
+      focusInactivityTimeoutMs: 12 * 60_000,
+      idleReevaluationIntervalMs: 60_000,
+    });
+  });
+
+  it('validates scheduling trial ranges in common and profile scopes', () => {
+    expect(
+      parseOperatorAgentConfiguration({
+        version: 1,
+        common: {
+          scheduling: {
+            batchMaxWaitMs: 30_000,
+            idlePhaseThresholdMs: 30 * 60_000,
+            staleRunningThresholdMs: 60 * 60_000,
+            idleAgingMs: 5 * 60_000,
+            focusInactivityTimeoutMs: 10 * 60_000,
+            idleReevaluationIntervalMs: 60_000,
+          },
+        },
+        profiles: {
+          work: { scheduling: { idleAgingMs: 2 * 60_000 } },
+        },
+      }),
+    ).toMatchObject({
+      common: {
+        scheduling: { batchMaxWaitMs: 30_000 },
+      },
+      profiles: {
+        work: { scheduling: { idleAgingMs: 2 * 60_000 } },
+      },
+    });
+
+    expect(() =>
+      parseOperatorAgentConfiguration({
+        version: 1,
+        profiles: {
+          work: { scheduling: { batchMaxWaitMs: 9_999 } },
+        },
+      }),
+    ).toThrow(/batchMaxWaitMs.*10000.*120000/u);
+  });
+
+  it.each([
+    ['batchMaxWaitMs', 9_999, 120_001],
+    ['idlePhaseThresholdMs', 599_999, 7_200_001],
+    ['staleRunningThresholdMs', 1_799_999, 14_400_001],
+    ['idleAgingMs', 59_999, 1_800_001],
+    ['focusInactivityTimeoutMs', 179_999, 1_800_001],
+    ['idleReevaluationIntervalMs', 29_999, 300_001],
+  ])('rejects out-of-range %s values', (key, belowMinimum, aboveMaximum) => {
+    for (const value of [belowMinimum, aboveMaximum]) {
+      expect(() =>
+        parseOperatorAgentConfiguration({
+          version: 1,
+          profiles: {
+            work: { scheduling: { [key]: value } },
+          },
+        }),
+      ).toThrow(new RegExp(`${key}.*milliseconds`, 'u'));
+    }
   });
 });

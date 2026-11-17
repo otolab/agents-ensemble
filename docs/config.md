@@ -91,6 +91,39 @@ profiles:
         - github-read-only
 ```
 
+#### operator-agent の scheduler 設定
+
+report の集約・選択・focus 用設定は `common.scheduling` に置き、profile で上書きする場合は `profiles.<name>.scheduling` に同じ項目を指定します。profile の値は項目ごとに common の値を上書きします。watch の `pollIntervalMs` / `debounceMs` や conductor message listener の `messageDebounceMs` は、それぞれの watch / listener に属する既存設定で、scheduler の設定とは独立しています。
+
+```yaml
+version: 1
+common:
+  scheduling:
+    batchMaxWaitMs: 30000
+    idlePhaseThresholdMs: 1800000
+    staleRunningThresholdMs: 3600000
+    idleAgingMs: 300000
+    focusInactivityTimeoutMs: 600000
+    idleReevaluationIntervalMs: 60000
+profiles:
+  personal:
+    scheduling:
+      batchMaxWaitMs: 45000 # この profile だけ 45 秒にする
+```
+
+値はすべて整数ミリ秒です。`batchMaxWaitMs` の default と範囲、focus timeout の10分 default、idle aging の5分 default、idle-phase の30分 threshold、running の60分 threshold は operator が決めた試用条件です。batch max-wait 以外の範囲と `idleReevaluationIntervalMs` は、既存の polling 間隔と既決の条件をもとにした実装者の調整可能な初期案で、追加の operator 決定ではありません。idle 候補生成は後続 Issue #745 の範囲で、この Issue #741 では候補を生成しません。そのため idle 関連の設定値は #745 の生成機能が入るまで候補通知に作用しません。
+
+| 項目 | default / 許容範囲 | 意味と調整した場合の効果 |
+|------|--------------------|--------------------------|
+| `batchMaxWaitMs` | 30,000 / 10,000–120,000 ms | session batch を ready にする上限。短いと後着 report の quiet window を早く打ち切り通知を急ぎ、長いと集約機会が増える一方で待ちが延びる。既存 quiet deadline との早い方で ready にするが、send / dispatch の期限ではない。 |
+| `idlePhaseThresholdMs` | 1,800,000 / 600,000–7,200,000 ms | `harnessPhase=idle` の session を確認候補にする経過時間。30 分 default は operator 決定。短いと候補が早まり、長いと通知頻度が下がる。 |
+| `staleRunningThresholdMs` | 3,600,000 / 1,800,000–14,400,000 ms | `running` session で進捗 signal または status line の更新がない時間。60 分を超えた候補は「60分以上更新なし・要確認」とし、異常・停止とは断定しない。正確な signal mapping は #745 で扱う。 |
+| `idleAgingMs` | 300,000 / 60,000–1,800,000 ms | eligible な idle-only batch が通常 FIFO 帯へ昇格するまでの時間。短いと通常 report の後に早く選ばれ、長いと低 priority の期間が延びる。上位 priority、hold、停止を越える dispatch deadline ではない。 |
+| `focusInactivityTimeoutMs` | 600,000 / 180,000–1,800,000 ms | 最後の operator / user 入力から測る focus の sliding failsafe timeout。短いと focus が早く解除され、長いと人間入力が止まった focus が続く。通常は人間応答待ちに入る際に手動で切り替える / 解除する。 |
+| `idleReevaluationIntervalMs` | 60,000 / 30,000–300,000 ms | #745 の idle candidate 再評価 cadence。短いと状態変化を早く見つけるが観測回数が増え、長いと観測負荷が減る一方で候補化が遅れる。gate 解除時の一回再評価とは別の周期。 |
+
+`harnessPhase` が `idle` であることや `statusLine.reportedAt` は、それだけで worker の進捗や停止を証明しません。#745 は明示的な観測値と観測時刻を使い、missing / stale / conflicting evidence を unknown として扱います。60 分条件で status line の時刻しか使えない場合も、最後に観測した status update の proxy と明記します。
+
 profile は `--profile` > `ENSEMBLE_OPERATOR_AGENT_PROFILE` > 再開対象 conversation に記録された profile > `defaultProfile` > 唯一の profile の順に選びます。まだ複数候補が残る場合は TTY で選択します。保存 conversation の profile が config から消えていて選び直す場合は、その差を表示します。
 
 `backend` / `model` / `reasoning` は `ENSEMBLE_OPERATOR_AGENT_BACKEND` / `ENSEMBLE_OPERATOR_AGENT_MODEL` / `ENSEMBLE_OPERATOR_AGENT_REASONING` > 選択 profile > `common.conductor` > 既定値の順です。operator-agent は `CONDUCTOR_*`、generic config、project config、team profile から値を継承しません。Pi 共通 root は `common.pi.agentDir` > `PI_CODING_AGENT_DIR` > `~/.ensemble/pi`、profile root は `profiles.<name>.pi.projectDir` > `<profile workspace>/pi` の順です。Pi はこの user 共通 root と選択 profile root のみを読み、launch cwd や profile workspace から `.ensemble/pi` を自動探索しません。
