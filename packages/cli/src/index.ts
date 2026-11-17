@@ -6,7 +6,10 @@ import { Command, CommanderError, Option } from 'commander';
 import {
   DEFAULT_DISPATCH_HOLD_REMINDER_MS,
   DEFAULT_PERMISSION_DEADLOCK_STALL_MS,
+  CONDUCTOR_MODEL_ID_ENV,
   listConductorModels,
+  resolveConductorModelId,
+  resolvePiModelDetails,
   resolveIssueUrl,
   escapeTerminalControlCharacters,
 } from '@agents-ensemble/core';
@@ -17,6 +20,7 @@ import {
 import { readCliPackageVersion } from './cli-version.js';
 import { executeIssueCommand, issueCommandExitCode } from './issue-command.js';
 import { formatModelsListJson, formatModelsListNote, formatModelsListText } from './format-models-list.js';
+import { formatModelDetailsJson, formatModelDetailsText } from './format-model-details.js';
 import { isOperatorInputTty } from './prompt-operator-input.js';
 import { resolveIssueSummaryFormat } from './resolve-summary-format.js';
 import { writeIssueSessionSummary } from './write-issue-session-summary.js';
@@ -916,6 +920,72 @@ addConductorCommandOptions(models.command('list'))
       process.exit(1);
     }
   });
+
+models
+  .command('show [model]')
+  .description('Show the resolved local details for a Pi model')
+  .option(
+    '--repo-root <path>',
+    'Repository root used for config, profile, and Pi project resources',
+    process.cwd(),
+  )
+  .option('--profile <name>', 'Team profile used to resolve conductor.backend')
+  .option('--provider <id>', 'Pi provider ID to use for an unqualified model ID')
+  .option('--json', 'Output JSON')
+  .action(
+    async (
+      model: string | undefined,
+      options: {
+        repoRoot: string;
+        profile?: string;
+        provider?: string;
+        json?: boolean;
+      },
+    ) => {
+      try {
+        const context = await resolveConductorCommandContext(options);
+        if (context.auth.backend !== 'pi' || !context.auth.pi) {
+          throw new Error(
+            '`ensemble models show` requires the Pi backend; the configured backend is ' +
+              `"${context.auth.backend}". Cursor model details do not include contextWindow.`,
+          );
+        }
+
+        const modelId =
+          model?.trim() ||
+          resolveConductorModelId(undefined, { config: context.config });
+        const modelSource =
+          model?.trim()
+            ? 'argument'
+            : process.env[CONDUCTOR_MODEL_ID_ENV]?.trim()
+              ? CONDUCTOR_MODEL_ID_ENV
+              : context.config.conductor.model !== 'default' &&
+                  context.config.conductor.model !== 'auto'
+                ? 'conductor.model'
+                : undefined;
+        const details = await resolvePiModelDetails({
+          ...context.auth.pi,
+          modelId,
+          ...(options.provider ? { provider: options.provider } : {}),
+        });
+        const output = {
+          ...details,
+          selection: {
+            ...details.selection,
+            ...(modelSource ? { model: modelSource } : {}),
+          },
+        };
+        console.log(
+          options.json
+            ? formatModelDetailsJson(output)
+            : formatModelDetailsText(output),
+        );
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : error);
+        process.exit(1);
+      }
+    },
+  );
 
 addConductorCommandOptions(models.command('remote'), true)
   .description('List IDs from a configured Pi provider remote catalog')

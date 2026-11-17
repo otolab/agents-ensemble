@@ -25,7 +25,7 @@ conductor:
   backend: cursor
 ```
 
-Pi backend の初回セットアップ、resource root、provider 認証、`ensemble auth` / `ensemble models list`、missing key / 401 からの復旧は [Pi conductor セットアップと認証](https://github.com/otolab/agents-ensemble/blob/main/docs/pi-conductor-setup.md) が正本です。Pi の model catalog を扱う `models remote` / `diff` / `add` と旧 `sync` からの移行も同ガイドを参照してください。Pi の user root は `conductor.pi.agentDir`、`PI_CODING_AGENT_DIR`、`~/.ensemble/pi/` の順、project root は `conductor.pi.projectDir`、`<repoRoot>/.ensemble/pi/` の順で解決します。
+Pi backend の初回セットアップ、resource root、provider 認証、`ensemble auth` / `ensemble models list` / `ensemble models show`、missing key / 401 からの復旧は [Pi conductor セットアップと認証](https://github.com/otolab/agents-ensemble/blob/main/docs/pi-conductor-setup.md) が正本です。Pi の model catalog を扱う `models remote` / `diff` / `add` と旧 `sync` からの移行も同ガイドを参照してください。Pi の user root は `conductor.pi.agentDir`、`PI_CODING_AGENT_DIR`、`~/.ensemble/pi/` の順、project root は `conductor.pi.projectDir`、`<repoRoot>/.ensemble/pi/` の順で解決します。
 
 clone したら、推奨初回導線として TTY で `ensemble setup` を実行します。Pi（OpenAI）または Cursor を選び、Pi では OAuth / API key も選べます。Pi を選んだ場合、`conductor.model: default` は user Pi settings に保存した provider / model を使います。設定と認証は user 層に保存し、既存 project config・project Pi resource・profile の値は変更しません。user の保存先が project `.ensemble` / Pi resource と重なる場合や、project の symlink から path として辿れる保存先と重なる場合は書き込みを中止します。project/profile が backend を指定している場合は user 設定より優先されます。setup を使わず Pi settings に model がなく、明示 model もない場合は起動前に設定エラーになります。CI / headless では user config・Pi settings・認証情報を手動で用意できます。API key は `ensemble auth login --api-key-stdin` から user 層に保存できます。OAuth と TTY prompt には TTY が必要です。手順は [Pi conductor セットアップと認証](https://github.com/otolab/agents-ensemble/blob/main/docs/pi-conductor-setup.md) を参照してください。
 
@@ -128,6 +128,7 @@ ensemble auth clear-command --provider <provider-id>
 
 ensemble auth status
 ensemble models list
+ensemble models show
 
 # GitHub API（gh CLI を使う場合）
 gh auth login

@@ -19,9 +19,14 @@ export {
 export {
   PiConductorAgent,
   createPiConductorAgentFactory,
+  resolvePiModelDetails,
   resolvePiModelConfig,
 } from './pi-conductor-agent.js';
-export type { PiResolvedModel } from './pi-conductor-agent.js';
+export type {
+  PiModelDetailsContextWindowSource,
+  PiResolvedModel,
+  PiResolvedModelDetails,
+} from './pi-conductor-agent.js';
 export { writeConductorSetupFiles } from './conductor-setup.js';
 export type {
   ConductorSetupFiles,
