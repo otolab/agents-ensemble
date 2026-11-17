@@ -28,6 +28,7 @@ export type OperatorDispatchEvent =
       arrivalOrder?: number;
       firstQueuedAt?: number;
       eligibleAt?: number;
+      batchReadyAt?: number;
       retryReadyAt?: number;
       frozenBatchId?: string;
       frozenPayload?: string;
@@ -107,7 +108,8 @@ export interface OperatorDispatchQueue {
     state: OperatorDispatchState,
     now?: number,
   ): OperatorDispatchBatch | undefined;
-  commitBatch(batch: OperatorDispatchBatch): boolean;
+  isBatchCurrent(batch: OperatorDispatchBatch, state: OperatorDispatchState): boolean;
+  commitBatch(batch: OperatorDispatchBatch, finalize?: () => void): boolean;
   rollbackBatchCommit(batch: OperatorDispatchBatch): void;
   takeBatch(state: OperatorDispatchState, now?: number): OperatorDispatchBatch | undefined;
   nextReadyAt(): number | undefined;
@@ -120,6 +122,7 @@ export interface OperatorDispatchQueue {
   readonly reportHold: boolean;
   readonly hold: boolean;
   readonly focusSessionId: string | undefined;
+  readonly batchMaxWaitMs: number;
 }
 
 export function operatorEventSourceKey(event: OperatorDispatchEvent): string {
@@ -143,6 +146,8 @@ export function selectOperatorDispatchBatch(
   maxUserInputBytes = CONDUCTOR_RECOVERY_INPUT_BYTE_LIMIT,
   scheduling: Pick<OperatorDispatchScheduling, 'batchMaxWaitMs' | 'idleAgingMs'> =
     DEFAULT_OPERATOR_DISPATCH_SCHEDULING,
+  alreadyReady?: OperatorDispatchBatch,
+  readyHeads?: WeakSet<OperatorDispatchEvent>,
 ): { batch: OperatorDispatchBatch; remaining: OperatorDispatchEvent[] } | undefined {
   const ordered = [...queue].sort(compareDispatchEvents);
   const readyUsers = ordered.filter(
@@ -189,6 +194,7 @@ export function selectOperatorDispatchBatch(
           ),
         )
       : Math.min(
+          ...events.map((event) => event.batchReadyAt ?? Infinity),
           Math.max(...events.map((event) => event.readyAt)),
           Math.min(
             ...events.map(
@@ -198,7 +204,16 @@ export function selectOperatorDispatchBatch(
             ),
           ),
         );
-    if (readyAt > now) continue;
+    const originallySelected = alreadyReady?.events[0];
+    const remainsSelectedHead =
+      alreadyReady?.sourceKey === sourceKey &&
+      originallySelected === first;
+    if (
+      readyAt > now &&
+      !remainsSelectedHead &&
+      (frozenBatchId !== undefined || !readyHeads?.has(first))
+    ) continue;
+    if (!frozenBatchId && readyAt <= now) readyHeads?.add(first);
 
     const priority: OperatorDispatchPriority = events.some(
       (event) => event.priority === 'open_question',
@@ -469,6 +484,7 @@ export function createOperatorDispatchQueue(
   let arrival = 0;
   let held: Extract<OperatorDispatchEvent, { type: 'report' }>[] = [];
   let pending: OperatorDispatchEvent[] = [];
+  const readyHeads = new WeakSet<OperatorDispatchEvent>();
   const inFlightReportIds = new Set<string>();
   const retryReadyAtById = new Map<string, number>();
   let conversationHold = false;
@@ -498,6 +514,27 @@ export function createOperatorDispatchQueue(
   const orderReports = (
     reports: Extract<OperatorDispatchEvent, { type: 'report' }>[],
   ) => reports.sort(compareDispatchEvents);
+  const latchReadyBeforeUpdate = (sourceKeys: Set<string>, now: number) => {
+    for (const sourceKey of sourceKeys) {
+      const reports = orderReports(
+        [...pending, ...held].filter(
+          (event): event is Extract<OperatorDispatchEvent, { type: 'report' }> =>
+            event.type === 'report' &&
+            !event.frozenBatchId &&
+            operatorEventSourceKey(event) === sourceKey,
+        ),
+      );
+      const first = reports[0];
+      if (!first) continue;
+      const readyAt = Math.min(
+        ...reports.map((event) => event.batchReadyAt ?? Infinity),
+        Math.max(...reports.map((event) => event.readyAt)),
+        Math.min(...reports.map((event) =>
+          (event.firstQueuedAt ?? event.readyAt) + scheduling.batchMaxWaitMs)),
+      );
+      if (readyAt <= now) readyHeads.add(first);
+    }
+  };
   const updateHold = (
     previousHold: boolean,
   ): { heldEventCount: number; releasedEventCount: number } => {
@@ -555,6 +592,7 @@ export function createOperatorDispatchQueue(
     enqueueReports(events, debounceMs) {
       if (events.length === 0) return;
       const now = Date.now();
+      latchReadyBeforeUpdate(new Set(events.map(reportSourceKey)), now);
       const readyAt = now + Math.max(0, debounceMs);
       let added = false;
       for (const event of events) {
@@ -588,6 +626,7 @@ export function createOperatorDispatchQueue(
       const now = Date.now();
       const readyAt = now + Math.max(0, debounceMs);
       const sourceKeys = new Set(events.map(reportSourceKey));
+      latchReadyBeforeUpdate(sourceKeys, now);
       let changed = false;
       for (const event of pending) {
         if (
@@ -674,6 +713,7 @@ export function createOperatorDispatchQueue(
             queued.arrivalOrder !== persisted.event.arrivalOrder ||
             queued.firstQueuedAt !== persisted.event.firstQueuedAt ||
             queued.eligibleAt !== persisted.event.eligibleAt ||
+            queued.batchReadyAt !== persisted.event.batchReadyAt ||
             queued.priority !== persisted.event.priority ||
             queued.frozenBatchId !== persisted.event.frozenBatchId ||
             queued.frozenPayload !== persisted.event.frozenPayload ||
@@ -707,6 +747,7 @@ export function createOperatorDispatchQueue(
     },
     deferWatchReports(conductorAgentId, debounceMs) {
       const readyAt = Date.now() + Math.max(0, debounceMs);
+      latchReadyBeforeUpdate(new Set([`session:${conductorAgentId}`]), Date.now());
       for (const event of [...pending, ...held]) {
         if (
           event.type === 'report' &&
@@ -817,10 +858,33 @@ export function createOperatorDispatchQueue(
         now,
         CONDUCTOR_RECOVERY_INPUT_BYTE_LIMIT,
         scheduling,
+        undefined,
+        readyHeads,
       );
       return selected?.batch;
     },
-    commitBatch(batch) {
+    isBatchCurrent(batch, state) {
+      clearExpiredFocus(Date.now());
+      const selected = selectOperatorDispatchBatch(
+        pending,
+        { ...state, focusSessionId },
+        Date.now(),
+        CONDUCTOR_RECOVERY_INPUT_BYTE_LIMIT,
+        scheduling,
+        batch,
+        readyHeads,
+      )?.batch;
+      if (
+        !selected ||
+        selected.sourceKey !== batch.sourceKey ||
+        selected.events[0] !== batch.events[0]
+      ) {
+        return false;
+      }
+      batch.usedContinuation = selected.usedContinuation;
+      return true;
+    },
+    commitBatch(batch, finalize) {
       let events = batch.events;
       if (batch.sourceKey !== 'user' && !batch.batchId) {
         const appendable = orderReports(
@@ -878,6 +942,7 @@ export function createOperatorDispatchQueue(
           retryReadyAtById.delete(event.reportId);
         }
       }
+      finalize?.();
       notify();
       return true;
     },
@@ -948,6 +1013,7 @@ export function createOperatorDispatchQueue(
               ),
             )
           : Math.min(
+              ...batch.map((event) => event.batchReadyAt ?? Infinity),
               Math.max(...batch.map((event) => event.readyAt)),
               Math.min(
                 ...batch.map(
@@ -1012,6 +1078,9 @@ export function createOperatorDispatchQueue(
     get focusSessionId() {
       clearExpiredFocus(Date.now());
       return focusSessionId;
+    },
+    get batchMaxWaitMs() {
+      return scheduling.batchMaxWaitMs;
     },
   };
 }

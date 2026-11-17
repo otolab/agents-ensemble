@@ -557,7 +557,7 @@ describe('operator dispatch batching', () => {
         issueUrl: 'https://github.com/example/repo/issues/1',
         text: 'early report',
       },
-      0,
+      2_000,
     );
     now.mockReturnValue(2_000);
     queue.enqueueReport(
@@ -928,6 +928,29 @@ describe('operator dispatch batching', () => {
             event.type === 'report' ? event.firstQueuedAt : undefined,
         ),
       ).toEqual([1_000, 20_000]);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it('keeps a batch ready when a report arrives during hold after its quiet deadline', () => {
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_000);
+    const queue = createOperatorDispatchQueue();
+    try {
+      queue.setHold(true);
+      queue.enqueueDebouncedReports([{
+        type: 'report', reportType: 'session_state', reportId: 'first',
+        conductorAgentId: 'one', issueUrl: 'https://github.com/example/repo/issues/1', text: 'first',
+      }], 10_000);
+      now.mockReturnValue(12_000);
+      queue.enqueueDebouncedReports([{
+        type: 'report', reportType: 'open_question', reportId: 'second',
+        conductorAgentId: 'one', issueUrl: 'https://github.com/example/repo/issues/1', text: 'second',
+      }], 10_000);
+      queue.setHold(false);
+      const batch = queue.selectBatch({ continuationConsumed: false })!;
+      expect(batch.events.map((event) => event.reportId)).toEqual(['first', 'second']);
+      expect(batch.priority).toBe('open_question');
     } finally {
       now.mockRestore();
     }
