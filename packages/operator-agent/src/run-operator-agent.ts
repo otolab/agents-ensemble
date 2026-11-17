@@ -1015,6 +1015,17 @@ async function runTtyConversation(options: {
         if (didStop) return exitContinuity;
         continue;
       }
+      // Let the one-shot fresh poll admit candidates before freezing a report batch.
+      if (options.dispatchQueue.pendingUserCount === 0) {
+        await idleCandidateMonitor.waitForGateRefresh();
+      }
+      if (
+        inputEnded &&
+        options.dispatchQueue.pendingUserCount === 0 &&
+        pendingReconnects === 0
+      ) {
+        return exitContinuity;
+      }
       const batch = options.dispatchQueue.selectBatch(dispatchState);
       if (!batch) {
         const readyAt = options.dispatchQueue.nextReadyAt();

@@ -435,6 +435,63 @@ describe('operator idle candidate evaluation', () => {
     },
   );
 
+  it('waits for gate-clear refresh and candidate admission to finish before dispatch can continue', async () => {
+    const dispatchQueue = createOperatorDispatchQueue();
+    dispatchQueue.setConversationHold(true);
+    let current = observation({ observationVersion: 1 });
+    let releaseRefresh!: () => void;
+    const refreshBarrier = new Promise<void>((resolve) => {
+      releaseRefresh = resolve;
+    });
+    const enqueueIdleCandidate = vi.fn(async () => 'idle-after-refresh');
+    const refreshOnGateClear = vi.fn(async () => {
+      await refreshBarrier;
+      current = {
+        ...current,
+        observationVersion: current.observationVersion + 1,
+        checkedAt: Date.now(),
+      };
+    });
+    const monitor = createOperatorIdleCandidateMonitor({
+      watchPool: {
+        list: () => [
+          {
+            conductorAgentId: current.conductorAgentId,
+            pollIntervalMs: current.pollIntervalMs,
+            debounceMs: 0,
+          },
+        ],
+        pollOnce: async () => 0,
+        listIdleCandidateObservations: () => [current],
+        enqueueIdleCandidate,
+      },
+      dispatchQueue,
+      scheduling: defaults,
+      isAgentSendInFlight: () => false,
+      refreshOnGateClear,
+    });
+
+    try {
+      dispatchQueue.setConversationHold(false);
+      let settled = false;
+      const waiting = monitor.waitForGateRefresh().then(() => {
+        settled = true;
+      });
+      await Promise.resolve();
+      expect(refreshOnGateClear).toHaveBeenCalledTimes(1);
+      expect(enqueueIdleCandidate).not.toHaveBeenCalled();
+      expect(settled).toBe(false);
+
+      releaseRefresh();
+      await waiting;
+      expect(settled).toBe(true);
+      expect(enqueueIdleCandidate).toHaveBeenCalledTimes(1);
+    } finally {
+      releaseRefresh();
+      monitor.close();
+    }
+  });
+
   it('does not reuse a pre-gate observation when refresh produces no new observation', async () => {
     const dispatchQueue = createOperatorDispatchQueue();
     dispatchQueue.setConversationHold(true);

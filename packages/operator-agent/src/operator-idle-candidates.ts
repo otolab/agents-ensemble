@@ -124,6 +124,7 @@ export interface OperatorIdleCandidateMonitorOptions {
 
 export interface OperatorIdleCandidateMonitor {
   notifyActivityChanged(): void;
+  waitForGateRefresh(): Promise<void>;
   close(): void;
 }
 
@@ -132,6 +133,7 @@ export function createOperatorIdleCandidateMonitor(
 ): OperatorIdleCandidateMonitor {
   let closed = false;
   let evaluationInFlight: Promise<void> | undefined;
+  let gateRefreshInFlight: Promise<void> | undefined;
   let refreshAfterCurrentEvaluation = false;
   const isGateActive = () =>
     options.isAgentSendInFlight() ||
@@ -224,7 +226,21 @@ export function createOperatorIdleCandidateMonitor(
   const refreshGate = () => {
     const gateActive = isGateActive();
     if (gateActive) refreshAfterCurrentEvaluation = false;
-    if (previousGateActive && !gateActive) void evaluate(true);
+    if (previousGateActive && !gateActive) {
+      const refresh = evaluate(true).catch((error: unknown) => {
+        options.onError?.(
+          `idle candidate gate refresh failed: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      });
+      let pendingRefresh: Promise<void>;
+      pendingRefresh = refresh.finally(() => {
+        if (gateRefreshInFlight === pendingRefresh) {
+          gateRefreshInFlight = undefined;
+        }
+        options.dispatchQueue.wake();
+      });
+      gateRefreshInFlight = pendingRefresh;
+    }
     previousGateActive = gateActive;
   };
   const unsubscribe = options.dispatchQueue.subscribe(refreshGate);
@@ -235,6 +251,11 @@ export function createOperatorIdleCandidateMonitor(
   return {
     notifyActivityChanged() {
       refreshGate();
+    },
+    async waitForGateRefresh() {
+      while (gateRefreshInFlight) {
+        await gateRefreshInFlight;
+      }
     },
     close() {
       closed = true;

@@ -160,7 +160,7 @@ lock-wait の比較は選択から commit まで100 ms、OQ 到着から commit 
 
 複数 session、focus 切替、user input と conversation gate、正常な長時間処理、stale-running、manual hold、retry / restart / ack、#755 commit boundary を fixture / scheduler / integration test で確認します。実 provider / 複数 conductor / TTY の運用計測は行っていません。agent の処理時間、人間の応答、process 停止や上位 priority の継続に対する有限通知時間も保証しません。
 
-`runOperatorAgent` を通す fake-clock / fake-send 比較では、user-send gate 中の OQ に対し baseline / idle 統合後とも 2 dispatch（user input と report）、1 report batch、2 fake turns、OQ 待ち10,050 msを記録しました。OQ は10秒の user-send gate 中に到着し、解除後の fresh UDS refresh に合成50 msを加えています。この値も合成試験で、provider 実測や実運用の UDS latency ではありません。現行 regression test では統合後の report send に idle candidate が入らない競合を再現しており、gate 解除時の refresh/admission と selector の協調は未達です。この run-loop 結果を受け入れ済みの成功測定として扱わず、同一 send 条件を満たす修正・再検証が必要です。
+`runOperatorAgent` を通す fake-clock / fake-send 比較では、user-send gate 中の OQ に対し baseline / idle 統合後とも 2 dispatch（user input と report）、1 report batch、2 fake turns、OQ 待ち10,050 msを記録しました。OQ は10秒の user-send gate 中に到着し、gate 解除後の fresh UDS refresh に合成50 msを加えています。統合後は OQ と idle candidate を到着順・OQ priority のまま一つの report send に含め、OQ の重複はありません。runner は gate-clear refresh/admission が終わるまで次 batch の選択を待ちます。これらの値は再現可能な合成比較であり、provider 実測や実運用の UDS latency ではありません。状態が unknown、refresh が失敗、または fresh evidence が候補条件を満たさない場合は候補を作らず、待ち続けません。
 
 profile は `--profile` > `ENSEMBLE_OPERATOR_AGENT_PROFILE` > 再開対象 conversation に記録された profile > `defaultProfile` > 唯一の profile の順に選びます。まだ複数候補が残る場合は TTY で選択します。保存 conversation の profile が config から消えていて選び直す場合は、その差を表示します。
 
