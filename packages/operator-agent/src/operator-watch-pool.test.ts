@@ -385,6 +385,106 @@ describe('operator watch pool', () => {
     }
   });
 
+  it('limits repository registrations per profile and preserves duplicate, restart, and freed-slot semantics', async () => {
+    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-repository-watch-registration-limit-'));
+    const dispatchQueue = createOperatorDispatchQueue();
+    let pool = await createOperatorWatchPool({ repoRoot, dispatchQueue });
+    const repositoryAt = (index: number) =>
+      `example/repo-${String(index).padStart(2, '0')}`;
+    const registerTool = createRegisterRepositoryWatchTool(pool);
+    try {
+      for (let index = 0; index < 19; index += 1) {
+        await registerTool.execute({
+          githubRepo: repositoryAt(index),
+          scanIntervalMs: 60_000,
+          pollIntervalMs: 60_000,
+        });
+      }
+      expect(pool.listRepositoryWatches()).toHaveLength(19);
+
+      const twentiethRegistration = await registerTool.execute({
+        githubRepo: repositoryAt(19),
+        scanIntervalMs: 60_000,
+        pollIntervalMs: 60_000,
+      });
+      const twentiethConfig = JSON.parse(
+        twentiethRegistration.content[0]!.text,
+      ) as { enabledAt: number; githubRepo: string };
+      expect(twentiethConfig).toMatchObject({
+        githubRepo: repositoryAt(19),
+      });
+      expect(pool.listRepositoryWatches()).toHaveLength(20);
+
+      await expect(
+        registerTool.execute({ githubRepo: repositoryAt(20) }),
+      ).rejects.toThrow(
+        'At most 20 repositories can be watched in one profile.',
+      );
+      expect(pool.listRepositoryWatches()).toHaveLength(20);
+      expect(
+        pool.listRepositoryWatches().some(
+          (watch) => watch.githubRepo === repositoryAt(20),
+        ),
+      ).toBe(false);
+
+      const duplicateAtLimit = await registerTool.execute({
+        githubRepo: repositoryAt(19),
+        scanIntervalMs: 90_000,
+        pollIntervalMs: 55_000,
+      });
+      expect(JSON.parse(duplicateAtLimit.content[0]!.text)).toMatchObject({
+        enabledAt: twentiethConfig.enabledAt,
+        githubRepo: repositoryAt(19),
+        scanIntervalMs: 90_000,
+        pollIntervalMs: 55_000,
+      });
+      expect(pool.listRepositoryWatches()).toHaveLength(20);
+
+      pool.close();
+      pool = await createOperatorWatchPool({ repoRoot, dispatchQueue });
+      expect(pool.listRepositoryWatches()).toHaveLength(20);
+      const restartedRegisterTool = createRegisterRepositoryWatchTool(pool);
+      await expect(
+        restartedRegisterTool.execute({
+          githubRepo: repositoryAt(20),
+        }),
+      ).rejects.toThrow(
+        'At most 20 repositories can be watched in one profile.',
+      );
+      const duplicateAfterRestart = await restartedRegisterTool.execute({
+        githubRepo: repositoryAt(19),
+        scanIntervalMs: 120_000,
+      });
+      expect(JSON.parse(duplicateAfterRestart.content[0]!.text)).toMatchObject({
+        enabledAt: twentiethConfig.enabledAt,
+        githubRepo: repositoryAt(19),
+        scanIntervalMs: 120_000,
+      });
+      expect(pool.listRepositoryWatches()).toHaveLength(20);
+
+      const unregistered = await createUnregisterRepositoryWatchTool(
+        pool,
+      ).execute({ githubRepo: repositoryAt(0) });
+      expect(JSON.parse(unregistered.content[0]!.text)).toEqual({
+        githubRepo: repositoryAt(0),
+        removed: true,
+      });
+      expect(pool.listRepositoryWatches()).toHaveLength(19);
+
+      const registrationAfterUnregister = await restartedRegisterTool.execute({
+        githubRepo: repositoryAt(20),
+        scanIntervalMs: 60_000,
+        pollIntervalMs: 60_000,
+      });
+      expect(JSON.parse(registrationAfterUnregister.content[0]!.text)).toMatchObject({
+        githubRepo: repositoryAt(20),
+      });
+      expect(pool.listRepositoryWatches()).toHaveLength(20);
+    } finally {
+      pool.close();
+    }
+  });
+
   it('discovers and auto-watches new runs beyond the 500-store page boundary without duplicates', async () => {
     repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-repository-watch-page-boundary-'));
     const baselineIssue = 'https://github.com/example/repo/issues/1';

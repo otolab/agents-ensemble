@@ -1746,7 +1746,7 @@ export function createRegisterRepositoryWatchTool(
   return {
     name: 'register_repository_watch',
     description:
-      'Enable a profile-scoped watch for one exact GitHub owner/repo. Existing saved runs become the baseline and are eligible for automatic watch; later runs are discovered on the repository scan interval. Registration and first-observed times survive operator-agent restarts. Automatic live polling is capped at 20 runs per profile; manual session watches remain available beyond that cap.',
+      'Enable a profile-scoped watch for one exact GitHub owner/repo. A profile can register up to 20 repositories; registering a new repository beyond that limit fails, while registering an existing repository updates its settings. This repository registration limit is separate from the automatic live polling limit of 20 runs per profile. Existing saved runs become the baseline and are eligible for automatic watch; later runs are discovered on the repository scan interval. Registration and first-observed times survive operator-agent restarts. Manual session watches remain available beyond the automatic run limit.',
     inputSchema: {
       type: 'object',
       properties: {
