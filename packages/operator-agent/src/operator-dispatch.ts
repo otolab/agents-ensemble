@@ -107,7 +107,7 @@ export interface OperatorDispatchQueue {
     state: OperatorDispatchState,
     now?: number,
   ): OperatorDispatchBatch | undefined;
-  commitBatch(batch: OperatorDispatchBatch): boolean;
+  commitBatch(batch: OperatorDispatchBatch, finalize?: () => void): boolean;
   rollbackBatchCommit(batch: OperatorDispatchBatch): void;
   takeBatch(state: OperatorDispatchState, now?: number): OperatorDispatchBatch | undefined;
   nextReadyAt(): number | undefined;
@@ -820,7 +820,7 @@ export function createOperatorDispatchQueue(
       );
       return selected?.batch;
     },
-    commitBatch(batch) {
+    commitBatch(batch, finalize) {
       let events = batch.events;
       if (batch.sourceKey !== 'user' && !batch.batchId) {
         const appendable = orderReports(
@@ -878,6 +878,7 @@ export function createOperatorDispatchQueue(
           retryReadyAtById.delete(event.reportId);
         }
       }
+      finalize?.();
       notify();
       return true;
     },

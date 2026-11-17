@@ -1,6 +1,12 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import {
+  chmodSync,
+  mkdirSync,
+  renameSync,
+  writeFileSync,
+} from 'node:fs';
+import {
   access,
   chmod,
   mkdir,
@@ -321,7 +327,7 @@ export async function createOperatorWatchPool(
       fallbackQueuedReportIds.add(event.reportId);
     }
   };
-  const refreshStateFromDisk = async () => {
+  const refreshStateFromDisk = async (syncQueue = true) => {
     repositoryState = await loadOperatorRepositoryWatchState(
       repositoryStatePath,
     );
@@ -389,9 +395,9 @@ export async function createOperatorWatchPool(
       state = mergeWatchStates(state, sourceBundles[0]!);
       unassignedDiagnostics.delete(id);
     }
-    syncPendingReportsToQueue();
+    if (syncQueue) syncPendingReportsToQueue();
   };
-  await withWatchStateLock(root, profile, refreshStateFromDisk);
+  await withWatchStateLock(root, profile, () => refreshStateFromDisk());
   const timers = new Map<string, NodeJS.Timeout>();
   const repositoryTimers = new Map<string, NodeJS.Timeout>();
   const repositoryScansInFlight = new Set<string>();
@@ -466,10 +472,11 @@ export async function createOperatorWatchPool(
   };
   const withStateLock = <T>(
     operation: (nextArrivalOrder: () => number) => Promise<T>,
+    syncQueue = true,
   ): Promise<T> => {
     const next = stateOperationQueue.then(() =>
       withWatchStateLock(root, profile, async (nextArrivalOrder) => {
-        await refreshStateFromDisk();
+        await refreshStateFromDisk(syncQueue);
         const allocateArrivalOrder = () =>
           nextArrivalOrder(
             Math.max(
@@ -480,7 +487,7 @@ export async function createOperatorWatchPool(
             ),
           );
         const result = await operation(allocateArrivalOrder);
-        syncPendingReportsToQueue();
+        if (syncQueue) syncPendingReportsToQueue();
         return result;
       }),
     );
@@ -1717,32 +1724,30 @@ export async function createOperatorWatchPool(
       return reportId;
     },
     async commitBatch(batch) {
-      const alreadyFrozen = batch.batchId !== undefined;
-      if (!options.dispatchQueue.commitBatch(batch)) return false;
-
-      const reports = batch.events.filter(
-        (event): event is Extract<OperatorDispatchEvent, { type: 'report' }> =>
-          event.type === 'report' && event.reportId !== undefined,
-      );
-      if (reports.length === 0 || alreadyFrozen) return true;
-      if (!batch.batchId || !batch.payload) {
-        options.dispatchQueue.rollbackBatchCommit(batch);
-        throw new Error('A committed report batch must have a frozen id and payload.');
+      // User input and already frozen retries do not need a new manifest.
+      if (batch.sourceKey === 'user' || batch.batchId) {
+        return options.dispatchQueue.commitBatch(batch);
       }
-
+      let committed = false;
+      let durable = false;
       try {
-        // The dispatch queue freezes its local membership synchronously above,
-        // before this method first awaits the durable profile lock. No
-        // same-session report arriving during lock wait can join this payload.
-        await withStateLock(async () => {
-          const reportsById = new Map(
-            state.pendingReports.map((report) => [report.reportId, report]),
-          );
-          const previous = new Map<
-            string,
-            (typeof state.pendingReports)[number]
-          >();
-          try {
+        return await withStateLock(async () => {
+          // Do not reconcile the refreshed durable state into the local queue:
+          // reports from peers that are not yet locally visible belong to the
+          // next batch. Capture local arrivals only after acquiring the lock.
+          return options.dispatchQueue.commitBatch(batch, () => {
+            committed = true;
+            const reports = batch.events.filter(
+              (event): event is Extract<OperatorDispatchEvent, { type: 'report' }> =>
+                event.type === 'report' && event.reportId !== undefined,
+            );
+            if (reports.length === 0) return;
+            if (!batch.batchId || !batch.payload) {
+              throw new Error('A committed report batch must have a frozen id and payload.');
+            }
+            const reportsById = new Map(
+              state.pendingReports.map((report) => [report.reportId, report]),
+            );
             for (const event of reports) {
               const stored = reportsById.get(event.reportId!);
               if (!stored) {
@@ -1750,7 +1755,6 @@ export async function createOperatorWatchPool(
                   `Pending report ${event.reportId} disappeared before its batch could be frozen.`,
                 );
               }
-              previous.set(event.reportId!, { ...stored });
               stored.arrivalOrder = event.arrivalOrder ?? stored.arrivalOrder;
               stored.firstQueuedAt = event.firstQueuedAt ?? stored.firstQueuedAt;
               stored.readyAt = event.readyAt;
@@ -1760,22 +1764,25 @@ export async function createOperatorWatchPool(
               stored.frozenPayload = batch.payload;
               delete stored.retryReadyAt;
             }
-            await persist();
-          } catch (error) {
-            for (const [reportId, snapshot] of previous) {
-              const stored = reportsById.get(reportId);
-              if (stored) Object.assign(stored, snapshot);
-            }
-            throw error;
-          }
-        });
+            const path = pathById.get(reports[0]!.conductorAgentId);
+            if (!path) throw new Error('Cannot persist a batch without its session state path.');
+            const partitions = partitionWatchState(state, pathById, issueUrlById);
+            const partition = partitions.get(path);
+            if (!partition) throw new Error('Cannot persist a batch without its session state.');
+            const retained = unassignedStateByPath.get(path);
+            // Synchronous atomic replacement makes the local capture and durable
+            // freeze one event-loop operation: no report can arrive in between.
+            saveWatchStateSync(path, retained ? mergeWatchStates(partition, retained) : partition);
+            durable = true;
+            statePaths.add(path);
+          });
+        }, false);
       } catch (error) {
-        // Persistence failed before send. Restore the captured local members
-        // so a later attempt can commit them again without losing IDs.
-        options.dispatchQueue.rollbackBatchCommit(batch);
+        // Once the manifest reached disk, an uncertain lock release must not
+        // unfreeze it locally. Restart can replay the durable batch unchanged.
+        if (committed && !durable) options.dispatchQueue.rollbackBatchCommit(batch);
         throw error;
       }
-      return true;
     },
     async recordRetry(events, retryReadyAt) {
       const reports = events.filter(
@@ -3069,6 +3076,19 @@ async function loadWatchState(path: string): Promise<OperatorWatchState> {
     }
     throw error;
   }
+}
+
+function saveWatchStateSync(path: string, state: OperatorWatchState): void {
+  const directory = dirname(path);
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  chmodSync(directory, 0o700);
+  const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
+  writeFileSync(temporary, `${JSON.stringify(state, null, 2)}\n`, {
+    encoding: 'utf8',
+    mode: 0o600,
+  });
+  chmodSync(temporary, 0o600);
+  renameSync(temporary, path);
 }
 
 async function saveWatchState(

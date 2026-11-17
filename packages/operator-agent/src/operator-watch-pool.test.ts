@@ -2460,7 +2460,7 @@ describe('operator watch pool', () => {
     }
   });
 
-  it('freezes the local membership before waiting for persistence and starts idle age at admission', async () => {
+  it('includes local arrivals during lock wait but leaves unsynchronized peer reports for the next batch', async () => {
     repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-watch-commit-cutoff-'));
     await mkdir(join(repoRoot, '.ensemble', 'sessions'), { recursive: true });
     const sessionId = 'commit-cutoff-session';
@@ -2501,12 +2501,29 @@ describe('operator watch pool', () => {
         event.type === 'report' ? event.reportId : undefined,
       )).toEqual([firstReportId]);
 
+      const durable = JSON.parse(await readFile(statePath, 'utf8'));
+      const firstOrder = durable.pendingReports[0].arrivalOrder;
+      const queuedAt = Date.now();
+      for (const [index, reportId] of ['local-arrival-during-lock-wait', 'peer-unsynced'].entries()) {
+        durable.pendingReports.push({
+          reportId,
+          reportType: index === 0 ? 'open_question' : 'session_state',
+          conductorAgentId: sessionId,
+          issueUrl: DEFAULT_ISSUE_URL,
+          text: reportId,
+          debounceMs: 0,
+          readyAt: queuedAt,
+          firstQueuedAt: queuedAt,
+          arrivalOrder: firstOrder + index + 1,
+          priority: index === 0 ? 'open_question' : 'normal',
+        });
+      }
+      await writeFile(statePath, JSON.stringify(durable));
       stateLock = new DatabaseSync(lockPath);
       stateLock.exec('BEGIN IMMEDIATE');
       lockHeld = true;
 
-      // commitBatch captures and removes its current local membership before
-      // it starts waiting for the durable profile lock.
+      // The selected batch remains appendable while the profile lock is held.
       let commitSettled = false;
       const commitPromise = pool.commitBatch(batch).finally(() => {
         commitSettled = true;
@@ -2514,15 +2531,16 @@ describe('operator watch pool', () => {
       expect(batch.events.map((event) =>
         event.type === 'report' ? event.reportId : undefined,
       )).toEqual([firstReportId]);
-      expect(batch.batchId).toBeTypeOf('string');
+      expect(batch.batchId).toBeUndefined();
 
       await new Promise((resolve) => setTimeout(resolve, 60));
       expect(commitSettled).toBe(false);
       dispatchQueue.enqueueReport(
         {
           type: 'report',
-          reportType: 'session_state',
+          reportType: 'open_question',
           reportId: 'local-arrival-during-lock-wait',
+          arrivalOrder: firstOrder + 1,
           conductorAgentId: sessionId,
           issueUrl: DEFAULT_ISSUE_URL,
           text: 'local arrival during lock wait',
@@ -2546,9 +2564,11 @@ describe('operator watch pool', () => {
       const laterReportId = await laterCandidatePromise;
       expect(batch.events.map((event) =>
         event.type === 'report' ? event.reportId : undefined,
-      )).toEqual([firstReportId]);
+      )).toEqual([firstReportId, 'local-arrival-during-lock-wait']);
+      expect(batch.priority).toBe('open_question');
+      expect(batch.payload).toContain('local arrival during lock wait');
+      expect(batch.payload).not.toContain('peer-unsynced');
       expect(batch.payload).not.toContain('arrived during lock wait');
-      expect(batch.payload).not.toContain('local arrival during lock wait');
 
       const persisted = JSON.parse(await readFile(statePath, 'utf8')) as {
         pendingReports: Array<{
@@ -2566,6 +2586,12 @@ describe('operator watch pool', () => {
             frozenPayload: batch.payload,
           }),
           expect.objectContaining({
+            reportId: 'local-arrival-during-lock-wait',
+            frozenBatchId: batch.batchId,
+            frozenPayload: batch.payload,
+          }),
+          expect.objectContaining({ reportId: 'peer-unsynced' }),
+          expect.objectContaining({
             reportId: laterReportId,
             eligibleAt: expect.any(Number),
           }),
@@ -2577,6 +2603,26 @@ describe('operator watch pool', () => {
       expect(laterCandidate.eligibleAt).toBeGreaterThanOrEqual(lockReleasedAt);
       expect(laterCandidate.frozenBatchId).toBeUndefined();
 
+      const replayQueue = createOperatorDispatchQueue();
+      const replayPool = await createOperatorWatchPool({
+        repoRoot,
+        userEnsembleRoot,
+        dispatchQueue: replayQueue,
+      });
+      try {
+        const replay = replayQueue.selectBatch(
+          { continuationConsumed: false },
+          Date.now(),
+        )!;
+        expect(replay.events.map((event) =>
+          event.type === 'report' ? event.reportId : undefined,
+        )).toEqual([firstReportId, 'local-arrival-during-lock-wait']);
+        expect(replay.batchId).toBe(batch.batchId);
+        expect(replay.payload).toBe(batch.payload);
+      } finally {
+        replayPool.close();
+      }
+
       await pool.acknowledge(batch.events);
       const next = dispatchQueue.selectBatch(
         { continuationConsumed: false },
@@ -2584,10 +2630,50 @@ describe('operator watch pool', () => {
       )!;
       expect(next.events.map((event) =>
         event.type === 'report' ? event.reportId : undefined,
-      )).toEqual([laterReportId]);
+      )).toEqual(['peer-unsynced', laterReportId]);
     } finally {
       if (lockHeld) stateLock?.exec('ROLLBACK');
       stateLock?.close();
+      pool.close();
+    }
+  });
+
+  it('rolls back the entire local batch when a member cannot be frozen', async () => {
+    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-watch-freeze-failure-'));
+    await mkdir(join(repoRoot, '.ensemble', 'sessions'), { recursive: true });
+    const sessionId = 'freeze-failure-session';
+    await writeResumeStore(sessionId, 1, undefined, DEFAULT_ISSUE_URL);
+    const queue = createOperatorDispatchQueue();
+    const pool = await createOperatorWatchPool({ repoRoot, dispatchQueue: queue });
+    try {
+      const firstId = await pool.enqueueIdleCandidate!({
+        conductorAgentId: sessionId,
+        text: 'durable first report',
+        eligibleAt: Date.now(),
+      });
+      const batch = queue.selectBatch({ continuationConsumed: false })!;
+      queue.enqueueReport({
+        type: 'report',
+        reportType: 'open_question',
+        reportId: 'missing-durable-report',
+        conductorAgentId: sessionId,
+        issueUrl: DEFAULT_ISSUE_URL,
+        text: 'not yet durable',
+      }, 0);
+      await expect(pool.commitBatch(batch)).rejects.toThrow(
+        'Pending report missing-durable-report disappeared',
+      );
+      expect(batch.batchId).toBeUndefined();
+      expect(queue.pendingEventCount).toBe(2);
+      const disk = JSON.parse(await readFile(currentWatchStatePath(repoRoot), 'utf8'));
+      expect(disk.pendingReports[0].frozenBatchId).toBeUndefined();
+      queue.discardQueuedReports!(['missing-durable-report']);
+      const retry = queue.selectBatch({ continuationConsumed: false })!;
+      expect(retry.events.map((event) =>
+        event.type === 'report' ? event.reportId : undefined,
+      )).toEqual([firstId]);
+      expect(await pool.commitBatch(retry)).toBe(true);
+    } finally {
       pool.close();
     }
   });
