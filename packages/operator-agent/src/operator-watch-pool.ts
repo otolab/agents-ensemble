@@ -55,6 +55,7 @@ import {
 } from './operator-repository-watch-state.js';
 import type {
   OperatorDispatchEvent,
+  OperatorDispatchBatch,
   OperatorDispatchQueue,
 } from './operator-dispatch.js';
 import { formatOversizedConductorMessageWarning } from './operator-dispatch.js';
@@ -139,12 +140,23 @@ interface OperatorWatchState {
   messageCursors: Record<string, number>;
   pendingReports: Array<{
     reportId: string;
-    reportType: 'session_state' | 'open_question' | 'conductor_message';
+    reportType:
+      | 'session_state'
+      | 'open_question'
+      | 'conductor_message'
+      | 'idle_candidate';
     conductorAgentId: string;
     issueUrl: string;
     text: string;
     debounceMs: number;
     readyAt: number;
+    arrivalOrder: number;
+    firstQueuedAt: number;
+    priority: 'open_question' | 'normal' | 'idle';
+    eligibleAt?: number;
+    retryReadyAt?: number;
+    frozenBatchId?: string;
+    frozenPayload?: string;
     sendCount?: number;
     oversizedSendCounts?: number[];
   }>;
@@ -183,6 +195,17 @@ export interface OperatorWatchPool {
   refreshPendingReports?(): Promise<void>;
   getLiveStatus(conductorAgentId: string): OperatorSessionLiveStatus | undefined;
   acknowledge(events: readonly OperatorDispatchEvent[]): Promise<void>;
+  enqueueIdleCandidate?(input: {
+    conductorAgentId: string;
+    text: string;
+    /** Requested by the producer; the pool records its actual admission time instead. */
+    eligibleAt: number;
+  }): Promise<string>;
+  commitBatch(batch: OperatorDispatchBatch): Promise<boolean>;
+  recordRetry?(
+    events: readonly OperatorDispatchEvent[],
+    retryReadyAt: number,
+  ): Promise<void>;
   close(): void;
 }
 
@@ -271,19 +294,13 @@ export async function createOperatorWatchPool(
   let repositoryState = emptyOperatorRepositoryWatchState();
   const fallbackQueuedReportIds = new Set<string>();
   const syncPendingReportsToQueue = () => {
-    const reports = state.pendingReports.map((report) => ({
-      event: {
-        type: 'report' as const,
-        reportId: report.reportId,
-        reportType: report.reportType,
-        conductorAgentId: report.conductorAgentId,
-        issueUrl: report.issueUrl,
-        text: report.text,
-        sendCount: report.sendCount,
-        oversizedSendCounts: report.oversizedSendCounts,
-      },
-      readyAt: report.readyAt,
-    }));
+    const reports = state.pendingReports.map((report) => {
+      const { readyAt, ...event } = report;
+      return {
+        event: { type: 'report' as const, ...event },
+        readyAt,
+      };
+    });
     if (options.dispatchQueue.reconcileReports) {
       options.dispatchQueue.reconcileReports(reports);
       return;
@@ -440,17 +457,29 @@ export async function createOperatorWatchPool(
     for (const report of state.pendingReports) {
       if (
         report.conductorAgentId === conductorAgentId &&
-        report.reportType !== 'conductor_message'
+        report.reportType !== 'conductor_message' &&
+        !report.frozenBatchId
       ) {
         report.readyAt = readyAt;
       }
     }
   };
-  const withStateLock = <T>(operation: () => Promise<T>): Promise<T> => {
+  const withStateLock = <T>(
+    operation: (nextArrivalOrder: () => number) => Promise<T>,
+  ): Promise<T> => {
     const next = stateOperationQueue.then(() =>
-      withWatchStateLock(root, profile, async () => {
+      withWatchStateLock(root, profile, async (nextArrivalOrder) => {
         await refreshStateFromDisk();
-        const result = await operation();
+        const allocateArrivalOrder = () =>
+          nextArrivalOrder(
+            Math.max(
+              0,
+              ...state.pendingReports.map(
+                (report) => report.arrivalOrder ?? 0,
+              ),
+            ),
+          );
+        const result = await operation(allocateArrivalOrder);
         syncPendingReportsToQueue();
         return result;
       }),
@@ -1441,7 +1470,7 @@ export async function createOperatorWatchPool(
       if (closed || polling.has(id)) return 0;
       polling.add(id);
       try {
-        return await withStateLock(async () => {
+        return await withStateLock(async (nextArrivalOrder) => {
           const watch = state.watches[id];
           if (!watch || closed) return 0;
           let located: LocatedSessionResumeStore | undefined;
@@ -1478,7 +1507,8 @@ export async function createOperatorWatchPool(
             watch.debounceMs,
             state.messageListeners[id]?.messageDebounceMs ?? 0,
           );
-          const readyAt = Date.now() + debounceMs;
+          const queuedAt = Date.now();
+          const readyAt = queuedAt + debounceMs;
           const reports = collectReports(
             resumeStore,
             observation,
@@ -1491,6 +1521,12 @@ export async function createOperatorWatchPool(
             issueUrl: resumeStore.issueUrl,
             debounceMs,
             readyAt,
+            arrivalOrder: nextArrivalOrder(),
+            firstQueuedAt: queuedAt,
+            priority:
+              report.reportType === 'open_question'
+                ? 'open_question' as const
+                : 'normal' as const,
           }));
           const cursorChanged = hash(previous ?? null) !== hash(next);
           if (reports.length > 0) state.pendingReports.push(...reports);
@@ -1507,7 +1543,7 @@ export async function createOperatorWatchPool(
       if (closed || messagePolling.has(id)) return 0;
       messagePolling.add(id);
       try {
-        return await withStateLock(async () => {
+        return await withStateLock(async (nextArrivalOrder) => {
           const listener = state.messageListeners[id];
           if (!listener || closed) return 0;
           let located: LocatedSessionResumeStore | undefined;
@@ -1554,7 +1590,8 @@ export async function createOperatorWatchPool(
             })),
           ].sort((left, right) => left.sendCount - right.sendCount);
           const reports: OperatorWatchState['pendingReports'] = [];
-          const readyAt = Date.now() + listener.messageDebounceMs;
+          const queuedAt = Date.now();
+          const readyAt = queuedAt + listener.messageDebounceMs;
           for (let index = 0; index < messageEvents.length; ) {
             const event = messageEvents[index]!;
             if (event.type === 'message') {
@@ -1566,6 +1603,9 @@ export async function createOperatorWatchPool(
                 text: formatConductorMessageReport(resumeStore, event.message),
                 debounceMs: listener.messageDebounceMs,
                 readyAt,
+                arrivalOrder: nextArrivalOrder(),
+                firstQueuedAt: queuedAt,
+                priority: 'normal',
                 sendCount: event.sendCount,
               });
               index += 1;
@@ -1591,6 +1631,9 @@ export async function createOperatorWatchPool(
               ),
               debounceMs: listener.messageDebounceMs,
               readyAt,
+              arrivalOrder: nextArrivalOrder(),
+              firstQueuedAt: queuedAt,
+              priority: 'normal',
               sendCount: oversizedSendCounts.at(-1)!,
               oversizedSendCounts,
             });
@@ -1602,7 +1645,10 @@ export async function createOperatorWatchPool(
           state.messageCursors[id] = nextCursor;
           if (reports.length > 0) {
             for (const pending of state.pendingReports) {
-              if (pending.conductorAgentId === id) pending.readyAt = readyAt;
+              if (
+                pending.conductorAgentId === id &&
+                !pending.frozenBatchId
+              ) pending.readyAt = readyAt;
             }
             state.pendingReports.push(...reports);
           }
@@ -1633,6 +1679,120 @@ export async function createOperatorWatchPool(
         await persist();
       });
       options.dispatchQueue.discardQueuedReports?.([...acknowledged]);
+    },
+    async enqueueIdleCandidate(input) {
+      const conductorAgentId = requireNonEmptyString(
+        input.conductorAgentId,
+        'conductorAgentId',
+      );
+      const text = requireNonEmptyString(input.text, 'text');
+      const issueUrl = issueUrlById.get(conductorAgentId);
+      if (!issueUrl) {
+        throw new Error(
+          `Cannot enqueue an idle candidate for unassigned session ${conductorAgentId}.`,
+        );
+      }
+      const reportId = randomUUID();
+      await withStateLock(async (nextArrivalOrder) => {
+        const queuedAt = Date.now();
+        state.pendingReports.push({
+          reportId,
+          reportType: 'idle_candidate',
+          conductorAgentId,
+          issueUrl,
+          text,
+          debounceMs: 0,
+          readyAt: queuedAt,
+          arrivalOrder: nextArrivalOrder(),
+          firstQueuedAt: queuedAt,
+          priority: 'idle',
+          // Eligibility begins when this process can actually admit the
+          // candidate to the shared scheduler, after acquiring the profile
+          // state lock. A caller-supplied timestamp must not age it while it
+          // waits outside the scheduler.
+          eligibleAt: queuedAt,
+        });
+        await persist();
+      });
+      return reportId;
+    },
+    async commitBatch(batch) {
+      const alreadyFrozen = batch.batchId !== undefined;
+      if (!options.dispatchQueue.commitBatch(batch)) return false;
+
+      const reports = batch.events.filter(
+        (event): event is Extract<OperatorDispatchEvent, { type: 'report' }> =>
+          event.type === 'report' && event.reportId !== undefined,
+      );
+      if (reports.length === 0 || alreadyFrozen) return true;
+      if (!batch.batchId || !batch.payload) {
+        options.dispatchQueue.rollbackBatchCommit(batch);
+        throw new Error('A committed report batch must have a frozen id and payload.');
+      }
+
+      try {
+        // The dispatch queue freezes its local membership synchronously above,
+        // before this method first awaits the durable profile lock. No
+        // same-session report arriving during lock wait can join this payload.
+        await withStateLock(async () => {
+          const reportsById = new Map(
+            state.pendingReports.map((report) => [report.reportId, report]),
+          );
+          const previous = new Map<
+            string,
+            (typeof state.pendingReports)[number]
+          >();
+          try {
+            for (const event of reports) {
+              const stored = reportsById.get(event.reportId!);
+              if (!stored) {
+                throw new Error(
+                  `Pending report ${event.reportId} disappeared before its batch could be frozen.`,
+                );
+              }
+              previous.set(event.reportId!, { ...stored });
+              stored.arrivalOrder = event.arrivalOrder ?? stored.arrivalOrder;
+              stored.firstQueuedAt = event.firstQueuedAt ?? stored.firstQueuedAt;
+              stored.readyAt = event.readyAt;
+              stored.priority = event.priority ?? stored.priority;
+              stored.eligibleAt = event.eligibleAt ?? stored.eligibleAt;
+              stored.frozenBatchId = batch.batchId;
+              stored.frozenPayload = batch.payload;
+              delete stored.retryReadyAt;
+            }
+            await persist();
+          } catch (error) {
+            for (const [reportId, snapshot] of previous) {
+              const stored = reportsById.get(reportId);
+              if (stored) Object.assign(stored, snapshot);
+            }
+            throw error;
+          }
+        });
+      } catch (error) {
+        // Persistence failed before send. Restore the captured local members
+        // so a later attempt can commit them again without losing IDs.
+        options.dispatchQueue.rollbackBatchCommit(batch);
+        throw error;
+      }
+      return true;
+    },
+    async recordRetry(events, retryReadyAt) {
+      const reports = events.filter(
+        (event): event is Extract<OperatorDispatchEvent, { type: 'report' }> =>
+          event.type === 'report' && event.reportId !== undefined,
+      );
+      if (reports.length === 0) return;
+      await withStateLock(async () => {
+        const reportsById = new Map(
+          state.pendingReports.map((report) => [report.reportId, report]),
+        );
+        for (const event of reports) {
+          const stored = reportsById.get(event.reportId!);
+          if (stored) stored.retryReadyAt = retryReadyAt;
+        }
+        await persist();
+      });
     },
     close() {
       closed = true;
@@ -2759,7 +2919,8 @@ async function loadWatchState(path: string): Promise<OperatorWatchState> {
         typeof report.text !== 'string' ||
         (report.reportType !== 'session_state' &&
           report.reportType !== 'open_question' &&
-          report.reportType !== 'conductor_message') ||
+          report.reportType !== 'conductor_message' &&
+          report.reportType !== 'idle_candidate') ||
         typeof report.debounceMs !== 'number'
       ) {
         throw new Error('Invalid operator-agent watch state: pending report.');
@@ -2816,14 +2977,75 @@ async function loadWatchState(path: string): Promise<OperatorWatchState> {
           'Invalid operator-agent watch state: pending report readyAt.',
         );
       }
+      for (const field of [
+        'arrivalOrder',
+        'firstQueuedAt',
+        'eligibleAt',
+        'retryReadyAt',
+      ] as const) {
+        const timestamp = report[field];
+        if (
+          timestamp !== undefined &&
+          (typeof timestamp !== 'number' ||
+            !Number.isSafeInteger(timestamp) ||
+            timestamp < 0)
+        ) {
+          throw new Error(
+            `Invalid operator-agent watch state: pending report ${field}.`,
+          );
+        }
+      }
+      if (
+        report.priority !== undefined &&
+          report.priority !== 'normal' &&
+          report.priority !== 'open_question' &&
+          report.priority !== 'idle'
+      ) {
+        throw new Error(
+          'Invalid operator-agent watch state: pending report priority.',
+        );
+      }
+      if (
+        (report.frozenBatchId !== undefined &&
+          (typeof report.frozenBatchId !== 'string' ||
+            report.frozenBatchId.trim().length === 0)) ||
+        (report.frozenPayload !== undefined &&
+          typeof report.frozenPayload !== 'string')
+      ) {
+        throw new Error(
+          'Invalid operator-agent watch state: pending report frozen batch.',
+        );
+      }
     }
-    const normalizedPendingReports = pendingReports.map((report) => {
+    const normalizedPendingReports = pendingReports.map((report, index) => {
       const record = report as Record<string, unknown>;
+      const readyAt =
+        typeof record.readyAt === 'number' ? record.readyAt : 0;
       return {
         ...record,
         // Legacy v1 state had no persisted deadline and was replayed
         // immediately on startup.
-        readyAt: typeof record.readyAt === 'number' ? record.readyAt : 0,
+        readyAt,
+        // Old records have no queue-order metadata. Preserve their file order;
+        // subsequent reports use the profile-wide locked sequence.
+        arrivalOrder:
+          typeof record.arrivalOrder === 'number'
+            ? record.arrivalOrder
+            : index,
+        // Old queuedAt values are intentionally ignored. readyAt is the only
+        // durable deadline they carried; new records retain firstQueuedAt.
+        firstQueuedAt:
+          typeof record.firstQueuedAt === 'number'
+            ? record.firstQueuedAt
+            : readyAt,
+        priority:
+          record.priority === 'idle' ||
+          record.reportType === 'idle_candidate'
+            ? 'idle'
+            : record.priority === 'open_question' ||
+                record.reportType === 'open_question'
+              ? 'open_question'
+            : 'normal',
       };
     }) as OperatorWatchState['pendingReports'];
     return {
@@ -2868,7 +3090,7 @@ async function saveWatchState(
 async function withWatchStateLock<T>(
   root: string,
   profile: string,
-  operation: () => Promise<T>,
+  operation: (nextArrivalOrder: (minimumExisting?: number) => number) => Promise<T>,
 ): Promise<T> {
   const directory = join(root, 'operator-agents', profile, 'watch');
   await mkdir(directory, { recursive: true, mode: 0o700 });
@@ -2878,6 +3100,7 @@ async function withWatchStateLock<T>(
     join(canonicalDirectory, 'watch-state-lock.sqlite'),
   );
   let transactionStarted = false;
+  let operationSucceeded = false;
   let operationError: unknown;
   try {
     await chmod(
@@ -2907,14 +3130,46 @@ async function withWatchStateLock<T>(
         { cause: lastLockError },
       );
     }
-    return await operation();
+    database.exec(
+      'CREATE TABLE IF NOT EXISTS operator_watch_order (id INTEGER PRIMARY KEY CHECK (id = 1), value INTEGER NOT NULL)',
+    );
+    database
+      .prepare(
+        'INSERT INTO operator_watch_order (id, value) VALUES (1, ?) ON CONFLICT(id) DO NOTHING',
+      )
+      .run(Date.now() * 1_000);
+    const nextArrivalOrder = (minimumExisting = 0) => {
+      const row = database
+        .prepare('SELECT value FROM operator_watch_order WHERE id = 1')
+        .get() as { value: number } | undefined;
+      if (!row || !Number.isSafeInteger(row.value)) {
+        throw new Error('Operator watch order counter is missing or invalid.');
+      }
+      const next = Math.max(
+        row.value + 1,
+        minimumExisting + 1,
+        Date.now() * 1_000,
+      );
+      if (!Number.isSafeInteger(next)) {
+        throw new Error('Operator watch order counter exceeded safe integer range.');
+      }
+      database
+        .prepare('UPDATE operator_watch_order SET value = ? WHERE id = 1')
+        .run(next);
+      return next;
+    };
+    const result = await operation(nextArrivalOrder);
+    operationSucceeded = true;
+    return result;
   } catch (error) {
     operationError = error;
     throw error;
   } finally {
     let releaseError: unknown;
     try {
-      if (transactionStarted) database.exec('ROLLBACK');
+      if (transactionStarted) {
+        database.exec(operationSucceeded ? 'COMMIT' : 'ROLLBACK');
+      }
     } catch (error) {
       releaseError = error;
     }

@@ -48,6 +48,7 @@ import { createListOperatorSessionsTool } from './list-operator-sessions-tool.js
 import {
   createReleaseReportsTool,
   createSetReportHoldTool,
+  createSetSessionFocusTool,
 } from './operator-control-tools.js';
 import {
   createOperatorWatchPool,
@@ -91,6 +92,8 @@ import {
   validateProfileName,
   type OperatorAgentConfiguration,
   type OperatorAgentProfile,
+  type OperatorAgentSchedulingConfig,
+  resolveOperatorAgentScheduling,
 } from './operator-agent-config.js';
 import { resolveOperatorAgentMcpServers } from './operator-agent-mcp.js';
 import {
@@ -140,6 +143,7 @@ interface OperatorRuntime {
   mcpServers?: ConductorAgentCreateOptions['mcpServers'];
   piResourceRoots: { agentDir: string; projectDir: string };
   systemPrompt: string;
+  scheduling: Required<OperatorAgentSchedulingConfig>;
 }
 
 interface OperatorAgentHandle extends ConductorAgentHandle {
@@ -238,7 +242,11 @@ export async function runOperatorAgent(
   const factory = addOperatorMcpStartupContext(
     dependencies.agentFactory ?? createConductorAgentFactory(runtime.backend),
   );
-  const dispatchQueue = createOperatorDispatchQueue();
+  const dispatchQueue = createOperatorDispatchQueue({
+    batchMaxWaitMs: runtime.scheduling.batchMaxWaitMs,
+    idleAgingMs: runtime.scheduling.idleAgingMs,
+    focusInactivityTimeoutMs: runtime.scheduling.focusInactivityTimeoutMs,
+  });
   const reportResumeStoreDuplicate = (
     diagnostic: SessionResumeStoreDuplicateDiagnostic,
   ) => {
@@ -366,6 +374,7 @@ export async function runOperatorAgent(
         createUnregisterConductorMessageListenTool(watchPool),
       set_report_hold: createSetReportHoldTool(dispatchQueue),
       release_reports: createReleaseReportsTool(dispatchQueue),
+      set_session_focus: createSetSessionFocusTool(dispatchQueue),
       send_operator_message: createSendOperatorMessageTool(
         { userEnsembleRoot: runtime.userEnsembleRoot },
         reportResumeStoreDuplicate,
@@ -506,6 +515,10 @@ async function resolveOperatorRuntime(
     process.env[OPERATOR_AGENT_REASONING_ENV]?.trim() ||
     profile.conductor?.reasoning ||
     config.common.conductor?.reasoning;
+  const scheduling = resolveOperatorAgentScheduling(
+    config.common.scheduling,
+    profile.scheduling,
+  );
   const agentDir = resolveOperatorPath(
     config.common.pi?.agentDir ??
       process.env.PI_CODING_AGENT_DIR ??
@@ -546,6 +559,7 @@ async function resolveOperatorRuntime(
     ...(mcpServers ? { mcpServers } : {}),
     piResourceRoots,
     systemPrompt,
+    scheduling,
   };
 }
 
@@ -823,8 +837,30 @@ async function runTtyConversation(options: {
     const message = rawMessage;
     const normalizedMessage = message.trim();
     if (!normalizedMessage || inputEnded) return;
+    options.dispatchQueue.noteOperatorInput();
     tui.appendUserMessage(message);
     if (handleRecoveryCommand(normalizedMessage)) return;
+    const focusCommand = /^\/focus(?:\s+(\S+))?$/u.exec(normalizedMessage);
+    if (focusCommand) {
+      if (!focusCommand[1]) {
+        writeChannelLine(
+          'observation',
+          `focus: ${options.dispatchQueue.focusSessionId ?? 'off'}。使い方: /focus <conductorAgentId> または /focus-off`,
+        );
+        return;
+      }
+      options.dispatchQueue.setFocus(focusCommand[1]);
+      writeChannelLine(
+        'observation',
+        `focus を ${focusCommand[1]} に設定しました。focus session の全 report を優先し、focus 外の Open Question が待つ場合があります。`,
+      );
+      return;
+    }
+    if (normalizedMessage === '/focus-off') {
+      options.dispatchQueue.setFocus(undefined);
+      writeChannelLine('observation', 'focus を解除しました。');
+      return;
+    }
     if (isOperatorCommand(normalizedMessage, 'exit')) {
       exitContinuity = true;
       inputEnded = true;
@@ -858,7 +894,7 @@ async function runTtyConversation(options: {
   process.on('SIGTERM', handleTermination);
   writeChannelLine(
     'observation',
-    `(${options.backend}) ready — enter /exit to start a fresh session next time.`,
+    `(${options.backend}) ready — enter /exit to start a fresh session next time. Focus: /focus <conductorAgentId> /focus-off.`,
     { leadingBlank: false },
   );
   const dispatchState: OperatorDispatchState = {
@@ -996,16 +1032,29 @@ async function runTtyConversation(options: {
         if (reservation) options.recoveryInbox.release(reservation);
         continue;
       }
-      if (!options.dispatchQueue.commitBatch(batch)) {
+      let committed: boolean;
+      try {
+        committed = await options.watchPool.commitBatch(batch);
+      } catch (error) {
+        if (reservation) options.recoveryInbox.release(reservation);
+        options.dispatchLifecycle.settleSend(lease, {
+          completed: false,
+          requiresConfirmation: false,
+        });
+        throw error;
+      }
+      if (!committed) {
         if (reservation) options.recoveryInbox.release(reservation);
         options.dispatchLifecycle.settleSend(lease, { completed: true });
         continue;
       }
 
+      // The watch pool resolves only after the frozen manifest is durable.
+      // Keep this path synchronous until sendConductorWithReconnect is invoked.
       const prompt =
         options.backend === 'cursor' && !cursorBootstrapComplete
-          ? `${options.systemPrompt}\n\n## User message\n\n${formatOperatorDispatchBatch(batch.events)}`
-          : formatOperatorDispatchBatch(batch.events);
+          ? `${options.systemPrompt}\n\n## User message\n\n${batch.payload ?? formatOperatorDispatchBatch(batch.events)}`
+          : batch.payload ?? formatOperatorDispatchBatch(batch.events);
       writeChannelLine('harness', 'operator: 処理中');
       const nextSendCount = sendCount + 1;
       let toolCallStarted = false;
@@ -1138,6 +1187,8 @@ async function runTtyConversation(options: {
           );
         }
       } else {
+        const retryReadyAt = Date.now() + 5_000;
+        await options.watchPool.recordRetry?.(batch.events, retryReadyAt);
         for (const event of batch.events) {
           if (event.type === 'report') options.dispatchQueue.requeue(event, 5_000);
         }

@@ -27,10 +27,12 @@ export const operatorBaseModule: PromptModule<OperatorPromptContext> = {
     'user の発話を受け取ると、自動 watch report の dispatch を会話 hold します。watch の購読と polling は継続し、報告は queue に保留されます。operator の応答 turn が完了し、次の user 発話が queue に無ければ自動 release します。',
     '手動 report hold は会話 hold と独立しており、どちらか一方が有効なら watch report は保留されます。`set_report_hold` / `release_reports` は手動 hold だけを操作します。',
     'user の発話と明示的な `send_operator_message` は report hold の対象外です。TTY の `/resume-watch` は会話 hold だけを手動解除します。',
+    'focus は既定 off です。TTY の `/focus <conductorAgentId>` または `set_session_focus` で対象を切り替え、`/focus-off` または引数なしの `set_session_focus` で解除します。focus 中はその session の全 report を優先するため、focus 外の Open Question が待つ場合があります。対象 session が人間応答待ちに入る際は通常手順として手動で切り替えるか解除してください。最後の operator / user 入力から測る既定10分の sliding timeout は解除忘れへの failsafe で、`common.scheduling.focusInactivityTimeoutMs` または profile の同項目で調整できます。自動 report や tool の自動実行では時計を更新しません。',
   ],
   instructions: [
     '`list_operator_sessions` の応答では、SessionResumeStore の保存値と `live.connectivity` による観測結果を区別してください。`unknown` は未確認であり、停止中を意味しません。',
     'Issue の状況を調べるときは `issueUrl` で対象 Issue を絞り、同じ Issue に複数 run があれば各 `conductorAgentId` を確認してください。後続 tool には対象 run の ID を指定し、更新時刻だけで同一 run と決めつけないでください。',
+    'user が特定 session の作業に集中したいと明示した場合は `set_session_focus` を使います。focus は default off で、focus 外 Open Question が待つ可能性があります。集中先が変わったら切り替え、人間応答待ちに入る際は手動解除してください。既定10分の人間入力起点 timeout は解除忘れ時の failsafe で、設定から調整できます。',
     '稼働中セッションの Open Question が必要なら `list_live_open_questions` を使ってください。SessionResumeStore の socket path は古い場合があるため、接続に失敗したら harness 未接続として伝え、保存 YAML へ切り替えないでください。',
     'Open Question を立てずに conductor へ送った後、直近の返答だけを確認するときは `get_last_conductor_message` を使ってください。これは inbound を含まず、稼働中 harness の最後の成功応答・時刻・send 番号を返します。対応する inbound 文脈や過去の履歴が必要なら `list_conductor_messages` を使ってください。',
     'conductor の発言と対応する inbound の履歴が必要なら `list_conductor_messages` を使ってください。これは provider session history から直近100件を読み、稼働中と process restart 後の両方で使えます。取得できない履歴は空一覧として扱わず、session ID と backend を含む error になります。',

@@ -31,12 +31,43 @@ export interface OperatorAgentMcpConfig {
   servers?: string[];
 }
 
+export interface OperatorAgentSchedulingConfig {
+  batchMaxWaitMs?: number;
+  idlePhaseThresholdMs?: number;
+  staleRunningThresholdMs?: number;
+  idleAgingMs?: number;
+  focusInactivityTimeoutMs?: number;
+  idleReevaluationIntervalMs?: number;
+}
+
+export const DEFAULT_OPERATOR_AGENT_SCHEDULING = {
+  batchMaxWaitMs: 30_000,
+  idlePhaseThresholdMs: 30 * 60_000,
+  staleRunningThresholdMs: 60 * 60_000,
+  idleAgingMs: 5 * 60_000,
+  focusInactivityTimeoutMs: 10 * 60_000,
+  idleReevaluationIntervalMs: 60_000,
+} as const satisfies Required<OperatorAgentSchedulingConfig>;
+
+const SCHEDULING_RANGES = {
+  batchMaxWaitMs: [10_000, 120_000],
+  idlePhaseThresholdMs: [10 * 60_000, 120 * 60_000],
+  staleRunningThresholdMs: [30 * 60_000, 240 * 60_000],
+  idleAgingMs: [60_000, 30 * 60_000],
+  focusInactivityTimeoutMs: [3 * 60_000, 30 * 60_000],
+  idleReevaluationIntervalMs: [30_000, 5 * 60_000],
+} as const satisfies Record<
+  keyof OperatorAgentSchedulingConfig,
+  readonly [number, number]
+>;
+
 export interface OperatorAgentProfile {
   include?: string[];
   conductor?: OperatorAgentSettings;
   prompt?: { instructions?: string[] };
   pi?: OperatorAgentPiProfileConfig;
   mcp?: OperatorAgentMcpConfig;
+  scheduling?: OperatorAgentSchedulingConfig;
 }
 
 export interface OperatorAgentConfiguration {
@@ -46,6 +77,7 @@ export interface OperatorAgentConfiguration {
     conductor?: OperatorAgentSettings;
     pi?: OperatorAgentPiCommonConfig;
     mcp?: OperatorAgentMcpConfig;
+    scheduling?: OperatorAgentSchedulingConfig;
   };
   profiles: Record<string, OperatorAgentProfile>;
 }
@@ -141,7 +173,11 @@ function parseCommon(
   source: string,
 ): OperatorAgentConfiguration['common'] {
   const record = asRecord(value, `${source}.common`);
-  assertOnlyKeys(record, ['conductor', 'pi', 'mcp'], `${source}.common`);
+  assertOnlyKeys(
+    record,
+    ['conductor', 'pi', 'mcp', 'scheduling'],
+    `${source}.common`,
+  );
   return {
     ...(record.conductor === undefined
       ? {}
@@ -152,12 +188,24 @@ function parseCommon(
     ...(record.mcp === undefined
       ? {}
       : { mcp: parseMcp(record.mcp, `${source}.common.mcp`) }),
+    ...(record.scheduling === undefined
+      ? {}
+      : {
+          scheduling: parseScheduling(
+            record.scheduling,
+            `${source}.common.scheduling`,
+          ),
+        }),
   };
 }
 
 function parseProfile(value: unknown, source: string): OperatorAgentProfile {
   const record = asRecord(value, source);
-  assertOnlyKeys(record, ['include', 'conductor', 'prompt', 'pi', 'mcp'], source);
+  assertOnlyKeys(
+    record,
+    ['include', 'conductor', 'prompt', 'pi', 'mcp', 'scheduling'],
+    source,
+  );
   const include =
     record.include === undefined
       ? undefined
@@ -176,7 +224,50 @@ function parseProfile(value: unknown, source: string): OperatorAgentProfile {
     ...(record.mcp === undefined
       ? {}
       : { mcp: parseMcp(record.mcp, `${source}.mcp`) }),
+    ...(record.scheduling === undefined
+      ? {}
+      : { scheduling: parseScheduling(record.scheduling, `${source}.scheduling`) }),
   };
+}
+
+export function resolveOperatorAgentScheduling(
+  common?: OperatorAgentSchedulingConfig,
+  profile?: OperatorAgentSchedulingConfig,
+): Required<OperatorAgentSchedulingConfig> {
+  return {
+    ...DEFAULT_OPERATOR_AGENT_SCHEDULING,
+    ...common,
+    ...profile,
+  };
+}
+
+function parseScheduling(
+  value: unknown,
+  source: string,
+): OperatorAgentSchedulingConfig {
+  const record = asRecord(value, source);
+  const keys = Object.keys(
+    SCHEDULING_RANGES,
+  ) as Array<keyof OperatorAgentSchedulingConfig>;
+  assertOnlyKeys(record, keys, source);
+  const scheduling: OperatorAgentSchedulingConfig = {};
+  for (const key of keys) {
+    const raw = record[key];
+    if (raw === undefined) continue;
+    const [minimum, maximum] = SCHEDULING_RANGES[key];
+    if (
+      typeof raw !== 'number' ||
+      !Number.isSafeInteger(raw) ||
+      raw < minimum ||
+      raw > maximum
+    ) {
+      throw new Error(
+        `Invalid ${source}.${key}: expected an integer from ${minimum} to ${maximum} milliseconds.`,
+      );
+    }
+    scheduling[key] = raw;
+  }
+  return scheduling;
 }
 
 function parseMcp(value: unknown, source: string): OperatorAgentMcpConfig {

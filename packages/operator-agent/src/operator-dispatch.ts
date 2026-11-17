@@ -1,4 +1,8 @@
 import { CONDUCTOR_RECOVERY_INPUT_BYTE_LIMIT } from '@agents-ensemble/core/operator-runtime';
+import { randomUUID } from 'node:crypto';
+import { DEFAULT_OPERATOR_AGENT_SCHEDULING } from './operator-agent-config.js';
+
+export type OperatorDispatchPriority = 'open_question' | 'normal' | 'idle';
 
 export type OperatorDispatchEvent =
   | {
@@ -9,13 +13,24 @@ export type OperatorDispatchEvent =
     }
   | {
       type: 'report';
-      reportType: 'session_state' | 'open_question' | 'conductor_message';
+      reportType:
+        | 'session_state'
+        | 'open_question'
+        | 'conductor_message'
+        | 'idle_candidate';
       conductorAgentId: string;
       issueUrl: string;
       text: string;
       reportId?: string;
       sendCount?: number;
       oversizedSendCounts?: number[];
+      priority?: OperatorDispatchPriority;
+      arrivalOrder?: number;
+      firstQueuedAt?: number;
+      eligibleAt?: number;
+      retryReadyAt?: number;
+      frozenBatchId?: string;
+      frozenPayload?: string;
       arrival: number;
       readyAt: number;
     };
@@ -23,13 +38,30 @@ export type OperatorDispatchEvent =
 export interface OperatorDispatchState {
   lastDispatchedSourceKey?: string;
   continuationConsumed: boolean;
+  focusSessionId?: string;
 }
 
 export interface OperatorDispatchBatch {
   sourceKey: string;
   events: OperatorDispatchEvent[];
   usedContinuation: boolean;
+  priority?: OperatorDispatchPriority;
+  batchId?: string;
+  payload?: string;
 }
+
+export interface OperatorDispatchScheduling {
+  batchMaxWaitMs: number;
+  idleAgingMs: number;
+  focusInactivityTimeoutMs: number;
+}
+
+export const DEFAULT_OPERATOR_DISPATCH_SCHEDULING: OperatorDispatchScheduling = {
+  batchMaxWaitMs: DEFAULT_OPERATOR_AGENT_SCHEDULING.batchMaxWaitMs,
+  idleAgingMs: DEFAULT_OPERATOR_AGENT_SCHEDULING.idleAgingMs,
+  focusInactivityTimeoutMs:
+    DEFAULT_OPERATOR_AGENT_SCHEDULING.focusInactivityTimeoutMs,
+};
 
 export interface OperatorDispatchQueue {
   subscribe(listener: () => void): () => void;
@@ -69,11 +101,14 @@ export interface OperatorDispatchQueue {
     releasedEventCount: number;
   };
   setHold(hold: boolean): { heldEventCount: number; releasedEventCount: number };
+  setFocus(conductorAgentId?: string, now?: number): string | undefined;
+  noteOperatorInput(now?: number): void;
   selectBatch(
     state: OperatorDispatchState,
     now?: number,
   ): OperatorDispatchBatch | undefined;
   commitBatch(batch: OperatorDispatchBatch): boolean;
+  rollbackBatchCommit(batch: OperatorDispatchBatch): void;
   takeBatch(state: OperatorDispatchState, now?: number): OperatorDispatchBatch | undefined;
   nextReadyAt(): number | undefined;
   waitForChange(timeoutMs?: number): Promise<void>;
@@ -84,6 +119,7 @@ export interface OperatorDispatchQueue {
   readonly conversationHold: boolean;
   readonly reportHold: boolean;
   readonly hold: boolean;
+  readonly focusSessionId: string | undefined;
 }
 
 export function operatorEventSourceKey(event: OperatorDispatchEvent): string {
@@ -105,49 +141,133 @@ export function selectOperatorDispatchBatch(
   state: OperatorDispatchState,
   now = Date.now(),
   maxUserInputBytes = CONDUCTOR_RECOVERY_INPUT_BYTE_LIMIT,
+  scheduling: Pick<OperatorDispatchScheduling, 'batchMaxWaitMs' | 'idleAgingMs'> =
+    DEFAULT_OPERATOR_DISPATCH_SCHEDULING,
 ): { batch: OperatorDispatchBatch; remaining: OperatorDispatchEvent[] } | undefined {
-  const ready = queue.filter((event) => {
-    if (event.readyAt > now) return false;
-    if (event.type === 'user') return true;
-    return queue
-      .filter(
-        (candidate) =>
-          candidate.type === 'report' &&
-          operatorEventSourceKey(candidate) === operatorEventSourceKey(event),
-      )
-      .every((candidate) => candidate.readyAt <= now);
-  });
-  if (ready.length === 0) return undefined;
+  const ordered = [...queue].sort(compareDispatchEvents);
+  const readyUsers = ordered.filter(
+    (event) => event.type === 'user' && event.readyAt <= now,
+  );
+  const sessions = new Map<
+    string,
+    { events: Extract<OperatorDispatchEvent, { type: 'report' }>[]; readyAt: number; priority: OperatorDispatchPriority; hasQuestion: boolean }
+  >();
+  for (const event of ordered) {
+    if (event.type !== 'report') continue;
+    const sourceKey = operatorEventSourceKey(event);
+    const group = sessions.get(sourceKey) ?? {
+      events: [],
+      readyAt: 0,
+      priority: 'idle' as const,
+      hasQuestion: false,
+    };
+    group.events.push(event);
+    sessions.set(sourceKey, group);
+  }
 
-  const user = ready.find((event) => event.type === 'user');
+  const candidates: Array<{
+    sourceKey: string;
+    events: Extract<OperatorDispatchEvent, { type: 'report' }>[];
+    order: number;
+    readyAt: number;
+    priority: OperatorDispatchPriority;
+    hasQuestion: boolean;
+    aged: boolean;
+  }> = [];
+  for (const [sourceKey, group] of sessions) {
+    const first = group.events[0]!;
+    const frozenBatchId = first.frozenBatchId;
+    const events = frozenBatchId
+      ? group.events.filter((event) => event.frozenBatchId === frozenBatchId)
+      : group.events.filter((event) => !event.frozenBatchId);
+    if (events.length === 0) continue;
+
+    const readyAt = frozenBatchId
+      ? Math.max(
+          ...events.map((event) =>
+            event.retryReadyAt ?? 0,
+          ),
+        )
+      : Math.min(
+          Math.max(...events.map((event) => event.readyAt)),
+          Math.min(
+            ...events.map(
+              (event) =>
+                (event.firstQueuedAt ?? event.readyAt) +
+                scheduling.batchMaxWaitMs,
+            ),
+          ),
+        );
+    if (readyAt > now) continue;
+
+    const priority: OperatorDispatchPriority = events.some(
+      (event) => event.priority === 'open_question',
+    )
+      ? 'open_question'
+      : events.some((event) => event.priority !== 'idle')
+        ? 'normal'
+        : 'idle';
+    const eligibleAt = Math.min(
+      ...events.map((event) => event.eligibleAt ?? event.firstQueuedAt ?? event.readyAt),
+    );
+    const aged = priority === 'idle' && now >= eligibleAt + scheduling.idleAgingMs;
+    candidates.push({
+      sourceKey,
+      events,
+      order: eventOrder(first),
+      readyAt,
+      priority,
+      hasQuestion: events.some((event) => event.reportType === 'open_question'),
+      aged,
+    });
+  }
+
+  if (readyUsers.length === 0 && candidates.length === 0) return undefined;
+  const user = readyUsers[0];
   let sourceKey: string;
   let usedContinuation = false;
+  let selectedCandidate:
+    | (typeof candidates)[number]
+    | undefined;
   if (user) {
     sourceKey = 'user';
   } else {
-    const question = ready.find(
-      (event) => event.type === 'report' && event.reportType === 'open_question',
-    );
-    if (question) {
-      sourceKey = operatorEventSourceKey(question);
-    } else if (
+    const focus = state.focusSessionId
+      ? candidates.find(
+          (candidate) =>
+            candidate.sourceKey === `session:${state.focusSessionId}`,
+        )
+      : undefined;
+    const question = candidates
+      .filter((candidate) => candidate.hasQuestion)
+      .sort((left, right) => left.order - right.order)[0];
+    selectedCandidate = focus ?? question;
+    if (
+      !selectedCandidate &&
       !state.continuationConsumed &&
-      state.lastDispatchedSourceKey?.startsWith('session:') &&
-      ready.some(
-        (event) =>
-          operatorEventSourceKey(event) === state.lastDispatchedSourceKey,
-      )
+      state.lastDispatchedSourceKey?.startsWith('session:')
     ) {
-      sourceKey = state.lastDispatchedSourceKey;
-      usedContinuation = true;
-    } else {
-      sourceKey = operatorEventSourceKey(ready[0]!);
+      selectedCandidate = candidates.find(
+        (candidate) =>
+          candidate.sourceKey === state.lastDispatchedSourceKey,
+      );
+      usedContinuation = selectedCandidate !== undefined;
     }
+    if (!selectedCandidate) {
+      const normalFifo = candidates
+        .filter((candidate) => candidate.priority === 'normal' || candidate.aged)
+        .sort((left, right) => left.order - right.order);
+      selectedCandidate =
+        normalFifo[0] ??
+        candidates.sort((left, right) => left.order - right.order)[0];
+    }
+    if (!selectedCandidate) return undefined;
+    sourceKey = selectedCandidate.sourceKey;
   }
 
-  let events = ready.filter(
-    (event) => operatorEventSourceKey(event) === sourceKey,
-  );
+  let events: OperatorDispatchEvent[] = user
+    ? readyUsers
+    : [...(selectedCandidate?.events ?? [])];
   if (sourceKey === 'user') {
     const bounded: OperatorDispatchEvent[] = [];
     let inputBytes = 0;
@@ -165,10 +285,34 @@ export function selectOperatorDispatchBatch(
     if (events.length === 0) return undefined;
   }
   const selected = new Set(events);
+  const frozen = events.find(
+    (event): event is Extract<OperatorDispatchEvent, { type: 'report' }> =>
+      event.type === 'report' && event.frozenBatchId !== undefined,
+  );
   return {
-    batch: { sourceKey, events, usedContinuation },
+    batch: {
+      sourceKey,
+      events,
+      usedContinuation,
+      ...(selectedCandidate ? { priority: selectedCandidate.aged ? 'normal' : selectedCandidate.priority } : {}),
+      ...(frozen?.frozenBatchId ? { batchId: frozen.frozenBatchId } : {}),
+      ...(frozen?.frozenPayload ? { payload: frozen.frozenPayload } : {}),
+    },
     remaining: queue.filter((event) => !selected.has(event)),
   };
+}
+
+function eventOrder(event: OperatorDispatchEvent): number {
+  return event.type === 'report'
+    ? event.arrivalOrder ?? event.arrival
+    : event.arrival;
+}
+
+function compareDispatchEvents(
+  left: OperatorDispatchEvent,
+  right: OperatorDispatchEvent,
+): number {
+  return eventOrder(left) - eventOrder(right) || left.arrival - right.arrival;
 }
 
 export function formatOperatorDispatchBatch(
@@ -187,10 +331,7 @@ export function formatOperatorDispatchBatch(
     );
     const reportTypes = new Set(reports.map((event) => event.reportType));
     if (reportTypes.size === 1 && reportTypes.has('conductor_message')) {
-      const messages = aggregateOversizedConductorMessageWarnings(reports).sort(
-        (left, right) =>
-          (left.sendCount ?? 0) - (right.sendCount ?? 0),
-      );
+      const messages = aggregateOversizedConductorMessageWarnings(reports);
       if (messages.length === 1) {
         return ['## Conductor の発言', '', messages[0]!.text].join('\n');
       }
@@ -229,6 +370,7 @@ export function formatOperatorDispatchBatch(
         session_state: 'セッション状態',
         open_question: 'Open Question',
         conductor_message: 'Conductor の発言',
+        idle_candidate: '稼働 session の確認候補',
       };
       const formattedReports = aggregateOversizedConductorMessageWarnings(
         reports,
@@ -321,7 +463,9 @@ export function formatOversizedConductorMessageWarning(
   ].join('\n');
 }
 
-export function createOperatorDispatchQueue(): OperatorDispatchQueue {
+export function createOperatorDispatchQueue(
+  scheduling: OperatorDispatchScheduling = DEFAULT_OPERATOR_DISPATCH_SCHEDULING,
+): OperatorDispatchQueue {
   let arrival = 0;
   let held: Extract<OperatorDispatchEvent, { type: 'report' }>[] = [];
   let pending: OperatorDispatchEvent[] = [];
@@ -329,6 +473,10 @@ export function createOperatorDispatchQueue(): OperatorDispatchQueue {
   const retryReadyAtById = new Map<string, number>();
   let conversationHold = false;
   let reportHold = false;
+  let focusSessionId: string | undefined;
+  let focusLastInputAt: number | undefined;
+  let lastOperatorInputAt: number | undefined;
+  let firstFocusActivationAt: number | undefined;
   const isHeld = () => conversationHold || reportHold;
   const hasReport = (reportId: string) =>
     inFlightReportIds.has(reportId) ||
@@ -336,6 +484,20 @@ export function createOperatorDispatchQueue(): OperatorDispatchQueue {
       (event) => event.type === 'report' && event.reportId === reportId,
     ) ||
     held.some((event) => event.reportId === reportId);
+  const clearExpiredFocus = (now: number) => {
+    if (
+      focusSessionId &&
+      focusLastInputAt !== undefined &&
+      now - focusLastInputAt >= scheduling.focusInactivityTimeoutMs
+    ) {
+      focusSessionId = undefined;
+      focusLastInputAt = undefined;
+      notify();
+    }
+  };
+  const orderReports = (
+    reports: Extract<OperatorDispatchEvent, { type: 'report' }>[],
+  ) => reports.sort(compareDispatchEvents);
   const updateHold = (
     previousHold: boolean,
   ): { heldEventCount: number; releasedEventCount: number } => {
@@ -390,13 +552,31 @@ export function createOperatorDispatchQueue(): OperatorDispatchQueue {
     enqueueReport(event, debounceMs) {
       this.enqueueReports([event], debounceMs);
     },
-  enqueueReports(events, debounceMs) {
+    enqueueReports(events, debounceMs) {
       if (events.length === 0) return;
-      const readyAt = Date.now() + Math.max(0, debounceMs);
+      const now = Date.now();
+      const readyAt = now + Math.max(0, debounceMs);
       let added = false;
       for (const event of events) {
+        const priority =
+          event.priority ??
+          (event.reportType === 'idle_candidate'
+            ? 'idle'
+            : event.reportType === 'open_question'
+              ? 'open_question'
+              : 'normal');
         if (event.reportId && hasReport(event.reportId)) continue;
-        const next = { ...event, arrival: arrival++, readyAt };
+        const next = {
+          ...event,
+          priority,
+          arrivalOrder: event.arrivalOrder ?? arrival,
+          firstQueuedAt: event.firstQueuedAt ?? now,
+          ...(priority === 'idle'
+            ? { eligibleAt: now }
+            : {}),
+          arrival: arrival++,
+          readyAt,
+        };
         if (isHeld()) held.push(next);
         else pending.push(next);
         added = true;
@@ -405,34 +585,64 @@ export function createOperatorDispatchQueue(): OperatorDispatchQueue {
     },
     enqueueDebouncedReports(events, debounceMs) {
       if (events.length === 0) return;
-      const readyAt = Date.now() + Math.max(0, debounceMs);
+      const now = Date.now();
+      const readyAt = now + Math.max(0, debounceMs);
       const sourceKeys = new Set(events.map(reportSourceKey));
       let changed = false;
       for (const event of pending) {
-        if (sourceKeys.has(operatorEventSourceKey(event))) {
+        if (
+          event.type === 'report' &&
+          !event.frozenBatchId &&
+          sourceKeys.has(operatorEventSourceKey(event))
+        ) {
           event.readyAt = readyAt;
           changed = true;
         }
       }
       for (const event of held) {
-        if (sourceKeys.has(operatorEventSourceKey(event))) {
+        if (
+          !event.frozenBatchId &&
+          sourceKeys.has(operatorEventSourceKey(event))
+        ) {
           event.readyAt = readyAt;
           changed = true;
         }
       }
       for (const event of events) {
+        const priority =
+          event.priority ??
+          (event.reportType === 'idle_candidate'
+            ? 'idle'
+            : event.reportType === 'open_question'
+              ? 'open_question'
+              : 'normal');
         if (event.reportId && hasReport(event.reportId)) continue;
-        const next = { ...event, arrival: arrival++, readyAt };
+        const sourceKey = reportSourceKey(event);
+        const next = {
+          ...event,
+          priority,
+          arrivalOrder: event.arrivalOrder ?? arrival,
+          firstQueuedAt: event.firstQueuedAt ?? now,
+          ...(priority === 'idle'
+            ? { eligibleAt: now }
+            : {}),
+          arrival: arrival++,
+          readyAt,
+        };
         if (isHeld()) held.push(next);
         else pending.push(next);
         changed = true;
       }
+      pending.sort(compareDispatchEvents);
+      held.sort(compareDispatchEvents);
       if (changed) notify();
     },
     reconcileReports(reports) {
       const desired = new Map(
-        reports.flatMap(({ event, readyAt }) =>
-          event.reportId ? [[event.reportId, { event, readyAt }] as const] : [],
+        reports.flatMap(({ event, readyAt, ...metadata }) =>
+          event.reportId
+            ? [[event.reportId, { event, readyAt, ...metadata }] as const]
+            : [],
         ),
       );
       const pendingBefore = pending.length;
@@ -451,15 +661,25 @@ export function createOperatorDispatchQueue(): OperatorDispatchQueue {
       for (const [reportId, persisted] of desired) {
         const readyAt = Math.max(
           persisted.readyAt,
+          persisted.event.retryReadyAt ?? 0,
           retryReadyAtById.get(reportId) ?? 0,
         );
         const queued = [...pending, ...held].find(
-          (event) =>
+          (event): event is Extract<OperatorDispatchEvent, { type: 'report' }> =>
             event.type === 'report' && event.reportId === reportId,
         );
         if (queued) {
-          if (queued.readyAt !== readyAt) {
-            queued.readyAt = readyAt;
+          if (
+            queued.readyAt !== readyAt ||
+            queued.arrivalOrder !== persisted.event.arrivalOrder ||
+            queued.firstQueuedAt !== persisted.event.firstQueuedAt ||
+            queued.eligibleAt !== persisted.event.eligibleAt ||
+            queued.priority !== persisted.event.priority ||
+            queued.frozenBatchId !== persisted.event.frozenBatchId ||
+            queued.frozenPayload !== persisted.event.frozenPayload ||
+            queued.retryReadyAt !== persisted.event.retryReadyAt
+          ) {
+            Object.assign(queued, persisted.event, { readyAt });
             changed = true;
           }
           continue;
@@ -468,13 +688,16 @@ export function createOperatorDispatchQueue(): OperatorDispatchQueue {
 
         const next = {
           ...persisted.event,
-          arrival: arrival++,
+          arrival: persisted.event.arrivalOrder ?? arrival,
           readyAt,
         };
+        arrival = Math.max(arrival, next.arrival + 1);
         if (isHeld()) held.push(next);
         else pending.push(next);
         changed = true;
       }
+      pending.sort(compareDispatchEvents);
+      held.sort(compareDispatchEvents);
       for (const reportId of retryReadyAtById.keys()) {
         if (!desired.has(reportId) && !inFlightReportIds.has(reportId)) {
           retryReadyAtById.delete(reportId);
@@ -487,6 +710,7 @@ export function createOperatorDispatchQueue(): OperatorDispatchQueue {
       for (const event of [...pending, ...held]) {
         if (
           event.type === 'report' &&
+          !event.frozenBatchId &&
           event.conductorAgentId === conductorAgentId &&
           event.reportType !== 'conductor_message'
         ) {
@@ -529,22 +753,26 @@ export function createOperatorDispatchQueue(): OperatorDispatchQueue {
           inFlightReportIds.delete(reportId);
           retryReadyAtById.set(reportId, readyAt);
           const queued = [...pending, ...held].find(
-            (candidate) =>
+            (candidate): candidate is Extract<OperatorDispatchEvent, { type: 'report' }> =>
               candidate.type === 'report' && candidate.reportId === reportId,
           );
           if (queued) {
-            queued.readyAt = Math.max(queued.readyAt, readyAt);
+            queued.retryReadyAt = readyAt;
             notify();
             return;
           }
         }
         const next = {
           ...event,
-          arrival: arrival++,
-          readyAt,
+          arrivalOrder: event.arrivalOrder ?? event.arrival,
+          retryReadyAt: readyAt,
+          arrival: event.arrival,
+          readyAt: event.readyAt,
         };
         if (isHeld()) held.push(next);
         else pending.push(next);
+        pending.sort(compareDispatchEvents);
+        held.sort(compareDispatchEvents);
       }
       notify();
     },
@@ -558,16 +786,93 @@ export function createOperatorDispatchQueue(): OperatorDispatchQueue {
       reportHold = nextHold;
       return updateHold(previousHold);
     },
+    setFocus(conductorAgentId, now = Date.now()) {
+      const previous = focusSessionId;
+      const normalized = conductorAgentId?.trim();
+      focusSessionId = normalized || undefined;
+      if (!focusSessionId) {
+        focusLastInputAt = undefined;
+      } else if (!previous) {
+        // The TTY input handler records its human input before applying the
+        // focus command. Tool calls can activate or switch focus, but cannot
+        // move an existing human-input deadline forward. If no human input
+        // has been observed, seed a one-time fallback from first activation.
+        firstFocusActivationAt ??= now;
+        focusLastInputAt = lastOperatorInputAt ?? firstFocusActivationAt;
+      }
+      notify();
+      return previous;
+    },
+    noteOperatorInput(now = Date.now()) {
+      lastOperatorInputAt = now;
+      if (!focusSessionId) return;
+      focusLastInputAt = now;
+      notify();
+    },
     selectBatch(state, now = Date.now()) {
-      const selected = selectOperatorDispatchBatch(pending, state, now);
+      clearExpiredFocus(now);
+      const selected = selectOperatorDispatchBatch(
+        pending,
+        { ...state, focusSessionId },
+        now,
+        CONDUCTOR_RECOVERY_INPUT_BYTE_LIMIT,
+        scheduling,
+      );
       return selected?.batch;
     },
     commitBatch(batch) {
-      const selected = new Set(batch.events);
+      let events = batch.events;
+      if (batch.sourceKey !== 'user' && !batch.batchId) {
+        const appendable = orderReports(
+          pending.filter(
+            (event): event is Extract<OperatorDispatchEvent, { type: 'report' }> =>
+              event.type === 'report' &&
+              operatorEventSourceKey(event) === batch.sourceKey &&
+              !event.frozenBatchId,
+          ),
+        );
+        if (appendable.length > 0) {
+          events = appendable;
+          batch.events.splice(0, batch.events.length, ...appendable);
+          const batchId = randomUUID();
+          const payload = formatOperatorDispatchBatch(appendable);
+          batch.batchId = batchId;
+          batch.payload = payload;
+          const memberPriority: OperatorDispatchPriority = appendable.some(
+            (event) => event.priority === 'open_question',
+          )
+            ? 'open_question'
+            : appendable.some((event) => event.priority !== 'idle')
+              ? 'normal'
+              : 'idle';
+          batch.priority =
+            memberPriority === 'idle' && batch.priority === 'normal'
+              ? 'normal'
+              : memberPriority;
+          for (const event of appendable) {
+            event.frozenBatchId = batchId;
+            event.frozenPayload = payload;
+          }
+        }
+      } else if (batch.batchId) {
+        const frozenReports = orderReports(
+          pending.filter(
+            (event): event is Extract<OperatorDispatchEvent, { type: 'report' }> =>
+              event.type === 'report' &&
+              event.frozenBatchId === batch.batchId,
+          ),
+        );
+        if (frozenReports.length > 0) {
+          events = frozenReports;
+          batch.events.splice(0, batch.events.length, ...frozenReports);
+          batch.payload = frozenReports[0]!.frozenPayload;
+        }
+      }
+      const selected = new Set(events);
       const previousLength = pending.length;
       pending = pending.filter((event) => !selected.has(event));
       if (pending.length === previousLength) return false;
-      for (const event of batch.events) {
+      for (const event of events) {
         if (event.type === 'report' && event.reportId) {
           inFlightReportIds.add(event.reportId);
           retryReadyAtById.delete(event.reportId);
@@ -576,6 +881,22 @@ export function createOperatorDispatchQueue(): OperatorDispatchQueue {
       notify();
       return true;
     },
+    rollbackBatchCommit(batch) {
+      if (batch.sourceKey === 'user') return;
+      for (const event of batch.events) {
+        if (event.type !== 'report') continue;
+        if (event.reportId) inFlightReportIds.delete(event.reportId);
+        if (batch.batchId && event.frozenBatchId === batch.batchId) {
+          delete event.frozenBatchId;
+          delete event.frozenPayload;
+        }
+        if (!pending.includes(event)) pending.push(event);
+      }
+      pending.sort(compareDispatchEvents);
+      delete batch.batchId;
+      delete batch.payload;
+      notify();
+    },
     takeBatch(state, now = Date.now()) {
       const batch = this.selectBatch(state, now);
       if (!batch) return undefined;
@@ -583,8 +904,19 @@ export function createOperatorDispatchQueue(): OperatorDispatchQueue {
       return batch;
     },
     nextReadyAt() {
-      const nextBySource = new Map<string, number>();
       let nextUserReadyAt: number | undefined;
+      const nextCandidateTimes: number[] = [];
+      const now = Date.now();
+      clearExpiredFocus(now);
+      if (focusSessionId && focusLastInputAt !== undefined) {
+        nextCandidateTimes.push(
+          focusLastInputAt + scheduling.focusInactivityTimeoutMs,
+        );
+      }
+      const bySource = new Map<
+        string,
+        Extract<OperatorDispatchEvent, { type: 'report' }>[]
+      >();
       for (const event of pending) {
         if (event.type === 'user') {
           nextUserReadyAt =
@@ -594,14 +926,52 @@ export function createOperatorDispatchQueue(): OperatorDispatchQueue {
           continue;
         }
         const sourceKey = operatorEventSourceKey(event);
-        nextBySource.set(
-          sourceKey,
-          Math.max(nextBySource.get(sourceKey) ?? Number.NEGATIVE_INFINITY, event.readyAt),
-        );
+        const reports = bySource.get(sourceKey) ?? [];
+        reports.push(event);
+        bySource.set(sourceKey, reports);
+      }
+      for (const reports of bySource.values()) {
+        orderReports(reports);
+        const first = reports[0]!;
+        const frozenBatchId = first.frozenBatchId;
+        const batch = frozenBatchId
+          ? reports.filter((event) => event.frozenBatchId === frozenBatchId)
+          : reports.filter((event) => !event.frozenBatchId);
+        if (batch.length === 0) continue;
+        const readyAt = frozenBatchId
+          ? Math.max(
+              ...batch.map((event) =>
+                Math.max(
+                  event.retryReadyAt ?? 0,
+                  retryReadyAtById.get(event.reportId ?? '') ?? 0,
+                ),
+              ),
+            )
+          : Math.min(
+              Math.max(...batch.map((event) => event.readyAt)),
+              Math.min(
+                ...batch.map(
+                  (event) =>
+                    (event.firstQueuedAt ?? event.readyAt) +
+                    scheduling.batchMaxWaitMs,
+                ),
+              ),
+            );
+        nextCandidateTimes.push(readyAt);
+        const idleOnly = batch.every((event) => event.priority === 'idle');
+        if (idleOnly) {
+          const eligibleAt = Math.min(
+            ...batch.map(
+              (event) =>
+                event.eligibleAt ?? event.firstQueuedAt ?? event.readyAt,
+            ),
+          );
+          nextCandidateTimes.push(eligibleAt + scheduling.idleAgingMs);
+        }
       }
       const deadlines = [
         ...(nextUserReadyAt === undefined ? [] : [nextUserReadyAt]),
-        ...nextBySource.values(),
+        ...nextCandidateTimes.filter((deadline) => deadline > now),
       ];
       return deadlines.length > 0 ? Math.min(...deadlines) : undefined;
     },
@@ -638,6 +1008,10 @@ export function createOperatorDispatchQueue(): OperatorDispatchQueue {
     },
     get hold() {
       return isHeld();
+    },
+    get focusSessionId() {
+      clearExpiredFocus(Date.now());
+      return focusSessionId;
     },
   };
 }

@@ -945,6 +945,7 @@ describe('runOperatorAgent', () => {
       'unregister_conductor_message_listen',
       'set_report_hold',
       'release_reports',
+      'set_session_focus',
       'send_operator_message',
       'shutdown_issue_session',
       'read_operator_workspace_file',
@@ -1909,6 +1910,81 @@ describe('runOperatorAgent', () => {
     expect(sentPrompts[1]).toContain('conductor reply 2');
   });
 
+  it('does not start a send when the durable batch freeze cannot be committed', async () => {
+    const setupPool = await createOperatorWatchPool({
+      repoRoot,
+      userEnsembleRoot: join(repoRoot, '.ensemble'),
+      profile: 'smoke',
+      dispatchQueue: createOperatorDispatchQueue(),
+    });
+    try {
+      await setupPool.enqueueIdleCandidate!({
+        conductorAgentId: 'conductor-one',
+        text: 'candidate waits for a durable batch commit',
+        eligibleAt: Date.now(),
+      });
+    } finally {
+      setupPool.close();
+    }
+
+    const lockPath = join(
+      repoRoot,
+      '.ensemble',
+      'operator-agents',
+      'smoke',
+      'watch',
+      'watch-state-lock.sqlite',
+    );
+    const send = vi.fn(async () => ({
+      runId: 'must-not-send',
+      status: 'finished' as const,
+      result: 'unexpected send',
+    }));
+    const input = createInteractiveInput();
+    const output = createOutput();
+    let stateLock: DatabaseSync | undefined;
+    const fakeAgent = createFakeAgent({ send });
+    const run = runOperatorAgent(
+      { repoRoot, newSession: true },
+      {
+        stdin: input,
+        stdout: output,
+        agentFactory: {
+          create: async () => {
+            stateLock = new DatabaseSync(lockPath);
+            stateLock.exec('BEGIN IMMEDIATE');
+            return fakeAgent;
+          },
+          resume: async () => fakeAgent,
+        },
+      },
+    );
+
+    try {
+      await expect(run).rejects.toThrow(
+        /Could not acquire operator watch state profile lock/u,
+      );
+    } finally {
+      stateLock?.exec('ROLLBACK');
+      stateLock?.close();
+      input.end();
+    }
+
+    expect(send).not.toHaveBeenCalled();
+    const persisted = JSON.parse(
+      await readFile(baseWatchStatePath(repoRoot), 'utf8'),
+    ) as {
+      pendingReports: Array<{
+        reportId: string;
+        frozenBatchId?: string;
+        frozenPayload?: string;
+      }>;
+    };
+    expect(persisted.pendingReports).toHaveLength(1);
+    expect(persisted.pendingReports[0]).not.toHaveProperty('frozenBatchId');
+    expect(persisted.pendingReports[0]).not.toHaveProperty('frozenPayload');
+  });
+
   it('retries a completed report acknowledgement in the same runner without resending the turn', async () => {
     let liveSnapshot: SessionObservationSnapshot = {
       sequence: 1,
@@ -2292,8 +2368,13 @@ describe('runOperatorAgent', () => {
 
     const afterCancelledSend = JSON.parse(
       await readFile(statePath, 'utf8'),
-    ) as { pendingReports: Array<{ reportId: string }> };
+    ) as {
+      pendingReports: Array<{ reportId: string; retryReadyAt?: number }>;
+    };
     expect(afterCancelledSend.pendingReports).toHaveLength(1);
+    expect(afterCancelledSend.pendingReports[0]?.retryReadyAt).toBeGreaterThan(
+      Date.now(),
+    );
     expect(normalizeTtyText(firstOutput.capturedText())).toContain(
       'send not completed (status=cancelled); watched reports retained for retry.',
     );
@@ -2326,7 +2407,10 @@ describe('runOperatorAgent', () => {
       },
     );
 
-    await vi.waitFor(() => expect(retryPrompts).toHaveLength(1));
+    await vi.waitFor(
+      () => expect(retryPrompts).toHaveLength(1),
+      { timeout: 8_000, interval: 50 },
+    );
     expect(retryPrompts[0]).toContain('Should this report be retried?');
     await vi.waitFor(async () => {
       const saved = JSON.parse(await readFile(statePath, 'utf8')) as {
@@ -2336,7 +2420,7 @@ describe('runOperatorAgent', () => {
     });
     retryInput.write('/exit\n');
     await retryRun;
-  });
+  }, 15_000);
 
   it('keeps the TTY transcript free of ANSI escapes when NO_COLOR is set', async () => {
     process.env.NO_COLOR = '1';

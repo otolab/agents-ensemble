@@ -57,6 +57,38 @@ export function createReleaseReportsTool(
   };
 }
 
+export function createSetSessionFocusTool(
+  queue: OperatorDispatchQueue,
+): ConductorTool {
+  return {
+    name: 'set_session_focus',
+    description:
+      'Set the session whose reports receive focus priority, or omit conductorAgentId to turn focus off. Focus defaults to off. While on, all reports from the focused session precede reports from other sessions, so an Open Question outside focus can wait. The operator should switch or clear focus when work changes and manually clear it when the focused session enters a human-response wait; the default 10-minute sliding timeout since operator/user input is a failsafe and is configurable from 3–30 minutes with common.scheduling.focusInactivityTimeoutMs or profiles.<name>.scheduling.focusInactivityTimeoutMs. Only operator/user input received by operator-agent resets the timeout; invoking this tool or receiving automatic reports does not.',
+    inputSchema: {
+      type: 'object',
+      properties: { conductorAgentId: { type: 'string' } },
+      additionalProperties: false,
+    },
+    execute: async (args) => {
+      if (
+        args.conductorAgentId !== undefined &&
+        (typeof args.conductorAgentId !== 'string' ||
+          args.conductorAgentId.trim().length === 0)
+      ) {
+        throw new Error('conductorAgentId must be a non-empty string when provided.');
+      }
+      queue.setFocus(
+        typeof args.conductorAgentId === 'string'
+          ? args.conductorAgentId
+          : undefined,
+      );
+      return toolResult({
+        focusSessionId: queue.focusSessionId ?? null,
+      });
+    },
+  };
+}
+
 function toolResult(value: Record<string, ConductorJsonValue>): {
   content: Array<{ type: 'text'; text: string }>;
   structuredContent: Record<string, ConductorJsonValue>;

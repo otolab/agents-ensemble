@@ -8,7 +8,11 @@ import {
   saveSessionResumeStore,
   SESSION_RESUME_STORE_VERSION,
 } from '../../core/src/session/session-resume-store.js';
-import { createOperatorDispatchQueue } from './operator-dispatch.js';
+import {
+  createOperatorDispatchQueue,
+  DEFAULT_OPERATOR_DISPATCH_SCHEDULING,
+} from './operator-dispatch.js';
+import { createSetSessionFocusTool } from './operator-control-tools.js';
 import { createSendOperatorMessageTool } from './open-question-control-tools.js';
 
 describe('operator control tools', () => {
@@ -81,5 +85,131 @@ describe('operator control tools', () => {
     });
     expect(queue.heldEventCount).toBe(1);
     expect(queue.pendingEventCount).toBe(0);
+  });
+
+  it('sets and clears explicit session focus through the operator tool', async () => {
+    const queue = createOperatorDispatchQueue();
+    const tool = createSetSessionFocusTool(queue);
+
+    await tool.execute({ conductorAgentId: 'session-17' });
+    expect(queue.focusSessionId).toBe('session-17');
+    expect(tool.description).toContain('Open Question outside focus can wait');
+    expect(tool.description).toContain('failsafe');
+    expect(tool.description).toContain(
+      'common.scheduling.focusInactivityTimeoutMs',
+    );
+    expect(tool.description).toContain('3–30 minutes');
+    expect(tool.description).toContain(
+      'Only operator/user input received by operator-agent resets the timeout',
+    );
+
+    await tool.execute({});
+    expect(queue.focusSessionId).toBeUndefined();
+  });
+
+  it('does not reset the human-input focus deadline from a tool call or worker report', async () => {
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_000);
+    const queue = createOperatorDispatchQueue({
+      ...DEFAULT_OPERATOR_DISPATCH_SCHEDULING,
+      focusInactivityTimeoutMs: 10_000,
+    });
+    const tool = createSetSessionFocusTool(queue);
+    try {
+      queue.noteOperatorInput();
+      queue.setFocus('focused-session');
+      queue.enqueueReport(
+        {
+          type: 'report',
+          reportType: 'session_state',
+          conductorAgentId: 'focused-session',
+          issueUrl: 'https://github.com/example/repo/issues/1',
+          text: 'focused update',
+        },
+        0,
+      );
+      queue.enqueueReport(
+        {
+          type: 'report',
+          reportType: 'open_question',
+          conductorAgentId: 'outside-session',
+          issueUrl: 'https://github.com/example/repo/issues/2',
+          text: 'outside question',
+        },
+        0,
+      );
+
+      now.mockReturnValue(5_000);
+      queue.noteOperatorInput();
+      now.mockReturnValue(9_000);
+      await tool.execute({ conductorAgentId: 'focused-session' });
+      queue.enqueueReport(
+        {
+          type: 'report',
+          reportType: 'session_state',
+          conductorAgentId: 'worker-update',
+          issueUrl: 'https://github.com/example/repo/issues/3',
+          text: 'automatic worker report',
+        },
+        0,
+      );
+
+      expect(
+        queue.selectBatch({ continuationConsumed: false }, 14_999)?.sourceKey,
+      ).toBe('session:focused-session');
+      expect(queue.focusSessionId).toBe('focused-session');
+      expect(
+        queue.selectBatch({ continuationConsumed: false }, 15_000)?.sourceKey,
+      ).toBe('session:outside-session');
+      expect(queue.focusSessionId).toBeUndefined();
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it('does not renew the focus failsafe by toggling focus through tool calls', async () => {
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_000);
+    const queue = createOperatorDispatchQueue({
+      ...DEFAULT_OPERATOR_DISPATCH_SCHEDULING,
+      focusInactivityTimeoutMs: 10_000,
+    });
+    const tool = createSetSessionFocusTool(queue);
+    try {
+      await tool.execute({ conductorAgentId: 'focused-session' });
+      queue.enqueueReport(
+        {
+          type: 'report',
+          reportType: 'session_state',
+          conductorAgentId: 'focused-session',
+          issueUrl: 'https://github.com/example/repo/issues/1',
+          text: 'focused update',
+        },
+        0,
+      );
+      queue.enqueueReport(
+        {
+          type: 'report',
+          reportType: 'open_question',
+          conductorAgentId: 'outside-session',
+          issueUrl: 'https://github.com/example/repo/issues/2',
+          text: 'outside question',
+        },
+        0,
+      );
+
+      now.mockReturnValue(5_000);
+      await tool.execute({});
+      now.mockReturnValue(8_000);
+      await tool.execute({ conductorAgentId: 'focused-session' });
+
+      expect(
+        queue.selectBatch({ continuationConsumed: false }, 10_999)?.sourceKey,
+      ).toBe('session:focused-session');
+      expect(
+        queue.selectBatch({ continuationConsumed: false }, 11_000)?.sourceKey,
+      ).toBe('session:outside-session');
+      expect(queue.focusSessionId).toBeUndefined();
+    } finally {
+      now.mockRestore();
+    }
   });
 });
