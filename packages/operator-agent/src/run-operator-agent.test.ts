@@ -832,10 +832,13 @@ describe('runOperatorAgent', () => {
     );
     input.write('\r');
     await vi.waitFor(() => expect(sentPrompts).toEqual(['状況を教えて']));
+    // The fake send reads and writes workspace files before rendering its reply.
+    // Allow CI's shared runner enough time while still requiring the reply.
     await vi.waitFor(() =>
       expect(normalizeTtyText(output.capturedText())).toContain(
         'ライブ open question も確認できます。',
       ),
+      { timeout: 5_000 },
     );
     input.write('/exit\n');
     await run;
@@ -1908,7 +1911,7 @@ describe('runOperatorAgent', () => {
     expect(sentPrompts[1]).toContain('レビュー確認済み');
     expect(sentPrompts[1]).toContain('conductor reply 1');
     expect(sentPrompts[1]).toContain('conductor reply 2');
-  });
+  }, 25_000);
 
   it('does not start a send when the durable batch freeze cannot be committed', async () => {
     const setupPool = await createOperatorWatchPool({
@@ -2365,6 +2368,11 @@ describe('runOperatorAgent', () => {
     );
     firstInput.write('watch this session\n');
     await vi.waitFor(() => expect(firstPrompts).toHaveLength(2));
+    await vi.waitFor(() =>
+      expect(normalizeTtyText(firstOutput.capturedText())).toContain(
+        'send not completed (status=cancelled); watched reports retained for retry.',
+      ),
+    );
     firstInput.end();
     await firstRun;
 

@@ -1,3 +1,4 @@
+import { mkdirSync, renameSync, rmdirSync } from 'node:fs';
 import {
   mkdir,
   mkdtemp,
@@ -2650,7 +2651,7 @@ describe('operator watch pool', () => {
     }
   });
 
-  it('freezes the local membership before waiting for persistence and starts idle age at admission', async () => {
+  it('includes local arrivals during lock wait but leaves unsynchronized peer reports for the next batch', async () => {
     repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-watch-commit-cutoff-'));
     await mkdir(join(repoRoot, '.ensemble', 'sessions'), { recursive: true });
     const sessionId = 'commit-cutoff-session';
@@ -2693,12 +2694,29 @@ describe('operator watch pool', () => {
         event.type === 'report' ? event.reportId : undefined,
       )).toEqual([firstReportId]);
 
+      const durable = JSON.parse(await readFile(statePath, 'utf8'));
+      const firstOrder = durable.pendingReports[0].arrivalOrder;
+      const queuedAt = Date.now();
+      for (const [index, reportId] of ['local-arrival-during-lock-wait', 'peer-unsynced'].entries()) {
+        durable.pendingReports.push({
+          reportId,
+          reportType: index === 0 ? 'open_question' : 'session_state',
+          conductorAgentId: sessionId,
+          issueUrl: DEFAULT_ISSUE_URL,
+          text: reportId,
+          debounceMs: 0,
+          readyAt: queuedAt,
+          firstQueuedAt: queuedAt,
+          arrivalOrder: firstOrder + index + 1,
+          priority: index === 0 ? 'open_question' : 'normal',
+        });
+      }
+      await writeFile(statePath, JSON.stringify(durable));
       stateLock = new DatabaseSync(lockPath);
       stateLock.exec('BEGIN IMMEDIATE');
       lockHeld = true;
 
-      // commitBatch captures and removes its current local membership before
-      // it starts waiting for the durable profile lock.
+      // The selected batch remains appendable while the profile lock is held.
       let commitSettled = false;
       const commitPromise = pool.commitBatch(batch).finally(() => {
         commitSettled = true;
@@ -2706,15 +2724,16 @@ describe('operator watch pool', () => {
       expect(batch.events.map((event) =>
         event.type === 'report' ? event.reportId : undefined,
       )).toEqual([firstReportId]);
-      expect(batch.batchId).toBeTypeOf('string');
+      expect(batch.batchId).toBeUndefined();
 
       await new Promise((resolve) => setTimeout(resolve, 60));
       expect(commitSettled).toBe(false);
       dispatchQueue.enqueueReport(
         {
           type: 'report',
-          reportType: 'session_state',
+          reportType: 'open_question',
           reportId: 'local-arrival-during-lock-wait',
+          arrivalOrder: firstOrder + 1,
           conductorAgentId: sessionId,
           issueUrl: DEFAULT_ISSUE_URL,
           text: 'local arrival during lock wait',
@@ -2740,9 +2759,24 @@ describe('operator watch pool', () => {
       const laterReportId = (await laterCandidatePromise)!;
       expect(batch.events.map((event) =>
         event.type === 'report' ? event.reportId : undefined,
-      )).toEqual([firstReportId]);
+      )).toEqual([firstReportId, 'local-arrival-during-lock-wait']);
+      expect(batch.events.map((event) =>
+        event.type === 'report' ? event.reportType : undefined,
+      )).toEqual(['idle_candidate', 'open_question']);
+      expect(batch.events.map((event) =>
+        event.type === 'report' ? event.arrivalOrder : undefined,
+      )).toEqual([firstOrder, firstOrder + 1]);
+      expect(
+        batch.events.filter(
+          (event) =>
+            event.type === 'report' && event.reportType === 'open_question',
+        ),
+      ).toHaveLength(1);
+      expect(batch.priority).toBe('open_question');
+      expect(batch.payload).toContain('first candidate');
+      expect(batch.payload).toContain('local arrival during lock wait');
+      expect(batch.payload).not.toContain('peer-unsynced');
       expect(batch.payload).not.toContain('arrived during lock wait');
-      expect(batch.payload).not.toContain('local arrival during lock wait');
 
       const persisted = JSON.parse(await readFile(statePath, 'utf8')) as {
         pendingReports: Array<{
@@ -2760,6 +2794,12 @@ describe('operator watch pool', () => {
             frozenPayload: batch.payload,
           }),
           expect.objectContaining({
+            reportId: 'local-arrival-during-lock-wait',
+            frozenBatchId: batch.batchId,
+            frozenPayload: batch.payload,
+          }),
+          expect.objectContaining({ reportId: 'peer-unsynced' }),
+          expect.objectContaining({
             reportId: laterReportId,
             eligibleAt: expect.any(Number),
           }),
@@ -2771,18 +2811,298 @@ describe('operator watch pool', () => {
       expect(laterCandidate.eligibleAt).toBeGreaterThanOrEqual(lockReleasedAt);
       expect(laterCandidate.frozenBatchId).toBeUndefined();
 
-      await pool.acknowledge(batch.events);
-      const next = dispatchQueue.selectBatch(
-        { continuationConsumed: false },
-        Date.now(),
-      )!;
-      expect(next.events.map((event) =>
-        event.type === 'report' ? event.reportId : undefined,
-      )).toEqual([laterReportId]);
+      const retryAt = Date.now() + 5_000;
+      await pool.recordRetry?.(batch.events, retryAt);
+      pool.close();
+
+      const replayQueue = createOperatorDispatchQueue();
+      const replayPool = await createOperatorWatchPool({
+        repoRoot,
+        userEnsembleRoot,
+        dispatchQueue: replayQueue,
+      });
+      try {
+        expect(
+          replayQueue.selectBatch(
+            { continuationConsumed: false },
+            retryAt - 1,
+          ),
+        ).toBeUndefined();
+        const retry = replayQueue.selectBatch(
+          { continuationConsumed: false },
+          retryAt,
+        )!;
+        expect(retry.events.map((event) =>
+          event.type === 'report' ? event.reportId : undefined,
+        )).toEqual([firstReportId, 'local-arrival-during-lock-wait']);
+        expect(retry.events.map((event) =>
+          event.type === 'report' ? event.reportType : undefined,
+        )).toEqual(['idle_candidate', 'open_question']);
+        expect(retry.events.filter(
+          (event) =>
+            event.type === 'report' && event.reportType === 'open_question',
+        )).toHaveLength(1);
+        expect(retry.batchId).toBe(batch.batchId);
+        expect(retry.payload).toBe(batch.payload);
+        expect(retry.priority).toBe('open_question');
+        expect(await replayPool.commitBatch(retry)).toBe(true);
+        await replayPool.acknowledge(retry.events);
+
+        const peerBatch = replayQueue.selectBatch(
+          { continuationConsumed: false },
+          retryAt,
+        )!;
+        expect(peerBatch.events.map((event) =>
+          event.type === 'report' ? event.reportId : undefined,
+        )).toEqual(['peer-unsynced', laterReportId]);
+        expect(await replayPool.commitBatch(peerBatch)).toBe(true);
+        await replayPool.acknowledge(peerBatch.events);
+      } finally {
+        replayPool.close();
+      }
+
+      const afterAck = JSON.parse(await readFile(statePath, 'utf8')) as {
+        idleCandidateFingerprints: Record<string, Record<string, string>>;
+        pendingReports: Array<{ reportId: string }>;
+      };
+      expect(afterAck.idleCandidateFingerprints[sessionId]?.idle_phase)
+        .toBe('idle-first');
+      expect(afterAck.pendingReports).toEqual([]);
     } finally {
       if (lockHeld) stateLock?.exec('ROLLBACK');
       stateLock?.close();
       pool.close();
+    }
+  });
+
+  it('retains durable arrival order when a peer report is synchronized before a local report', async () => {
+    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-peer-order-'));
+    await mkdir(join(repoRoot, '.ensemble', 'sessions'), { recursive: true });
+    const sessionId = 'peer-order';
+    await writeResumeStore(sessionId, 1, undefined, DEFAULT_ISSUE_URL);
+    const queue = createOperatorDispatchQueue();
+    const local = await createOperatorWatchPool({ repoRoot, dispatchQueue: queue });
+    const peer = await createOperatorWatchPool({
+      repoRoot, dispatchQueue: createOperatorDispatchQueue(),
+    });
+    try {
+      const enqueue = (pool: typeof local, text: string) => pool.enqueueIdleCandidate!({
+        conductorAgentId: sessionId,
+        text,
+        kind: 'idle_phase',
+        fingerprint: `peer-order:${text}`,
+        eligibleAt: Date.now(),
+      });
+      const first = await enqueue(local, 'first local');
+      const second = await enqueue(peer, 'peer');
+      const third = await enqueue(local, 'later local');
+      const batch = queue.selectBatch({ continuationConsumed: false })!;
+      expect(batch.events.map((event) => event.type === 'report' ? event.reportId : undefined))
+        .toEqual([first, second, third]);
+      expect(await local.commitBatch(batch)).toBe(true);
+    } finally {
+      local.close();
+      peer.close();
+    }
+  });
+
+  it.each(['focus', 'tty', 'question', 'hold'] as const)(
+    'rechecks %s after waiting for the profile lock',
+    async (change) => {
+      repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-reselect-'));
+      await mkdir(join(repoRoot, '.ensemble', 'sessions'), { recursive: true });
+      await writeResumeStore('reselect-a', 1, undefined, DEFAULT_ISSUE_URL);
+      await writeResumeStore('reselect-b', 1, undefined, DEFAULT_ISSUE_URL);
+      const queue = createOperatorDispatchQueue();
+      const pool = await createOperatorWatchPool({ repoRoot, dispatchQueue: queue });
+      const lockPath = join(process.env.ENSEMBLE_USER_ROOT!, 'operator-agents',
+        'default', 'watch', 'watch-state-lock.sqlite');
+      let lock: DatabaseSync | undefined;
+      try {
+        await pool.enqueueIdleCandidate!({
+          conductorAgentId: 'reselect-a',
+          text: 'A',
+          kind: 'idle_phase',
+          fingerprint: 'reselect:a',
+          eligibleAt: Date.now(),
+        });
+        await pool.enqueueIdleCandidate!({
+          conductorAgentId: 'reselect-b',
+          text: 'B',
+          kind: 'idle_phase',
+          fingerprint: 'reselect:b',
+          eligibleAt: Date.now(),
+        });
+        const state = { continuationConsumed: false };
+        if (change === 'focus') queue.setFocus('reselect-a');
+        const batch = queue.selectBatch(state)!;
+        expect(batch.sourceKey).toBe('session:reselect-a');
+        lock = new DatabaseSync(lockPath);
+        lock.exec('BEGIN IMMEDIATE');
+        const pendingCommit = pool.commitBatch(batch, state);
+        await new Promise((resolve) => setTimeout(resolve, 60));
+        if (change === 'focus') {
+          queue.enqueueReport({
+            type: 'report', reportType: 'session_state', reportId: 'late-a',
+            conductorAgentId: 'reselect-a', issueUrl: DEFAULT_ISSUE_URL, text: 'late A',
+          }, 60_000);
+          queue.setFocus('reselect-b');
+        }
+        if (change === 'tty') queue.enqueueUser('operator input');
+        if (change === 'question') {
+          queue.enqueueReport({
+            type: 'report', reportType: 'open_question', reportId: 'new-question',
+            conductorAgentId: 'reselect-b', issueUrl: DEFAULT_ISSUE_URL, text: 'Question',
+          }, 0);
+        }
+        if (change === 'hold') queue.setHold(true);
+        lock.exec('ROLLBACK');
+        lock.close();
+        lock = undefined;
+        expect(await pendingCommit).toBe(false);
+        expect(batch.batchId).toBeUndefined();
+        const next = queue.selectBatch(state);
+        if (change === 'hold') expect(next).toBeUndefined();
+        else expect(next?.sourceKey).toBe(change === 'tty' ? 'user' : 'session:reselect-b');
+        if (change === 'focus') {
+          queue.setFocus('reselect-a');
+          expect(queue.selectBatch(state)?.events).toHaveLength(2);
+        }
+      } finally {
+        if (lock) { lock.exec('ROLLBACK'); lock.close(); }
+        pool.close();
+      }
+    },
+  );
+
+  it('rolls back the entire local batch when a member cannot be frozen', async () => {
+    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-watch-freeze-failure-'));
+    await mkdir(join(repoRoot, '.ensemble', 'sessions'), { recursive: true });
+    const sessionId = 'freeze-failure-session';
+    await writeResumeStore(sessionId, 1, undefined, DEFAULT_ISSUE_URL);
+    const queue = createOperatorDispatchQueue();
+    const pool = await createOperatorWatchPool({ repoRoot, dispatchQueue: queue });
+    try {
+      const firstId = await pool.enqueueIdleCandidate!({
+        conductorAgentId: sessionId,
+        text: 'durable first report',
+        kind: 'idle_phase',
+        fingerprint: 'freeze-failure:first',
+        eligibleAt: Date.now(),
+      });
+      const batch = queue.selectBatch({ continuationConsumed: false })!;
+      queue.enqueueReport({
+        type: 'report',
+        reportType: 'open_question',
+        reportId: 'missing-durable-report',
+        conductorAgentId: sessionId,
+        issueUrl: DEFAULT_ISSUE_URL,
+        text: 'not yet durable',
+      }, 0);
+      await expect(pool.commitBatch(batch)).rejects.toThrow(
+        'Pending report missing-durable-report disappeared',
+      );
+      expect(batch.batchId).toBeUndefined();
+      expect(queue.pendingEventCount).toBe(2);
+      const disk = JSON.parse(await readFile(currentWatchStatePath(repoRoot), 'utf8'));
+      expect(disk.pendingReports[0].frozenBatchId).toBeUndefined();
+      queue.discardQueuedReports!(['missing-durable-report']);
+      const retry = queue.selectBatch({ continuationConsumed: false })!;
+      expect(retry.events.map((event) =>
+        event.type === 'report' ? event.reportId : undefined,
+      )).toEqual([firstId]);
+      expect(await pool.commitBatch(retry)).toBe(true);
+    } finally {
+      pool.close();
+    }
+  });
+
+  it('restores the local batch if replacing the durable state fails', async () => {
+    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-rename-failure-'));
+    await mkdir(join(repoRoot, '.ensemble', 'sessions'), { recursive: true });
+    const sessionId = 'rename-failure';
+    await writeResumeStore(sessionId, 1, undefined, DEFAULT_ISSUE_URL);
+    const queue = createOperatorDispatchQueue();
+    const pool = await createOperatorWatchPool({ repoRoot, dispatchQueue: queue });
+    try {
+      const reportId = await pool.enqueueIdleCandidate!({
+        conductorAgentId: sessionId,
+        text: 'persisted report',
+        kind: 'idle_phase',
+        fingerprint: 'restore-failure',
+        eligibleAt: Date.now(),
+      });
+      const batch = queue.selectBatch({ continuationConsumed: false })!;
+      const statePath = currentWatchStatePath(repoRoot);
+      const backup = `${statePath}.test-backup`;
+      const commit = queue.commitBatch.bind(queue);
+      queue.commitBatch = (selected, finalize) => commit(selected, () => {
+        renameSync(statePath, backup);
+        mkdirSync(statePath);
+        try {
+          finalize?.();
+        } finally {
+          rmdirSync(statePath);
+          renameSync(backup, statePath);
+        }
+      });
+      await expect(pool.commitBatch(batch)).rejects.toThrow();
+      expect(batch.batchId).toBeUndefined();
+      expect(queue.pendingEventCount).toBe(1);
+      const disk = JSON.parse(await readFile(statePath, 'utf8'));
+      expect(disk.pendingReports[0]).toMatchObject({ reportId });
+      expect(disk.pendingReports[0].frozenBatchId).toBeUndefined();
+    } finally {
+      pool.close();
+    }
+  });
+
+  it('replays the frozen manifest after an uncertain lock release', async () => {
+    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-release-failure-'));
+    await mkdir(join(repoRoot, '.ensemble', 'sessions'), { recursive: true });
+    const sessionId = 'release-failure';
+    await writeResumeStore(sessionId, 1, undefined, DEFAULT_ISSUE_URL);
+    const queue = createOperatorDispatchQueue();
+    const pool = await createOperatorWatchPool({ repoRoot, dispatchQueue: queue });
+    let batchId: string | undefined;
+    let payload: string | undefined;
+    let reportId: string;
+    try {
+      reportId = await pool.enqueueIdleCandidate!({
+        conductorAgentId: sessionId,
+        text: 'frozen before release',
+        kind: 'idle_phase',
+        fingerprint: 'uncertain-release',
+        eligibleAt: Date.now(),
+      });
+      const batch = queue.selectBatch({ continuationConsumed: false })!;
+      const exec = DatabaseSync.prototype.exec;
+      const fault = vi.spyOn(DatabaseSync.prototype, 'exec').mockImplementation(function (sql) {
+        if (sql === 'COMMIT') throw new Error('injected lock release failure');
+        return exec.call(this, sql);
+      });
+      try {
+        await expect(pool.commitBatch(batch)).rejects.toThrow('injected lock release failure');
+      } finally {
+        fault.mockRestore();
+      }
+      batchId = batch.batchId;
+      payload = batch.payload;
+      expect(batchId).toBeDefined();
+      expect(queue.pendingEventCount).toBe(0);
+    } finally {
+      pool.close();
+    }
+    const replayQueue = createOperatorDispatchQueue();
+    const replayPool = await createOperatorWatchPool({ repoRoot, dispatchQueue: replayQueue });
+    try {
+      const replay = replayQueue.selectBatch({ continuationConsumed: false })!;
+      expect(replay.events.map((event) => event.type === 'report' ? event.reportId : undefined))
+        .toEqual([reportId!]);
+      expect(replay.batchId).toBe(batchId);
+      expect(replay.payload).toBe(payload);
+    } finally {
+      replayPool.close();
     }
   });
 
@@ -3884,7 +4204,7 @@ describe('operator watch pool', () => {
     try {
       await pool.register('watch-message-window', {
         pollIntervalMs: 60_000,
-        debounceMs: 0,
+        debounceMs: 1_000,
       });
       expect(await pool.pollOnce('watch-message-window')).toBe(1);
       expect(dispatchQueue.heldEventCount).toBe(1);
@@ -3908,6 +4228,70 @@ describe('operator watch pool', () => {
           releaseAt + 3_000,
         )?.events[0]?.text,
       ).toContain('waiting for review');
+    } finally {
+      now.mockRestore();
+      pool.close();
+    }
+  });
+
+  it('retains a ready held watch batch after message append and restart', async () => {
+    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-ready-replay-'));
+    await mkdir(join(repoRoot, '.ensemble', 'sessions'), { recursive: true });
+    let messages: Array<{ text: string; inbound: string; at: number; sendCount: number; dispatchSource: string }> = [];
+    const server = await startOpenQuestionControlServer({
+      listOpenQuestions: () => [],
+      observeSession: async () => ({
+        sequence: 1,
+        openQuestions: [],
+        sessionState: { current: { statusLine: 'watch first', reportedAt: 1 }, history: [] },
+      }),
+      listConductorMessages: () => messages,
+      answerOpenQuestion: async () => { throw new Error('unused'); },
+    });
+    closeServers.push(() => server.close());
+    await writeResumeStore('ready-replay', 1, server.socketPath);
+    const queue = createOperatorDispatchQueue();
+    queue.setHold(true);
+    queue.setConversationHold(true);
+    const pool = await createOperatorWatchPool({ repoRoot, dispatchQueue: queue });
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_000);
+    try {
+      await pool.registerConductorMessageListen('ready-replay', { messageDebounceMs: 10_000 });
+      await pool.register('ready-replay', { pollIntervalMs: 60_000, debounceMs: 0 });
+      expect(await pool.pollOnce('ready-replay')).toBe(1);
+      now.mockReturnValue(12_000);
+      messages = [{ text: 'message later', inbound: 'input', at: 12_000, sendCount: 1, dispatchSource: 'operator' }];
+      expect(await pool.pollConductorMessagesOnce('ready-replay')).toBe(1);
+      queue.setHold(false);
+      expect(queue.selectBatch({ continuationConsumed: false })).toBeUndefined();
+      queue.setConversationHold(false);
+      const batch = queue.selectBatch({ continuationConsumed: false })!;
+      expect(batch.events.map((event) => event.type === 'report' ? event.reportType : 'user'))
+        .toEqual(['session_state', 'conductor_message']);
+      expect(batch.events[0]).toMatchObject({ batchReadyAt: 11_000 });
+
+      pool.close();
+      const replayQueue = createOperatorDispatchQueue();
+      const replayPool = await createOperatorWatchPool({ repoRoot, dispatchQueue: replayQueue });
+      try {
+        const replay = replayQueue.selectBatch({ continuationConsumed: false })!;
+        expect(replay.events.map((event) => event.type === 'report' ? event.reportType : 'user'))
+          .toEqual(['session_state', 'conductor_message']);
+        expect(replay.events[0]).toMatchObject({ batchReadyAt: 11_000 });
+        expect(await replayPool.commitBatch(replay)).toBe(true);
+        await replayPool.recordRetry!(replay.events, 17_000);
+      } finally {
+        replayPool.close();
+      }
+      const retryQueue = createOperatorDispatchQueue();
+      const retryPool = await createOperatorWatchPool({ repoRoot, dispatchQueue: retryQueue });
+      try {
+        expect(retryQueue.selectBatch({ continuationConsumed: false }, 16_999)).toBeUndefined();
+        expect(retryQueue.selectBatch({ continuationConsumed: false }, 17_000)?.events)
+          .toHaveLength(2);
+      } finally {
+        retryPool.close();
+      }
     } finally {
       now.mockRestore();
       pool.close();

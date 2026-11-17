@@ -1065,7 +1065,7 @@ async function runTtyConversation(options: {
       }
       let committed: boolean;
       try {
-        committed = await options.watchPool.commitBatch(batch);
+        committed = await options.watchPool.commitBatch(batch, dispatchState);
       } catch (error) {
         if (reservation) options.recoveryInbox.release(reservation);
         options.dispatchLifecycle.settleSend(lease, {
@@ -1309,7 +1309,7 @@ async function runTtyConversation(options: {
     process.off('SIGTERM', handleTermination);
     tui.setInputEnabled(false);
     idleCandidateMonitor.close();
-    tui.dispose();
+    await tui.dispose();
     unsubscribeTtyLogRouter();
     unsubscribeHoldChanges();
     unsubscribeLifecycle();

@@ -29,7 +29,7 @@ export interface OperatorAgentTuiHost {
   appendUserMessage: (message: string) => void;
   appendOperatorResponse: (response: string) => void;
   setInputEnabled: (enabled: boolean) => void;
-  dispose: () => void;
+  dispose: () => Promise<void>;
 }
 
 export interface CreateOperatorAgentTuiHostOptions {
@@ -67,6 +67,7 @@ interface TuiSnapshot {
   readonly columns: number;
   readonly rows: number;
   readonly inputEnabled: boolean;
+  readonly replayGeneration: number;
 }
 
 class OperatorAgentTuiModel {
@@ -84,6 +85,7 @@ class OperatorAgentTuiModel {
       columns,
       rows,
       inputEnabled: true,
+      replayGeneration: 0,
     };
   }
 
@@ -122,6 +124,10 @@ class OperatorAgentTuiModel {
     this.update({ columns, rows });
   }
 
+  replay(): void {
+    this.update({ replayGeneration: this.snapshot.replayGeneration + 1 });
+  }
+
   setInputEnabled(inputEnabled: boolean): void {
     if (this.snapshot.inputEnabled === inputEnabled) return;
     this.update({ inputEnabled });
@@ -146,6 +152,8 @@ class OperatorAgentTuiModel {
 
 const ANSI_RED = '\u001b[31m';
 const MAX_INPUT_DISPLAY_LINES = 6;
+const RESIZE_SETTLE_MS = 150;
+const SHUTDOWN_RESIZE_LIMIT_MS = 1_000;
 
 function OperatorAgentTui({
   model,
@@ -167,8 +175,7 @@ function OperatorAgentTui({
     0,
     0,
   ]);
-  // Keep one row outside Ink's live frame so unmounting does not trigger its
-  // fullscreen terminal clear, which also clears scrollback.
+  // Limit the input viewport so the live frame stays below terminal height.
   const liveFrameRows = Math.max(1, snapshot.rows - 1);
   const handleInputChange = useCallback((value: string) => {
     setDraft(value);
@@ -204,8 +211,18 @@ function OperatorAgentTui({
 
   return (
     <>
-      <Static<ActivityEntry> items={[...snapshot.entries]}>
-        {(entry) => (
+      <Static<ActivityEntry | { readonly id: -1; readonly type: 'padding' }>
+        key={snapshot.replayGeneration}
+        items={[
+          ...(snapshot.replayGeneration > 0
+            ? [{ id: -1 as const, type: 'padding' as const }]
+            : []),
+          ...snapshot.entries,
+        ]}
+      >
+        {(entry) => entry.type === 'padding' ? (
+          <Text key="resize-padding">{'\n'.repeat(Math.max(0, snapshot.rows - 3))}</Text>
+        ) : (
           <Box
             key={`operator-agent-log-${entry.id}`}
             flexDirection="column"
@@ -240,11 +257,9 @@ function OperatorAgentTui({
       </Static>
       <Box
         width={snapshot.columns}
-        height={liveFrameRows}
         flexDirection="column"
         overflowY="hidden"
       >
-        <Box flexGrow={1} />
         <Box
           width={snapshot.columns}
           borderStyle="round"
@@ -260,6 +275,7 @@ function OperatorAgentTui({
               linePrefix={promptPrefix}
               viewportLines={maxInputDisplayLines}
               initialLineCount={1}
+              cursorStart={snapshot.inputEnabled ? { x: 2, y: 1 } : undefined}
               cursorPosition={cursorPosition}
               onCursorChange={setCursorPosition}
             />
@@ -293,12 +309,18 @@ export function createOperatorAgentTuiHost(
     size.rows,
     options.colorEnabled,
   );
-  const ink = render(
+  // Move the initial compact frame to the bottom; subsequent Static output
+  // scrolls the terminal naturally and remains visible above the input.
+  options.stdout.write('\n'.repeat(Math.max(0, size.rows - 3)));
+  const frame = (
     <OperatorAgentTui
       model={model}
       onSubmit={options.onSubmit}
       onInterrupt={options.onInterrupt}
-    />,
+    />
+  );
+  const ink = render(
+    frame,
     {
       stdin: options.stdin as NodeJS.ReadStream,
       stdout: options.stdout as NodeJS.WriteStream,
@@ -307,9 +329,33 @@ export function createOperatorAgentTuiHost(
       interactive: true,
     },
   );
+  let resizeTimer: ReturnType<typeof setTimeout> | undefined;
+  let resizeRevision = 0;
+  let recoveryNeeded = false;
+  let disposing = false;
+  const recoverResize = () => {
+    ink.clear();
+    options.stdout.write('\u001b[3J\u001b[2J\u001b[H');
+    model.replay();
+    recoveryNeeded = false;
+  };
   const handleResize = () => {
     const nextSize = readTerminalSize(options.stdout);
+    if (
+      nextSize.columns === model.getSnapshot().columns &&
+      nextSize.rows === model.getSnapshot().rows
+    ) return;
     model.setTerminalSize(nextSize.columns, nextSize.rows);
+    resizeRevision++;
+    recoveryNeeded = true;
+    if (disposing) return;
+    if (resizeTimer) clearTimeout(resizeTimer);
+    // Let Ink and TextArea settle their new widths before replaying. Remount
+    // only Static, preserving the editor's undo and kill ring state.
+    resizeTimer = setTimeout(() => {
+      resizeTimer = undefined;
+      recoverResize();
+    }, RESIZE_SETTLE_MS);
   };
   options.stdout.on('resize', handleResize);
 
@@ -320,9 +366,47 @@ export function createOperatorAgentTuiHost(
     appendOperatorResponse: (response) =>
       model.appendDialogue('operator', response),
     setInputEnabled: (enabled) => model.setInputEnabled(enabled),
-    dispose: () => {
-      options.stdout.off('resize', handleResize);
-      ink.unmount();
+    dispose: async () => {
+      disposing = true;
+      if (resizeTimer) {
+        clearTimeout(resizeTimer);
+        resizeTimer = undefined;
+      }
+      const deadline = performance.now() + SHUTDOWN_RESIZE_LIMIT_MS;
+      try {
+        // Prefer a settled final frame, but never delay terminal restoration
+        // indefinitely when the terminal keeps resizing.
+        while (performance.now() < deadline) {
+          if (recoveryNeeded) {
+            const revision = resizeRevision;
+            const remaining = deadline - performance.now();
+            await new Promise<void>((resolve) => setTimeout(resolve, Math.min(RESIZE_SETTLE_MS, remaining)));
+            if (performance.now() >= deadline) break;
+            if (revision !== resizeRevision) continue;
+            recoverResize();
+          }
+          const revision = resizeRevision;
+          let timeout: ReturnType<typeof setTimeout> | undefined;
+          const flushed = await Promise.race([
+            ink.waitUntilRenderFlush().then(() => true),
+            new Promise<false>((resolve) => {
+              timeout = setTimeout(() => resolve(false), Math.max(0, deadline - performance.now()));
+            }),
+          ]);
+          if (timeout) clearTimeout(timeout);
+          if (!flushed) break;
+          if (revision === resizeRevision) return;
+        }
+        // At the deadline, replay once at the last observed size. Further
+        // terminal resizes can reflow this final frame after restoration.
+        const size = readTerminalSize(options.stdout);
+        model.setTerminalSize(size.columns, size.rows);
+        recoverResize();
+        ink.rerender(frame);
+      } finally {
+        options.stdout.off('resize', handleResize);
+        ink.unmount();
+      }
     },
   };
 }

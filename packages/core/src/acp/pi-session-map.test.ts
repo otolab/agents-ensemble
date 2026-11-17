@@ -68,6 +68,7 @@ describe('Pi ACP session map paths', () => {
     expect(migrateLegacyPiAcpSessionMap(paths)).toBe(false);
   });
 
+  // Windows applies owner ACLs through multiple PowerShell processes.
   it('copies the old shared map for each Issue while preserving old session paths', async () => {
     tempRoot = await mkdtemp(join(tmpdir(), 'builtin-pi-map-'));
     const workerStorageParent = join(tempRoot, 'worker-storage');
@@ -169,7 +170,7 @@ describe('Pi ACP session map paths', () => {
         expect((await stat(file)).mode & 0o777).toBe(0o600);
       }
     }
-  });
+  }, 30_000);
 
   it('does not replace a new Issue map with the legacy shared map', async () => {
     tempRoot = await mkdtemp(join(tmpdir(), 'builtin-pi-map-'));
