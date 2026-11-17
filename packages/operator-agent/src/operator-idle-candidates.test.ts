@@ -5,7 +5,10 @@ import {
   createOperatorIdleCandidateMonitor,
   evaluateOperatorIdleCandidate,
 } from './operator-idle-candidates.js';
-import type { OperatorIdleCandidateObservation } from './operator-watch-pool.js';
+import type {
+  OperatorIdleCandidateObservation,
+  OperatorWatchPool,
+} from './operator-watch-pool.js';
 
 const issueUrl = 'https://github.com/example/repo/issues/42';
 const defaults = {
@@ -275,6 +278,150 @@ describe('operator idle candidate evaluation', () => {
       monitor.close();
     }
   });
+
+  it.each(['focus', 'conversation'] as const)(
+    'keeps a live OQ through the %s gate, then refreshes once and sends one mixed batch',
+    async (gate) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-11-17T00:00:00.000Z'));
+      const dispatchQueue = createOperatorDispatchQueue();
+      if (gate === 'focus') dispatchQueue.setFocus('other-session');
+      else dispatchQueue.setConversationHold(true);
+
+      const sessionId = 'conductor-42';
+      const questionReportId = 'live-open-question';
+      const candidateReportId = 'idle-after-gate';
+      const watches: ReturnType<OperatorWatchPool['list']> = [
+        {
+          conductorAgentId: sessionId,
+          pollIntervalMs: 2_000,
+          debounceMs: 0,
+        },
+      ];
+      dispatchQueue.enqueueReport(
+        {
+          type: 'report',
+          reportType: 'open_question',
+          reportId: questionReportId,
+          conductorAgentId: sessionId,
+          issueUrl,
+          text: 'live operator decision',
+        },
+        0,
+      );
+
+      let current = observation({
+        conductorAgentId: sessionId,
+        checkedAt: Date.now(),
+        observationVersion: 1,
+        harnessModifiedAt: Date.now() - defaults.idlePhaseThresholdMs,
+        openQuestionCount: 1,
+      });
+      const acceptedFingerprints = new Set<string>();
+      const enqueueIdleCandidate = vi.fn(
+        async (
+          input: Parameters<
+            NonNullable<OperatorWatchPool['enqueueIdleCandidate']>
+          >[0],
+        ) => {
+          if (
+            acceptedFingerprints.has(input.fingerprint) ||
+            !input.shouldAdmit?.()
+          ) {
+            return undefined;
+          }
+          acceptedFingerprints.add(input.fingerprint);
+          dispatchQueue.enqueueReport(
+            {
+              type: 'report',
+              reportType: 'idle_candidate',
+              reportId: candidateReportId,
+              conductorAgentId: input.conductorAgentId,
+              issueUrl,
+              text: input.text,
+              priority: 'idle',
+              eligibleAt: input.eligibleAt,
+            },
+            0,
+          );
+          return candidateReportId;
+        },
+      );
+      const refreshOnGateClear = vi.fn(async () => {
+        current = {
+          ...current,
+          observationVersion: current.observationVersion + 1,
+          checkedAt: Date.now(),
+          openQuestionCount: 1,
+        };
+      });
+      const monitor = createOperatorIdleCandidateMonitor({
+        watchPool: {
+          list: () => watches,
+          pollOnce: async () => 0,
+          listIdleCandidateObservations: () => [current],
+          enqueueIdleCandidate,
+        },
+        dispatchQueue,
+        scheduling: defaults,
+        isAgentSendInFlight: () => false,
+        refreshOnGateClear,
+      });
+
+      try {
+        await vi.advanceTimersByTimeAsync(
+          defaults.idleReevaluationIntervalMs * 2,
+        );
+        expect(current.openQuestionCount).toBe(1);
+        expect(refreshOnGateClear).not.toHaveBeenCalled();
+        expect(acceptedFingerprints.size).toBe(0);
+        expect(dispatchQueue.pendingEventCount + dispatchQueue.heldEventCount)
+          .toBe(1);
+        expect(enqueueIdleCandidate).not.toHaveBeenCalled();
+
+        if (gate === 'focus') dispatchQueue.setFocus(undefined);
+        else dispatchQueue.setConversationHold(false);
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+
+        expect(refreshOnGateClear).toHaveBeenCalledTimes(1);
+        expect(current.openQuestionCount).toBe(1);
+        expect(enqueueIdleCandidate).toHaveBeenCalledTimes(1);
+        expect(acceptedFingerprints.size).toBe(1);
+
+        const batch = dispatchQueue.selectBatch({
+          continuationConsumed: false,
+        })!;
+        expect(batch.priority).toBe('open_question');
+        expect(batch.events.map((event) =>
+          event.type === 'report' ? event.reportType : undefined,
+        )).toEqual(['open_question', 'idle_candidate']);
+        expect(batch.events.map((event) =>
+          event.type === 'report' ? event.reportId : undefined,
+        )).toEqual([questionReportId, candidateReportId]);
+        expect(
+          batch.events.filter(
+            (event) =>
+              event.type === 'report' &&
+              event.reportType === 'open_question',
+          ),
+        ).toHaveLength(1);
+        expect(dispatchQueue.commitBatch(batch)).toBe(true);
+        const agentSend = vi.fn(async (payload: string) => payload);
+        await agentSend(batch.payload!);
+        expect(agentSend).toHaveBeenCalledTimes(1);
+        expect(agentSend.mock.calls[0]?.[0]).toContain(
+          'live operator decision',
+        );
+        expect(agentSend.mock.calls[0]?.[0]).toContain(
+          '稼働 session の確認候補',
+        );
+      } finally {
+        monitor.close();
+      }
+    },
+  );
 
   it('does not reuse a pre-gate observation when refresh produces no new observation', async () => {
     const dispatchQueue = createOperatorDispatchQueue();
