@@ -1,5 +1,12 @@
 # @agents-ensemble/core
 
+## 0.23.1
+
+### Patch Changes
+
+- 372f42a: Add `ensemble models show` with resolved local Pi model details and JSON output.
+- 13b3576: Add repository-scoped run discovery and watch management to operator-agent, with timestamped per-run summaries and bounded GitHub pull-request details.
+
 ## 0.23.0
 
 ### Minor Changes

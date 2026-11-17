@@ -1,5 +1,16 @@
 # @agents-ensemble/cli
 
+## 0.23.1
+
+### Patch Changes
+
+- 372f42a: Add `ensemble models show` with resolved local Pi model details and JSON output.
+- Updated dependencies [372f42a]
+- Updated dependencies [13b3576]
+- Updated dependencies [7cad569]
+  - @agents-ensemble/core@0.23.1
+  - @agents-ensemble/operator-agent@0.6.1
+
 ## 0.23.0
 
 ### Minor Changes

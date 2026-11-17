@@ -30,6 +30,15 @@ pnpm changeset
 
 `@agents-ensemble/core` と `@agents-ensemble/cli` は **fixed** グループのため、常に同じバージョンでリリースされる。`@agents-ensemble/operator-agent` は独立したバージョンで管理する。新しい public package も `packages/*` を走査する publish step の対象になる。
 
+バージョンの上げ幅は、パッケージごとの成熟度、互換性への期待、利用者への影響を踏まえ、全パッケージ共通で次を基本に判断する。
+
+- 機能追加は patch。大きめのリファクタリングや内部構造の変更に伴う修正・機能追加も patch。
+- 機能変更は patch または minor とし、影響に応じて相談する。
+- 大きめのリファクタリングや内部構造の変更は minor。
+- major は明示的に指定された場合だけ使う。
+
+`operator-agent` は現時点では alpha 相当として扱う。破壊的変更や移行への影響は上げ幅とは別に確認し、必要な場合は利用者に明記する。
+
 CI の `changeset-check` が PR に changeset の有無を検証する。ドキュメントのみの変更などでスキップする場合は、コミットメッセージに `[skip-changeset]` を含める。
 
 ## リリース手順
@@ -46,7 +55,11 @@ ls .changeset/*.md | grep -v README.md
 git checkout main
 git pull origin main
 git checkout -b release/1.0.0   # または release/v1.0.0
+```
 
+必要に応じ、**初回 push 前**に release ブランチ上の `.changeset/*.md` の対象パッケージの上げ幅を調整し、コミットする。各 changeset の内容と fixed グループを確認し、残る changeset の最大上げ幅から公開予定バージョンを判断する。ルート版に使うブランチ名も、意図したリリース版と揃える。変更は Release PR で確認でき、main 上の元の changeset は Release PR のマージ時に反映される。
+
+```bash
 git push -u origin release/1.0.0
 ```
 
