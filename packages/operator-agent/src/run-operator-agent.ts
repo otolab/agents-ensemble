@@ -1269,7 +1269,7 @@ async function runTtyConversation(options: {
     process.off('SIGINT', handleInterrupt);
     process.off('SIGTERM', handleTermination);
     tui.setInputEnabled(false);
-    tui.dispose();
+    await tui.dispose();
     unsubscribeTtyLogRouter();
     unsubscribeHoldChanges();
     unsubscribeLifecycle();

@@ -832,10 +832,13 @@ describe('runOperatorAgent', () => {
     );
     input.write('\r');
     await vi.waitFor(() => expect(sentPrompts).toEqual(['状況を教えて']));
+    // The fake send reads and writes workspace files before rendering its reply.
+    // Allow CI's shared runner enough time while still requiring the reply.
     await vi.waitFor(() =>
       expect(normalizeTtyText(output.capturedText())).toContain(
         'ライブ open question も確認できます。',
       ),
+      { timeout: 5_000 },
     );
     input.write('/exit\n');
     await run;
