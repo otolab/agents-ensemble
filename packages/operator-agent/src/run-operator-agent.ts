@@ -1034,7 +1034,7 @@ async function runTtyConversation(options: {
       }
       let committed: boolean;
       try {
-        committed = await options.watchPool.commitBatch(batch);
+        committed = await options.watchPool.commitBatch(batch, dispatchState);
       } catch (error) {
         if (reservation) options.recoveryInbox.release(reservation);
         options.dispatchLifecycle.settleSend(lease, {

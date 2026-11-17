@@ -107,6 +107,7 @@ export interface OperatorDispatchQueue {
     state: OperatorDispatchState,
     now?: number,
   ): OperatorDispatchBatch | undefined;
+  isBatchCurrent(batch: OperatorDispatchBatch, state: OperatorDispatchState): boolean;
   commitBatch(batch: OperatorDispatchBatch, finalize?: () => void): boolean;
   rollbackBatchCommit(batch: OperatorDispatchBatch): void;
   takeBatch(state: OperatorDispatchState, now?: number): OperatorDispatchBatch | undefined;
@@ -143,6 +144,8 @@ export function selectOperatorDispatchBatch(
   maxUserInputBytes = CONDUCTOR_RECOVERY_INPUT_BYTE_LIMIT,
   scheduling: Pick<OperatorDispatchScheduling, 'batchMaxWaitMs' | 'idleAgingMs'> =
     DEFAULT_OPERATOR_DISPATCH_SCHEDULING,
+  alreadyReady?: OperatorDispatchBatch,
+  readyHeads?: WeakSet<OperatorDispatchEvent>,
 ): { batch: OperatorDispatchBatch; remaining: OperatorDispatchEvent[] } | undefined {
   const ordered = [...queue].sort(compareDispatchEvents);
   const readyUsers = ordered.filter(
@@ -198,7 +201,16 @@ export function selectOperatorDispatchBatch(
             ),
           ),
         );
-    if (readyAt > now) continue;
+    const originallySelected = alreadyReady?.events[0];
+    const remainsSelectedHead =
+      alreadyReady?.sourceKey === sourceKey &&
+      originallySelected === first;
+    if (
+      readyAt > now &&
+      !remainsSelectedHead &&
+      (frozenBatchId !== undefined || !readyHeads?.has(first))
+    ) continue;
+    if (!frozenBatchId && readyAt <= now) readyHeads?.add(first);
 
     const priority: OperatorDispatchPriority = events.some(
       (event) => event.priority === 'open_question',
@@ -469,6 +481,7 @@ export function createOperatorDispatchQueue(
   let arrival = 0;
   let held: Extract<OperatorDispatchEvent, { type: 'report' }>[] = [];
   let pending: OperatorDispatchEvent[] = [];
+  const readyHeads = new WeakSet<OperatorDispatchEvent>();
   const inFlightReportIds = new Set<string>();
   const retryReadyAtById = new Map<string, number>();
   let conversationHold = false;
@@ -817,8 +830,31 @@ export function createOperatorDispatchQueue(
         now,
         CONDUCTOR_RECOVERY_INPUT_BYTE_LIMIT,
         scheduling,
+        undefined,
+        readyHeads,
       );
       return selected?.batch;
+    },
+    isBatchCurrent(batch, state) {
+      clearExpiredFocus(Date.now());
+      const selected = selectOperatorDispatchBatch(
+        pending,
+        { ...state, focusSessionId },
+        Date.now(),
+        CONDUCTOR_RECOVERY_INPUT_BYTE_LIMIT,
+        scheduling,
+        batch,
+        readyHeads,
+      )?.batch;
+      if (
+        !selected ||
+        selected.sourceKey !== batch.sourceKey ||
+        selected.events[0] !== batch.events[0]
+      ) {
+        return false;
+      }
+      batch.usedContinuation = selected.usedContinuation;
+      return true;
     },
     commitBatch(batch, finalize) {
       let events = batch.events;

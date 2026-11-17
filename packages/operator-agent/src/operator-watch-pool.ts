@@ -62,6 +62,7 @@ import {
 import type {
   OperatorDispatchEvent,
   OperatorDispatchBatch,
+  OperatorDispatchState,
   OperatorDispatchQueue,
 } from './operator-dispatch.js';
 import { formatOversizedConductorMessageWarning } from './operator-dispatch.js';
@@ -207,7 +208,7 @@ export interface OperatorWatchPool {
     /** Requested by the producer; the pool records its actual admission time instead. */
     eligibleAt: number;
   }): Promise<string>;
-  commitBatch(batch: OperatorDispatchBatch): Promise<boolean>;
+  commitBatch(batch: OperatorDispatchBatch, state?: OperatorDispatchState): Promise<boolean>;
   recordRetry?(
     events: readonly OperatorDispatchEvent[],
     retryReadyAt: number,
@@ -1723,7 +1724,7 @@ export async function createOperatorWatchPool(
       });
       return reportId;
     },
-    async commitBatch(batch) {
+    async commitBatch(batch, dispatchState) {
       // User input and already frozen retries do not need a new manifest.
       if (batch.sourceKey === 'user' || batch.batchId) {
         return options.dispatchQueue.commitBatch(batch);
@@ -1735,6 +1736,12 @@ export async function createOperatorWatchPool(
           // Do not reconcile the refreshed durable state into the local queue:
           // reports from peers that are not yet locally visible belong to the
           // next batch. Capture local arrivals only after acquiring the lock.
+          if (
+            dispatchState &&
+            !options.dispatchQueue.isBatchCurrent(batch, dispatchState)
+          ) {
+            return false;
+          }
           return options.dispatchQueue.commitBatch(batch, () => {
             committed = true;
             const reports = batch.events.filter(
