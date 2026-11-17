@@ -1,5 +1,15 @@
 # @agents-ensemble/operator-agent
 
+## 0.6.1
+
+### Patch Changes
+
+- 13b3576: Add repository-scoped run discovery and watch management to operator-agent, with timestamped per-run summaries and bounded GitHub pull-request details.
+- 7cad569: Replace the operator-agent readline prompt with a fixed-bottom multiline TUI.
+- Updated dependencies [372f42a]
+- Updated dependencies [13b3576]
+  - @agents-ensemble/core@0.23.1
+
 ## 0.6.0
 
 ### Minor Changes
