@@ -35,6 +35,24 @@ import {
   listOperatorWatchStatePaths,
   operatorWatchStatePath as profileOperatorWatchStatePath,
 } from './operator-state-paths.js';
+import {
+  normalizeRepositoryPattern,
+  repositoryMatchesPatterns,
+} from './operator-agent-config.js';
+import {
+  DEFAULT_REPOSITORY_AUTO_POLL_INTERVAL_MS,
+  DEFAULT_REPOSITORY_SCAN_INTERVAL_MS,
+  MAX_REPOSITORY_AUTO_WATCHES,
+  MAX_REPOSITORY_WATCHES,
+  MIN_REPOSITORY_SCAN_INTERVAL_MS,
+  MAX_REPOSITORY_SCAN_INTERVAL_MS,
+  emptyOperatorRepositoryWatchState,
+  loadOperatorRepositoryWatchState,
+  operatorRepositoryWatchStatePath,
+  saveOperatorRepositoryWatchState,
+  type OperatorRepositoryWatchState,
+  type RepositoryWatchConfig,
+} from './operator-repository-watch-state.js';
 import type {
   OperatorDispatchEvent,
   OperatorDispatchQueue,
@@ -67,6 +85,19 @@ interface SessionCursor {
     { question: string; status: 'open' | 'answered'; askedAt: number }
   >;
   statusFingerprints: Record<string, string>;
+  questionCountObservation?: {
+    metric: 'unanswered_open_questions';
+    current: {
+      count: number;
+      checkedAt: number;
+      source: 'uds' | 'resume_store';
+    };
+    previous?: {
+      count: number;
+      checkedAt: number;
+      source: 'uds' | 'resume_store';
+    };
+  };
 }
 
 export interface ConductorMessageListenConfig {
@@ -78,6 +109,26 @@ export interface OperatorSessionLiveStatus {
   connectivity: 'reachable' | 'unreachable' | 'unknown';
   checkedAt: number | null;
   unreachableSince: number | null;
+}
+
+export interface OperatorSessionTrackingInfo {
+  firstObservedAt: number | null;
+  repositoryWatchEnabled: boolean;
+  repositoryScan: {
+    status: 'fresh' | 'stale' | 'not_observed';
+    checkedAt: number | null;
+    error: 'scan_failed' | null;
+  };
+  watchEnabled: boolean;
+  watchSource: 'manual' | 'repository_auto' | null;
+  watchReason:
+    | 'watching'
+    | 'auto_watch_capacity'
+    | 'suppressed'
+    | 'not_registered'
+    | 'repository_watch_stopped';
+  pollIntervalMs: number | null;
+  questionCountObservation?: SessionCursor['questionCountObservation'];
 }
 
 interface OperatorWatchState {
@@ -106,6 +157,21 @@ export interface OperatorWatchPool {
   ): Promise<WatchConfig>;
   unregister(conductorAgentId: string): Promise<boolean>;
   list(): WatchConfig[];
+  registerRepository(
+    githubRepo: string,
+    options?: {
+      scanIntervalMs?: number;
+      pollIntervalMs?: number;
+      debounceMs?: number;
+    },
+  ): Promise<RepositoryWatchConfig>;
+  unregisterRepository(githubRepo: string): Promise<boolean>;
+  listRepositoryWatches(): RepositoryWatchConfig[];
+  scanRepositoriesOnce(): Promise<number>;
+  getSessionTrackingInfo(
+    conductorAgentId: string,
+    issueUrl: string,
+  ): OperatorSessionTrackingInfo;
   registerConductorMessageListen(
     conductorAgentId: string,
     options?: { messageDebounceMs?: number },
@@ -125,6 +191,9 @@ export interface CreateOperatorWatchPoolOptions {
   userEnsembleRoot?: string;
   /** Profile whose watch state is active. */
   profile?: string;
+  /** Repository patterns allowed by the selected profile and CLI. */
+  profileIncludes?: readonly string[];
+  repoFilters?: readonly string[];
   /** @deprecated Test and internal compatibility for pre-Phase 3 callers. */
   repoRoot?: string;
   dispatchQueue: OperatorDispatchQueue;
@@ -198,6 +267,8 @@ export async function createOperatorWatchPool(
     );
   };
   let state = emptyWatchState();
+  const repositoryStatePath = operatorRepositoryWatchStatePath(root, profile);
+  let repositoryState = emptyOperatorRepositoryWatchState();
   const fallbackQueuedReportIds = new Set<string>();
   const syncPendingReportsToQueue = () => {
     const reports = state.pendingReports.map((report) => ({
@@ -234,6 +305,9 @@ export async function createOperatorWatchPool(
     }
   };
   const refreshStateFromDisk = async () => {
+    repositoryState = await loadOperatorRepositoryWatchState(
+      repositoryStatePath,
+    );
     const paths = new Set([
       ...statePaths,
       ...(await listOperatorWatchStatePaths(root, profile)),
@@ -302,6 +376,8 @@ export async function createOperatorWatchPool(
   };
   await withWatchStateLock(root, profile, refreshStateFromDisk);
   const timers = new Map<string, NodeJS.Timeout>();
+  const repositoryTimers = new Map<string, NodeJS.Timeout>();
+  const repositoryScansInFlight = new Set<string>();
   const polling = new Set<string>();
   const messageTimers = new Map<string, NodeJS.Timeout>();
   const messagePolling = new Set<string>();
@@ -350,6 +426,12 @@ export async function createOperatorWatchPool(
       }
     }
   };
+  const persistRepositoryState = async () => {
+    await saveOperatorRepositoryWatchState(
+      repositoryStatePath,
+      repositoryState,
+    );
+  };
   const deferWatchPendingReports = (
     conductorAgentId: string,
     debounceMs: number,
@@ -392,6 +474,18 @@ export async function createOperatorWatchPool(
     }, watch.pollIntervalMs);
     timer.unref();
     timers.set(watch.conductorAgentId, timer);
+  };
+  const startRepositoryTimer = (watch: RepositoryWatchConfig) => {
+    if (repositoryTimers.has(watch.githubRepo)) return;
+    const timer = setInterval(() => {
+      void scanRepositoryOnce(watch.githubRepo).catch((error: unknown) => {
+        options.onError?.(
+          `repository watch scan failed for ${watch.githubRepo}: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      });
+    }, watch.scanIntervalMs);
+    timer.unref();
+    repositoryTimers.set(watch.githubRepo, timer);
   };
   const startMessageTimer = (listener: ConductorMessageListenConfig) => {
     if (messageTimers.has(listener.conductorAgentId)) return;
@@ -551,6 +645,275 @@ export async function createOperatorWatchPool(
     unassignedDiagnostics.delete(id);
     return { assigned: true };
   };
+  const verifyUniqueLocatedSession = async (
+    id: string,
+    located: LocatedSessionResumeStore,
+  ): Promise<boolean> => {
+    const initialMatches = storesById.get(id);
+    if (initialMatches && initialMatches.length > 1) return false;
+    if (initialMatches?.length === 1) {
+      return (
+        issueIdentity(initialMatches[0]!.resumeStore.issueUrl) ===
+        issueIdentity(located.resumeStore.issueUrl)
+      );
+    }
+    try {
+      const verified = await locateSession(id);
+      return (
+        verified !== undefined &&
+        issueIdentity(verified.resumeStore.issueUrl) ===
+          issueIdentity(located.resumeStore.issueUrl)
+      );
+    } catch (error) {
+      if (isAmbiguousResumeStoreError(error)) return false;
+      throw error;
+    }
+  };
+  const assertRepositoryAllowed = (value: string): string => {
+    const repository = normalizeRepositoryPattern(value);
+    if (repository.endsWith('/*')) {
+      throw new Error('githubRepo must name one exact owner/repo.');
+    }
+    const includes = options.profileIncludes?.length
+      ? options.profileIncludes.map((pattern) =>
+          normalizeRepositoryPattern(pattern),
+        )
+      : undefined;
+    if (
+      includes &&
+      !repositoryMatchesPatterns(repository, includes)
+    ) {
+      throw new Error(
+        `Repository ${repository} is outside the selected profile include scope.`,
+      );
+    }
+    const filters = options.repoFilters?.length
+      ? options.repoFilters.map((pattern) =>
+          normalizeRepositoryPattern(pattern),
+        )
+      : undefined;
+    if (filters && !repositoryMatchesPatterns(repository, filters)) {
+      throw new Error(
+        `Repository ${repository} is outside the active --repo-filter scope.`,
+      );
+    }
+    return repository;
+  };
+  const repositoryIsInActiveScope = (repository: string): boolean => {
+    try {
+      assertRepositoryAllowed(repository);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  const nextFirstObservedAt = (): number => {
+    let latest = -1;
+    for (const discoveries of Object.values(repositoryState.discoveries)) {
+      for (const discovery of Object.values(discoveries)) {
+        latest = Math.max(latest, discovery.firstObservedAt);
+      }
+    }
+    return Math.max(Date.now(), latest + 1);
+  };
+  const listRepositoryStores = async (
+    githubRepo: string,
+  ): Promise<LocatedSessionResumeStore[]> => {
+    const sessions: LocatedSessionResumeStore[] = [];
+    let cursor: string | undefined;
+    do {
+      const page = await listUserLocatedSessionResumeStoresPage(
+        {
+          githubRepo,
+          limit: 500,
+          ...(cursor ? { cursor } : {}),
+        },
+        {
+          userEnsembleRoot: root,
+          onDuplicate: onResumeStoreDuplicate,
+        },
+      );
+      sessions.push(...page.sessions);
+      cursor = page.nextCursor;
+    } while (cursor);
+    return sessions;
+  };
+  const reconcileRepositoryAutoWatches = () => {
+    const previousManaged = new Set<string>();
+    const candidates: Array<{
+      id: string;
+      githubRepo: string;
+      firstObservedAt: number;
+      config: RepositoryWatchConfig;
+    }> = [];
+    for (const config of Object.values(repositoryState.watches)) {
+      for (const id of config.managedSessionIds) previousManaged.add(id);
+      if (!repositoryIsInActiveScope(config.githubRepo)) continue;
+      const discoveries = repositoryState.discoveries[config.githubRepo] ?? {};
+      const manual = new Set(config.manualSessionIds);
+      const suppressed = new Set(config.suppressedSessionIds);
+      for (const id of config.managedSessionIds) {
+        const discovery = discoveries[id];
+        if (!discovery || manual.has(id) || suppressed.has(id)) continue;
+        candidates.push({
+          id,
+          githubRepo: config.githubRepo,
+          firstObservedAt: discovery.firstObservedAt,
+          config,
+        });
+      }
+    }
+    candidates.sort(
+      (left, right) =>
+        right.firstObservedAt - left.firstObservedAt ||
+        left.githubRepo.localeCompare(right.githubRepo) ||
+        left.id.localeCompare(right.id),
+    );
+    const selected = new Map(
+      candidates
+        .slice(0, MAX_REPOSITORY_AUTO_WATCHES)
+        .map((candidate) => [candidate.id, candidate]),
+    );
+    for (const id of previousManaged) {
+      const stillManual = Object.values(repositoryState.watches).some(
+        (config) => config.manualSessionIds.includes(id),
+      );
+      if (!selected.has(id) && !stillManual) delete state.watches[id];
+    }
+    for (const candidate of selected.values()) {
+      if (candidate.config.manualSessionIds.includes(candidate.id)) continue;
+      state.watches[candidate.id] = {
+        conductorAgentId: candidate.id,
+        pollIntervalMs: candidate.config.pollIntervalMs,
+        debounceMs: candidate.config.debounceMs,
+      };
+    }
+  };
+  const syncSessionWatchTimers = () => {
+    const active = new Map(
+      pool.list().map((watch) => [watch.conductorAgentId, watch]),
+    );
+    for (const [id, timer] of timers) {
+      if (!active.has(id)) {
+        clearInterval(timer);
+        timers.delete(id);
+      }
+    }
+    for (const watch of active.values()) {
+      const existing = timers.get(watch.conductorAgentId);
+      if (existing) clearInterval(existing);
+      timers.delete(watch.conductorAgentId);
+      startTimer(watch);
+    }
+  };
+  const syncRepositoryWatchTimers = () => {
+    const active = new Map(
+      Object.values(repositoryState.watches)
+        .filter((watch) => repositoryIsInActiveScope(watch.githubRepo))
+        .map((watch) => [watch.githubRepo, watch]),
+    );
+    for (const [githubRepo, timer] of repositoryTimers) {
+      if (!active.has(githubRepo)) {
+        clearInterval(timer);
+        repositoryTimers.delete(githubRepo);
+      }
+    }
+    for (const watch of active.values()) {
+      const existing = repositoryTimers.get(watch.githubRepo);
+      if (existing) clearInterval(existing);
+      repositoryTimers.delete(watch.githubRepo);
+      startRepositoryTimer(watch);
+    }
+  };
+  const scanRepositoryOnce = async (githubRepo: string): Promise<number> => {
+    if (closed || repositoryScansInFlight.has(githubRepo)) return 0;
+    repositoryScansInFlight.add(githubRepo);
+    try {
+      const locatedSessions = await listRepositoryStores(githubRepo);
+      const grouped = new Map<string, LocatedSessionResumeStore[]>();
+      for (const located of locatedSessions) {
+        const id = located.resumeStore.conductorAgentId;
+        const matches = grouped.get(id) ?? [];
+        matches.push(located);
+        grouped.set(id, matches);
+      }
+      let added = 0;
+      await withStateLock(async () => {
+        const config = repositoryState.watches[githubRepo];
+        if (!config || closed) return;
+        const discoveries =
+          (repositoryState.discoveries[githubRepo] ??= {});
+        const now = Date.now();
+        const firstObservedAt = nextFirstObservedAt();
+        config.lastScanAttemptAt = now;
+        config.lastSuccessfulScanAt = now;
+        config.lastScanError = null;
+        for (const [id, matches] of [...grouped].sort(([left], [right]) =>
+          left.localeCompare(right),
+        )) {
+          if (
+            matches.length !== 1 ||
+            ambiguousResumeStoreIds.has(id) ||
+            !(await verifyUniqueLocatedSession(id, matches[0]!))
+          ) {
+            ambiguousResumeStoreIds.add(id);
+            options.onError?.(
+              `repository watch skipped ambiguous conductor ID ${id} in ${githubRepo}.`,
+            );
+            continue;
+          }
+          const located = matches[0]!;
+          if (!discoveries[id]) {
+            discoveries[id] = {
+              issueUrl: located.resumeStore.issueUrl,
+              firstObservedAt,
+            };
+            added += 1;
+          }
+          if (
+            config.suppressedSessionIds.includes(id) ||
+            config.manualSessionIds.includes(id)
+          ) {
+            continue;
+          }
+          const binding = bindLocatedSession(id, located);
+          if (!binding.assigned) {
+            options.onError?.(
+              `repository watch could not bind ${id}: ${binding.reason ?? 'unknown reason'}.`,
+            );
+            continue;
+          }
+          if (!config.managedSessionIds.includes(id)) {
+            config.managedSessionIds.push(id);
+          }
+        }
+        // A deleted resume store is no longer a live candidate. Keep its first
+        // observation record, but stop polling it while its repository is watched.
+        const present = new Set(grouped.keys());
+        config.managedSessionIds = config.managedSessionIds.filter((id) => {
+          if (present.has(id)) return true;
+          delete state.watches[id];
+          return false;
+        });
+        reconcileRepositoryAutoWatches();
+        await persist();
+        await persistRepositoryState();
+      });
+      syncSessionWatchTimers();
+      return added;
+    } catch (error) {
+      await withStateLock(async () => {
+        const config = repositoryState.watches[githubRepo];
+        if (!config) return;
+        config.lastScanAttemptAt = Date.now();
+        config.lastScanError = 'scan_failed';
+        await persistRepositoryState();
+      });
+      throw error;
+    } finally {
+      repositoryScansInFlight.delete(githubRepo);
+    }
+  };
   const pool: OperatorWatchPool = {
     async register(conductorAgentId, input = {}) {
       const id = requireNonEmptyString(conductorAgentId, 'conductorAgentId');
@@ -581,12 +944,37 @@ export async function createOperatorWatchPool(
           ),
         };
         const previousWatch = state.watches[id];
+        const repository =
+          repositoryForIssue(located.resumeStore.issueUrl);
+        const repositoryConfig = repository
+          ? repositoryState.watches[repository]
+          : undefined;
+        const previousRepositoryConfig = repositoryConfig
+          ? { ...repositoryConfig,
+              managedSessionIds: [...repositoryConfig.managedSessionIds],
+              manualSessionIds: [...repositoryConfig.manualSessionIds],
+              suppressedSessionIds: [...repositoryConfig.suppressedSessionIds],
+            }
+          : undefined;
         state.watches[id] = nextWatch;
+        if (repositoryConfig) {
+          repositoryConfig.managedSessionIds =
+            repositoryConfig.managedSessionIds.filter((item) => item !== id);
+          repositoryConfig.suppressedSessionIds =
+            repositoryConfig.suppressedSessionIds.filter((item) => item !== id);
+          if (!repositoryConfig.manualSessionIds.includes(id)) {
+            repositoryConfig.manualSessionIds.push(id);
+          }
+        }
         try {
           await persist();
+          if (repositoryConfig) await persistRepositoryState();
         } catch (error) {
           if (previousWatch) state.watches[id] = previousWatch;
           else delete state.watches[id];
+          if (repositoryConfig && previousRepositoryConfig) {
+            repositoryState.watches[repository!] = previousRepositoryConfig;
+          }
           throw error;
         }
         return nextWatch;
@@ -605,10 +993,36 @@ export async function createOperatorWatchPool(
         const previousWatch = state.watches[id];
         if (!previousWatch) return false;
         delete state.watches[id];
+        const repositoryConfig = Object.values(repositoryState.watches).find(
+          (config) =>
+            config.manualSessionIds.includes(id) ||
+            config.managedSessionIds.includes(id),
+        );
+        const previousRepositoryConfig = repositoryConfig
+          ? { ...repositoryConfig,
+              managedSessionIds: [...repositoryConfig.managedSessionIds],
+              manualSessionIds: [...repositoryConfig.manualSessionIds],
+              suppressedSessionIds: [...repositoryConfig.suppressedSessionIds],
+            }
+          : undefined;
+        if (repositoryConfig) {
+          repositoryConfig.manualSessionIds =
+            repositoryConfig.manualSessionIds.filter((item) => item !== id);
+          repositoryConfig.managedSessionIds =
+            repositoryConfig.managedSessionIds.filter((item) => item !== id);
+          if (!repositoryConfig.suppressedSessionIds.includes(id)) {
+            repositoryConfig.suppressedSessionIds.push(id);
+          }
+        }
         try {
           await persist();
+          if (repositoryConfig) await persistRepositoryState();
         } catch (error) {
           state.watches[id] = previousWatch;
+          if (repositoryConfig && previousRepositoryConfig) {
+            repositoryState.watches[repositoryConfig.githubRepo] =
+              previousRepositoryConfig;
+          }
           throw error;
         }
         return true;
@@ -621,6 +1035,250 @@ export async function createOperatorWatchPool(
     },
     list() {
       return Object.values(state.watches).map((watch) => ({ ...watch }));
+    },
+    async registerRepository(githubRepo, input = {}) {
+      const repository = assertRepositoryAllowed(githubRepo);
+      const scanIntervalMs = parseBoundedInteger(
+        input.scanIntervalMs,
+        DEFAULT_REPOSITORY_SCAN_INTERVAL_MS,
+        MIN_REPOSITORY_SCAN_INTERVAL_MS,
+        MAX_REPOSITORY_SCAN_INTERVAL_MS,
+        'scanIntervalMs',
+      );
+      const pollIntervalMs = parseBoundedInteger(
+        input.pollIntervalMs,
+        DEFAULT_REPOSITORY_AUTO_POLL_INTERVAL_MS,
+        MIN_POLL_INTERVAL_MS,
+        MAX_POLL_INTERVAL_MS,
+        'pollIntervalMs',
+      );
+      const debounceMs = parseBoundedInteger(
+        input.debounceMs,
+        250,
+        0,
+        MAX_DEBOUNCE_MS,
+        'debounceMs',
+      );
+      const alreadyRegistered = await withStateLock(async () => {
+        const current = repositoryState.watches[repository];
+        if (!current) return false;
+        const previous = { ...current };
+        repositoryState.watches[repository] = {
+          ...current,
+          scanIntervalMs,
+          pollIntervalMs,
+          debounceMs,
+        };
+        try {
+          reconcileRepositoryAutoWatches();
+          await persist();
+          await persistRepositoryState();
+        } catch (error) {
+          repositoryState.watches[repository] = previous;
+          throw error;
+        }
+        return true;
+      });
+      if (alreadyRegistered) {
+        syncSessionWatchTimers();
+        syncRepositoryWatchTimers();
+        return structuredClone(repositoryState.watches[repository]!);
+      }
+
+      // Capture the baseline outside the profile lock: each page may read
+      // hundreds of saved runs, while all state mutation remains serialized.
+      const baseline = await listRepositoryStores(repository);
+      const config = await withStateLock(async () => {
+        const existing = repositoryState.watches[repository];
+        if (existing) return structuredClone(existing);
+        if (Object.keys(repositoryState.watches).length >= MAX_REPOSITORY_WATCHES) {
+          throw new Error(
+            `At most ${MAX_REPOSITORY_WATCHES} repositories can be watched in one profile.`,
+          );
+        }
+        const next: RepositoryWatchConfig = {
+          githubRepo: repository,
+          enabledAt: Date.now(),
+          lastScanAttemptAt: Date.now(),
+          lastSuccessfulScanAt: Date.now(),
+          lastScanError: null,
+          scanIntervalMs,
+          pollIntervalMs,
+          debounceMs,
+          managedSessionIds: [],
+          manualSessionIds: [],
+          suppressedSessionIds: [],
+        };
+        const discoveries =
+          (repositoryState.discoveries[repository] ??= {});
+        const grouped = new Map<string, LocatedSessionResumeStore[]>();
+        for (const located of baseline) {
+          const id = located.resumeStore.conductorAgentId;
+          const matches = grouped.get(id) ?? [];
+          matches.push(located);
+          grouped.set(id, matches);
+        }
+        const baselineFirstObservedAt = nextFirstObservedAt();
+        for (const [id, matches] of [...grouped].sort(([left], [right]) =>
+          left.localeCompare(right),
+        )) {
+          if (
+            matches.length !== 1 ||
+            ambiguousResumeStoreIds.has(id) ||
+            !(await verifyUniqueLocatedSession(id, matches[0]!))
+          ) {
+            ambiguousResumeStoreIds.add(id);
+            options.onError?.(
+              `repository watch skipped ambiguous conductor ID ${id} in ${repository}.`,
+            );
+            continue;
+          }
+          const located = matches[0]!;
+          discoveries[id] ??= {
+            issueUrl: located.resumeStore.issueUrl,
+            firstObservedAt: baselineFirstObservedAt,
+          };
+          const binding = bindLocatedSession(id, located);
+          if (!binding.assigned) {
+            options.onError?.(
+              `repository watch could not bind ${id}: ${binding.reason ?? 'unknown reason'}.`,
+            );
+            continue;
+          }
+          if (state.watches[id]) {
+            next.manualSessionIds.push(id);
+          } else {
+            next.managedSessionIds.push(id);
+          }
+        }
+        repositoryState.watches[repository] = next;
+        reconcileRepositoryAutoWatches();
+        try {
+          await persist();
+          await persistRepositoryState();
+        } catch (error) {
+          delete repositoryState.watches[repository];
+          throw error;
+        }
+        return structuredClone(next);
+      });
+      syncSessionWatchTimers();
+      syncRepositoryWatchTimers();
+      return config;
+    },
+    async unregisterRepository(githubRepo) {
+      const repository = assertRepositoryAllowed(githubRepo);
+      const removed = await withStateLock(async () => {
+        const config = repositoryState.watches[repository];
+        if (!config) return false;
+        delete repositoryState.watches[repository];
+        for (const id of config.managedSessionIds) {
+          delete state.watches[id];
+        }
+        try {
+          await persist();
+          await persistRepositoryState();
+        } catch (error) {
+          repositoryState.watches[repository] = config;
+          reconcileRepositoryAutoWatches();
+          throw error;
+        }
+        return true;
+      });
+      if (!removed) return false;
+      syncSessionWatchTimers();
+      syncRepositoryWatchTimers();
+      return true;
+    },
+    listRepositoryWatches() {
+      return Object.values(repositoryState.watches)
+        .filter((watch) => repositoryIsInActiveScope(watch.githubRepo))
+        .map((watch) =>
+        structuredClone(watch),
+        );
+    },
+    async scanRepositoriesOnce() {
+      const repositories = Object.keys(repositoryState.watches).filter(
+        repositoryIsInActiveScope,
+      );
+      let discovered = 0;
+      for (const repository of repositories) {
+        discovered += await scanRepositoryOnce(repository);
+      }
+      return discovered;
+    },
+    getSessionTrackingInfo(conductorAgentId, issueUrl) {
+      let repository: string | undefined;
+      try {
+        repository = repositoryForIssue(issueUrl);
+      } catch {
+        repository = undefined;
+      }
+      const discovery = repository
+        ? repositoryState.discoveries[repository]?.[conductorAgentId]
+        : undefined;
+      const repositoryConfig = repository
+        ? repositoryState.watches[repository]
+        : undefined;
+      const activeWatch = state.watches[conductorAgentId];
+      const isManual =
+        repositoryConfig?.manualSessionIds.includes(conductorAgentId) ??
+        false;
+      const isManaged =
+        repositoryConfig?.managedSessionIds.includes(conductorAgentId) ??
+        false;
+      let watchReason: OperatorSessionTrackingInfo['watchReason'];
+      if (activeWatch) {
+        watchReason =
+          isManual || !isManaged ? 'watching' : 'watching';
+      } else if (!repositoryConfig && discovery) {
+        watchReason = 'repository_watch_stopped';
+      } else if (
+        repositoryConfig?.suppressedSessionIds.includes(conductorAgentId)
+      ) {
+        watchReason = 'suppressed';
+      } else if (isManaged) {
+        watchReason = 'auto_watch_capacity';
+      } else {
+        watchReason = 'not_registered';
+      }
+      const watchSource: OperatorSessionTrackingInfo['watchSource'] =
+        !activeWatch
+          ? null
+          : isManual || !isManaged
+            ? 'manual'
+            : 'repository_auto';
+      return {
+        firstObservedAt:
+          discovery && issueIdentity(discovery.issueUrl) === issueIdentity(issueUrl)
+            ? discovery.firstObservedAt
+            : null,
+        repositoryWatchEnabled: repositoryConfig !== undefined,
+        repositoryScan: {
+          status:
+            repositoryConfig?.lastSuccessfulScanAt === null ||
+            repositoryConfig?.lastSuccessfulScanAt === undefined
+              ? 'not_observed'
+              : repositoryConfig.lastScanError ||
+                  Date.now() - repositoryConfig.lastSuccessfulScanAt >
+                    repositoryConfig.scanIntervalMs * 2
+                ? 'stale'
+                : 'fresh',
+          checkedAt: repositoryConfig?.lastSuccessfulScanAt ?? null,
+          error: repositoryConfig?.lastScanError ?? null,
+        },
+        watchEnabled: activeWatch !== undefined,
+        watchSource,
+        watchReason,
+        pollIntervalMs: activeWatch?.pollIntervalMs ?? null,
+        ...(state.cursors[conductorAgentId]?.questionCountObservation
+          ? {
+              questionCountObservation: structuredClone(
+                state.cursors[conductorAgentId]!.questionCountObservation,
+              ),
+            }
+          : {}),
+      };
     },
     async registerConductorMessageListen(conductorAgentId, input = {}) {
       const id = requireNonEmptyString(conductorAgentId, 'conductorAgentId');
@@ -776,7 +1434,6 @@ export async function createOperatorWatchPool(
     getLiveStatus(conductorAgentId) {
       const status = liveStatuses.get(conductorAgentId);
       if (!status || status.checkedAt === null) return undefined;
-      if (Date.now() - status.checkedAt > 10_000) return undefined;
       return { ...status };
     },
     async pollOnce(conductorAgentId) {
@@ -807,7 +1464,7 @@ export async function createOperatorWatchPool(
           const checkedAt = Date.now();
           liveStatuses.set(id, {
             connectivity,
-            checkedAt: connectivity === 'unknown' ? null : checkedAt,
+            checkedAt,
             unreachableSince:
               connectivity === 'unreachable'
                 ? previousLiveStatus?.connectivity === 'unreachable'
@@ -816,7 +1473,7 @@ export async function createOperatorWatchPool(
                 : null,
           });
           const previous = state.cursors[id];
-          const next = cursorFor(observation);
+          const next = cursorFor(observation, checkedAt, source, previous);
           const debounceMs = Math.max(
             watch.debounceMs,
             state.messageListeners[id]?.messageDebounceMs ?? 0,
@@ -981,6 +1638,8 @@ export async function createOperatorWatchPool(
       closed = true;
       for (const timer of timers.values()) clearInterval(timer);
       timers.clear();
+      for (const timer of repositoryTimers.values()) clearInterval(timer);
+      repositoryTimers.clear();
       for (const timer of messageTimers.values()) clearInterval(timer);
       messageTimers.clear();
       if (pendingReportRefreshTimer) clearInterval(pendingReportRefreshTimer);
@@ -1000,10 +1659,20 @@ export async function createOperatorWatchPool(
     });
   }, PENDING_REPORT_REFRESH_INTERVAL_MS);
   pendingReportRefreshTimer.unref();
+  await withStateLock(async () => {
+    reconcileRepositoryAutoWatches();
+    await persist();
+  });
   for (const watch of pool.list()) startTimer(watch);
   for (const listener of pool.listConductorMessageListens()) {
     startMessageTimer(listener);
   }
+  syncRepositoryWatchTimers();
+  void pool.scanRepositoriesOnce().catch((error: unknown) => {
+    options.onError?.(
+      `repository watch startup scan failed: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  });
   return pool;
 }
 
@@ -1067,6 +1736,87 @@ export function createUnregisterSessionWatchTool(
       );
       const removed = await pool.unregister(conductorAgentId);
       return toolResult({ conductorAgentId, removed });
+    },
+  };
+}
+
+export function createRegisterRepositoryWatchTool(
+  pool: OperatorWatchPool,
+): ConductorTool {
+  return {
+    name: 'register_repository_watch',
+    description:
+      'Enable a profile-scoped watch for one exact GitHub owner/repo. A profile can register up to 20 repositories; registering a new repository beyond that limit fails, while registering an existing repository updates its settings. This repository registration limit is separate from the automatic live polling limit of 20 runs per profile. Existing saved runs become the baseline and are eligible for automatic watch; later runs are discovered on the repository scan interval. Registration and first-observed times survive operator-agent restarts. Manual session watches remain available beyond the automatic run limit.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        githubRepo: {
+          type: 'string',
+          description: 'Exact GitHub repository in owner/repo form.',
+        },
+        scanIntervalMs: {
+          type: 'integer',
+          minimum: MIN_REPOSITORY_SCAN_INTERVAL_MS,
+          maximum: MAX_REPOSITORY_SCAN_INTERVAL_MS,
+          description: 'Repository discovery interval (default 30000).',
+        },
+        pollIntervalMs: {
+          type: 'integer',
+          minimum: MIN_POLL_INTERVAL_MS,
+          maximum: MAX_POLL_INTERVAL_MS,
+          description: 'Automatic live observation interval (default 10000).',
+        },
+        debounceMs: {
+          type: 'integer',
+          minimum: 0,
+          maximum: MAX_DEBOUNCE_MS,
+          description: 'Watch report quiet window (default 250).',
+        },
+      },
+      required: ['githubRepo'],
+      additionalProperties: false,
+    },
+    execute: async (args) => {
+      const config = await pool.registerRepository(
+        requireToolString(args.githubRepo, 'githubRepo'),
+        {
+          scanIntervalMs: optionalNumber(args.scanIntervalMs, 'scanIntervalMs'),
+          pollIntervalMs: optionalNumber(args.pollIntervalMs, 'pollIntervalMs'),
+          debounceMs: optionalNumber(args.debounceMs, 'debounceMs'),
+        },
+      );
+      return toolResult({
+        ...config,
+        baselineRunCount: config.managedSessionIds.length +
+          config.manualSessionIds.length,
+        autoWatchLimit: MAX_REPOSITORY_AUTO_WATCHES,
+      } as unknown as ConductorJsonValue);
+    },
+  };
+}
+
+export function createUnregisterRepositoryWatchTool(
+  pool: OperatorWatchPool,
+): ConductorTool {
+  return {
+    name: 'unregister_repository_watch',
+    description:
+      'Stop repository scans and remove only its automatic session watches. Explicit manual session watches stay active, and first-observed history is retained for future registration.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        githubRepo: {
+          type: 'string',
+          description: 'Exact GitHub repository in owner/repo form.',
+        },
+      },
+      required: ['githubRepo'],
+      additionalProperties: false,
+    },
+    execute: async (args) => {
+      const githubRepo = requireToolString(args.githubRepo, 'githubRepo');
+      const removed = await pool.unregisterRepository(githubRepo);
+      return toolResult({ githubRepo, removed });
     },
   };
 }
@@ -1531,7 +2281,12 @@ function collectReports(
   return reports;
 }
 
-function cursorFor(observation: SessionObservationSnapshot): SessionCursor {
+function cursorFor(
+  observation: SessionObservationSnapshot,
+  checkedAt?: number,
+  source?: 'uds' | 'resume_store',
+  previous?: SessionCursor,
+): SessionCursor {
   const questionFingerprints: Record<string, string> = {};
   const questionSnapshots: NonNullable<SessionCursor['questionSnapshots']> = {};
   for (const question of observation.openQuestions) {
@@ -1556,6 +2311,31 @@ function cursorFor(observation: SessionObservationSnapshot): SessionCursor {
     questionFingerprints,
     questionSnapshots,
     statusFingerprints,
+    ...(checkedAt !== undefined && source !== undefined
+      ? {
+          questionCountObservation: {
+            metric: 'unanswered_open_questions',
+            current: {
+              count: observation.openQuestions.filter(
+                (question) => question.status === 'open',
+              ).length,
+              checkedAt,
+              source,
+            },
+            ...(previous?.questionCountObservation
+              ? {
+                  previous:
+                    previous.questionCountObservation.current,
+                }
+              : {}),
+          },
+        }
+      : previous?.questionCountObservation
+        ? {
+            questionCountObservation:
+              previous.questionCountObservation,
+          }
+        : {}),
   };
 }
 
@@ -1754,6 +2534,15 @@ function issueIdentity(issueUrl: string): string | undefined {
   }
 }
 
+function repositoryForIssue(issueUrl: string): string | undefined {
+  try {
+    const issue = parseIssueUrl(issueUrl);
+    return `${issue.owner}/${issue.repo}`.toLowerCase();
+  } catch {
+    return undefined;
+  }
+}
+
 async function findSession(
   conductorAgentId: string,
   options: {
@@ -1855,11 +2644,65 @@ async function loadWatchState(path: string): Promise<OperatorWatchState> {
           };
         }
       }
+      let questionCountObservation: SessionCursor['questionCountObservation'];
+      if (rawCursor.questionCountObservation !== undefined) {
+        if (!isRecord(rawCursor.questionCountObservation)) {
+          throw new Error(
+            `Invalid operator-agent watch state: question count observation ${id}.`,
+          );
+        }
+        // Older observations counted answered questions too. Drop those
+        // values so a restart establishes a correct unanswered-count baseline.
+        if (
+          rawCursor.questionCountObservation.metric ===
+          'unanswered_open_questions'
+        ) {
+          const parseCountSample = (
+            sample: unknown,
+          ): NonNullable<
+            SessionCursor['questionCountObservation']
+          >['current'] => {
+            if (
+              !isRecord(sample) ||
+              !Number.isSafeInteger(sample.count) ||
+              (sample.count as number) < 0 ||
+              !Number.isSafeInteger(sample.checkedAt) ||
+              (sample.checkedAt as number) < 0 ||
+              (sample.source !== 'uds' && sample.source !== 'resume_store')
+            ) {
+              throw new Error(
+                `Invalid operator-agent watch state: question count sample ${id}.`,
+              );
+            }
+            return {
+              count: sample.count as number,
+              checkedAt: sample.checkedAt as number,
+              source: sample.source,
+            };
+          };
+          questionCountObservation = {
+            metric: 'unanswered_open_questions',
+            current: parseCountSample(
+              rawCursor.questionCountObservation.current,
+            ),
+            ...(rawCursor.questionCountObservation.previous === undefined
+              ? {}
+              : {
+                  previous: parseCountSample(
+                    rawCursor.questionCountObservation.previous,
+                  ),
+                }),
+          };
+        }
+      }
       cursors[id] = {
         sequence: rawCursor.sequence as number,
         questionFingerprints: rawCursor.questionFingerprints,
         ...(questionSnapshots ? { questionSnapshots } : {}),
         statusFingerprints: rawCursor.statusFingerprints,
+        ...(questionCountObservation
+          ? { questionCountObservation }
+          : {}),
       };
     }
     const rawListeners = value.messageListeners ?? {};

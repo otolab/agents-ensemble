@@ -398,6 +398,8 @@ Issue session 内で worker に指示し、ユーザへ結果を返す agent は
 
 同じ Issue に複数 run がある場合、一覧で各 `conductorAgentId` を見て対象を選び、履歴照会にはその ID を指定する。SessionResumeStore は worker prompt failure event を保持しないため、保存 worker session / transcript の欠如は失敗の証拠ではない。終了 JSON から分かるのは `workerFailureCount` までで、どの worker が失敗したかを知るには captured harness log など詳細を残した記録が必要になる。
 
+operator-agent は `register_repository_watch` で完全一致の `owner/repo` を登録すると、既存 run を baseline として記録し、以後の run を定期発見して自動 watch します。発見時刻は profile の `repository-watch-state.json` に保持され、再起動後の scan でも引き継がれます。`SessionResumeStore.updatedAt` は flush 時刻であり、新着順には使いません。自動 live watch は profile 全体で最大20 run、個別の手動 watch は別枠です。`list_operator_sessions` は1 run 1行で保存 phase と live connectivity / 観測時刻、statusLine / 報告時刻、未回答 Open Question 件数と比較時刻、GitHub API 由来の PR head / 個別 CI / review decision を区別して返します。GitHub 情報は1ページ最大5 Issueへ問い合わせ、30秒 cache します。scan・live probe・GitHub API の未知、stale、失敗はそれぞれ別の status で示します。運用契約と page/filter は [operator input reference](operator-input.md)、watch state と観測項目は [live control API reference](live-open-question-control-api.md) を参照してください。
+
 | レイヤ | 役割 |
 |--------|------|
 | **modular-prompt** | system prompt 文（指揮方針・materials） |

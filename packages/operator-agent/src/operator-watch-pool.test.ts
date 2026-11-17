@@ -29,9 +29,12 @@ import {
 } from './operator-dispatch.js';
 import {
   createOperatorWatchPool,
+  createRegisterRepositoryWatchTool,
   createRegisterSessionWatchTool,
+  createUnregisterRepositoryWatchTool,
   operatorWatchStatePath,
 } from './operator-watch-pool.js';
+import { createListOperatorSessionsTool } from './list-operator-sessions-tool.js';
 
 const DEFAULT_ISSUE_URL = 'https://github.com/example/repo/issues/1';
 
@@ -205,6 +208,354 @@ describe('operator watch pool', () => {
         'https://github.com/example/repo/issues/42',
       ),
     ).toThrow(/Invalid operator-agent profile name/u);
+  });
+
+  it('discovers repository runs, preserves first-observed times across restarts, and stops only automatic watches', async () => {
+    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-repository-watch-'));
+    const existingIssue = 'https://github.com/example/repo/issues/1';
+    const manualIssue = 'https://github.com/example/repo/issues/2';
+    const newIssue = 'https://github.com/example/repo/issues/3';
+    await writeResumeStore('baseline-run', 900, undefined, existingIssue);
+    await writeResumeStore('manual-run', 800, undefined, manualIssue);
+    const dispatchQueue = createOperatorDispatchQueue();
+    let pool = await createOperatorWatchPool({ repoRoot, dispatchQueue });
+    await pool.register('manual-run', {
+      pollIntervalMs: 60_000,
+      debounceMs: 0,
+    });
+    try {
+      const registration = await createRegisterRepositoryWatchTool(pool).execute({
+        githubRepo: 'example/repo',
+        scanIntervalMs: 5_000,
+        pollIntervalMs: 60_000,
+      });
+      const registrationResult = JSON.parse(
+        registration.content[0]!.text,
+      ) as { baselineRunCount: number; enabledAt: number };
+      expect(registrationResult.baselineRunCount).toBe(2);
+      const baselineObservedAt = pool.getSessionTrackingInfo(
+        'baseline-run',
+        existingIssue,
+      ).firstObservedAt;
+      expect(baselineObservedAt).not.toBeNull();
+      expect(
+        pool.getSessionTrackingInfo('manual-run', manualIssue),
+      ).toMatchObject({
+        repositoryWatchEnabled: true,
+        watchEnabled: true,
+        watchSource: 'manual',
+      });
+
+      const duplicate = await pool.registerRepository('example/repo', {
+        scanIntervalMs: 5_000,
+        pollIntervalMs: 60_000,
+      });
+      expect(duplicate.enabledAt).toBe(registrationResult.enabledAt);
+      expect(duplicate.managedSessionIds).toEqual(['baseline-run']);
+      expect(
+        pool.getSessionTrackingInfo('baseline-run', existingIssue)
+          .firstObservedAt,
+      ).toBe(baselineObservedAt);
+      await expect(pool.unregister('baseline-run')).resolves.toBe(true);
+      expect(
+        pool.getSessionTrackingInfo('baseline-run', existingIssue),
+      ).toMatchObject({
+        watchEnabled: false,
+        watchReason: 'suppressed',
+      });
+
+      await writeResumeStore('new-run', 1, undefined, newIssue);
+      await expect(pool.scanRepositoriesOnce()).resolves.toBe(1);
+      const newObservedAt = pool.getSessionTrackingInfo(
+        'new-run',
+        newIssue,
+      ).firstObservedAt;
+      expect(newObservedAt).not.toBeNull();
+      expect(newObservedAt).toBeGreaterThan(baselineObservedAt!);
+      expect(
+        pool.getSessionTrackingInfo('new-run', newIssue),
+      ).toMatchObject({
+        repositoryWatchEnabled: true,
+        watchEnabled: true,
+        watchSource: 'repository_auto',
+        repositoryScan: { status: 'fresh', error: null },
+      });
+
+      const newRunPath = resolveEnsemblePaths({
+        repoRoot,
+      }).canonicalSessionResumeStorePath(newIssue, 'new-run');
+      await writeFile(newRunPath, '{ invalid json');
+      await expect(pool.scanRepositoriesOnce()).rejects.toThrow();
+      expect(
+        pool.getSessionTrackingInfo('new-run', newIssue).repositoryScan,
+      ).toMatchObject({ status: 'stale', error: 'scan_failed' });
+      await writeResumeStore('new-run', 1, undefined, newIssue);
+      await expect(pool.scanRepositoriesOnce()).resolves.toBe(0);
+
+      pool.close();
+      pool = await createOperatorWatchPool({ repoRoot, dispatchQueue });
+      expect(pool.listRepositoryWatches()).toHaveLength(1);
+      expect(
+        pool.getSessionTrackingInfo('new-run', newIssue).firstObservedAt,
+      ).toBe(newObservedAt);
+      expect(
+        pool.getSessionTrackingInfo('baseline-run', existingIssue).watchReason,
+      ).toBe('suppressed');
+      expect(pool.list().map((watch) => watch.conductorAgentId).sort()).toEqual([
+        'manual-run',
+        'new-run',
+      ]);
+
+      const stopped = await createUnregisterRepositoryWatchTool(pool).execute({
+        githubRepo: 'example/repo',
+      });
+      expect(JSON.parse(stopped.content[0]!.text)).toEqual({
+        githubRepo: 'example/repo',
+        removed: true,
+      });
+      expect(pool.list().map((watch) => watch.conductorAgentId)).toEqual([
+        'manual-run',
+      ]);
+      expect(
+        pool.getSessionTrackingInfo('new-run', newIssue),
+      ).toMatchObject({
+        firstObservedAt: newObservedAt,
+        repositoryWatchEnabled: false,
+        watchEnabled: false,
+        watchReason: 'repository_watch_stopped',
+      });
+      await pool.registerRepository('example/repo', {
+        scanIntervalMs: 5_000,
+        pollIntervalMs: 60_000,
+      });
+      expect(
+        pool.getSessionTrackingInfo('baseline-run', existingIssue),
+      ).toMatchObject({
+        firstObservedAt: baselineObservedAt,
+        watchEnabled: true,
+        watchSource: 'repository_auto',
+      });
+    } finally {
+      pool.close();
+    }
+  });
+
+  it('caps repository auto watches at 20, keeps overflow visible, and honors registration scope', async () => {
+    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-repository-watch-cap-'));
+    await Promise.all(
+      Array.from({ length: 21 }, (_, index) =>
+        writeResumeStore(
+          `cap-${String(index).padStart(2, '0')}`,
+          index,
+          undefined,
+          `https://github.com/example/repo/issues/${100 + index}`,
+        ),
+      ),
+    );
+    const pool = await createOperatorWatchPool({
+      repoRoot,
+      dispatchQueue: createOperatorDispatchQueue(),
+      profileIncludes: ['example/*'],
+      repoFilters: ['example/repo'],
+    });
+    try {
+      const config = await pool.registerRepository('example/repo', {
+        scanIntervalMs: 5_000,
+        pollIntervalMs: 60_000,
+      });
+      expect(config.managedSessionIds).toHaveLength(21);
+      expect(pool.list()).toHaveLength(20);
+      expect(
+        pool.getSessionTrackingInfo(
+          'cap-20',
+          'https://github.com/example/repo/issues/120',
+        ),
+      ).toMatchObject({
+        watchEnabled: false,
+        watchReason: 'auto_watch_capacity',
+      });
+      await expect(
+        pool.registerRepository('outside/repo'),
+      ).rejects.toThrow('outside the selected profile include scope');
+      await expect(
+        pool.registerRepository('example/other'),
+      ).rejects.toThrow('outside the active --repo-filter scope');
+    } finally {
+      pool.close();
+    }
+  });
+
+  it('limits repository registrations per profile and preserves duplicate, restart, and freed-slot semantics', async () => {
+    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-repository-watch-registration-limit-'));
+    const dispatchQueue = createOperatorDispatchQueue();
+    let pool = await createOperatorWatchPool({ repoRoot, dispatchQueue });
+    const repositoryAt = (index: number) =>
+      `example/repo-${String(index).padStart(2, '0')}`;
+    const registerTool = createRegisterRepositoryWatchTool(pool);
+    try {
+      for (let index = 0; index < 19; index += 1) {
+        await registerTool.execute({
+          githubRepo: repositoryAt(index),
+          scanIntervalMs: 60_000,
+          pollIntervalMs: 60_000,
+        });
+      }
+      expect(pool.listRepositoryWatches()).toHaveLength(19);
+
+      const twentiethRegistration = await registerTool.execute({
+        githubRepo: repositoryAt(19),
+        scanIntervalMs: 60_000,
+        pollIntervalMs: 60_000,
+      });
+      const twentiethConfig = JSON.parse(
+        twentiethRegistration.content[0]!.text,
+      ) as { enabledAt: number; githubRepo: string };
+      expect(twentiethConfig).toMatchObject({
+        githubRepo: repositoryAt(19),
+      });
+      expect(pool.listRepositoryWatches()).toHaveLength(20);
+
+      await expect(
+        registerTool.execute({ githubRepo: repositoryAt(20) }),
+      ).rejects.toThrow(
+        'At most 20 repositories can be watched in one profile.',
+      );
+      expect(pool.listRepositoryWatches()).toHaveLength(20);
+      expect(
+        pool.listRepositoryWatches().some(
+          (watch) => watch.githubRepo === repositoryAt(20),
+        ),
+      ).toBe(false);
+
+      const duplicateAtLimit = await registerTool.execute({
+        githubRepo: repositoryAt(19),
+        scanIntervalMs: 90_000,
+        pollIntervalMs: 55_000,
+      });
+      expect(JSON.parse(duplicateAtLimit.content[0]!.text)).toMatchObject({
+        enabledAt: twentiethConfig.enabledAt,
+        githubRepo: repositoryAt(19),
+        scanIntervalMs: 90_000,
+        pollIntervalMs: 55_000,
+      });
+      expect(pool.listRepositoryWatches()).toHaveLength(20);
+
+      pool.close();
+      pool = await createOperatorWatchPool({ repoRoot, dispatchQueue });
+      expect(pool.listRepositoryWatches()).toHaveLength(20);
+      const restartedRegisterTool = createRegisterRepositoryWatchTool(pool);
+      await expect(
+        restartedRegisterTool.execute({
+          githubRepo: repositoryAt(20),
+        }),
+      ).rejects.toThrow(
+        'At most 20 repositories can be watched in one profile.',
+      );
+      const duplicateAfterRestart = await restartedRegisterTool.execute({
+        githubRepo: repositoryAt(19),
+        scanIntervalMs: 120_000,
+      });
+      expect(JSON.parse(duplicateAfterRestart.content[0]!.text)).toMatchObject({
+        enabledAt: twentiethConfig.enabledAt,
+        githubRepo: repositoryAt(19),
+        scanIntervalMs: 120_000,
+      });
+      expect(pool.listRepositoryWatches()).toHaveLength(20);
+
+      const unregistered = await createUnregisterRepositoryWatchTool(
+        pool,
+      ).execute({ githubRepo: repositoryAt(0) });
+      expect(JSON.parse(unregistered.content[0]!.text)).toEqual({
+        githubRepo: repositoryAt(0),
+        removed: true,
+      });
+      expect(pool.listRepositoryWatches()).toHaveLength(19);
+
+      const registrationAfterUnregister = await restartedRegisterTool.execute({
+        githubRepo: repositoryAt(20),
+        scanIntervalMs: 60_000,
+        pollIntervalMs: 60_000,
+      });
+      expect(JSON.parse(registrationAfterUnregister.content[0]!.text)).toMatchObject({
+        githubRepo: repositoryAt(20),
+      });
+      expect(pool.listRepositoryWatches()).toHaveLength(20);
+    } finally {
+      pool.close();
+    }
+  });
+
+  it('discovers and auto-watches new runs beyond the 500-store page boundary without duplicates', async () => {
+    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-repository-watch-page-boundary-'));
+    const baselineIssue = 'https://github.com/example/repo/issues/1';
+    const sharedNewIssue = 'https://github.com/example/repo/issues/900';
+    await Promise.all(
+      Array.from({ length: 500 }, (_, index) =>
+        writeResumeStore(
+          `baseline-${String(index).padStart(3, '0')}`,
+          index + 2,
+          undefined,
+          baselineIssue,
+        ),
+      ),
+    );
+    const pool = await createOperatorWatchPool({
+      repoRoot,
+      dispatchQueue: createOperatorDispatchQueue(),
+    });
+    try {
+      const registered = await pool.registerRepository('example/repo', {
+        scanIntervalMs: 60_000,
+        pollIntervalMs: 60_000,
+      });
+      expect(registered.managedSessionIds).toHaveLength(500);
+
+      // These older flush times place both new runs on page two of the
+      // updatedAt-descending inventory, despite sharing one Issue.
+      await writeResumeStore('boundary-run-a', 1, undefined, sharedNewIssue);
+      await writeResumeStore('boundary-run-b', 0, undefined, sharedNewIssue);
+      await expect(pool.scanRepositoriesOnce()).resolves.toBe(2);
+
+      const discovered = pool.listRepositoryWatches()[0]!;
+      expect(discovered.managedSessionIds).toHaveLength(502);
+      expect(discovered.managedSessionIds).toEqual(
+        expect.arrayContaining(['boundary-run-a', 'boundary-run-b']),
+      );
+      expect(
+        discovered.managedSessionIds.filter(
+          (id) => id === 'boundary-run-a' || id === 'boundary-run-b',
+        ),
+      ).toEqual(['boundary-run-a', 'boundary-run-b']);
+      for (const conductorAgentId of ['boundary-run-a', 'boundary-run-b']) {
+        expect(
+          pool.getSessionTrackingInfo(conductorAgentId, sharedNewIssue),
+        ).toMatchObject({
+          repositoryWatchEnabled: true,
+          watchEnabled: true,
+          watchSource: 'repository_auto',
+          watchReason: 'watching',
+        });
+        expect(
+          pool.list().filter(
+            (watch) => watch.conductorAgentId === conductorAgentId,
+          ),
+        ).toHaveLength(1);
+      }
+
+      await expect(pool.scanRepositoriesOnce()).resolves.toBe(0);
+      expect(pool.listRepositoryWatches()[0]?.managedSessionIds).toHaveLength(
+        502,
+      );
+      expect(
+        pool.list().filter((watch) =>
+          ['boundary-run-a', 'boundary-run-b'].includes(
+            watch.conductorAgentId,
+          ),
+        ),
+      ).toHaveLength(2);
+    } finally {
+      pool.close();
+    }
   });
 
   it('does not load project-local operator watch state', async () => {
@@ -1041,6 +1392,157 @@ describe('operator watch pool', () => {
       } finally {
         resumedPool.close();
       }
+    } finally {
+      pool.close();
+    }
+  });
+
+  it('counts only unanswered questions and re-baselines legacy total counts after restart', async () => {
+    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-watch-question-count-'));
+    await mkdir(join(repoRoot, '.ensemble', 'sessions'), { recursive: true });
+    let snapshot: SessionObservationSnapshot = {
+      sequence: 1,
+      openQuestions: [
+        {
+          id: 'inq-1',
+          question: 'Still open?',
+          responseType: 'text',
+          source: 'conductor',
+          status: 'open',
+          askedAt: 10,
+        },
+        {
+          id: 'inq-2',
+          question: 'Already answered?',
+          responseType: 'text',
+          source: 'conductor',
+          status: 'answered',
+          answer: 'Yes.',
+          answeredBy: 'operator',
+          answeredAt: 15,
+          askedAt: 11,
+        },
+      ],
+    };
+    const liveServer = await startOpenQuestionControlServer({
+      listOpenQuestions: () => [],
+      observeSession: async () => snapshot,
+      answerOpenQuestion: async () => {
+        throw new Error('unused');
+      },
+    });
+    closeServers.push(() => liveServer.close());
+    const issueUrl = 'https://github.com/example/repo/issues/72';
+    const sessionId = 'question-count-session';
+    await writeResumeStore(sessionId, 1, liveServer.socketPath, issueUrl);
+    const dispatchQueue = createOperatorDispatchQueue();
+    let pool = await createOperatorWatchPool({ repoRoot, dispatchQueue });
+    const getObservation = () =>
+      pool.getSessionTrackingInfo(sessionId, issueUrl).questionCountObservation;
+    try {
+      await pool.register(sessionId, {
+        pollIntervalMs: 60_000,
+        debounceMs: 0,
+      });
+      await pool.pollOnce(sessionId);
+      expect(getObservation()).toMatchObject({
+        metric: 'unanswered_open_questions',
+        current: { count: 1, source: 'uds' },
+      });
+
+      pool.close();
+      pool = await createOperatorWatchPool({ repoRoot, dispatchQueue });
+      snapshot = {
+        sequence: 2,
+        openQuestions: [
+          {
+            id: 'inq-1',
+            question: 'Still open?',
+            responseType: 'text',
+            source: 'conductor',
+            status: 'answered',
+            answer: 'Done.',
+            answeredBy: 'operator',
+            answeredAt: 20,
+            askedAt: 10,
+          },
+          {
+            id: 'inq-2',
+            question: 'Already answered?',
+            responseType: 'text',
+            source: 'conductor',
+            status: 'answered',
+            answer: 'Yes.',
+            answeredBy: 'operator',
+            answeredAt: 15,
+            askedAt: 11,
+          },
+        ],
+      };
+      await pool.pollOnce(sessionId);
+      const answered = getObservation();
+      expect(answered).toMatchObject({
+        metric: 'unanswered_open_questions',
+        current: { count: 0, source: 'uds' },
+        previous: { count: 1, source: 'uds' },
+      });
+      const listTool = createListOperatorSessionsTool(
+        { userEnsembleRoot: join(homeRoot, '.ensemble') },
+        undefined,
+        undefined,
+        (id, url) => pool.getSessionTrackingInfo(id, url),
+      );
+      const listed = JSON.parse(
+        (await listTool.execute({ includeGithub: false })).content[0]!.text,
+      ) as {
+        sessions: Array<{
+          conductorAgentId: string;
+          openQuestionObservation: Record<string, unknown>;
+        }>;
+      };
+      expect(listed.sessions[0]).toMatchObject({
+        conductorAgentId: sessionId,
+        openQuestionObservation: {
+          metric: 'unanswered_open_questions',
+          current: { count: 0, source: 'uds' },
+          previous: { count: 1, source: 'uds' },
+          delta: -1,
+          comparedAt: expect.any(Number),
+        },
+      });
+
+      const statePath = currentWatchStatePath(repoRoot);
+      const savedState = JSON.parse(await readFile(statePath, 'utf8')) as {
+        cursors: Record<
+          string,
+          { questionCountObservation: Record<string, unknown> }
+        >;
+      };
+      delete savedState.cursors[sessionId]!.questionCountObservation.metric;
+      await writeFile(statePath, `${JSON.stringify(savedState)}\n`, 'utf8');
+
+      pool.close();
+      pool = await createOperatorWatchPool({ repoRoot, dispatchQueue });
+      snapshot = {
+        sequence: 3,
+        openQuestions: [
+          ...snapshot.openQuestions,
+          {
+            id: 'inq-3',
+            question: 'A new unanswered question?',
+            responseType: 'text',
+            source: 'conductor',
+            status: 'open',
+            askedAt: 30,
+          },
+        ],
+      };
+      await pool.pollOnce(sessionId);
+      expect(getObservation()).toMatchObject({
+        metric: 'unanswered_open_questions',
+        current: { count: 1, source: 'uds' },
+      });
+      expect(getObservation()?.previous).toBeUndefined();
     } finally {
       pool.close();
     }
