@@ -326,6 +326,15 @@ export function createOperatorAgentTuiHost(
     },
   );
   let resizeTimer: ReturnType<typeof setTimeout> | undefined;
+  let resizeRevision = 0;
+  let recoveryNeeded = false;
+  let disposing = false;
+  const recoverResize = () => {
+    ink.clear();
+    options.stdout.write('\u001b[3J\u001b[2J\u001b[H');
+    model.replay();
+    recoveryNeeded = false;
+  };
   const handleResize = () => {
     const nextSize = readTerminalSize(options.stdout);
     if (
@@ -333,14 +342,15 @@ export function createOperatorAgentTuiHost(
       nextSize.rows === model.getSnapshot().rows
     ) return;
     model.setTerminalSize(nextSize.columns, nextSize.rows);
+    resizeRevision++;
+    recoveryNeeded = true;
+    if (disposing) return;
     if (resizeTimer) clearTimeout(resizeTimer);
     // Let Ink and TextArea settle their new widths before replaying. Remount
     // only Static, preserving the editor's undo and kill ring state.
     resizeTimer = setTimeout(() => {
       resizeTimer = undefined;
-      ink.clear();
-      options.stdout.write('\u001b[3J\u001b[2J\u001b[H');
-      model.replay();
+      recoverResize();
     }, RESIZE_SETTLE_MS);
   };
   options.stdout.on('resize', handleResize);
@@ -353,20 +363,27 @@ export function createOperatorAgentTuiHost(
       model.appendDialogue('operator', response),
     setInputEnabled: (enabled) => model.setInputEnabled(enabled),
     dispose: async () => {
-      options.stdout.off('resize', handleResize);
+      disposing = true;
       if (resizeTimer) {
         clearTimeout(resizeTimer);
         resizeTimer = undefined;
-        // Settle the pending width/layout changes before the final replay.
-        await new Promise<void>((resolve) => setTimeout(resolve, RESIZE_SETTLE_MS));
-        ink.clear();
-        options.stdout.write('\u001b[3J\u001b[2J\u001b[H');
-        model.replay();
       }
-      // A recovery timer may already have fired without its render committing.
       try {
-        await ink.waitUntilRenderFlush();
+        // Keep listening until the last resize has settled and its replay has
+        // flushed. A new resize while waiting restarts the recovery.
+        while (true) {
+          if (recoveryNeeded) {
+            const revision = resizeRevision;
+            await new Promise<void>((resolve) => setTimeout(resolve, RESIZE_SETTLE_MS));
+            if (revision !== resizeRevision) continue;
+            recoverResize();
+          }
+          const revision = resizeRevision;
+          await ink.waitUntilRenderFlush();
+          if (revision === resizeRevision) break;
+        }
       } finally {
+        options.stdout.off('resize', handleResize);
         ink.unmount();
       }
     },
