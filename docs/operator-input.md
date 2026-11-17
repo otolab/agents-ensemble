@@ -140,6 +140,8 @@ operator-agent の応答が `finished` / `completed` で返り、次の user 入
 
 `set_report_hold({ hold: true })` / `release_reports` による手動 report hold は会話 hold と独立しています。どちらか一方が有効なら report を保留し、両方が解除されたときに保留分を既存の batching 規則で dispatch queue に戻します。`/resume-watch` は手動 report hold を解除しません。TTY では hold の状態・理由・保留件数を `[harness] 監視報告: 保留（理由: …、保留件数: N 件）` または `[harness] 監視報告: 解除（理由: なし、保留件数: 0 件）` と表示します。会話 hold / 手動 hold の有効状態、理由、保留件数が変わった時点で同じ形式の行を更新します。
 
+会話 hold と手動 report hold は process-local です。operator-agent を再起動すると、どちらも解除状態から始まります。hold 中に永続化された pending report（idle candidate を含む）と idle evidence fingerprint は watch state に残ります。未 ack report は restart 後に同じ report ID で replay されることがあり、配送は at-least-once です。したがって、再起動後は pending report が送信可能になり、すでに処理済みの report が再送される可能性もあります。
+
 ### operator-agent の session focus
 
 focus は既定で off です。TTY では `/focus <conductorAgentId>` で対象を選び、`/focus` で現在の対象を確認し、`/focus-off` で解除できます。`set_session_focus` tool でも設定・解除できます。focus は選択対象の session report 全体を他 session より優先します。TTY の user input が先に処理される契約は維持されます。focus 外の Open Question は待つことがあるため、作業対象が変わったら focus を切り替えるか off に戻してください。
