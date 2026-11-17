@@ -67,6 +67,7 @@ interface TuiSnapshot {
   readonly columns: number;
   readonly rows: number;
   readonly inputEnabled: boolean;
+  readonly replayGeneration: number;
 }
 
 class OperatorAgentTuiModel {
@@ -84,6 +85,7 @@ class OperatorAgentTuiModel {
       columns,
       rows,
       inputEnabled: true,
+      replayGeneration: 0,
     };
   }
 
@@ -122,6 +124,10 @@ class OperatorAgentTuiModel {
     this.update({ columns, rows });
   }
 
+  replay(): void {
+    this.update({ replayGeneration: this.snapshot.replayGeneration + 1 });
+  }
+
   setInputEnabled(inputEnabled: boolean): void {
     if (this.snapshot.inputEnabled === inputEnabled) return;
     this.update({ inputEnabled });
@@ -146,6 +152,7 @@ class OperatorAgentTuiModel {
 
 const ANSI_RED = '\u001b[31m';
 const MAX_INPUT_DISPLAY_LINES = 6;
+const RESIZE_SETTLE_MS = 150;
 
 function OperatorAgentTui({
   model,
@@ -203,8 +210,18 @@ function OperatorAgentTui({
 
   return (
     <>
-      <Static<ActivityEntry> items={[...snapshot.entries]}>
-        {(entry) => (
+      <Static<ActivityEntry | { readonly id: -1; readonly type: 'padding' }>
+        key={snapshot.replayGeneration}
+        items={[
+          ...(snapshot.replayGeneration > 0
+            ? [{ id: -1 as const, type: 'padding' as const }]
+            : []),
+          ...snapshot.entries,
+        ]}
+      >
+        {(entry) => entry.type === 'padding' ? (
+          <Text key="resize-padding">{'\n'.repeat(Math.max(0, snapshot.rows - 3))}</Text>
+        ) : (
           <Box
             key={`operator-agent-log-${entry.id}`}
             flexDirection="column"
@@ -308,9 +325,22 @@ export function createOperatorAgentTuiHost(
       interactive: true,
     },
   );
+  let resizeTimer: ReturnType<typeof setTimeout> | undefined;
   const handleResize = () => {
     const nextSize = readTerminalSize(options.stdout);
+    if (
+      nextSize.columns === model.getSnapshot().columns &&
+      nextSize.rows === model.getSnapshot().rows
+    ) return;
     model.setTerminalSize(nextSize.columns, nextSize.rows);
+    if (resizeTimer) clearTimeout(resizeTimer);
+    // Let Ink and TextArea settle their new widths before replaying. Remount
+    // only Static, preserving the editor's undo and kill ring state.
+    resizeTimer = setTimeout(() => {
+      ink.clear();
+      options.stdout.write('\u001b[3J\u001b[2J\u001b[H');
+      model.replay();
+    }, RESIZE_SETTLE_MS);
   };
   options.stdout.on('resize', handleResize);
 
@@ -323,6 +353,7 @@ export function createOperatorAgentTuiHost(
     setInputEnabled: (enabled) => model.setInputEnabled(enabled),
     dispose: () => {
       options.stdout.off('resize', handleResize);
+      if (resizeTimer) clearTimeout(resizeTimer);
       ink.unmount();
     },
   };
