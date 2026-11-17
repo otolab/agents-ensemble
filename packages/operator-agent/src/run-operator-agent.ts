@@ -1,4 +1,4 @@
-import { clearLine, createInterface, cursorTo } from 'node:readline';
+import { createInterface } from 'node:readline';
 import { mkdir } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -87,6 +87,10 @@ import {
   type OperatorAgentProfile,
 } from './operator-agent-config.js';
 import { resolveOperatorAgentMcpServers } from './operator-agent-mcp.js';
+import {
+  createOperatorAgentTuiHost,
+  type OperatorAgentTuiLogOptions,
+} from './operator-agent-tui.js';
 
 export interface RunOperatorAgentOptions {
   profile?: string;
@@ -99,10 +103,14 @@ export interface RunOperatorAgentOptions {
 
 export interface OperatorAgentInput extends NodeJS.ReadableStream {
   isTTY?: boolean;
+  isRaw?: boolean;
+  setRawMode?: (mode: boolean) => unknown;
 }
 
 export interface OperatorAgentOutput extends NodeJS.WritableStream {
   isTTY?: boolean;
+  columns?: number;
+  rows?: number;
 }
 
 export interface RunOperatorAgentDependencies {
@@ -142,9 +150,22 @@ interface OperatorTtyChannels {
   observation(detail: string, options?: { color?: string }): void;
 }
 
-const ANSI_RESET = '\u001b[0m';
-const ANSI_DIM = '\u001b[2m';
-const ANSI_CYAN = '\u001b[36m';
+interface OperatorTtyLogEntry {
+  channel: 'harness' | 'observation';
+  detail: string;
+  options?: OperatorAgentTuiLogOptions;
+}
+
+interface OperatorTtyLogRouter {
+  append: (
+    channel: OperatorTtyLogEntry['channel'],
+    detail: string,
+    options?: OperatorAgentTuiLogOptions,
+  ) => void;
+  attach: (sink: (entry: OperatorTtyLogEntry) => void) => () => void;
+  drain: () => OperatorTtyLogEntry[];
+}
+
 const ANSI_RED = '\u001b[31m';
 
 /** Start an operator-role conversation on an interactive terminal. */
@@ -157,9 +178,12 @@ export async function runOperatorAgent(
   const stderr = dependencies.stderr ?? process.stderr;
   assertTty(stdin, stdout);
 
+  const ttyLogRouter = createOperatorTtyLogRouter();
   const ttyChannels: OperatorTtyChannels = {
-    harness: (detail) => stdout.write(`\n[harness] ${detail}\n\n`),
-    observation: (detail) => stdout.write(`\n[observation] ${detail}\n\n`),
+    harness: (detail, logOptions) =>
+      ttyLogRouter.append('harness', detail, logOptions),
+    observation: (detail, logOptions) =>
+      ttyLogRouter.append('observation', detail, logOptions),
   };
   const userEnsembleRoot = resolve(
     resolveUserEnsembleRoot({
@@ -196,7 +220,11 @@ export async function runOperatorAgent(
     options,
     dependencies,
     existingState,
-    { stdin, stdout },
+    {
+      stdin,
+      stdout,
+      log: (detail) => ttyLogRouter.append('observation', detail),
+    },
   );
   const workspaceFileTools = createOperatorWorkspaceFileTools(
     await resolveOperatorWorkspaceRoot(runtime.workspace),
@@ -337,6 +365,10 @@ export async function runOperatorAgent(
       : await factory.create(agentOptions);
   } catch (error) {
     watchPool.close();
+    for (const entry of ttyLogRouter.drain()) {
+      const leadingBlank = entry.options?.leadingBlank === false ? '' : '\n';
+      stdout.write(`${leadingBlank}[${entry.channel}] ${entry.detail}\n`);
+    }
     throw error;
   }
 
@@ -377,9 +409,9 @@ export async function runOperatorAgent(
       stdin,
       stdout,
       stderr,
+      ttyLogRouter,
       dispatchQueue,
       watchPool,
-      ttyChannels,
       recoveryInbox,
       dispatchLifecycle,
       operatorCanInspectRecovery,
@@ -400,7 +432,11 @@ async function resolveOperatorRuntime(
   options: RunOperatorAgentOptions,
   dependencies: RunOperatorAgentDependencies,
   existingState?: OperatorAgentState,
-  tty?: { stdin: OperatorAgentInput; stdout: OperatorAgentOutput },
+  tty?: {
+    stdin: OperatorAgentInput;
+    stdout: OperatorAgentOutput;
+    log?: (detail: string) => void;
+  },
 ): Promise<OperatorRuntime> {
   const userEnsembleRoot = resolve(
     resolveUserEnsembleRoot({
@@ -547,7 +583,11 @@ async function selectProfileName(
   options: RunOperatorAgentOptions,
   config: OperatorAgentConfiguration,
   existingState?: OperatorAgentState,
-  tty?: { stdin: OperatorAgentInput; stdout: OperatorAgentOutput },
+  tty?: {
+    stdin: OperatorAgentInput;
+    stdout: OperatorAgentOutput;
+    log?: (detail: string) => void;
+  },
 ): Promise<string> {
   const commandLineProfile = options.profile?.trim();
   const environmentProfile = process.env[OPERATOR_AGENT_PROFILE_ENV]?.trim();
@@ -563,9 +603,13 @@ async function selectProfileName(
     return existingState.profile;
   }
   if (existingState) {
-    tty?.stdout.write(
-      `\n[observation] 保存会話の profile=${existingState.profile} は現在の operator config にありません。利用可能な profile を選びます。\n\n`,
-    );
+    const message =
+      `保存会話の profile=${existingState.profile} は現在の operator config にありません。利用可能な profile を選びます。`;
+    if (tty?.log) {
+      tty.log(message);
+    } else {
+      tty?.stdout.write(`\n[observation] ${message}\n\n`);
+    }
   }
   if (config.defaultProfile) return config.defaultProfile;
   const profiles = Object.keys(config.profiles).sort();
@@ -651,21 +695,14 @@ async function runTtyConversation(options: {
   stdin: OperatorAgentInput;
   stdout: OperatorAgentOutput;
   stderr: OperatorAgentOutput;
+  ttyLogRouter: OperatorTtyLogRouter;
   dispatchQueue: ReturnType<typeof createOperatorDispatchQueue>;
   watchPool: OperatorWatchPool;
-  ttyChannels: OperatorTtyChannels;
   recoveryInbox: ConductorRecoveryInbox;
   dispatchLifecycle: ConductorDispatchLifecycle<OperatorAgentDispatchPayload>;
   operatorCanInspectRecovery: boolean;
   colorEnabled: boolean;
 }): Promise<boolean> {
-  const terminal = createInterface({
-    input: options.stdin,
-    output: options.stdout,
-    terminal: true,
-    crlfDelay: Infinity,
-  });
-  terminal.setPrompt(`${colorize('user>', ANSI_DIM, options.colorEnabled)} `);
   let cursorBootstrapComplete = options.backend !== 'cursor';
   let stop: () => void = () => {};
   let exitContinuity = false;
@@ -676,37 +713,34 @@ async function runTtyConversation(options: {
     current?: ConductorRecoveryReconnect;
   } = {};
   let recoveryCapacityNoticeSent = false;
-  let promptVisible = false;
-  let terminalClosed = false;
   let shownHoldStatus = formatReportHoldStatus(options.dispatchQueue);
   const stopping = new Promise<void>((resolve) => {
     stop = resolve;
   });
   const sendSuppression = new AbortController();
+  let handleInput = (_message: string) => {};
+  let tui: ReturnType<typeof createOperatorAgentTuiHost>;
   const requestStop = (exitCode?: number) => {
     if (exitCode !== undefined) process.exitCode = exitCode;
     sendSuppression.abort();
-    terminal.close();
+    tui.setInputEnabled(false);
     stop();
   };
+  tui = createOperatorAgentTuiHost({
+    stdin: options.stdin,
+    stdout: options.stdout,
+    colorEnabled: options.colorEnabled,
+    onSubmit: (message) => handleInput(message),
+    onInterrupt: () => requestStop(130),
+  });
+  const unsubscribeTtyLogRouter = options.ttyLogRouter.attach((entry) => {
+    tui.appendChannel(entry.channel, entry.detail, entry.options);
+  });
   const writeChannelLine = (
     channel: keyof OperatorTtyChannels,
     detail: string,
-    displayOptions: { color?: string; leadingBlank?: boolean } = {},
-  ) => {
-    const color = displayOptions.color ?? ANSI_DIM;
-    const line = `${colorize(`[${channel}]`, color, options.colorEnabled)} ${detail}`;
-    if (promptVisible) {
-      clearLine(options.stdout, 0);
-      cursorTo(options.stdout, 0);
-      options.stdout.write(`${line}\n\n`);
-      terminal.prompt(true);
-    } else {
-      options.stdout.write(
-        `${displayOptions.leadingBlank === false ? '' : '\n'}${line}\n\n`,
-      );
-    }
-  };
+    displayOptions: OperatorAgentTuiLogOptions = {},
+  ) => tui.appendChannel(channel, detail, displayOptions);
   const waitForAcknowledgementRetry = (delayMs: number) =>
     new Promise<boolean>((resolve) => {
       let settled = false;
@@ -720,10 +754,6 @@ async function runTtyConversation(options: {
       timer = setTimeout(() => finish(false), delayMs);
       void stopping.then(() => finish(true));
     });
-  options.ttyChannels.harness = (detail, displayOptions) =>
-    writeChannelLine('harness', detail, displayOptions);
-  options.ttyChannels.observation = (detail, displayOptions) =>
-    writeChannelLine('observation', detail, displayOptions);
   const unsubscribeHoldChanges = options.dispatchQueue.subscribe(() => {
     const nextStatus = formatReportHoldStatus(options.dispatchQueue);
     if (nextStatus === shownHoldStatus) return;
@@ -766,11 +796,44 @@ async function runTtyConversation(options: {
   };
   const handleInterrupt = () => requestStop(130);
   const handleTermination = () => requestStop(143);
-  terminal.on('SIGINT', handleInterrupt);
-  terminal.on('close', () => {
-    promptVisible = false;
-    terminalClosed = true;
-  });
+  const handleInputEnd = () => {
+    inputEnded = true;
+    options.dispatchQueue.wake();
+  };
+  const handleSubmittedInput = (rawMessage: string) => {
+    const message = rawMessage.trim();
+    if (!message || inputEnded) return;
+    tui.appendUserMessage(message);
+    if (handleRecoveryCommand(message)) return;
+    if (isOperatorCommand(message, 'exit')) {
+      exitContinuity = true;
+      inputEnded = true;
+      tui.setInputEnabled(false);
+      writeChannelLine('observation', 'session ended.');
+      options.dispatchQueue.wake();
+      return;
+    }
+    if (isOperatorCommand(message, 'reconnect')) {
+      pendingReconnects += 1;
+      options.dispatchQueue.wake();
+      return;
+    }
+    if (isResumeWatchCommand(message)) {
+      options.dispatchQueue.setConversationHold(false);
+      return;
+    }
+    if (!options.dispatchQueue.enqueueUser(message)) {
+      writeChannelLine(
+        'harness',
+        'recovery inbox の完全保持に合わせ、1 MiB を超える入力は受け付けません。短くするか分割してから送信してください。',
+        { color: ANSI_RED },
+      );
+      return;
+    }
+    options.dispatchQueue.setConversationHold(true);
+  };
+  handleInput = handleSubmittedInput;
+  options.stdin.on('end', handleInputEnd);
   process.on('SIGINT', handleInterrupt);
   process.on('SIGTERM', handleTermination);
   writeChannelLine(
@@ -778,50 +841,6 @@ async function runTtyConversation(options: {
     `(${options.backend}) ready — enter /exit to start a fresh session next time.`,
     { leadingBlank: false },
   );
-  const readInput = async () => {
-    try {
-      for await (const rawLine of terminal) {
-        const message = rawLine.trim();
-        if (!message) continue;
-        if (handleRecoveryCommand(message)) continue;
-        if (isOperatorCommand(message, 'exit')) {
-          exitContinuity = true;
-          clearLine(options.stdout, 0);
-          cursorTo(options.stdout, 0);
-          promptVisible = false;
-          writeChannelLine('observation', 'session ended.');
-          terminal.close();
-          break;
-        }
-        if (isOperatorCommand(message, 'reconnect')) {
-          pendingReconnects += 1;
-          options.dispatchQueue.wake();
-          continue;
-        }
-        if (isResumeWatchCommand(message)) {
-          options.dispatchQueue.setConversationHold(false);
-          continue;
-        }
-        if (!options.dispatchQueue.enqueueUser(message)) {
-          writeChannelLine(
-            'harness',
-            'recovery inbox の完全保持に合わせ、1 MiB を超える入力は受け付けません。短くするか分割してから送信してください。',
-            { color: ANSI_RED },
-          );
-          continue;
-        }
-        options.dispatchQueue.setConversationHold(true);
-      }
-    } finally {
-      inputEnded = true;
-      options.dispatchQueue.wake();
-    }
-  };
-  const inputTask = readInput();
-  if (!terminalClosed) {
-    terminal.prompt();
-    promptVisible = true;
-  }
   const dispatchState: OperatorDispatchState = {
     continuationConsumed: false,
   };
@@ -1090,6 +1109,8 @@ async function runTtyConversation(options: {
             'pending state は保持されています。重複 turn を避けるため runner を停止します。' +
             '再起動後は同じ report ID を再送する場合があります。';
           writeChannelLine('harness', message, { color: ANSI_RED });
+          // Commit the final Static log entry before teardown unmounts Ink.
+          await new Promise<void>((resolve) => setImmediate(resolve));
           requestStop(1);
           throw new Error(
             `Operator watch report acknowledgement failed after ${OPERATOR_WATCH_ACK_MAX_RETRIES} retries; pending reports were retained. Restart may redeliver the same report IDs.`,
@@ -1156,12 +1177,7 @@ async function runTtyConversation(options: {
       }
       if (sendCompleted && result.result?.trim()) {
         const response = normalizeOperatorResponse(result.result);
-        clearLine(options.stdout, 0);
-        cursorTo(options.stdout, 0);
-        options.stdout.write(
-          `\n${colorize('operator>', ANSI_CYAN, options.colorEnabled)}\n${response}\n\n`,
-        );
-        if (promptVisible) terminal.prompt(true);
+        tui.appendOperatorResponse(response);
       } else if (sendCompleted) {
         writeChannelLine(
           'observation',
@@ -1178,12 +1194,12 @@ async function runTtyConversation(options: {
       }
     }
   } finally {
-    await inputTask.catch(() => {});
-    terminal.off('SIGINT', handleInterrupt);
+    options.stdin.off('end', handleInputEnd);
     process.off('SIGINT', handleInterrupt);
     process.off('SIGTERM', handleTermination);
-    terminal.close();
-    promptVisible = false;
+    tui.setInputEnabled(false);
+    tui.dispose();
+    unsubscribeTtyLogRouter();
     unsubscribeHoldChanges();
     unsubscribeLifecycle();
     unsubscribeRecoveryInbox();
@@ -1203,6 +1219,26 @@ function formatReportHoldStatus(
   ].join('');
 }
 
+function createOperatorTtyLogRouter(): OperatorTtyLogRouter {
+  const pending: OperatorTtyLogEntry[] = [];
+  let sink: ((entry: OperatorTtyLogEntry) => void) | undefined;
+  return {
+    append: (channel, detail, options) => {
+      const entry: OperatorTtyLogEntry = { channel, detail, options };
+      if (sink) sink(entry);
+      else pending.push(entry);
+    },
+    attach: (nextSink) => {
+      sink = nextSink;
+      for (const entry of pending.splice(0)) nextSink(entry);
+      return () => {
+        if (sink === nextSink) sink = undefined;
+      };
+    },
+    drain: () => pending.splice(0),
+  };
+}
+
 function isResumeWatchCommand(message: string): boolean {
   const normalized = message.toLocaleLowerCase();
   return normalized === '/resume-watch' || normalized === 'resume-watch';
@@ -1214,10 +1250,6 @@ function normalizeOperatorResponse(response: string): string {
 
 function formatOperatorToolName(tool: string): string {
   return tool.replace(/[\u0000-\u001f\u007f-\u009f]/g, ' ').trim() || 'unknown';
-}
-
-function colorize(text: string, color: string, enabled: boolean): string {
-  return enabled ? `${color}${text}${ANSI_RESET}` : text;
 }
 
 function assertTty(stdin: OperatorAgentInput, stdout: OperatorAgentOutput): void {

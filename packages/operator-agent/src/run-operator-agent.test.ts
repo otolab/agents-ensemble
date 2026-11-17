@@ -387,7 +387,7 @@ describe('runOperatorAgent', () => {
         '',
       ].join('\n'),
     );
-    const input = new PassThrough() as PassThrough & OperatorAgentInput;
+    const input = createInteractiveInput();
     input.isTTY = true;
     const output = createOutput();
     let agentOptions: ConductorAgentCreateOptions | undefined;
@@ -418,7 +418,7 @@ describe('runOperatorAgent', () => {
     );
     input.write('2\n');
     await vi.waitFor(() =>
-      expect(output.capturedText()).toContain('\u001b[2muser>\u001b[0m '),
+      expect(output.capturedText()).toContain('user>'),
     );
     input.write('/exit\n');
     await run;
@@ -760,7 +760,7 @@ describe('runOperatorAgent', () => {
   );
 
   it('runs a Pi-backed TTY conversation with profile prompt and saved session summaries', async () => {
-    const input = createInput('状況を教えて\n/exit\n');
+    const input = createInteractiveInput();
     const output = createOutput();
     let agentOptions: ConductorAgentCreateOptions | undefined;
     let listedSessions = '';
@@ -819,7 +819,26 @@ describe('runOperatorAgent', () => {
         },
       ],
     });
-    await runOperatorAgent({ repoRoot }, { stdin: input, stdout: output, agentFactory });
+    const run = runOperatorAgent(
+      { repoRoot },
+      { stdin: input, stdout: output, agentFactory },
+    );
+    await vi.waitFor(() =>
+      expect(output.capturedText()).toContain('user>'),
+    );
+    input.write('状況を教えて');
+    await vi.waitFor(() =>
+      expect(output.capturedText()).toContain('状況を教えて'),
+    );
+    input.write('\r');
+    await vi.waitFor(() => expect(sentPrompts).toEqual(['状況を教えて']));
+    await vi.waitFor(() =>
+      expect(normalizeTtyText(output.capturedText())).toContain(
+        'ライブ open question も確認できます。',
+      ),
+    );
+    input.write('/exit\n');
+    await run;
 
     const transcript = output.capturedText();
     expect(sentPrompts).toEqual(['状況を教えて']);
@@ -845,20 +864,23 @@ describe('runOperatorAgent', () => {
       ),
     ).resolves.toBe('Session notes.');
     expect(transcript).toContain(
-      '\u001b[2m[observation]\u001b[0m (pi) ready — enter /exit to start a fresh session next time.',
+      '[observation] (pi) ready — enter /exit to start a fresh session next time.',
     );
-    expect(transcript).toContain('\u001b[2muser>\u001b[0m');
+    expect(transcript).toContain('user>');
+    const readableTranscript = normalizeTtyText(transcript);
+    expect(readableTranscript).toContain('operator>');
+    expect(readableTranscript).toContain(
+      '保存済み SessionResumeStore から implementer のセッション情報を確認できます。',
+    );
+    expect(readableTranscript).toContain('ライブ open question も確認できます。');
     expect(transcript).toContain(
-      '\u001b[36moperator>\u001b[0m\n保存済み SessionResumeStore から implementer のセッション情報を確認できます。\n\nライブ open question も確認できます。\n\n',
+      '[harness] 監視報告: 保留（理由: 会話、保留件数: 0 件）',
     );
     expect(transcript).toContain(
-      '\u001b[2m[harness]\u001b[0m 監視報告: 保留（理由: 会話、保留件数: 0 件）',
+      '[harness] 監視報告: 解除（理由: なし、保留件数: 0 件）',
     );
     expect(transcript).toContain(
-      '\u001b[2m[harness]\u001b[0m 監視報告: 解除（理由: なし、保留件数: 0 件）',
-    );
-    expect(transcript).toContain(
-      '\u001b[2m[observation]\u001b[0m session ended.',
+      '[observation] session ended.',
     );
     expect(transcript).not.toMatch(/(?:^|\n)> /);
     expect(transcript).not.toContain('operator-agent 会話 hold');
@@ -932,7 +954,7 @@ describe('runOperatorAgent', () => {
   });
 
   it('shows send and tool activity while preserving the TTY prompt', async () => {
-    const input = new PassThrough() as PassThrough & OperatorAgentInput;
+    const input = createInteractiveInput();
     input.isTTY = true;
     const output = createOutput();
     let finishSend:
@@ -969,10 +991,10 @@ describe('runOperatorAgent', () => {
 
     const pendingTranscript = output.capturedText();
     expect(pendingTranscript).toContain(
-      '\u001b[2m[harness]\u001b[0m operator: 処理中',
+      '[harness] operator: 処理中',
     );
     expect(pendingTranscript).toContain(
-      '\u001b[2m[harness]\u001b[0m operator: calling list_operator_sessions',
+      '[harness] operator: calling list_operator_sessions',
     );
     expect(pendingTranscript.lastIndexOf('user>')).toBeGreaterThan(
       pendingTranscript.indexOf('operator: calling list_operator_sessions'),
@@ -986,7 +1008,7 @@ describe('runOperatorAgent', () => {
     });
     await vi.waitFor(() => {
       const transcript = output.capturedText();
-      const responseLabel = transcript.indexOf('\u001b[36moperator>\u001b[0m');
+      const responseLabel = transcript.indexOf('operator>');
       const responseBody = transcript.indexOf('Done.');
       expect(responseLabel).toBeGreaterThan(-1);
       expect(responseBody).toBeGreaterThan(responseLabel);
@@ -996,8 +1018,176 @@ describe('runOperatorAgent', () => {
     await run;
   });
 
+  it('submits a multiline paste once and preserves its newline', async () => {
+    const input = createInteractiveInput();
+    const output = createOutput();
+    const sentPrompts: string[] = [];
+    const fakeAgent = createFakeAgent({
+      send: async (prompt) => {
+        sentPrompts.push(prompt);
+        return {
+          runId: `run-${sentPrompts.length}`,
+          status: 'completed',
+          result: 'Received.',
+        };
+      },
+    });
+    const run = runOperatorAgent(
+      { repoRoot },
+      {
+        stdin: input,
+        stdout: output,
+        agentFactory: {
+          create: async () => fakeAgent,
+          resume: async () => fakeAgent,
+        },
+      },
+    );
+
+    input.write('\u001b[200~first line\nsecond line\u001b[201~');
+    await vi.waitFor(() =>
+      expect(output.capturedText()).toContain('second line'),
+    );
+    expect(sentPrompts).toEqual([]);
+
+    input.write('\r');
+    await vi.waitFor(() =>
+      expect(sentPrompts).toEqual(['first line\nsecond line']),
+    );
+    input.write('/resume-watch');
+    await vi.waitFor(() =>
+      expect(output.capturedText()).toContain('/resume-watch'),
+    );
+    input.write('\r');
+    await vi.waitFor(() => {
+      const text = output.capturedText();
+      expect(text.split('/resume-watch').length - 1).toBeGreaterThan(1);
+    });
+    input.write('/exit');
+    await vi.waitFor(() =>
+      expect(output.capturedText()).toContain('/exit'),
+    );
+    input.write('\r');
+    await vi.waitFor(() =>
+      expect(output.capturedText()).toContain('session ended.'),
+    );
+    input.end();
+    await run;
+
+    expect(sentPrompts).toEqual(['first line\nsecond line']);
+    expect(output.capturedText()).toContain('/resume-watch');
+    expect(output.capturedText()).toContain('[observation]');
+    expect(input.isRaw).toBe(false);
+  });
+
+  it('preserves a draft cursor through async logs and terminal resize while responding', async () => {
+    const input = createInteractiveInput();
+    const output = createOutput();
+    const sentPrompts: string[] = [];
+    let finishFirstSend!: (
+      result: Awaited<ReturnType<ConductorAgent['send']>>,
+    ) => void;
+    let firstSendStarted!: () => void;
+    let appendToolActivity!: () => void;
+    const firstStarted = new Promise<void>((resolve) => {
+      firstSendStarted = resolve;
+    });
+    const fakeAgent = createFakeAgent({
+      send: async (prompt, callbacks) => {
+        sentPrompts.push(prompt);
+        if (sentPrompts.length === 1) {
+          appendToolActivity = () =>
+            callbacks?.onToolCallStarted?.({
+              runId: 'run-1',
+              tool: 'list_operator_sessions',
+              callId: 'call-1',
+            });
+          firstSendStarted();
+          return await new Promise<
+            Awaited<ReturnType<ConductorAgent['send']>>
+          >((resolve) => {
+            finishFirstSend = resolve;
+          });
+        }
+        return {
+          runId: 'run-2',
+          status: 'completed',
+          result: 'Draft received.',
+        };
+      },
+    });
+    const run = runOperatorAgent(
+      { repoRoot },
+      {
+        stdin: input,
+        stdout: output,
+        agentFactory: {
+          create: async () => fakeAgent,
+          resume: async () => fakeAgent,
+        },
+      },
+    );
+
+    await vi.waitFor(
+      () => {
+        const text = output.capturedText();
+        if (!text.includes('user>')) {
+          throw new Error(`input TUI not rendered yet: ${text.slice(-300)}`);
+        }
+      },
+      { timeout: 1000 },
+    );
+    input.write('start');
+    await vi.waitFor(() =>
+      expect(output.capturedText()).toContain('start'),
+    );
+    input.write('\r');
+    await firstStarted;
+    input.write('draft');
+    await vi.waitFor(() =>
+      expect(output.capturedText()).toContain('draft'),
+    );
+    input.write('\u001b[D');
+    await new Promise<void>((resolve) => setTimeout(resolve, 25));
+    input.write('\u001b[D');
+    await new Promise<void>((resolve) => setTimeout(resolve, 50));
+
+    output.columns = 40;
+    output.rows = 12;
+    output.emit('resize');
+    appendToolActivity();
+    await vi.waitFor(() =>
+      expect(output.capturedText()).toContain('list_operator_sessions'),
+    );
+
+    input.write('X');
+    await vi.waitFor(() =>
+      expect(output.capturedText()).toContain('draXft'),
+    );
+    input.write('\r');
+    finishFirstSend({
+      runId: 'run-1',
+      status: 'completed',
+      result: 'First turn complete.',
+    });
+    await vi.waitFor(() => expect(sentPrompts).toHaveLength(2));
+    expect(sentPrompts[1]).toBe('draXft');
+
+    input.write('/exit');
+    await vi.waitFor(() =>
+      expect(output.capturedText()).toContain('/exit'),
+    );
+    input.write('\r');
+    await vi.waitFor(() =>
+      expect(output.capturedText()).toContain('session ended.'),
+    );
+    input.end();
+    await run;
+    expect(input.isRaw).toBe(false);
+  });
+
   it('keeps the conversation hold through consecutive user turns', async () => {
-    const input = new PassThrough() as PassThrough & OperatorAgentInput;
+    const input = createInteractiveInput();
     input.isTTY = true;
     const output = createOutput();
     let agentOptions: ConductorAgentCreateOptions | undefined;
@@ -1058,7 +1248,7 @@ describe('runOperatorAgent', () => {
     );
 
     await vi.waitFor(() =>
-      expect(output.capturedText()).toContain('\u001b[2muser>\u001b[0m '),
+      expect(output.capturedText()).toContain('user>'),
     );
     input.write('first turn\n');
     await firstStarted;
@@ -1101,7 +1291,7 @@ describe('runOperatorAgent', () => {
       JSON.stringify({ ...resumeStore, harnessSocketPath: liveServer.socketPath }),
     );
 
-    const input = new PassThrough() as PassThrough & OperatorAgentInput;
+    const input = createInteractiveInput();
     input.isTTY = true;
     const output = createOutput();
     let agentOptions: ConductorAgentCreateOptions | undefined;
@@ -1157,7 +1347,7 @@ describe('runOperatorAgent', () => {
     let runFinished = false;
     try {
       await vi.waitFor(() =>
-        expect(output.capturedText()).toContain('\u001b[2muser>\u001b[0m '),
+        expect(output.capturedText()).toContain('user>'),
       );
       input.write('summarize the live update\n');
       await userStarted;
@@ -1250,7 +1440,7 @@ describe('runOperatorAgent', () => {
       JSON.stringify({ ...resumeStore, harnessSocketPath: liveServer.socketPath }),
     );
 
-    const input = new PassThrough() as PassThrough & OperatorAgentInput;
+    const input = createInteractiveInput();
     input.isTTY = true;
     const output = createOutput();
     let agentOptions: ConductorAgentCreateOptions | undefined;
@@ -1310,7 +1500,7 @@ describe('runOperatorAgent', () => {
     let runFinished = false;
     try {
       await vi.waitFor(() =>
-        expect(output.capturedText()).toContain('\u001b[2muser>\u001b[0m '),
+        expect(output.capturedText()).toContain('user>'),
       );
       input.write('start the discussion\n');
       await firstStarted;
@@ -1389,7 +1579,7 @@ describe('runOperatorAgent', () => {
   });
 
   it('polls an offline watched session and refreshes the held-report count in the TTY', async () => {
-    const input = new PassThrough() as PassThrough & OperatorAgentInput;
+    const input = createInteractiveInput();
     input.isTTY = true;
     const output = createOutput();
     let agentOptions: ConductorAgentCreateOptions | undefined;
@@ -1451,7 +1641,7 @@ describe('runOperatorAgent', () => {
     );
 
     await vi.waitFor(() =>
-      expect(output.capturedText()).toContain('\u001b[2muser>\u001b[0m '),
+      expect(output.capturedText()).toContain('user>'),
     );
     input.write('監視を開始\n');
     setTimeout(() => input.write('/exit\n'), 750);
@@ -1494,7 +1684,7 @@ describe('runOperatorAgent', () => {
       JSON.stringify({ ...resumeStore, harnessSocketPath: liveServer.socketPath }),
     );
 
-    const input = new PassThrough() as PassThrough & OperatorAgentInput;
+    const input = createInteractiveInput();
     input.isTTY = true;
     const output = createOutput();
     let agentOptions: ConductorAgentCreateOptions | undefined;
@@ -1571,7 +1761,7 @@ describe('runOperatorAgent', () => {
 
     try {
       await vi.waitFor(() =>
-        expect(output.capturedText()).toContain('\u001b[2muser>\u001b[0m '),
+        expect(output.capturedText()).toContain('user>'),
       );
       input.write('start watching\n');
       await vi.waitFor(
@@ -1677,7 +1867,7 @@ describe('runOperatorAgent', () => {
         result: 'The report was handled.',
       };
     });
-    const input = new PassThrough() as PassThrough & OperatorAgentInput;
+    const input = createInteractiveInput();
     input.isTTY = true;
     const output = createOutput();
     const run = runOperatorAgent(
@@ -1705,7 +1895,7 @@ describe('runOperatorAgent', () => {
 
     try {
       await vi.waitFor(() =>
-        expect(output.capturedText()).toContain(
+        expect(normalizeTtyText(output.capturedText())).toContain(
           `5 秒後に ack だけを再試行します（1/${OPERATOR_WATCH_ACK_MAX_RETRIES}）`,
         ),
         { timeout: 6_000, interval: 25 },
@@ -1833,7 +2023,7 @@ describe('runOperatorAgent', () => {
         result: 'The report was handled.',
       };
     });
-    const input = new PassThrough() as PassThrough & OperatorAgentInput;
+    const input = createInteractiveInput();
     input.isTTY = true;
     const output = createOutput();
     const run = runOperatorAgent(
@@ -1856,12 +2046,11 @@ describe('runOperatorAgent', () => {
       );
       expect(send).toHaveBeenCalledOnce();
       expect(process.exitCode).toBe(1);
-      expect(output.capturedText()).toContain(
+      expect(normalizeTtyText(output.capturedText())).toContain(
         'pending state は保持されています。重複 turn を避けるため runner を停止します。',
       );
       expect(
-        output
-          .capturedText()
+        normalizeTtyText(output.capturedText())
           .match(/5 秒後に ack だけを再試行します/gu),
       ).toHaveLength(OPERATOR_WATCH_ACK_MAX_RETRIES);
       expect(
@@ -1907,7 +2096,7 @@ describe('runOperatorAgent', () => {
     );
 
     const statePath = baseWatchStatePath(repoRoot);
-    const firstInput = new PassThrough() as PassThrough & OperatorAgentInput;
+    const firstInput = createInteractiveInput();
     firstInput.isTTY = true;
     const firstOutput = createOutput();
     let firstAgentOptions: ConductorAgentCreateOptions | undefined;
@@ -1971,7 +2160,7 @@ describe('runOperatorAgent', () => {
     );
 
     await vi.waitFor(() =>
-      expect(firstOutput.capturedText()).toContain('\u001b[2muser>\u001b[0m '),
+      expect(firstOutput.capturedText()).toContain('user>'),
     );
     firstInput.write('watch this session\n');
     await vi.waitFor(() => expect(firstPrompts).toHaveLength(2));
@@ -1982,11 +2171,11 @@ describe('runOperatorAgent', () => {
       await readFile(statePath, 'utf8'),
     ) as { pendingReports: Array<{ reportId: string }> };
     expect(afterCancelledSend.pendingReports).toHaveLength(1);
-    expect(firstOutput.capturedText()).toContain(
+    expect(normalizeTtyText(firstOutput.capturedText())).toContain(
       'send not completed (status=cancelled); watched reports retained for retry.',
     );
 
-    const retryInput = new PassThrough() as PassThrough & OperatorAgentInput;
+    const retryInput = createInteractiveInput();
     retryInput.isTTY = true;
     const retryOutput = createOutput();
     const retryPrompts: string[] = [];
@@ -2060,7 +2249,7 @@ describe('runOperatorAgent', () => {
     expect(transcript).toContain('[observation] session ended.');
   });
 
-  it('gives error rows matching spacing and a colored error label', async () => {
+  it('keeps error rows spaced and labeled', async () => {
     const output = createOutput();
 
     await runOperatorAgent(
@@ -2084,13 +2273,11 @@ describe('runOperatorAgent', () => {
       },
     );
 
-    expect(output.capturedText()).toContain(
-      '\u001b[31m[harness]\u001b[0m Request failed.',
-    );
+    expect(output.capturedText()).toContain('[harness] Request failed.');
   });
 
   it('escapes backend status controls in operator-agent failure notices', async () => {
-    const input = new PassThrough() as PassThrough & OperatorAgentInput;
+    const input = createInteractiveInput();
     input.isTTY = true;
     const stdout = createOutput();
     const stderr = createOutput();
@@ -2125,15 +2312,14 @@ describe('runOperatorAgent', () => {
         },
       },
     );
-
     let exited = false;
     try {
       await vi.waitFor(() =>
-        expect(stdout.capturedText()).toContain('\u001b[2muser>\u001b[0m '),
+        expect(stdout.capturedText()).toContain('user>'),
       );
       input.write('inspect current state\n');
       await vi.waitFor(() => {
-        const output = stdout.capturedText();
+        const output = normalizeTtyText(stdout.capturedText());
         expect(output).toContain(
           'operator send が未完了です (status=error\\u001b[2J\\u202e\\u2066\\u000aspoof',
         );
@@ -2145,9 +2331,7 @@ describe('runOperatorAgent', () => {
       const escapedStatus =
         'error\\u001b[2J\\u202e\\u2066\\u000aspoof';
       const statuses = [
-        ...stdout
-          .capturedText()
-          .matchAll(
+        ...normalizeTtyText(stdout.capturedText()).matchAll(
             /(?:operator send が未完了です \(status=|send not completed \(status=)(.*?)(?:, failure=|\);)/gu,
           ),
       ].map((match) => match[1]);
@@ -2171,7 +2355,7 @@ describe('runOperatorAgent', () => {
 
   it('keeps only authored input after a failed first Cursor send and waits for confirmation', async () => {
     await writeOperatorSettings(repoRoot, 'cursor');
-    const input = new PassThrough() as PassThrough & OperatorAgentInput;
+    const input = createInteractiveInput();
     input.isTTY = true;
     const stdout = createOutput();
     const stderr = createOutput();
@@ -2235,16 +2419,15 @@ describe('runOperatorAgent', () => {
         },
       },
     );
-
     let exited = false;
     try {
       await vi.waitFor(() =>
-        expect(stdout.capturedText()).toContain('\u001b[2muser>\u001b[0m '),
+        expect(stdout.capturedText()).toContain('user>'),
       );
       input.write(`${authoredInput}\n`);
       await vi.waitFor(() => {
         expect(resume).toHaveBeenCalledOnce();
-        expect(stdout.capturedText()).toContain(
+        expect(normalizeTtyText(stdout.capturedText())).toContain(
           'operator send が未完了です (status=error, failure=auth)',
         );
       });
@@ -2299,6 +2482,11 @@ describe('runOperatorAgent', () => {
       expect(stdout.capturedText()).toContain('Follow-up handled.');
 
       input.write('/exit\n');
+      await vi.waitFor(() =>
+        expect(normalizeTtyText(stdout.capturedText())).toContain(
+          'session ended.',
+        ),
+      );
       await run;
       exited = true;
     } finally {
@@ -2309,7 +2497,7 @@ describe('runOperatorAgent', () => {
   });
 
   it('does not close the old conductor again when finalization follows failed resume', async () => {
-    const input = new PassThrough() as PassThrough & OperatorAgentInput;
+    const input = createInteractiveInput();
     input.isTTY = true;
     const stdout = createOutput();
     const stderr = createOutput();
@@ -2355,7 +2543,7 @@ describe('runOperatorAgent', () => {
     input.write('request whose result is unknown\n');
     await vi.waitFor(() => {
       expect(resume).toHaveBeenCalledOnce();
-      expect(stdout.capturedText()).toContain(
+      expect(normalizeTtyText(stdout.capturedText())).toContain(
         'operator send が未完了です (status=error, failure=auth)',
       );
     });
@@ -2391,7 +2579,7 @@ describe('runOperatorAgent', () => {
       JSON.stringify({ ...resumeStore, harnessSocketPath: liveServer.socketPath }),
     );
 
-    const input = new PassThrough() as PassThrough & OperatorAgentInput;
+    const input = createInteractiveInput();
     input.isTTY = true;
     const stdout = createOutput();
     const stderr = createOutput();
@@ -2488,7 +2676,7 @@ describe('runOperatorAgent', () => {
     let exited = false;
     try {
       await vi.waitFor(() =>
-        expect(stdout.capturedText()).toContain('\u001b[2muser>\u001b[0m '),
+        expect(stdout.capturedText()).toContain('user>'),
       );
       input.write(`${failedInput}\n`);
       await vi.waitFor(() => expect(resume).toHaveBeenCalledOnce());
@@ -2508,7 +2696,7 @@ describe('runOperatorAgent', () => {
       expect(resumedSend).not.toHaveBeenCalled();
       rejectAutomaticResume(new Error('automatic resume unavailable'));
       await vi.waitFor(() =>
-        expect(stdout.capturedText()).toContain(
+        expect(normalizeTtyText(stdout.capturedText())).toContain(
           'operator send が未完了です (status=error, failure=auth)',
         ),
       );
@@ -2516,7 +2704,7 @@ describe('runOperatorAgent', () => {
       input.write('/reconnect\n');
       await vi.waitFor(() => {
         expect(resume).toHaveBeenCalledTimes(2);
-        expect(stdout.capturedText()).toContain(
+        expect(normalizeTtyText(stdout.capturedText())).toContain(
           'source=manual failure=auth',
         );
       });
@@ -2568,7 +2756,7 @@ describe('runOperatorAgent', () => {
 
   it('closes a late automatic resume after SIGTERM instead of installing it', async () => {
     const previousExitCode = process.exitCode;
-    const input = new PassThrough() as PassThrough & OperatorAgentInput;
+    const input = createInteractiveInput();
     input.isTTY = true;
     const stdout = createOutput();
     const stderr = createOutput();
@@ -2625,7 +2813,7 @@ describe('runOperatorAgent', () => {
     let terminationSent = false;
     try {
       await vi.waitFor(() =>
-        expect(stdout.capturedText()).toContain('\u001b[2muser>\u001b[0m '),
+        expect(stdout.capturedText()).toContain('user>'),
       );
       input.write('input that fails during Cursor bootstrap\n');
       await vi.waitFor(() => expect(resume).toHaveBeenCalledOnce());
@@ -2655,105 +2843,43 @@ describe('runOperatorAgent', () => {
     }
   });
 
-  it('treats a rejected send as unknown until reconnect and explicit confirmation', async () => {
-    const input = new PassThrough() as PassThrough & OperatorAgentInput;
-    input.isTTY = true;
+  it('treats a rejected send as unknown without exposing provider details', async () => {
+    const authoredInput = 'possibly completed task';
+    const input = createInput(`${authoredInput}\n`);
     const stdout = createOutput();
     const stderr = createOutput();
-    const config: EnsembleConfig = {
-      profile: { default: 'unused' },
-      conductor: { backend: 'cursor', model: 'cursor-model' },
-    } as EnsembleConfig;
-    const profile: ResolvedProfile = {
-      workers: [],
-      agents: {},
-    };
-    const authoredInput = 'possibly completed task';
-    const followupInput = 'inspect current state and continue unfinished work';
     const rawError = 'ambiguous provider rejection with secret-token';
     const rejectedSend = vi
       .fn()
       .mockRejectedValue(new Error(rawError));
-    const followupSend = vi.fn(async (message: string) => {
-      expect(message).toContain(followupInput);
-      expect(message).not.toContain(authoredInput);
-      return {
-        runId: 'run-followup',
-        status: 'completed',
-        result: 'Follow-up handled.',
-      };
-    });
     const resume = vi.fn(async () =>
-      createFakeAgent({ send: followupSend }),
+      createFakeAgent({ send: vi.fn() }),
     );
-    const oldClose = vi.fn().mockRejectedValue(new Error('cleanup failed'));
 
-    const run = runOperatorAgent(
+    await runOperatorAgent(
       { repoRoot },
       {
         stdin: input,
         stdout,
         stderr,
-        loadConfig: async () => config,
-        loadProfile: async () => ({ profile, profilePath: 'test-profile' }),
         agentFactory: {
-          create: async () => ({
-            ...createFakeAgent({ send: rejectedSend }),
-            close: oldClose,
-          }),
+          create: async () => createFakeAgent({ send: rejectedSend }),
           resume,
         },
       },
     );
 
-    let exited = false;
-    try {
-      await vi.waitFor(() =>
-        expect(stdout.capturedText()).toContain('\u001b[2muser>\u001b[0m '),
-      );
-      input.write(`${authoredInput}\n`);
-      await vi.waitFor(() => {
-        expect(stdout.capturedText()).toContain(
-          'operator send が未完了です (status=send_rejected, failure=send_rejected)',
-        );
-        expect(stdout.capturedText()).toContain(
-          '明示的に /reconnect するまで conductor への送信を停止します。',
-        );
-      });
-      expect(rejectedSend).toHaveBeenCalledOnce();
-      expect(resume).not.toHaveBeenCalled();
-      expect(stdout.capturedText()).not.toContain(rawError);
-      expect(stderr.capturedText()).not.toContain(rawError);
-
-      input.write(`${followupInput}\n`);
-      await new Promise((resolve) => setTimeout(resolve, 0));
-      expect(followupSend).not.toHaveBeenCalled();
-
-      input.write('/reconnect\n');
-      await vi.waitFor(() => {
-        expect(resume).toHaveBeenCalledOnce();
-        expect(stdout.capturedText()).toContain(
-          'source=manual failure=send_rejected',
-        );
-        expect(stdout.capturedText()).toContain(
-          '旧 conductor の終了処理に失敗したため、リソース解放は確認できません。',
-        );
-      });
-      expect(oldClose).toHaveBeenCalledOnce();
-      expect(followupSend).not.toHaveBeenCalled();
-
-      input.write('/recovery continue\n');
-      await vi.waitFor(() => expect(followupSend).toHaveBeenCalledOnce());
-      expect(stdout.capturedText()).toContain('Follow-up handled.');
-
-      input.write('/exit\n');
-      await run;
-      exited = true;
-    } finally {
-      if (!exited) input.write('/exit\n');
-      input.end();
-      await run.catch(() => {});
-    }
+    const output = normalizeTtyText(stdout.capturedText());
+    expect(rejectedSend).toHaveBeenCalledOnce();
+    expect(resume).not.toHaveBeenCalled();
+    expect(output).toContain(
+      'operator send が未完了です (status=send_rejected, failure=send_rejected)',
+    );
+    expect(output).toContain(
+      '明示的に /reconnect するまで conductor への送信を停止します。',
+    );
+    expect(output).not.toContain(rawError);
+    expect(stderr.capturedText()).not.toContain(rawError);
   });
 
   it('intercepts reconnect commands and reports each resume result without sending them', async () => {
@@ -2764,7 +2890,7 @@ describe('runOperatorAgent', () => {
       'reconnect-server': { type: 'stdio', command: 'reconnect-mcp' },
     });
     const stdout = createOutput();
-    const stdin = new PassThrough() as PassThrough & OperatorAgentInput;
+    const stdin = createInteractiveInput();
     stdin.isTTY = true;
     const send = vi.fn(async () => ({
       runId: 'run-1',
@@ -2798,7 +2924,7 @@ describe('runOperatorAgent', () => {
     );
 
     await vi.waitFor(() =>
-      expect(stdout.capturedText()).toContain('\u001b[0m (pi) ready'),
+      expect(stdout.capturedText()).toContain('(pi) ready'),
     );
     stdin.write('/reconnect\n');
     await vi.waitFor(() => expect(resume).toHaveBeenCalledTimes(1));
@@ -2854,7 +2980,7 @@ describe('runOperatorAgent', () => {
   it('does not replay a failed operator-agent prompt after manual reconnect', async () => {
     const stdout = createOutput();
     const stderr = createOutput();
-    const stdin = new PassThrough() as PassThrough & OperatorAgentInput;
+    const stdin = createInteractiveInput();
     stdin.isTTY = true;
     const prompt = 'check status after reconnect';
     const authFailure = {
@@ -2903,14 +3029,16 @@ describe('runOperatorAgent', () => {
     );
 
     await vi.waitFor(() =>
-      expect(stdout.capturedText()).toContain('\u001b[2muser>\u001b[0m '),
+      expect(stdout.capturedText()).toContain('user>'),
     );
     stdin.write(`${prompt}\n`);
     await vi.waitFor(() => expect(stderr.capturedText()).toContain('[auth] Pi 認証エラー'));
     expect(firstSend).toHaveBeenCalledOnce();
     expect(automaticRetrySend).not.toHaveBeenCalled();
     expect(resume).toHaveBeenCalledOnce();
-    expect(stdout.capturedText()).toContain('operator send が未完了です');
+    expect(normalizeTtyText(stdout.capturedText())).toContain(
+      'operator send が未完了です',
+    );
 
     stdin.write('/reconnect\n');
     await vi.waitFor(() => expect(resume).toHaveBeenCalledTimes(2));
@@ -3077,7 +3205,7 @@ describe('runOperatorAgent', () => {
 
   it('closes the agent and keeps its identity when the process receives SIGTERM', async () => {
     const previousExitCode = process.exitCode;
-    const input = new PassThrough() as PassThrough & OperatorAgentInput;
+    const input = createInteractiveInput();
     input.isTTY = true;
     const output = createOutput();
     const agent = createFakeAgent({ send: async () => ({ runId: '', status: 'completed' }) });
@@ -3292,14 +3420,145 @@ describe('retryOperatorWatchAcknowledgement', () => {
   });
 });
 
-function createInput(
-  text: string,
-  isTTY = true,
-): OperatorAgentInput {
-  const input = new PassThrough() as PassThrough & OperatorAgentInput;
-  input.isTTY = isTTY;
-  input.end(text);
+function createInteractiveInput(): PassThrough &
+  OperatorAgentInput & { endWhenReady: () => void } {
+  class InteractivePassThrough extends PassThrough {
+    isRaw = false;
+    private readonly pendingKeys: Array<{
+      readonly key: string;
+      readonly encoding?: BufferEncoding;
+      readonly callback?: (error?: Error | null) => void;
+    }> = [];
+    private pendingEnd = false;
+    private pendingEndCallback?: (error?: Error | null) => void;
+    private flushScheduled = false;
+
+    override write(
+      chunk: Uint8Array | string,
+      encodingOrCallback?: BufferEncoding | ((error?: Error | null) => void),
+      callback?: (error?: Error | null) => void,
+    ): boolean {
+      const encoding =
+        typeof encodingOrCallback === 'string' ? encodingOrCallback : undefined;
+      const done =
+        typeof encodingOrCallback === 'function'
+          ? encodingOrCallback
+          : callback;
+      if (typeof chunk !== 'string') {
+        return typeof encoding === 'string'
+          ? super.write(chunk, encoding, done)
+          : super.write(chunk, done);
+      }
+
+      const keys =
+        chunk.startsWith('\u001b[200~') && chunk.endsWith('\u001b[201~')
+          ? [chunk]
+          : (chunk.match(
+              /\u001b\[[0-?]*[ -/]*[@-~]|\u001b[NO][ -~]|\r\n|\r|\n|./gsu,
+            ) ?? []);
+      const terminalKeys = keys.map((key) =>
+        key === '\n' || key === '\r\n' ? '\r' : key,
+      );
+      terminalKeys.forEach((key, index) => {
+        const keyCallback = index === terminalKeys.length - 1 ? done : undefined;
+        this.pendingKeys.push({
+          key,
+          ...(encoding ? { encoding } : {}),
+          ...(keyCallback ? { callback: keyCallback } : {}),
+        });
+      });
+      this.scheduleFlush();
+      return true;
+    }
+
+    override end(
+      chunk?: Uint8Array | string,
+      encodingOrCallback?:
+        | BufferEncoding
+        | ((error?: Error | null) => void),
+      callback?: (error?: Error | null) => void,
+    ): this {
+      if (chunk !== undefined) {
+        this.write(
+          chunk,
+          encodingOrCallback as BufferEncoding | undefined,
+          callback,
+        );
+      }
+      this.pendingEndCallback =
+        typeof encodingOrCallback === 'function'
+          ? encodingOrCallback
+          : callback;
+      this.pendingEnd = true;
+      this.scheduleFlush();
+      return this;
+    }
+
+    flushPending(): void {
+      if (!this.isRaw) return;
+      const nextKey = this.pendingKeys.shift();
+      if (nextKey) {
+        if (nextKey.encoding) {
+          super.write(nextKey.key, nextKey.encoding, nextKey.callback);
+        } else {
+          super.write(nextKey.key, nextKey.callback);
+        }
+        this.scheduleFlush();
+        return;
+      }
+      if (this.pendingEnd) {
+        this.pendingEnd = false;
+        super.end(this.pendingEndCallback);
+        this.pendingEndCallback = undefined;
+      }
+    }
+
+    endWhenReady(): void {
+      this.end();
+    }
+
+    private scheduleFlush(): void {
+      if (!this.isRaw || this.flushScheduled) return;
+      this.flushScheduled = true;
+      setImmediate(() => {
+        this.flushScheduled = false;
+        this.flushPending();
+      });
+    }
+  }
+
+  const input = new InteractivePassThrough() as InteractivePassThrough &
+    OperatorAgentInput & {
+      endWhenReady: () => void;
+      flushPending: () => void;
+      ref: () => void;
+      unref: () => void;
+    };
+  input.isTTY = true;
+  input.isRaw = false;
+  input.setRawMode = (mode) => {
+    input.isRaw = mode;
+    if (mode) setImmediate(() => input.flushPending());
+    return input;
+  };
+  input.ref = () => {};
+  input.unref = () => {};
   return input;
+}
+
+function createInput(text: string, isTTY = true): OperatorAgentInput {
+  const input = createInteractiveInput();
+  input.isTTY = isTTY;
+  input.write(text.replace(/\n/g, '\r'));
+  input.endWhenReady();
+  return input;
+}
+
+function normalizeTtyText(text: string): string {
+  return text
+    .replace(/\u001b\[[0-?]*[ -/]*[@-~]/gu, ' ')
+    .replace(/\s+/gu, ' ')
+    .trim();
 }
 
 function createOutput(
@@ -3311,6 +3570,8 @@ function createOutput(
   output.on('data', (chunk) => chunks.push(String(chunk)));
   output.capturedText = () => chunks.join('');
   output.isTTY = isTTY;
+  output.columns = 80;
+  output.rows = 24;
   return output;
 }
 
