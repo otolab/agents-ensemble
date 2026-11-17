@@ -167,8 +167,7 @@ function OperatorAgentTui({
     0,
     0,
   ]);
-  // Keep one row outside Ink's live frame so unmounting does not trigger its
-  // fullscreen terminal clear, which also clears scrollback.
+  // Limit the input viewport so the live frame stays below terminal height.
   const liveFrameRows = Math.max(1, snapshot.rows - 1);
   const handleInputChange = useCallback((value: string) => {
     setDraft(value);
@@ -240,11 +239,9 @@ function OperatorAgentTui({
       </Static>
       <Box
         width={snapshot.columns}
-        height={liveFrameRows}
         flexDirection="column"
         overflowY="hidden"
       >
-        <Box flexGrow={1} />
         <Box
           width={snapshot.columns}
           borderStyle="round"
@@ -260,6 +257,7 @@ function OperatorAgentTui({
               linePrefix={promptPrefix}
               viewportLines={maxInputDisplayLines}
               initialLineCount={1}
+              cursorStart={snapshot.inputEnabled ? { x: 2, y: 1 } : undefined}
               cursorPosition={cursorPosition}
               onCursorChange={setCursorPosition}
             />
@@ -293,6 +291,9 @@ export function createOperatorAgentTuiHost(
     size.rows,
     options.colorEnabled,
   );
+  // Move the initial compact frame to the bottom; subsequent Static output
+  // scrolls the terminal naturally and remains visible above the input.
+  options.stdout.write('\n'.repeat(Math.max(0, size.rows - 3)));
   const ink = render(
     <OperatorAgentTui
       model={model}
