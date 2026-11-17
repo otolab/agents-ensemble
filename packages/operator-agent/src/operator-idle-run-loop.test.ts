@@ -41,11 +41,11 @@ vi.mock('./operator-agent-tui.js', () => ({
 
 describe('operator idle candidate dispatch run loop', () => {
   let repoRoot = '';
-  let closeServer: (() => Promise<void>) | undefined;
+  let closeServers: Array<() => Promise<void>> = [];
 
   afterEach(async () => {
-    await closeServer?.();
-    closeServer = undefined;
+    for (const closeServer of closeServers) await closeServer();
+    closeServers = [];
     await rm(repoRoot, { recursive: true, force: true });
     repoRoot = '';
     tuiHarness.onSubmit = undefined;
@@ -53,7 +53,7 @@ describe('operator idle candidate dispatch run loop', () => {
     vi.restoreAllMocks();
   });
 
-  it('compares baseline and integrated sends through runOperatorAgent with a fake clock', async () => {
+  it('compares baseline and idle integration across multiple watched sessions through runOperatorAgent', async () => {
     repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-idle-run-loop-'));
     const userRoot = join(repoRoot, '.ensemble');
     await mkdir(join(userRoot, 'sessions'), { recursive: true });
@@ -64,7 +64,7 @@ describe('operator idle candidate dispatch run loop', () => {
     let observationSequence = 0;
     let gateReleased = false;
     let modeledRefreshDelayApplied = false;
-    const server = await startOpenQuestionControlServer({
+    const questionServer = await startOpenQuestionControlServer({
       listOpenQuestions: () => currentQuestion ? [currentQuestion] : [],
       observeSession: async () => {
         if (gateReleased && !modeledRefreshDelayApplied) {
@@ -80,7 +80,43 @@ describe('operator idle candidate dispatch run loop', () => {
         throw new Error('unused');
       },
     });
-    closeServer = () => server.close();
+    closeServers.push(() => questionServer.close());
+    const idleSessionServer = await startOpenQuestionControlServer({
+      listOpenQuestions: () => [],
+      observeSession: async () => ({
+        sequence: 0,
+        openQuestions: [],
+        sessionState: {
+          current: {
+            statusLine: '外部処理の完了待ち',
+            reportedAt: startAt - 60_000,
+          },
+          history: [],
+        },
+      }),
+      answerOpenQuestion: async () => {
+        throw new Error('unused');
+      },
+    });
+    closeServers.push(() => idleSessionServer.close());
+    const healthyRunningServer = await startOpenQuestionControlServer({
+      listOpenQuestions: () => [],
+      observeSession: async () => ({
+        sequence: 0,
+        openQuestions: [],
+        sessionState: {
+          current: {
+            statusLine: '正常な長時間処理中',
+            reportedAt: startAt - 5 * 60_000,
+          },
+          history: [],
+        },
+      }),
+      answerOpenQuestion: async () => {
+        throw new Error('unused');
+      },
+    });
+    closeServers.push(() => healthyRunningServer.close());
 
     const baseStore = {
       version: 1,
@@ -91,24 +127,37 @@ describe('operator idle candidate dispatch run loop', () => {
       sequence: 0,
       workers: {},
       updatedAt: startAt,
-      harnessSocketPath: server.socketPath,
       harnessPhase: 'idle',
       modifiedAt: startAt - 31 * 60_000,
       lifecycle: 'unknown',
     };
-    const resumeStorePath = resolveEnsemblePaths({
-      repoRoot,
-      userEnsembleRoot: userRoot,
-    }).canonicalSessionResumeStorePath(issueUrl, 'conductor-idle');
-    await mkdir(dirname(resumeStorePath), { recursive: true });
-    await writeFile(
-      resumeStorePath,
-      JSON.stringify({
-        ...baseStore,
-        conductorAgentId: 'conductor-idle',
-        issueUrl,
-      }),
-    );
+    const writeResumeStore = async (
+      conductorAgentId: string,
+      harnessSocketPath: string,
+      overrides: Record<string, unknown> = {},
+    ) => {
+      const resumeStorePath = resolveEnsemblePaths({
+        repoRoot,
+        userEnsembleRoot: userRoot,
+      }).canonicalSessionResumeStorePath(issueUrl, conductorAgentId);
+      await mkdir(dirname(resumeStorePath), { recursive: true });
+      await writeFile(
+        resumeStorePath,
+        JSON.stringify({
+          ...baseStore,
+          ...overrides,
+          conductorAgentId,
+          issueUrl,
+          harnessSocketPath,
+        }),
+      );
+    };
+    await writeResumeStore('conductor-idle', questionServer.socketPath);
+    await writeResumeStore('conductor-idle-peer', idleSessionServer.socketPath);
+    await writeResumeStore('conductor-running', healthyRunningServer.socketPath, {
+      harnessPhase: 'running',
+      modifiedAt: startAt - 50 * 60_000,
+    });
 
     const runProfile = async (
       profile: 'baseline' | 'integrated',
@@ -171,23 +220,30 @@ describe('operator idle candidate dispatch run loop', () => {
       const sendTimes: number[] = [];
       const reportPrompts: string[] = [];
       const frozenBatchIds: string[] = [];
-      let mixedBatchReports: Array<{
+      const mixedBatchReports: Array<Array<{
         reportId: string;
         reportType: string;
         priority?: string;
         arrivalOrder?: number;
         frozenBatchId?: string;
-      }> = [];
+        conductorAgentId: string;
+      }>> = [];
       const fakeAgent: ConductorAgent = {
         agentId: `operator-${profile}`,
         async send(prompt) {
           if (prompt === 'watch the live session') {
             try {
-              await agentOptions!.customTools!.register_session_watch!.execute({
-                conductorAgentId: 'conductor-idle',
-                pollIntervalMs: 250,
-                debounceMs: 0,
-              });
+              for (const conductorAgentId of [
+                'conductor-idle',
+                'conductor-idle-peer',
+                'conductor-running',
+              ]) {
+                await agentOptions!.customTools!.register_session_watch!.execute({
+                  conductorAgentId,
+                  pollIntervalMs: 250,
+                  debounceMs: 0,
+                });
+              }
               let cursorFound = false;
               for (let attempt = 0; attempt < 800; attempt += 1) {
                 try {
@@ -196,7 +252,13 @@ describe('operator idle candidate dispatch run loop', () => {
                   ) as {
                     cursors: Record<string, { sequence: number }>;
                   };
-                  if (state.cursors['conductor-idle']?.sequence === 0) {
+                  if (
+                    [
+                      'conductor-idle',
+                      'conductor-idle-peer',
+                      'conductor-running',
+                    ].every((id) => state.cursors[id]?.sequence === 0)
+                  ) {
                     cursorFound = true;
                     break;
                   }
@@ -271,7 +333,7 @@ describe('operator idle candidate dispatch run loop', () => {
           const batchId = included[0]?.frozenBatchId;
           expect(batchId).toBeTypeOf('string');
           frozenBatchIds.push(batchId!);
-          mixedBatchReports = (
+          const batchReports = (
             batchId
               ? state.pendingReports.filter(
                   (report) => report.frozenBatchId === batchId,
@@ -283,11 +345,15 @@ describe('operator idle candidate dispatch run loop', () => {
             priority: report.priority,
             arrivalOrder: report.arrivalOrder,
             frozenBatchId: report.frozenBatchId,
+            conductorAgentId: report.conductorAgentId,
           }));
+          mixedBatchReports.push(batchReports);
           reportPrompts.push(prompt);
           sendTimes.push(fakeNow);
-          tuiHarness.onSubmit?.('/exit');
-          signalReportSent();
+          if (mixedBatchReports.length === 3) {
+            tuiHarness.onSubmit?.('/exit');
+            signalReportSent();
+          }
           return {
             runId: `${profile}-report`,
             status: 'finished',
@@ -371,11 +437,15 @@ describe('operator idle candidate dispatch run loop', () => {
         pendingReports: unknown[];
         idleCandidateFingerprints?: Record<string, Record<string, string>>;
       };
+      const questionBatchIndex = mixedBatchReports.findIndex((batch) =>
+        batch.some((report) => report.reportType === 'open_question'),
+      );
       const metrics = {
         dispatchAttempts: sendTimes.length,
         reportBatches: new Set(frozenBatchIds).size,
         fakeAgentTurns: sendTimes.length,
-        openQuestionWaitMs: sendTimes[1]! - questionArrivalAt,
+        openQuestionWaitMs:
+          sendTimes[questionBatchIndex + 1]! - questionArrivalAt,
       };
       input.destroy();
       stdout.destroy();
@@ -392,9 +462,9 @@ describe('operator idle candidate dispatch run loop', () => {
     const integrated = await runProfile('integrated');
 
     expect(baseline.metrics).toEqual({
-      dispatchAttempts: 2,
-      reportBatches: 1,
-      fakeAgentTurns: 2,
+      dispatchAttempts: 4,
+      reportBatches: 3,
+      fakeAgentTurns: 4,
       openQuestionWaitMs: 10_050,
     });
     expect(integrated.metrics).toEqual(baseline.metrics);
@@ -402,23 +472,83 @@ describe('operator idle candidate dispatch run loop', () => {
     expect(baseline.prompt).not.toContain('稼働 session の確認候補');
     expect(integrated.prompt).toContain('Review the live session?');
     expect(integrated.prompt).toContain('稼働 session の確認候補');
-    expect(integrated.mixedBatchReports.map((report) => report.reportType)).toEqual([
+    const baselineQuestionBatch = baseline.mixedBatchReports.find((batch) =>
+      batch.some((report) => report.reportType === 'open_question'),
+    )!;
+    const integratedQuestionBatch = integrated.mixedBatchReports.find((batch) =>
+      batch.some((report) => report.reportType === 'open_question'),
+    )!;
+    expect(baselineQuestionBatch.map((report) => report.reportType)).toEqual([
+      'open_question',
+    ]);
+    expect(integratedQuestionBatch.map((report) => report.reportType)).toEqual([
       'open_question',
       'idle_candidate',
     ]);
-    expect(integrated.mixedBatchReports).toHaveLength(2);
-    expect(integrated.mixedBatchReports[0]?.priority).toBe('open_question');
-    expect(integrated.mixedBatchReports[0]?.reportId).toBeTruthy();
-    expect(integrated.mixedBatchReports[1]?.reportId).toBeTruthy();
-    expect(integrated.mixedBatchReports[0]?.frozenBatchId).toBe(
-      integrated.mixedBatchReports[1]?.frozenBatchId,
+    expect(integratedQuestionBatch).toHaveLength(2);
+    expect(integratedQuestionBatch[0]?.priority).toBe('open_question');
+    expect(integratedQuestionBatch[0]?.reportId).toBeTruthy();
+    expect(integratedQuestionBatch[1]?.reportId).toBeTruthy();
+    expect(integratedQuestionBatch[0]?.conductorAgentId).toBe('conductor-idle');
+    expect(integratedQuestionBatch[1]?.conductorAgentId).toBe('conductor-idle');
+    expect(integratedQuestionBatch[0]?.frozenBatchId).toBe(
+      integratedQuestionBatch[1]?.frozenBatchId,
     );
     expect(
-      integrated.mixedBatchReports[0]!.arrivalOrder!,
-    ).toBeLessThan(integrated.mixedBatchReports[1]!.arrivalOrder!);
+      integratedQuestionBatch[0]!.arrivalOrder!,
+    ).toBeLessThan(integratedQuestionBatch[1]!.arrivalOrder!);
+    const baselineIdlePeerBatch = baseline.mixedBatchReports.find((batch) =>
+      batch.some((report) => report.conductorAgentId === 'conductor-idle-peer'),
+    )!;
+    const integratedIdlePeerBatch = integrated.mixedBatchReports.find((batch) =>
+      batch.some((report) => report.conductorAgentId === 'conductor-idle-peer'),
+    )!;
+    expect(
+      baselineIdlePeerBatch.map((report) => report.reportType),
+    ).toEqual(['session_state']);
+    expect(
+      integratedIdlePeerBatch.map((report) => report.reportType),
+    ).toEqual(['session_state', 'idle_candidate']);
+    expect(integratedIdlePeerBatch[0]?.conductorAgentId).toBe(
+      'conductor-idle-peer',
+    );
+    expect(integratedIdlePeerBatch[1]?.conductorAgentId).toBe(
+      'conductor-idle-peer',
+    );
+    expect(
+      integratedIdlePeerBatch[0]!.arrivalOrder!,
+    ).toBeLessThan(integratedIdlePeerBatch[1]!.arrivalOrder!);
+    const baselineHealthyRunningBatch = baseline.mixedBatchReports.find((batch) =>
+      batch.some((report) => report.conductorAgentId === 'conductor-running'),
+    )!;
+    const integratedHealthyRunningBatch = integrated.mixedBatchReports.find((batch) =>
+      batch.some((report) => report.conductorAgentId === 'conductor-running'),
+    )!;
+    expect(
+      baselineHealthyRunningBatch.map((report) => report.reportType),
+    ).toEqual(['session_state']);
+    expect(
+      integratedHealthyRunningBatch.map((report) => report.reportType),
+    ).toEqual(['session_state']);
+    expect(
+      integrated.mixedBatchReports.flat().filter(
+        (report) => report.reportType === 'open_question',
+      ),
+    ).toHaveLength(1);
+    expect(
+      integrated.mixedBatchReports.flat().filter(
+        (report) =>
+          report.reportType === 'idle_candidate' &&
+          report.conductorAgentId === 'conductor-running',
+      ),
+    ).toEqual([]);
     expect(integrated.persisted.pendingReports).toEqual([]);
     expect(
       integrated.persisted.idleCandidateFingerprints?.['conductor-idle']
+        ?.idle_phase,
+    ).toBeDefined();
+    expect(
+      integrated.persisted.idleCandidateFingerprints?.['conductor-idle-peer']
         ?.idle_phase,
     ).toBeDefined();
   });

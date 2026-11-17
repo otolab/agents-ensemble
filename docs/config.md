@@ -142,7 +142,7 @@ candidate は既存の session report queue / batch / hold / retry / ack 経路�
 
 [場面別の比較 test](../packages/operator-agent/src/operator-idle-candidate-scenarios.test.ts) は、同じ fake-clock timeline を baseline（idle candidate なし）と統合後（条件を満たす candidate を登録）で再生します。実 `OperatorDispatchQueue` と fake `agent.send` を使います。ここで dispatch は選択された user/report batch、report batch は distinct な frozen `batchId`、turn は fake `agent.send` 呼び出しです。失敗した send retry も turn proxy に数えます。重要通知の待ち時間は OQ の投入から、それを含む最初の成功 send までです。
 
-この比較は queue を直接駆動する synthetic harness です。`runOperatorAgent` の非同期 run loop、watch poll、gate 解除と dispatch の競合は通しません。そのため、下表は scheduler の選択規則を同条件で比べる補助 evidence であり、run-loop 統合や実 provider の待ち時間を示すものではありません。run-loop での比較結果と未検証範囲は、実経路の regression test が通った後に別途記録します。
+この場面表は `OperatorDispatchQueue` の実 `selectBatch` / `commitBatch` を直接呼ぶ synthetic harness で、`agent.send` は fake です。selector の規則を同じ fake-clock timeline で比較しますが、watch pool や run loop の非同期競合を再現するものではありません。実 `runOperatorAgent` を通す比較は別の [run-loop integration test](../packages/operator-agent/src/operator-idle-run-loop.test.ts) で行います。どちらも実 provider の待ち時間・turn 数を測るものではありません。
 
 | シナリオ | baseline dispatch / report batch / fake turn・OQ 待ち | idle 統合 dispatch / report batch / fake turn・OQ 待ち | 観測した差 |
 |---|---:|---:|---|
@@ -160,7 +160,9 @@ lock-wait の比較は選択から commit まで100 ms、OQ 到着から commit 
 
 複数 session、focus 切替、user input と conversation gate、正常な長時間処理、stale-running、manual hold、retry / restart / ack、#755 commit boundary を fixture / scheduler / integration test で確認します。実 provider / 複数 conductor / TTY の運用計測は行っていません。agent の処理時間、人間の応答、process 停止や上位 priority の継続に対する有限通知時間も保証しません。
 
-`runOperatorAgent` を通す fake-clock / fake-send 比較では、user-send gate 中の OQ に対し baseline / idle 統合後とも 2 dispatch（user input と report）、1 report batch、2 fake turns、OQ 待ち10,050 msを記録しました。OQ は10秒の user-send gate 中に到着し、gate 解除後の fresh UDS refresh に合成50 msを加えています。統合後は OQ と idle candidate を到着順・OQ priority のまま一つの report send に含め、OQ の重複はありません。runner は gate-clear refresh/admission が終わるまで次 batch の選択を待ちます。これらの値は再現可能な合成比較であり、provider 実測や実運用の UDS latency ではありません。状態が unknown、refresh が失敗、または fresh evidence が候補条件を満たさない場合は候補を作らず、待ち続けません。
+`runOperatorAgent` を通す fake-clock / fake-agent 比較では、3 session を同じ user-send gate 中に watch し、baseline / idle 統合後とも 4 dispatch（user input と3 report batch）、3 report batch、4 fake turns、OQ 待ち10,050 msでした。OQ は10秒の user-send gate 中に到着し、gate 解除後の fresh UDS refresh に合成50 msを加えています。統合後は OQ と同一 session の idle candidate、および別 session の通常 `session_state` report と idle candidate が、それぞれ同じ batch に入りました。OQ は一度だけ到着順どおりに含まれ、OQ priority を維持しました。最後の statusLine が5分前の `running` session には stale-running candidate を作らず、baseline と同じ通常 report だけを送りました。idle candidate 2件は既存 report に同梱されたため追加 turn はありません。runner は gate-clear refresh/admission が終わるまで次 batch の選択を待ちます。
+
+この run-loop 比較も再現可能な合成試験で、50 ms は固定した fake refresh delay です。実 provider の latency、複数 conductor の同時負荷、OS scheduling、TTY 操作時間は測定していません。状態が unknown、refresh が失敗、または fresh evidence が候補条件を満たさない場合は候補を作らず、古い observation のまま待ち続けません。aging 境界での継続する通常 report に対する非飢餓、同順位の FIFO、gate refresh / append / retry / restart をまたぐ `eligibleAt` と到着順の保持は selector / watch-pool integration tests で確認します。上位 priority、hold、停止、provider の長い処理が続けば通知は遅れ得ます。5分 aging は通常 FIFO 帯へ昇格させますが、有限時間内の送信を保証しません。
 
 profile は `--profile` > `ENSEMBLE_OPERATOR_AGENT_PROFILE` > 再開対象 conversation に記録された profile > `defaultProfile` > 唯一の profile の順に選びます。まだ複数候補が残る場合は TTY で選択します。保存 conversation の profile が config から消えていて選び直す場合は、その差を表示します。
 
