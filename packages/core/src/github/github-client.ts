@@ -59,10 +59,20 @@ export interface GitHubIssuePullRequestSummary {
   checksTruncated: boolean;
 }
 
-export interface GitHubIssuePullRequestSummaries {
+interface GitHubIssuePullRequestSummaryData {
   pullRequests: GitHubIssuePullRequestSummary[];
   pullRequestsTruncated: boolean;
 }
+
+export type GitHubIssuePullRequestSummaries =
+  | ({ status: 'available' } & GitHubIssuePullRequestSummaryData)
+  | {
+      status: 'unavailable';
+      reason:
+        | 'repository_unavailable'
+        | 'issue_unavailable'
+        | 'timeline_unavailable';
+    };
 
 export interface GitHubPullRequestReview {
   id: number;
@@ -378,8 +388,10 @@ export function buildGitHubClient(options: GitHubClientOptions): GitHubClient {
                   hasNextPage
                 }
                 nodes {
+                  __typename
                   ... on CrossReferencedEvent {
                     source {
+                      __typename
                       ... on PullRequest {
                         number
                         title
@@ -443,6 +455,7 @@ export function buildGitHubClient(options: GitHubClientOptions): GitHubClient {
         commit?: { oid?: string } | null;
       };
       type PullRequestNode = {
+        __typename: 'PullRequest';
         number: number;
         title: string;
         url: string;
@@ -457,14 +470,22 @@ export function buildGitHubClient(options: GitHubClientOptions): GitHubClient {
           };
         } | null;
       };
+      type PullRequestSource =
+        | PullRequestNode
+        | { __typename?: string };
+      const isPullRequestSource = (
+        source: PullRequestSource | null | undefined,
+      ): source is PullRequestNode => source?.__typename === 'PullRequest';
+      type TimelineNode = {
+        __typename: string;
+        source?: PullRequestSource | null;
+      } | null;
       type IssuePullRequestResponse = {
-        repository: {
-          issue: {
-            timelineItems: {
-              pageInfo: { hasNextPage: boolean };
-              nodes: Array<{
-                source?: PullRequestNode | null;
-              } | null>;
+        repository?: {
+          issue?: {
+            timelineItems?: {
+              pageInfo?: { hasNextPage: boolean } | null;
+              nodes?: TimelineNode[] | null;
             } | null;
           } | null;
         } | null;
@@ -475,39 +496,55 @@ export function buildGitHubClient(options: GitHubClientOptions): GitHubClient {
         name: repo,
         number: issueNumber,
       });
-      const connection = data.repository?.issue?.timelineItems;
-      if (!connection) {
-        return { pullRequests: [], pullRequestsTruncated: false };
+      if (!data.repository) {
+        return { status: 'unavailable', reason: 'repository_unavailable' };
+      }
+      if (!data.repository.issue) {
+        return { status: 'unavailable', reason: 'issue_unavailable' };
+      }
+      const connection = data.repository.issue.timelineItems;
+      if (
+        !connection ||
+        !connection.pageInfo ||
+        !Array.isArray(connection.nodes)
+      ) {
+        return { status: 'unavailable', reason: 'timeline_unavailable' };
       }
       const pullRequests = [
         ...new Map(
-          connection.nodes.flatMap((event) =>
-            event?.source ? [[event.source.number, event.source] as const] : [],
-          ),
+          connection.nodes.flatMap((event) => {
+            const source = event?.source;
+            return event?.__typename === 'CrossReferencedEvent' &&
+              isPullRequestSource(source)
+              ? [[source.number, source] as const]
+              : [];
+          }),
         ).values(),
       ];
       return {
+        status: 'available',
         pullRequests: pullRequests.map((pullRequest) => {
           const contexts = pullRequest.statusCheckRollup?.contexts;
-          const checks = (contexts?.nodes ?? []).map((check) =>
-            check.__typename === 'CheckRun'
-              ? {
-                  type: 'check_run' as const,
-                  name: check.name,
-                  status: check.status,
-                  conclusion: check.conclusion,
-                  url: check.detailsUrl,
-                  headSha: check.checkSuite?.commit?.oid ?? null,
-                }
-              : {
-                  type: 'status_context' as const,
-                  name: check.context,
-                  status: check.state,
-                  conclusion: null,
-                  url: check.targetUrl,
-                  headSha: check.commit?.oid ?? null,
-                },
-          );
+          const checks = (contexts?.nodes ?? []).map((check) => {
+            if (check.__typename === 'CheckRun') {
+              return {
+                type: 'check_run' as const,
+                name: check.name,
+                status: check.status,
+                conclusion: check.conclusion,
+                url: check.detailsUrl,
+                headSha: check.checkSuite?.commit?.oid ?? null,
+              };
+            }
+            return {
+              type: 'status_context' as const,
+              name: check.context,
+              status: check.state,
+              conclusion: null,
+              url: check.targetUrl,
+              headSha: check.commit?.oid ?? null,
+            };
+          });
           return {
             number: pullRequest.number,
             title: pullRequest.title,

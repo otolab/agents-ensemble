@@ -34,6 +34,7 @@ import {
   createUnregisterRepositoryWatchTool,
   operatorWatchStatePath,
 } from './operator-watch-pool.js';
+import { createListOperatorSessionsTool } from './list-operator-sessions-tool.js';
 
 const DEFAULT_ISSUE_URL = 'https://github.com/example/repo/issues/1';
 
@@ -379,6 +380,79 @@ describe('operator watch pool', () => {
       await expect(
         pool.registerRepository('example/other'),
       ).rejects.toThrow('outside the active --repo-filter scope');
+    } finally {
+      pool.close();
+    }
+  });
+
+  it('discovers and auto-watches new runs beyond the 500-store page boundary without duplicates', async () => {
+    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-repository-watch-page-boundary-'));
+    const baselineIssue = 'https://github.com/example/repo/issues/1';
+    const sharedNewIssue = 'https://github.com/example/repo/issues/900';
+    await Promise.all(
+      Array.from({ length: 500 }, (_, index) =>
+        writeResumeStore(
+          `baseline-${String(index).padStart(3, '0')}`,
+          index + 2,
+          undefined,
+          baselineIssue,
+        ),
+      ),
+    );
+    const pool = await createOperatorWatchPool({
+      repoRoot,
+      dispatchQueue: createOperatorDispatchQueue(),
+    });
+    try {
+      const registered = await pool.registerRepository('example/repo', {
+        scanIntervalMs: 60_000,
+        pollIntervalMs: 60_000,
+      });
+      expect(registered.managedSessionIds).toHaveLength(500);
+
+      // These older flush times place both new runs on page two of the
+      // updatedAt-descending inventory, despite sharing one Issue.
+      await writeResumeStore('boundary-run-a', 1, undefined, sharedNewIssue);
+      await writeResumeStore('boundary-run-b', 0, undefined, sharedNewIssue);
+      await expect(pool.scanRepositoriesOnce()).resolves.toBe(2);
+
+      const discovered = pool.listRepositoryWatches()[0]!;
+      expect(discovered.managedSessionIds).toHaveLength(502);
+      expect(discovered.managedSessionIds).toEqual(
+        expect.arrayContaining(['boundary-run-a', 'boundary-run-b']),
+      );
+      expect(
+        discovered.managedSessionIds.filter(
+          (id) => id === 'boundary-run-a' || id === 'boundary-run-b',
+        ),
+      ).toEqual(['boundary-run-a', 'boundary-run-b']);
+      for (const conductorAgentId of ['boundary-run-a', 'boundary-run-b']) {
+        expect(
+          pool.getSessionTrackingInfo(conductorAgentId, sharedNewIssue),
+        ).toMatchObject({
+          repositoryWatchEnabled: true,
+          watchEnabled: true,
+          watchSource: 'repository_auto',
+          watchReason: 'watching',
+        });
+        expect(
+          pool.list().filter(
+            (watch) => watch.conductorAgentId === conductorAgentId,
+          ),
+        ).toHaveLength(1);
+      }
+
+      await expect(pool.scanRepositoriesOnce()).resolves.toBe(0);
+      expect(pool.listRepositoryWatches()[0]?.managedSessionIds).toHaveLength(
+        502,
+      );
+      expect(
+        pool.list().filter((watch) =>
+          ['boundary-run-a', 'boundary-run-b'].includes(
+            watch.conductorAgentId,
+          ),
+        ),
+      ).toHaveLength(2);
     } finally {
       pool.close();
     }
@@ -1218,6 +1292,157 @@ describe('operator watch pool', () => {
       } finally {
         resumedPool.close();
       }
+    } finally {
+      pool.close();
+    }
+  });
+
+  it('counts only unanswered questions and re-baselines legacy total counts after restart', async () => {
+    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-watch-question-count-'));
+    await mkdir(join(repoRoot, '.ensemble', 'sessions'), { recursive: true });
+    let snapshot: SessionObservationSnapshot = {
+      sequence: 1,
+      openQuestions: [
+        {
+          id: 'inq-1',
+          question: 'Still open?',
+          responseType: 'text',
+          source: 'conductor',
+          status: 'open',
+          askedAt: 10,
+        },
+        {
+          id: 'inq-2',
+          question: 'Already answered?',
+          responseType: 'text',
+          source: 'conductor',
+          status: 'answered',
+          answer: 'Yes.',
+          answeredBy: 'operator',
+          answeredAt: 15,
+          askedAt: 11,
+        },
+      ],
+    };
+    const liveServer = await startOpenQuestionControlServer({
+      listOpenQuestions: () => [],
+      observeSession: async () => snapshot,
+      answerOpenQuestion: async () => {
+        throw new Error('unused');
+      },
+    });
+    closeServers.push(() => liveServer.close());
+    const issueUrl = 'https://github.com/example/repo/issues/72';
+    const sessionId = 'question-count-session';
+    await writeResumeStore(sessionId, 1, liveServer.socketPath, issueUrl);
+    const dispatchQueue = createOperatorDispatchQueue();
+    let pool = await createOperatorWatchPool({ repoRoot, dispatchQueue });
+    const getObservation = () =>
+      pool.getSessionTrackingInfo(sessionId, issueUrl).questionCountObservation;
+    try {
+      await pool.register(sessionId, {
+        pollIntervalMs: 60_000,
+        debounceMs: 0,
+      });
+      await pool.pollOnce(sessionId);
+      expect(getObservation()).toMatchObject({
+        metric: 'unanswered_open_questions',
+        current: { count: 1, source: 'uds' },
+      });
+
+      pool.close();
+      pool = await createOperatorWatchPool({ repoRoot, dispatchQueue });
+      snapshot = {
+        sequence: 2,
+        openQuestions: [
+          {
+            id: 'inq-1',
+            question: 'Still open?',
+            responseType: 'text',
+            source: 'conductor',
+            status: 'answered',
+            answer: 'Done.',
+            answeredBy: 'operator',
+            answeredAt: 20,
+            askedAt: 10,
+          },
+          {
+            id: 'inq-2',
+            question: 'Already answered?',
+            responseType: 'text',
+            source: 'conductor',
+            status: 'answered',
+            answer: 'Yes.',
+            answeredBy: 'operator',
+            answeredAt: 15,
+            askedAt: 11,
+          },
+        ],
+      };
+      await pool.pollOnce(sessionId);
+      const answered = getObservation();
+      expect(answered).toMatchObject({
+        metric: 'unanswered_open_questions',
+        current: { count: 0, source: 'uds' },
+        previous: { count: 1, source: 'uds' },
+      });
+      const listTool = createListOperatorSessionsTool(
+        { userEnsembleRoot: join(homeRoot, '.ensemble') },
+        undefined,
+        undefined,
+        (id, url) => pool.getSessionTrackingInfo(id, url),
+      );
+      const listed = JSON.parse(
+        (await listTool.execute({ includeGithub: false })).content[0]!.text,
+      ) as {
+        sessions: Array<{
+          conductorAgentId: string;
+          openQuestionObservation: Record<string, unknown>;
+        }>;
+      };
+      expect(listed.sessions[0]).toMatchObject({
+        conductorAgentId: sessionId,
+        openQuestionObservation: {
+          metric: 'unanswered_open_questions',
+          current: { count: 0, source: 'uds' },
+          previous: { count: 1, source: 'uds' },
+          delta: -1,
+          comparedAt: expect.any(Number),
+        },
+      });
+
+      const statePath = currentWatchStatePath(repoRoot);
+      const savedState = JSON.parse(await readFile(statePath, 'utf8')) as {
+        cursors: Record<
+          string,
+          { questionCountObservation: Record<string, unknown> }
+        >;
+      };
+      delete savedState.cursors[sessionId]!.questionCountObservation.metric;
+      await writeFile(statePath, `${JSON.stringify(savedState)}\n`, 'utf8');
+
+      pool.close();
+      pool = await createOperatorWatchPool({ repoRoot, dispatchQueue });
+      snapshot = {
+        sequence: 3,
+        openQuestions: [
+          ...snapshot.openQuestions,
+          {
+            id: 'inq-3',
+            question: 'A new unanswered question?',
+            responseType: 'text',
+            source: 'conductor',
+            status: 'open',
+            askedAt: 30,
+          },
+        ],
+      };
+      await pool.pollOnce(sessionId);
+      expect(getObservation()).toMatchObject({
+        metric: 'unanswered_open_questions',
+        current: { count: 1, source: 'uds' },
+      });
+      expect(getObservation()?.previous).toBeUndefined();
     } finally {
       pool.close();
     }

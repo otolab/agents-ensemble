@@ -86,6 +86,7 @@ interface SessionCursor {
   >;
   statusFingerprints: Record<string, string>;
   questionCountObservation?: {
+    metric: 'unanswered_open_questions';
     current: {
       count: number;
       checkedAt: number;
@@ -2313,8 +2314,11 @@ function cursorFor(
     ...(checkedAt !== undefined && source !== undefined
       ? {
           questionCountObservation: {
+            metric: 'unanswered_open_questions',
             current: {
-              count: observation.openQuestions.length,
+              count: observation.openQuestions.filter(
+                (question) => question.status === 'open',
+              ).length,
               checkedAt,
               source,
             },
@@ -2647,41 +2651,49 @@ async function loadWatchState(path: string): Promise<OperatorWatchState> {
             `Invalid operator-agent watch state: question count observation ${id}.`,
           );
         }
-        const parseCountSample = (
-          sample: unknown,
-        ): NonNullable<
-          SessionCursor['questionCountObservation']
-        >['current'] => {
-          if (
-            !isRecord(sample) ||
-            !Number.isSafeInteger(sample.count) ||
-            (sample.count as number) < 0 ||
-            !Number.isSafeInteger(sample.checkedAt) ||
-            (sample.checkedAt as number) < 0 ||
-            (sample.source !== 'uds' && sample.source !== 'resume_store')
-          ) {
-            throw new Error(
-              `Invalid operator-agent watch state: question count sample ${id}.`,
-            );
-          }
-          return {
-            count: sample.count as number,
-            checkedAt: sample.checkedAt as number,
-            source: sample.source,
+        // Older observations counted answered questions too. Drop those
+        // values so a restart establishes a correct unanswered-count baseline.
+        if (
+          rawCursor.questionCountObservation.metric ===
+          'unanswered_open_questions'
+        ) {
+          const parseCountSample = (
+            sample: unknown,
+          ): NonNullable<
+            SessionCursor['questionCountObservation']
+          >['current'] => {
+            if (
+              !isRecord(sample) ||
+              !Number.isSafeInteger(sample.count) ||
+              (sample.count as number) < 0 ||
+              !Number.isSafeInteger(sample.checkedAt) ||
+              (sample.checkedAt as number) < 0 ||
+              (sample.source !== 'uds' && sample.source !== 'resume_store')
+            ) {
+              throw new Error(
+                `Invalid operator-agent watch state: question count sample ${id}.`,
+              );
+            }
+            return {
+              count: sample.count as number,
+              checkedAt: sample.checkedAt as number,
+              source: sample.source,
+            };
           };
-        };
-        questionCountObservation = {
-          current: parseCountSample(
-            rawCursor.questionCountObservation.current,
-          ),
-          ...(rawCursor.questionCountObservation.previous === undefined
-            ? {}
-            : {
-                previous: parseCountSample(
-                  rawCursor.questionCountObservation.previous,
-                ),
-              }),
-        };
+          questionCountObservation = {
+            metric: 'unanswered_open_questions',
+            current: parseCountSample(
+              rawCursor.questionCountObservation.current,
+            ),
+            ...(rawCursor.questionCountObservation.previous === undefined
+              ? {}
+              : {
+                  previous: parseCountSample(
+                    rawCursor.questionCountObservation.previous,
+                  ),
+                }),
+          };
+        }
       }
       cursors[id] = {
         sequence: rawCursor.sequence as number,

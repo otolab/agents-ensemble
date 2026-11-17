@@ -335,6 +335,7 @@ describe('list_operator_sessions', () => {
           conductorAgentId === 'run-new' ? 'watching' : 'auto_watch_capacity',
         pollIntervalMs: conductorAgentId === 'run-new' ? 10_000 : null,
         questionCountObservation: {
+          metric: 'unanswered_open_questions',
           current: { count: 3, checkedAt: checkedAt + 1_000, source: 'uds' },
           previous: {
             count: 1,
@@ -370,6 +371,7 @@ describe('list_operator_sessions', () => {
         reason: 'watching',
       },
       openQuestionObservation: {
+        metric: 'unanswered_open_questions',
         status: 'observed',
         current: { count: 3, source: 'uds' },
         previous: { count: 1, source: 'resume_store' },
@@ -406,6 +408,7 @@ describe('list_operator_sessions', () => {
       ),
     );
     const response = {
+      status: 'available' as const,
       pullRequests: [
         {
           number: 900,
@@ -492,6 +495,69 @@ describe('list_operator_sessions', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('distinguishes a verified Issue with no PR references from unavailable GraphQL data', async () => {
+    const withoutReference =
+      'https://github.com/example/project/issues/810';
+    const unavailableIssue =
+      'https://github.com/example/project/issues/811';
+    await writeResumeStore('no-pr-run', 20, withoutReference);
+    await writeResumeStore('unavailable-pr-run', 10, unavailableIssue);
+    const client = {
+      getIssuePullRequestSummaries: vi.fn(async (
+        _owner: string,
+        _repo: string,
+        issueNumber: number,
+      ) =>
+        issueNumber === 810
+          ? {
+              status: 'available' as const,
+              pullRequests: [],
+              pullRequestsTruncated: false,
+            }
+          : {
+              status: 'unavailable' as const,
+              reason: 'issue_unavailable' as const,
+            },
+      ),
+    } as unknown as GitHubClient;
+    const tool = createListOperatorSessionsTool({
+      userEnsembleRoot: join(repoRoot, '.user-ensemble'),
+      getGitHubClient: async () => client,
+    });
+
+    const result = JSON.parse(
+      (await tool.execute({ sort: 'updatedAtAsc' })).content[0]!.text,
+    ) as {
+      sessions: Array<{
+        conductorAgentId: string;
+        pullRequests: Record<string, unknown>;
+      }>;
+    };
+
+    expect(result.sessions).toEqual([
+      expect.objectContaining({
+        conductorAgentId: 'unavailable-pr-run',
+        pullRequests: {
+          status: 'unavailable',
+          source: null,
+          checkedAt: null,
+          freshness: 'not_observed',
+          reason: 'issue_unavailable',
+          items: [],
+        },
+      }),
+      expect.objectContaining({
+        conductorAgentId: 'no-pr-run',
+        pullRequests: expect.objectContaining({
+          status: 'none',
+          source: 'github_api',
+          freshness: 'fresh',
+          items: [],
+        }),
+      }),
+    ]);
   });
 
   it('ignores path-hash status YAML for listed Issue sessions', async () => {

@@ -4,6 +4,7 @@ import {
   isGitHubAuthError,
   isGitHubRateLimitError,
   type GitHubClient,
+  type GitHubIssuePullRequestSummary,
   type GitHubIssuePullRequestSummaries,
 } from '@agents-ensemble/core';
 import {
@@ -87,6 +88,7 @@ interface OperatorSessionSummary {
     pollIntervalMs: number | null;
   };
   openQuestionObservation: {
+    metric: 'unanswered_open_questions';
     status: 'observed' | 'not_observed';
     current: {
       count: number;
@@ -186,14 +188,14 @@ interface GitHubPullRequestSummaryView {
     checks: {
       status: 'available' | 'none' | 'truncated';
       source: 'github_api';
-      items: GitHubIssuePullRequestSummaries['pullRequests'][number]['checks'];
+      items: GitHubIssuePullRequestSummary['checks'];
     };
   }>;
 }
 
 interface CachedGitHubSummary {
   checkedAt?: number;
-  data?: GitHubIssuePullRequestSummaries;
+  data?: Extract<GitHubIssuePullRequestSummaries, { status: 'available' }>;
   failure?: string;
   failureAt?: number;
 }
@@ -815,6 +817,7 @@ function summarizeSession(
       pollIntervalMs: tracking.pollIntervalMs,
     },
     openQuestionObservation: {
+      metric: 'unanswered_open_questions',
       status: tracking.questionCountObservation ? 'observed' : 'not_observed',
       current: tracking.questionCountObservation?.current ?? null,
       previous: tracking.questionCountObservation?.previous ?? null,
@@ -1012,6 +1015,19 @@ async function loadPullRequestSummaries(
           issue.number,
         );
         const checkedAt = Date.now();
+        if (data.status === 'unavailable') {
+          result.set(
+            key,
+            recordGitHubFailure(
+              key,
+              data.reason,
+              cache,
+              checkedAt,
+              previous,
+            ),
+          );
+          return;
+        }
         cache.set(key, { data, checkedAt });
         result.set(key, toGitHubSummaryView(data, checkedAt));
       } catch (error) {
@@ -1053,7 +1069,7 @@ function recordGitHubFailure(
 }
 
 function toGitHubSummaryView(
-  data: GitHubIssuePullRequestSummaries,
+  data: Extract<GitHubIssuePullRequestSummaries, { status: 'available' }>,
   checkedAt: number,
   overrideStatus?: 'stale',
   refreshFailure?: string,
