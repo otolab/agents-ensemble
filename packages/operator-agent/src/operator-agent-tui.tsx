@@ -301,6 +301,7 @@ export function createOperatorAgentTuiHost(
       stdin: options.stdin as NodeJS.ReadStream,
       stdout: options.stdout as NodeJS.WriteStream,
       alternateScreen: false,
+      interactive: true,
     },
   );
   const handleResize = () => {
