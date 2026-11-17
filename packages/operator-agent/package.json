@@ -20,10 +20,14 @@
   "dependencies": {
     "@agents-ensemble/core": "workspace:*",
     "@modular-prompt/core": "0.3.0",
+    "ink": "7.1.1",
+    "react": "19.2.0",
+    "react-ink-textarea": "npm:@otolab/react-ink-textarea@0.4.1-otolab.3",
     "yaml": "2.9.1"
   },
   "devDependencies": {
     "@types/node": "22.18.10",
+    "@types/react": "19.2.2",
     "typescript": "5.9.3",
     "vitest": "3.2.4"
   },

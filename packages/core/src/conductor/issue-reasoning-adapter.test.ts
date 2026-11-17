@@ -577,9 +577,7 @@ describe('operator-agent conductor reasoning backend wiring', () => {
         backend === 'pi'
           ? createPiConductorAgentFactory()
           : createCursorSdkConductorAgentFactory();
-      const input = new PassThrough() as PassThrough & { isTTY: boolean };
-      input.isTTY = true;
-      input.end('/exit\n');
+      const input = createInteractiveInput('/exit\n');
       const output = new PassThrough() as PassThrough & { isTTY: boolean };
       output.isTTY = true;
 
@@ -717,5 +715,33 @@ describe('operator-agent conductor reasoning backend wiring', () => {
         '',
       ].join('\n'),
     );
+  }
+
+  function createInteractiveInput(
+    text: string,
+  ): PassThrough & {
+    isTTY: boolean;
+    isRaw: boolean;
+    setRawMode: (mode: boolean) => unknown;
+    ref: () => void;
+    unref: () => void;
+  } {
+    const input = new PassThrough() as PassThrough & {
+      isTTY: boolean;
+      isRaw: boolean;
+      setRawMode: (mode: boolean) => unknown;
+      ref: () => void;
+      unref: () => void;
+    };
+    input.isTTY = true;
+    input.isRaw = false;
+    input.setRawMode = (mode) => {
+      input.isRaw = mode;
+      if (mode) setImmediate(() => input.end(text));
+      return input;
+    };
+    input.ref = () => {};
+    input.unref = () => {};
+    return input;
   }
 });

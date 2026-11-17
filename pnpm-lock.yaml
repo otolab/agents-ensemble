@@ -140,6 +140,15 @@ importers:
       '@modular-prompt/core':
         specifier: 0.3.0
         version: 0.3.0
+      ink:
+        specifier: 7.1.1
+        version: 7.1.1(@types/react@19.2.2)(react@19.2.0)
+      react:
+        specifier: 19.2.0
+        version: 19.2.0
+      react-ink-textarea:
+        specifier: npm:@otolab/react-ink-textarea@0.4.1-otolab.3
+        version: '@otolab/react-ink-textarea@0.4.1-otolab.3(ink@7.1.1(@types/react@19.2.2)(react@19.2.0))(react@19.2.0)'
       yaml:
         specifier: 2.9.1
         version: 2.9.1
@@ -147,6 +156,9 @@ importers:
       '@types/node':
         specifier: 22.18.10
         version: 22.18.10
+      '@types/react':
+        specifier: 19.2.2
+        version: 19.2.2
       typescript:
         specifier: 5.9.3
         version: 5.9.3

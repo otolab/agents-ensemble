@@ -178,6 +178,18 @@ describe('operator dispatch batching', () => {
     expect(queue.pendingUserCount).toBe(1);
   });
 
+  it('preserves user whitespace while rejecting whitespace-only input', () => {
+    const queue = createOperatorDispatchQueue();
+    const message = '  first line\n    second line  ';
+
+    expect(queue.enqueueUser(' \n\t ')).toBe(false);
+    expect(queue.enqueueUser(message)).toBe(true);
+
+    const batch = queue.selectBatch({ continuationConsumed: false });
+    expect(batch?.events).toMatchObject([{ type: 'user', text: message }]);
+    expect(formatOperatorDispatchBatch(batch!.events)).toBe(message);
+  });
+
   it('labels Open Question additions and keeps simultaneous sessions distinct', () => {
     const one = report('session-1', 'open_question', 'Issue 1 / inq-1');
     const two = report('session-2', 'open_question', 'Issue 2 / inq-1', 1);
