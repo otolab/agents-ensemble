@@ -64,12 +64,20 @@ describe('operator idle candidate dispatch run loop', () => {
     let observationSequence = 0;
     let gateReleased = false;
     let modeledRefreshDelayApplied = false;
+    let gateRefreshBarrier: Promise<void> = Promise.resolve();
+    let signalGateRefreshStarted: () => void = () => {};
+    let failGateRefresh = false;
     const questionServer = await startOpenQuestionControlServer({
       listOpenQuestions: () => currentQuestion ? [currentQuestion] : [],
       observeSession: async () => {
         if (gateReleased && !modeledRefreshDelayApplied) {
           fakeNow += 50;
           modeledRefreshDelayApplied = true;
+          signalGateRefreshStarted();
+          if (failGateRefresh) {
+            throw new Error('injected gate-clear refresh failure');
+          }
+          await gateRefreshBarrier;
         }
         return {
           sequence: observationSequence,
@@ -187,6 +195,17 @@ describe('operator idle candidate dispatch run loop', () => {
       observationSequence = 0;
       gateReleased = false;
       modeledRefreshDelayApplied = false;
+      failGateRefresh = profile === 'baseline';
+      let releaseGateRefresh!: () => void;
+      let signalRefreshStarted!: () => void;
+      const gateRefreshStarted = new Promise<void>((resolve) => {
+        signalRefreshStarted = resolve;
+      });
+      const gateRefreshBarrierForProfile = new Promise<void>((resolve) => {
+        releaseGateRefresh = resolve;
+      });
+      gateRefreshBarrier = gateRefreshBarrierForProfile;
+      signalGateRefreshStarted = signalRefreshStarted;
       fakeNow = startAt;
       const statePath = operatorWatchStatePath(userRoot, configProfile, issueUrl);
       const input = Object.assign(new PassThrough(), {
@@ -420,6 +439,31 @@ describe('operator idle candidate dispatch run loop', () => {
       fakeNow = startAt + 10_000;
       gateReleased = true;
       releaseUserSend();
+      await Promise.race([
+        gateRefreshStarted,
+        new Promise<never>((_resolve, reject) =>
+          setTimeout(
+            () => reject(new Error('gate-clear refresh did not start')),
+            2_000,
+          ),
+        ),
+      ]);
+      let reportPromptsWhileRefreshPending: string[] | undefined;
+      let refreshHeldState:
+        | { pendingReports: Array<{ reportType: string }> }
+        | undefined;
+      if (profile === 'integrated') {
+        // Regression guard: the old run loop froze and sent the ready OQ
+        // while this fresh observation was still pending, omitting the
+        // candidate that admission adds when the observation completes.
+        reportPromptsWhileRefreshPending = [...reportPrompts];
+        refreshHeldState = JSON.parse(
+          await readFile(statePath, 'utf8'),
+        ) as {
+          pendingReports: Array<{ reportType: string }>;
+        };
+      }
+      releaseGateRefresh();
       const reportOutcome = await Promise.race([
         reportSent.then(() => 'sent' as const),
         new Promise<'timeout'>((resolve) => setTimeout(() => resolve('timeout'), 2_000)),
@@ -433,6 +477,19 @@ describe('operator idle candidate dispatch run loop', () => {
         );
       }
       await run;
+      if (profile === 'integrated') {
+        expect(reportPromptsWhileRefreshPending).toEqual([]);
+        expect(
+          refreshHeldState!.pendingReports.filter(
+            (report) => report.reportType === 'open_question',
+          ),
+        ).toHaveLength(1);
+        expect(
+          refreshHeldState!.pendingReports.filter(
+            (report) => report.reportType === 'idle_candidate',
+          ),
+        ).toEqual([]);
+      }
       const persisted = JSON.parse(await readFile(statePath, 'utf8')) as {
         pendingReports: unknown[];
         idleCandidateFingerprints?: Record<string, Record<string, string>>;
