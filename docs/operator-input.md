@@ -150,6 +150,22 @@ focus は最後の operator / user 入力から10分の sliding inactivity timeo
 
 同一 session の report は到着順を保ち、一つの batch / send にまとめます。Open Question は同一 session 内の先行 report を追い越しません。session 間では TTY input の後、focus 中なら focus session、focus が off なら Open Question を含む session、直前 session の一回限りの continuation、通常 FIFO の順で選びます。ready 化した batch は agent send の期限を保証せず、hold・停止・優先通知などで待つ場合があります。
 
+### 稼働 session の idle 確認候補
+
+operator-agent は profile の session watch pool に登録された session のうち、live UDS に到達でき、保存 phase と観測時刻が整合するものを再評価します。対象は全保存 session ではなく、明示 watch と repository auto-watch の対象（最大20 run）です。終了・停止 phase、重複した SessionResumeStore、UDS 到達不能、観測の stale / 欠落 / 矛盾は候補にしません。live observation は watch の poll interval の2倍以内（最低10秒以内）のものを使います。poll の前後で保存 phase / `modifiedAt` / lifecycle を照合し、読み取り中の変化があればその回の状態は unknown として扱います。候補のために watch registration や polling は止めません。
+
+保存された `harnessPhase=idle` と、最後の harness state update を示す `modifiedAt` が30分以上前の session は「確認候補」として report します。`modifiedAt` は phase transition 専用時刻ではなく、直近の harness activity / phase transition 時刻です。これは保存 phase の観測であり、worker の完了・停止・作業未完了を示しません。現在 `running` と確認でき、最後の statusLine 報告が60分以上前の session も「60分以上更新なし・要確認」として候補にします。worker progress heartbeat は取れないため、statusLine と `reportedAt` は最終 status update の proxy です。実作業の進捗と statusLine を対応づける正確な signal mapping は未解決で、statusLine は進捗そのものではありません。通知には最終報告時刻を含めますが、長時間の正常処理を異常・停滞と断定せず、statusLine 欠落時は候補を作りません。idle phase の30分、stale-running の60分は調整可能な初期 default です。値・範囲・trade-off は [scheduler 設定](config.md#operator-agent-専用設定)を参照してください。
+
+候補の再評価は既定1分間隔です。候補評価 cadence は threshold を再確認する時計で、idle-only batch の5分 aging や `batchMaxWaitMs` とは別です。候補が generation gate を通過し、shared scheduler に永続化された時点から idle aging が始まります。manual report hold 中もこの時計は進みますが、hold 中は送信しません。未 dispatch 候補の retry / restart / ack は他の watch report と同じ report ID lifecycle を使い、独立 queue は作りません。
+
+候補生成を止める observable gate は、operator-agent の `agent.send` 実行中、送信済み operator input の queue / conversation hold、active focus です。gate 中は候補を生成・scheduler に登録せず、解除後に全 watch 対象を一度 fresh poll し、新しい観測だけを再評価します。busy 中だけ条件を満たした一時候補は後から追いつき通知しません。手動 report hold は別の dispatch gate なので候補評価を止めません。live Open Question だけでも候補を抑止せず、候補を OQ 解決や focus 解除の代わりに扱いません。入力欄に typed-but-unsubmitted の文字や一般的な worker wait は観測できず、gate signal として使いません。現行 observation には一般的な user-wait signal がなく、OQ は未回答 question の有無だけを示します。
+
+idle candidate は evidence fingerprint を durable に保持し、同じ根拠の定期的な再通知はしません。`modifiedAt` / statusLine の根拠が変わると新候補を作る場合があります。ack 後・再起動後も fingerprint は保持しますが、pending report の retry / restart replay は既存の at-least-once 契約に従い、同じ report ID が再送される可能性があります。
+
+同一 session の pending OQ と idle candidate が選択前に shared queue に揃った場合、到着順を保って同じ batch / send に載せ、batch は OQ の priority を保ちます。通常 report と idle candidate の混在 batch は通常 priority なので、idle candidate が通常 report に同梱されて早く届く場合があります。idle-only 候補は5分後に通常 FIFO 帯へ昇格しますが、TTY input、active focus、OQ、continuation を追い越しません。focus 中に新しい idle candidate は生成しません。OQ により focus は自動解除されないので、人間応答待ちへ移るときは operator が手動で切り替えるか解除します。
+
+`commitBatch` の profile lock 待ち中に同一 session の report が届いた場合、現在の実装は local membership を待ちの前に freeze するため、OQ + idle candidate の同一 send を保証できません。この shared scheduler の契約不一致は #741 の修正対象で、#745 は変更しません。通常経路で commit 開始前に両方が揃った場合の batch 統合とは区別してください。
+
 ## TTY TUI レイアウト
 
 端末ごとの確認済み・未確認・既知制限と、実端末確認結果の更新手順は [TUI 端末互換性マトリクス](tui-terminal-compatibility.md) に記載します。

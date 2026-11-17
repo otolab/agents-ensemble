@@ -2381,11 +2381,13 @@ describe('operator watch pool', () => {
         frozenBatchId: first.batchId,
         frozenPayload,
       });
-      idleReportId = await firstPool.enqueueIdleCandidate!({
+      idleReportId = (await firstPool.enqueueIdleCandidate!({
         conductorAgentId: sessionId,
         text: '中立的な idle 確認候補',
+        kind: 'idle_phase',
+        fingerprint: 'idle-evidence-v1',
         eligibleAt: Date.now(),
-      });
+      }))!;
       const afterPostCommitEnqueue = JSON.parse(
         await readFile(statePath, 'utf8'),
       ) as {
@@ -2460,6 +2462,194 @@ describe('operator watch pool', () => {
     }
   });
 
+  it('records fresh live phase evidence and keeps idle fingerprints through acknowledgement and restart', async () => {
+    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-idle-fingerprint-'));
+    const sessionId = 'idle-fingerprint-session';
+    const harnessModifiedAt = Date.now() - 31 * 60_000;
+    const liveServer = await startOpenQuestionControlServer({
+      listOpenQuestions: () => [],
+      observeSession: async () => ({
+        sequence: 0,
+        openQuestions: [],
+      }),
+      answerOpenQuestion: async () => {
+        throw new Error('unused');
+      },
+    });
+    closeServers.push(() => liveServer.close());
+    await writeResumeStore(
+      sessionId,
+      Date.now(),
+      liveServer.socketPath,
+      DEFAULT_ISSUE_URL,
+      {
+        harnessPhase: 'idle',
+        modifiedAt: harnessModifiedAt,
+        lifecycle: 'unknown',
+      },
+    );
+
+    const queue = createOperatorDispatchQueue();
+    let pool = await createOperatorWatchPool({ repoRoot, dispatchQueue: queue });
+    let firstReportId = '';
+    let retryReadyAt = 0;
+    const fingerprint = 'sha256:idle-phase-v1';
+    try {
+      await pool.register(sessionId, { pollIntervalMs: 60_000, debounceMs: 0 });
+      await pool.pollOnce(sessionId);
+      expect(pool.listIdleCandidateObservations()).toMatchObject([
+        {
+          conductorAgentId: sessionId,
+          source: 'uds',
+          connectivity: 'reachable',
+          harnessPhase: 'idle',
+          harnessModifiedAt,
+        },
+      ]);
+      firstReportId = (await pool.enqueueIdleCandidate!({
+        conductorAgentId: sessionId,
+        text: 'idle phase candidate',
+        kind: 'idle_phase',
+        fingerprint,
+        eligibleAt: Date.now(),
+      }))!;
+      expect(firstReportId).toBeTypeOf('string');
+      await expect(
+        pool.enqueueIdleCandidate!({
+          conductorAgentId: sessionId,
+          text: 'same evidence',
+          kind: 'idle_phase',
+          fingerprint,
+          eligibleAt: Date.now(),
+        }),
+      ).resolves.toBeUndefined();
+
+      const batch = queue.selectBatch(
+        { continuationConsumed: false },
+        Date.now(),
+      )!;
+      expect(batch.events.map((event) =>
+        event.type === 'report' ? event.reportId : undefined,
+      )).toEqual([firstReportId]);
+      expect(await pool.commitBatch(batch)).toBe(true);
+      retryReadyAt = Date.now() + 5_000;
+      await pool.recordRetry?.(batch.events, retryReadyAt);
+    } finally {
+      pool.close();
+    }
+
+    const retryQueue = createOperatorDispatchQueue();
+    pool = await createOperatorWatchPool({
+      repoRoot,
+      dispatchQueue: retryQueue,
+    });
+    try {
+      await pool.pollOnce(sessionId);
+      expect(
+        retryQueue.selectBatch({ continuationConsumed: false }, retryReadyAt - 1),
+      ).toBeUndefined();
+      const retried = retryQueue.selectBatch(
+        { continuationConsumed: false },
+        retryReadyAt,
+      )!;
+      expect(retried.events.map((event) =>
+        event.type === 'report' ? event.reportId : undefined,
+      )).toEqual([firstReportId]);
+      expect(retried.batchId).toBeDefined();
+      expect(await pool.commitBatch(retried)).toBe(true);
+      await pool.acknowledge(retried.events);
+      const persisted = JSON.parse(
+        await readFile(currentWatchStatePath(repoRoot), 'utf8'),
+      ) as {
+        idleCandidateFingerprints: Record<string, Record<string, string>>;
+        pendingReports: unknown[];
+      };
+      expect(persisted.idleCandidateFingerprints[sessionId]?.idle_phase)
+        .toBe(fingerprint);
+      expect(persisted.pendingReports).toEqual([]);
+      await expect(
+        pool.enqueueIdleCandidate!({
+          conductorAgentId: sessionId,
+          text: 'same evidence after restart',
+          kind: 'idle_phase',
+          fingerprint: 'sha256:idle-phase-v1',
+          eligibleAt: Date.now(),
+        }),
+      ).resolves.toBeUndefined();
+      expect(pool.listIdleCandidateObservations()).toHaveLength(1);
+    } finally {
+      pool.close();
+    }
+  });
+
+  it('combines a pending live Open Question and idle candidate into one shared send in the normal path', async () => {
+    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-idle-oq-batch-'));
+    const sessionId = 'idle-oq-session';
+    const liveQuestions: SessionObservationSnapshot['openQuestions'] = [];
+    const liveServer = await startOpenQuestionControlServer({
+      listOpenQuestions: () => liveQuestions,
+      observeSession: async () => ({
+        sequence: liveQuestions.length,
+        openQuestions: liveQuestions,
+      }),
+      answerOpenQuestion: async () => {
+        throw new Error('unused');
+      },
+    });
+    closeServers.push(() => liveServer.close());
+    await writeResumeStore(
+      sessionId,
+      Date.now(),
+      liveServer.socketPath,
+      DEFAULT_ISSUE_URL,
+      {
+        harnessPhase: 'idle',
+        modifiedAt: Date.now() - 31 * 60_000,
+        lifecycle: 'unknown',
+      },
+    );
+    const queue = createOperatorDispatchQueue();
+    const pool = await createOperatorWatchPool({ repoRoot, dispatchQueue: queue });
+    try {
+      await pool.register(sessionId, { pollIntervalMs: 60_000, debounceMs: 0 });
+      await pool.pollOnce(sessionId);
+      liveQuestions.push({
+        id: 'inq-live',
+        question: 'Which option should we use?',
+        responseType: 'choice',
+        source: 'conductor',
+        status: 'open',
+        askedAt: Date.now(),
+      });
+      expect(await pool.pollOnce(sessionId)).toBe(1);
+      const idleReportId = await pool.enqueueIdleCandidate!({
+        conductorAgentId: sessionId,
+        text: 'idle phase candidate',
+        kind: 'idle_phase',
+        fingerprint: 'idle-oq-evidence',
+        eligibleAt: Date.now(),
+      });
+
+      const batch = queue.selectBatch(
+        { continuationConsumed: false },
+        Date.now(),
+      )!;
+      expect(batch.priority).toBe('open_question');
+      expect(batch.events.map((event) =>
+        event.type === 'report' ? event.reportType : undefined,
+      )).toEqual(['open_question', 'idle_candidate']);
+      expect(batch.events.map((event) =>
+        event.type === 'report' ? event.reportId : undefined,
+      )).toEqual([expect.any(String), idleReportId]);
+      expect(await pool.commitBatch(batch)).toBe(true);
+      expect(batch.payload).toContain('Which option should we use?');
+      expect(batch.payload).toContain('idle phase candidate');
+      await pool.acknowledge(batch.events);
+    } finally {
+      pool.close();
+    }
+  });
+
   it('freezes the local membership before waiting for persistence and starts idle age at admission', async () => {
     repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-watch-commit-cutoff-'));
     await mkdir(join(repoRoot, '.ensemble', 'sessions'), { recursive: true });
@@ -2488,11 +2678,13 @@ describe('operator watch pool', () => {
     let stateLock: DatabaseSync | undefined;
     let lockHeld = false;
     try {
-      const firstReportId = await pool.enqueueIdleCandidate!({
+      const firstReportId = (await pool.enqueueIdleCandidate!({
         conductorAgentId: sessionId,
         text: 'first candidate',
+        kind: 'idle_phase',
+        fingerprint: 'idle-first',
         eligibleAt: Date.now(),
-      });
+      }))!;
       const batch = dispatchQueue.selectBatch(
         { continuationConsumed: false },
         Date.now(),
@@ -2533,6 +2725,8 @@ describe('operator watch pool', () => {
       const laterCandidatePromise = pool.enqueueIdleCandidate!({
         conductorAgentId: sessionId,
         text: 'arrived during lock wait',
+        kind: 'stale_running',
+        fingerprint: 'stale-during-lock',
         eligibleAt: staleEligibility,
       });
 
@@ -2543,7 +2737,7 @@ describe('operator watch pool', () => {
       lockHeld = false;
 
       expect(await commitPromise).toBe(true);
-      const laterReportId = await laterCandidatePromise;
+      const laterReportId = (await laterCandidatePromise)!;
       expect(batch.events.map((event) =>
         event.type === 'report' ? event.reportId : undefined,
       )).toEqual([firstReportId]);
@@ -2640,11 +2834,13 @@ describe('operator watch pool', () => {
         reportId: 'legacy-report',
         firstQueuedAt: readyAt,
       });
-      const laterReportId = await pool.enqueueIdleCandidate!({
+      const laterReportId = (await pool.enqueueIdleCandidate!({
         conductorAgentId: sessionId,
         text: '後から queue した確認候補',
+        kind: 'idle_phase',
+        fingerprint: 'idle-later',
         eligibleAt: Date.now(),
-      });
+      }))!;
       expect(
         queue
           .selectBatch({ continuationConsumed: false }, readyAt)
@@ -4367,6 +4563,11 @@ describe('operator watch pool', () => {
     updatedAt: number,
     harnessSocketPath?: string,
     issueUrl = 'https://github.com/example/repo/issues/1',
+    phase?: {
+      harnessPhase: 'running' | 'idle' | 'close' | 'abort' | 'exit';
+      modifiedAt: number;
+      lifecycle?: 'unknown' | 'closed' | 'exited' | 'interrupted';
+    },
   ) {
     const path = resolveEnsemblePaths({
       repoRoot,
@@ -4380,6 +4581,7 @@ describe('operator watch pool', () => {
         issueUrl,
         repoRoot,
         ...(harnessSocketPath ? { harnessSocketPath } : {}),
+        ...(phase ?? {}),
         profile: { workers: [], agents: {} },
         openQuestions: [],
         sequence: 0,

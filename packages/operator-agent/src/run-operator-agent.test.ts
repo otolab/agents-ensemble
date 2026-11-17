@@ -1921,6 +1921,8 @@ describe('runOperatorAgent', () => {
       await setupPool.enqueueIdleCandidate!({
         conductorAgentId: 'conductor-one',
         text: 'candidate waits for a durable batch commit',
+        kind: 'idle_phase',
+        fingerprint: 'durable-commit-fixture',
         eligibleAt: Date.now(),
       });
     } finally {

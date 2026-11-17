@@ -100,6 +100,7 @@ import {
   createOperatorAgentTuiHost,
   type OperatorAgentTuiLogOptions,
 } from './operator-agent-tui.js';
+import { createOperatorIdleCandidateMonitor } from './operator-idle-candidates.js';
 
 export interface RunOperatorAgentOptions {
   profile?: string;
@@ -443,6 +444,7 @@ export async function runOperatorAgent(
       recoveryInbox,
       dispatchLifecycle,
       operatorCanInspectRecovery,
+      scheduling: runtime.scheduling,
       colorEnabled:
         Boolean(stdin.isTTY && stdout.isTTY) && process.env.NO_COLOR === undefined,
     });
@@ -734,6 +736,7 @@ async function runTtyConversation(options: {
   recoveryInbox: ConductorRecoveryInbox;
   dispatchLifecycle: ConductorDispatchLifecycle<OperatorAgentDispatchPayload>;
   operatorCanInspectRecovery: boolean;
+  scheduling: Required<OperatorAgentSchedulingConfig>;
   colorEnabled: boolean;
 }): Promise<boolean> {
   let cursorBootstrapComplete = options.backend !== 'cursor';
@@ -742,6 +745,7 @@ async function runTtyConversation(options: {
   let inputEnded = false;
   let pendingReconnects = 0;
   let sendCount = 0;
+  let agentSendInFlight = false;
   const automaticReconnectResult: {
     current?: ConductorRecoveryReconnect;
   } = {};
@@ -900,6 +904,33 @@ async function runTtyConversation(options: {
   const dispatchState: OperatorDispatchState = {
     continuationConsumed: false,
   };
+  const idleCandidateMonitor = createOperatorIdleCandidateMonitor({
+    watchPool: options.watchPool,
+    dispatchQueue: options.dispatchQueue,
+    scheduling: options.scheduling,
+    isAgentSendInFlight: () => agentSendInFlight,
+    onError: (message) => writeChannelLine('harness', message),
+    refreshOnGateClear: async () => {
+      for (const watch of options.watchPool.list()) {
+        if (
+          agentSendInFlight ||
+          options.dispatchQueue.pendingUserCount > 0 ||
+          options.dispatchQueue.conversationHold ||
+          options.dispatchQueue.focusSessionId !== undefined
+        ) {
+          return;
+        }
+        try {
+          await options.watchPool.pollOnce(watch.conductorAgentId);
+        } catch (error) {
+          writeChannelLine(
+            'harness',
+            `idle candidate state refresh failed for ${watch.conductorAgentId}: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+      }
+    },
+  });
 
   try {
     while (true) {
@@ -1059,69 +1090,77 @@ async function runTtyConversation(options: {
       const nextSendCount = sendCount + 1;
       let toolCallStarted = false;
       automaticReconnectResult.current = undefined;
-      const result = await Promise.race([
-        sendConductorWithReconnect(
-          options.agentHandle,
-          prompt,
-          {
-            conductorAgentFactory: options.agentHandle.factory,
-            conductorOptions: options.agentHandle.agentOptions,
-            signal: sendSuppression.signal,
-            onToolCallStarted: ({ tool }) => {
-              toolCallStarted = true;
-              writeChannelLine(
-                'harness',
-                `operator: calling ${formatOperatorToolName(tool)}`,
-              );
+      agentSendInFlight = true;
+      idleCandidateMonitor.notifyActivityChanged();
+      let result: ConductorSendResult | undefined;
+      try {
+        result = await Promise.race([
+          sendConductorWithReconnect(
+            options.agentHandle,
+            prompt,
+            {
+              conductorAgentFactory: options.agentHandle.factory,
+              conductorOptions: options.agentHandle.agentOptions,
+              signal: sendSuppression.signal,
+              onToolCallStarted: ({ tool }) => {
+                toolCallStarted = true;
+                writeChannelLine(
+                  'harness',
+                  `operator: calling ${formatOperatorToolName(tool)}`,
+                );
+              },
+              onAuthReconnectAttempt: ({ agentId, source }) => {
+                writeChannelLine(
+                  'harness',
+                  `[auth] conductor reconnect attempt agentId=${agentId} source=${source ?? 'automatic'}`,
+                );
+              },
+              onAuthReconnectComplete: ({ success, source, closeFailed }) => {
+                options.dispatchLifecycle.setAgentAvailable(success);
+                automaticReconnectResult.current = {
+                  reason: 'auth',
+                  succeeded: success,
+                };
+                writeChannelLine(
+                  success ? 'observation' : 'harness',
+                  `[auth] conductor reconnect ${success ? 'succeeded' : 'failed'} source=${source ?? 'automatic'}${closeFailed ? ' old agent close failed; cleanup is unconfirmed' : ''}`,
+                  success ? {} : { color: ANSI_RED },
+                );
+              },
+              onTransportReconnectAttempt: ({ agentId, source }) => {
+                writeChannelLine(
+                  'harness',
+                  `[transport] conductor reconnect attempt agentId=${agentId} source=${source ?? 'automatic'}`,
+                );
+              },
+              onTransportReconnectComplete: ({
+                success,
+                source,
+                closeFailed,
+              }) => {
+                options.dispatchLifecycle.setAgentAvailable(success);
+                automaticReconnectResult.current = {
+                  reason: 'transport',
+                  succeeded: success,
+                };
+                writeChannelLine(
+                  success ? 'observation' : 'harness',
+                  `[transport] conductor reconnect ${success ? 'succeeded' : 'failed'} source=${source ?? 'automatic'}${closeFailed ? ' old agent close failed; cleanup is unconfirmed' : ''}`,
+                  success ? {} : { color: ANSI_RED },
+                );
+              },
             },
-            onAuthReconnectAttempt: ({ agentId, source }) => {
-              writeChannelLine(
-                'harness',
-                `[auth] conductor reconnect attempt agentId=${agentId} source=${source ?? 'automatic'}`,
-              );
-            },
-            onAuthReconnectComplete: ({ success, source, closeFailed }) => {
-              options.dispatchLifecycle.setAgentAvailable(success);
-              automaticReconnectResult.current = {
-                reason: 'auth',
-                succeeded: success,
-              };
-              writeChannelLine(
-                success ? 'observation' : 'harness',
-                `[auth] conductor reconnect ${success ? 'succeeded' : 'failed'} source=${source ?? 'automatic'}${closeFailed ? ' old agent close failed; cleanup is unconfirmed' : ''}`,
-                success ? {} : { color: ANSI_RED },
-              );
-            },
-            onTransportReconnectAttempt: ({ agentId, source }) => {
-              writeChannelLine(
-                'harness',
-                `[transport] conductor reconnect attempt agentId=${agentId} source=${source ?? 'automatic'}`,
-              );
-            },
-            onTransportReconnectComplete: ({
-              success,
-              source,
-              closeFailed,
-            }) => {
-              options.dispatchLifecycle.setAgentAvailable(success);
-              automaticReconnectResult.current = {
-                reason: 'transport',
-                succeeded: success,
-              };
-              writeChannelLine(
-                success ? 'observation' : 'harness',
-                `[transport] conductor reconnect ${success ? 'succeeded' : 'failed'} source=${source ?? 'automatic'}${closeFailed ? ' old agent close failed; cleanup is unconfirmed' : ''}`,
-                success ? {} : { color: ANSI_RED },
-              );
-            },
-          },
-        ).catch(() => {
-          // Keep the shared helper's rejected-promise API. This workflow owns
-          // the unknown-outcome transition and omits the raw error.
-          return { runId: '', status: 'send_rejected' } as ConductorSendResult;
-        }),
-        stopping.then(() => undefined),
-      ]);
+          ).catch(() => {
+            // Keep the shared helper's rejected-promise API. This workflow owns
+            // the unknown-outcome transition and omits the raw error.
+            return { runId: '', status: 'send_rejected' } as ConductorSendResult;
+          }),
+          stopping.then(() => undefined),
+        ]);
+      } finally {
+        agentSendInFlight = false;
+        idleCandidateMonitor.notifyActivityChanged();
+      }
       if (!result) {
         if (reservation) options.recoveryInbox.release(reservation);
         return exitContinuity;
@@ -1269,6 +1308,7 @@ async function runTtyConversation(options: {
     process.off('SIGINT', handleInterrupt);
     process.off('SIGTERM', handleTermination);
     tui.setInputEnabled(false);
+    idleCandidateMonitor.close();
     tui.dispose();
     unsubscribeTtyLogRouter();
     unsubscribeHoldChanges();
