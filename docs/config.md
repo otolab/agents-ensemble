@@ -136,13 +136,13 @@ idle phase の fingerprint は session と `modifiedAt`、stale-running fingerpr
 
 candidate は既存の session report queue / batch / hold / retry / ack 経路を使います。live OQ report と idle candidate が dispatch 前に同一 session の queue に揃っている場合、到着順を保った同じ batch / send に含み、batch priority は Open Question を保ちます。通常 report と idle candidate の混在 batch は通常 priority となり、idle candidate が早く同梱される場合があります。OQ は focus 解除 signal には使いません。
 
-shared scheduler には既知の append cutoff defect があります。`commitBatch` 呼び出し時点で process-local queue の membership が freeze されるため、profile lock 待ち中に同一 session へ届いた report は成功する commit より前でも現在の batch に入らず、次 batch に回る場合があります。これは #741 の未解決事項であり、#745 はその scheduler 契約を変更しません。したがって lock-wait 中の OQ + idle candidate 同一 send は現時点で保証されません。
+`commitBatch` は profile lock を取得してから dispatch eligibility を再確認し、ローカル queue に届いた同一 session report を含めて batch を凍結します。ローカル queue への到着が lock 待ち中であっても、成功する commit より前なら batch に含まれます。共有 state に保存されていても、この process の queue にまだ同期されていない peer report は次 batch に残ります。その場合も report を保持し、後続 batch で session 内の順序を守ります。
 
 #### 検証範囲と待ち時間の比較
 
-決定的な scheduler 試験では、agent が先行 turn を処理中で次の batch 選択機会が30秒後になる場面を置きました。baseline（OQ のみ）も、同じ session の queue に idle candidate が加わった場合も、OQ 到着から選択まで30秒、選択 batch は各1件でした。統合時の1 batch に OQ と candidate の2報告が入り、OQ priority は維持されます。run loop が batch ごとに送る場合の turn 数は1対1です。これは合成 queue 選択を比較したもので、`agent.send` の実呼び出し数、実 agent の応答時間、運用時の通知遅延を測った結果ではありません。
+決定的な selector 比較では、次の選択機会が30秒後の場面を置きました。baseline（OQ のみ）と、同じ session に idle candidate もある場合はどちらも選択機会まで30秒で、選択 batch は各1つです。混在 batch には OQ と candidate の2 report が入り、OQ priority を保ちます。run loop が batch ごとに送る場合の turn 数はどちらも1です。profile lock 競合の回帰テストは、idle candidate を先に選択してから lock 待ち中に local OQ が queue へ届く状況で、両方が1 frozen batch / send に入り、OQ が1件だけであることを確認します。これらは selector / fixture による合成確認であり、実 `agent.send` 呼び出しの運用計測、実 agent の応答時間、実環境の通知待ち時間を測った結果ではありません。
 
-複数 session と focus 切替、live OQ + idle candidate の通常 batch、user input / conversation / focus gate、正常な長時間処理・古い statusLine、状態不明、manual hold 中の aging、retry / restart / ack は fixture と scheduler による試験で確認します。実運用の複数 conductor / TTY を長時間動かした計測ではありません。特に `commitBatch` が profile lock を待つ間に届く append は #741 の未解決 defect があるため、同一 send・待ち時間の保証に含めません。agent の処理時間、人間の応答、process 停止や上位 priority の連続に対する有限通知時間も保証しません。
+複数 session と focus 切替、live OQ + idle candidate の同一 batch、user input / conversation / focus gate、正常な長時間処理・古い statusLine、状態不明、manual hold 中の aging、profile lock 中の local append、frozen retry / restart / ack は fixture と scheduler による試験で確認します。peer の未同期 report は後続 batch に残ることも確認します。実運用の複数 conductor / TTY を長時間動かした計測ではありません。実 agent の turn 数や重要通知の待機時間は未計測です。agent の処理時間、人間の応答、process 停止や上位 priority の連続に対する有限通知時間も保証しません。
 
 profile は `--profile` > `ENSEMBLE_OPERATOR_AGENT_PROFILE` > 再開対象 conversation に記録された profile > `defaultProfile` > 唯一の profile の順に選びます。まだ複数候補が残る場合は TTY で選択します。保存 conversation の profile が config から消えていて選び直す場合は、その差を表示します。
 

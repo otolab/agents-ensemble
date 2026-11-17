@@ -162,9 +162,7 @@ operator-agent は profile の session watch pool に登録された session の
 
 idle candidate は evidence fingerprint を durable に保持し、同じ根拠の定期的な再通知はしません。`modifiedAt` / statusLine の根拠が変わると新候補を作る場合があります。ack 後・再起動後も fingerprint は保持しますが、pending report の retry / restart replay は既存の at-least-once 契約に従い、同じ report ID が再送される可能性があります。
 
-同一 session の pending OQ と idle candidate が選択前に shared queue に揃った場合、到着順を保って同じ batch / send に載せ、batch は OQ の priority を保ちます。通常 report と idle candidate の混在 batch は通常 priority なので、idle candidate が通常 report に同梱されて早く届く場合があります。idle-only 候補は5分後に通常 FIFO 帯へ昇格しますが、TTY input、active focus、OQ、continuation を追い越しません。focus 中に新しい idle candidate は生成しません。OQ により focus は自動解除されないので、人間応答待ちへ移るときは operator が手動で切り替えるか解除します。
-
-`commitBatch` の profile lock 待ち中に同一 session の report が届いた場合、現在の実装は local membership を待ちの前に freeze するため、OQ + idle candidate の同一 send を保証できません。この shared scheduler の契約不一致は #741 の修正対象で、#745 は変更しません。通常経路で commit 開始前に両方が揃った場合の batch 統合とは区別してください。
+同一 session の pending OQ と idle candidate が選択前に shared queue に揃った場合、到着順を保って同じ batch / send に載せ、batch は OQ の priority を保ちます。profile lock 待ち中に local queue へ届いた report も、lock 取得後の successful `commitBatch` までに queue にあれば同じ frozen batch に含まれます。共有 state に保存済みでも、その process の queue に未同期の peer report は次 batch に残ります。通常 report と idle candidate の混在 batch は通常 priority なので、idle candidate が通常 report に同梱されて早く届く場合があります。idle-only 候補は5分後に通常 FIFO 帯へ昇格しますが、TTY input、active focus、OQ、continuation を追い越しません。focus 中に新しい idle candidate は生成しません。OQ により focus は自動解除されないので、人間応答待ちへ移るときは operator が手動で切り替えるか解除します。
 
 ## TTY TUI レイアウト
 
