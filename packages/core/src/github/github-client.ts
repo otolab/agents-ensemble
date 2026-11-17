@@ -33,6 +33,37 @@ export interface GitHubPullRequestRef {
   state: string;
 }
 
+export type GitHubPullRequestReviewDecision =
+  | 'APPROVED'
+  | 'CHANGES_REQUESTED'
+  | 'REVIEW_REQUIRED';
+
+export interface GitHubPullRequestCheckSummary {
+  type: 'check_run' | 'status_context';
+  name: string;
+  status: string | null;
+  conclusion: string | null;
+  url: string | null;
+  headSha: string | null;
+}
+
+export interface GitHubIssuePullRequestSummary {
+  number: number;
+  title: string;
+  url: string;
+  state: string;
+  headRefName: string;
+  headRefOid: string;
+  reviewDecision: GitHubPullRequestReviewDecision | null;
+  checks: GitHubPullRequestCheckSummary[];
+  checksTruncated: boolean;
+}
+
+export interface GitHubIssuePullRequestSummaries {
+  pullRequests: GitHubIssuePullRequestSummary[];
+  pullRequestsTruncated: boolean;
+}
+
 export interface GitHubPullRequestReview {
   id: number;
   body: string;
@@ -83,6 +114,12 @@ export interface GitHubClient {
     repo: string,
     prNumber: number,
   ): Promise<unknown[]>;
+  /** Bounded PR details for operator session summaries. */
+  getIssuePullRequestSummaries?(
+    owner: string,
+    repo: string,
+    issueNumber: number,
+  ): Promise<GitHubIssuePullRequestSummaries>;
 }
 
 export class GitHubApiError extends Error {
@@ -326,6 +363,165 @@ export function buildGitHubClient(options: GitHubClientOptions): GitHubClient {
       }
 
       return rollup.contexts.nodes ?? [];
+    },
+
+    async getIssuePullRequestSummaries(owner, repo, issueNumber) {
+      const query = `
+        query($owner: String!, $name: String!, $number: Int!) {
+          repository(owner: $owner, name: $name) {
+            issue(number: $number) {
+              timelineItems(
+                first: 5
+                itemTypes: [CROSS_REFERENCED_EVENT]
+              ) {
+                pageInfo {
+                  hasNextPage
+                }
+                nodes {
+                  ... on CrossReferencedEvent {
+                    source {
+                      ... on PullRequest {
+                        number
+                        title
+                        url
+                        state
+                        headRefName
+                        headRefOid
+                        reviewDecision
+                        statusCheckRollup {
+                          contexts(first: 20) {
+                            pageInfo {
+                              hasNextPage
+                            }
+                            nodes {
+                              __typename
+                              ... on CheckRun {
+                                name
+                                status
+                                conclusion
+                                detailsUrl
+                                checkSuite {
+                                  commit {
+                                    oid
+                                  }
+                                }
+                              }
+                              ... on StatusContext {
+                                context
+                                state
+                                targetUrl
+                                commit {
+                                  oid
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      `;
+
+      type CheckRunNode = {
+        __typename: 'CheckRun';
+        name: string;
+        status: string;
+        conclusion: string | null;
+        detailsUrl: string | null;
+        checkSuite?: { commit?: { oid?: string } | null } | null;
+      };
+      type StatusContextNode = {
+        __typename: 'StatusContext';
+        context: string;
+        state: string;
+        targetUrl: string | null;
+        commit?: { oid?: string } | null;
+      };
+      type PullRequestNode = {
+        number: number;
+        title: string;
+        url: string;
+        state: string;
+        headRefName: string;
+        headRefOid: string;
+        reviewDecision: GitHubPullRequestReviewDecision | null;
+        statusCheckRollup: {
+          contexts: {
+            pageInfo: { hasNextPage: boolean };
+            nodes: Array<CheckRunNode | StatusContextNode>;
+          };
+        } | null;
+      };
+      type IssuePullRequestResponse = {
+        repository: {
+          issue: {
+            timelineItems: {
+              pageInfo: { hasNextPage: boolean };
+              nodes: Array<{
+                source?: PullRequestNode | null;
+              } | null>;
+            } | null;
+          } | null;
+        } | null;
+      };
+
+      const data = await graphqlRequest<IssuePullRequestResponse>(query, {
+        owner,
+        name: repo,
+        number: issueNumber,
+      });
+      const connection = data.repository?.issue?.timelineItems;
+      if (!connection) {
+        return { pullRequests: [], pullRequestsTruncated: false };
+      }
+      const pullRequests = [
+        ...new Map(
+          connection.nodes.flatMap((event) =>
+            event?.source ? [[event.source.number, event.source] as const] : [],
+          ),
+        ).values(),
+      ];
+      return {
+        pullRequests: pullRequests.map((pullRequest) => {
+          const contexts = pullRequest.statusCheckRollup?.contexts;
+          const checks = (contexts?.nodes ?? []).map((check) =>
+            check.__typename === 'CheckRun'
+              ? {
+                  type: 'check_run' as const,
+                  name: check.name,
+                  status: check.status,
+                  conclusion: check.conclusion,
+                  url: check.detailsUrl,
+                  headSha: check.checkSuite?.commit?.oid ?? null,
+                }
+              : {
+                  type: 'status_context' as const,
+                  name: check.context,
+                  status: check.state,
+                  conclusion: null,
+                  url: check.targetUrl,
+                  headSha: check.commit?.oid ?? null,
+                },
+          );
+          return {
+            number: pullRequest.number,
+            title: pullRequest.title,
+            url: pullRequest.url,
+            state: pullRequest.state,
+            headRefName: pullRequest.headRefName,
+            headRefOid: pullRequest.headRefOid,
+            reviewDecision: pullRequest.reviewDecision,
+            checks,
+            checksTruncated: contexts?.pageInfo.hasNextPage ?? false,
+          };
+        }),
+        pullRequestsTruncated: connection.pageInfo.hasNextPage,
+      };
     },
   };
 }

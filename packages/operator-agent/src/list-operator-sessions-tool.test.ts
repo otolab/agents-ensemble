@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   resolveEnsemblePaths,
+  type GitHubClient,
 } from '@agents-ensemble/core';
 import { createListOperatorSessionsTool } from './list-operator-sessions-tool.js';
 
@@ -30,7 +31,7 @@ describe('list_operator_sessions', () => {
     });
     const tool = createListOperatorSessionsTool(repoRoot);
 
-    const result = await tool.execute({ limit: 1 });
+    const result = await tool.execute({ limit: 1, sort: 'updatedAtDesc' });
     const summary = JSON.parse(result.content[0]!.text) as {
       total: number;
       returned: number;
@@ -155,7 +156,8 @@ describe('list_operator_sessions', () => {
     const tool = createListOperatorSessionsTool(repoRoot);
 
     const issueRuns = JSON.parse(
-      (await tool.execute({ issueUrl })).content[0]!.text,
+      (await tool.execute({ issueUrl, sort: 'updatedAtDesc' })).content[0]!
+        .text,
     ) as {
       total: number;
       sessions: Array<{ issueUrl: string; conductorAgentId: string }>;
@@ -185,7 +187,8 @@ describe('list_operator_sessions', () => {
     });
 
     const firstPage = JSON.parse(
-      (await tool.execute({ issueUrl, limit: 1 })).content[0]!.text,
+      (await tool.execute({ issueUrl, limit: 1, sort: 'updatedAtDesc' }))
+        .content[0]!.text,
     ) as { nextCursor: string };
     await expect(
       tool.execute({ issueUrl: otherIssueUrl, cursor: firstPage.nextCursor }),
@@ -214,7 +217,8 @@ describe('list_operator_sessions', () => {
     });
 
     const first = JSON.parse(
-      (await tool.execute({ limit: 1 })).content[0]!.text,
+      (await tool.execute({ limit: 1, sort: 'updatedAtDesc' })).content[0]!
+        .text,
     ) as {
       total: number;
       returned: number;
@@ -235,6 +239,7 @@ describe('list_operator_sessions', () => {
         await tool.execute({
           limit: 1,
           cursor: first.nextCursor,
+          sort: 'updatedAtDesc',
         })
       ).content[0]!.text,
     ) as {
@@ -293,6 +298,200 @@ describe('list_operator_sessions', () => {
         ],
       }),
     );
+  });
+
+  it('sorts newness by first observation and labels stale live and count comparisons', async () => {
+    const issueUrl = 'https://github.com/example/project/issues/743';
+    await writeResumeStore('run-old', 900, issueUrl, {
+      lifecycle: 'closed',
+      statusLine: '保存済みの最新報告',
+    });
+    await writeResumeStore('run-new', 100, issueUrl);
+    const observations: Record<string, number> = {
+      'run-old': 1_000,
+      'run-new': 2_000,
+    };
+    const checkedAt = Date.now() - 20_000;
+    const tool = createListOperatorSessionsTool(
+      { userEnsembleRoot: join(repoRoot, '.user-ensemble') },
+      (conductorAgentId) => ({
+        connectivity: 'unreachable',
+        checkedAt,
+        unreachableSince: checkedAt,
+      }),
+      undefined,
+      (conductorAgentId) => ({
+        firstObservedAt: observations[conductorAgentId] ?? null,
+        repositoryWatchEnabled: true,
+        repositoryScan: {
+          status: 'fresh',
+          checkedAt,
+          error: null,
+        },
+        watchEnabled: conductorAgentId === 'run-new',
+        watchSource:
+          conductorAgentId === 'run-new' ? 'repository_auto' : null,
+        watchReason:
+          conductorAgentId === 'run-new' ? 'watching' : 'auto_watch_capacity',
+        pollIntervalMs: conductorAgentId === 'run-new' ? 10_000 : null,
+        questionCountObservation: {
+          current: { count: 3, checkedAt: checkedAt + 1_000, source: 'uds' },
+          previous: {
+            count: 1,
+            checkedAt,
+            source: 'resume_store',
+          },
+        },
+      }),
+    );
+    const first = JSON.parse(
+      (await tool.execute({ limit: 1, includeGithub: false })).content[0]!
+        .text,
+    ) as {
+      nextCursor: string;
+      sessions: Array<Record<string, any>>;
+    };
+    expect(first.sessions[0]).toMatchObject({
+      conductorAgentId: 'run-new',
+      updatedAtMeaning: 'resume_store_flush_time',
+      discovery: {
+        firstObservedAt: 2_000,
+        timeSource: 'repository_watch_first_observed',
+      },
+      live: {
+        connectivity: 'unknown',
+        lastKnownConnectivity: 'unreachable',
+        freshness: 'stale',
+        checkedAt,
+      },
+      watch: {
+        enabled: true,
+        source: 'repository_auto',
+        reason: 'watching',
+      },
+      openQuestionObservation: {
+        status: 'observed',
+        current: { count: 3, source: 'uds' },
+        previous: { count: 1, source: 'resume_store' },
+        delta: 2,
+        comparedAt: checkedAt,
+      },
+      pullRequests: { status: 'not_requested' },
+    });
+    const second = JSON.parse(
+      (
+        await tool.execute({
+          limit: 1,
+          cursor: first.nextCursor,
+          includeGithub: false,
+        })
+      ).content[0]!.text,
+    ) as { sessions: Array<Record<string, any>> };
+    expect(second.sessions[0]).toMatchObject({
+      conductorAgentId: 'run-old',
+      statusLine: '保存済みの最新報告',
+      statusLineSource: 'conductor_report',
+      watch: { enabled: false, reason: 'auto_watch_capacity' },
+    });
+  });
+
+  it('limits GitHub lookups per page and reports details, failure, and stale cache', async () => {
+    const issueUrls = Array.from(
+      { length: 6 },
+      (_, index) => `https://github.com/example/project/issues/${800 + index}`,
+    );
+    await Promise.all(
+      issueUrls.map((issueUrl, index) =>
+        writeResumeStore(`github-run-${index}`, index, issueUrl),
+      ),
+    );
+    const response = {
+      pullRequests: [
+        {
+          number: 900,
+          title: 'Fix run discovery',
+          url: 'https://github.com/example/project/pull/900',
+          state: 'OPEN',
+          headRefName: 'feature/run-discovery',
+          headRefOid: 'sha-900',
+          reviewDecision: 'APPROVED' as const,
+          checks: [
+            {
+              type: 'check_run' as const,
+              name: 'test',
+              status: 'COMPLETED',
+              conclusion: 'SUCCESS',
+              url: 'https://github.com/example/project/actions/runs/1',
+              headSha: 'sha-900',
+            },
+          ],
+          checksTruncated: false,
+        },
+      ],
+      pullRequestsTruncated: false,
+    };
+    const getIssuePullRequestSummaries = vi.fn().mockResolvedValue(response);
+    const client = {
+      getIssuePullRequestSummaries,
+    } as unknown as GitHubClient;
+    const tool = createListOperatorSessionsTool({
+      userEnsembleRoot: join(repoRoot, '.user-ensemble'),
+      getGitHubClient: async () => client,
+    });
+    const first = JSON.parse(
+      (await tool.execute({ limit: 10, sort: 'updatedAtAsc' })).content[0]!
+        .text,
+    ) as { sessions: Array<Record<string, any>> };
+    expect(getIssuePullRequestSummaries).toHaveBeenCalledTimes(5);
+    expect(
+      first.sessions.filter(
+        (session) => session.pullRequests.status === 'not_checked',
+      ),
+    ).toHaveLength(1);
+    expect(first.sessions[0]?.pullRequests).toMatchObject({
+      status: 'available',
+      source: 'github_api',
+      items: [
+        {
+          number: 900,
+          head: { ref: 'feature/run-discovery', sha: 'sha-900' },
+          review: {
+            decision: 'APPROVED',
+            source: 'github_api',
+          },
+          checks: {
+            status: 'available',
+            items: [{ name: 'test', conclusion: 'SUCCESS' }],
+          },
+        },
+      ],
+    });
+
+    const second = JSON.parse(
+      (await tool.execute({ limit: 1, sort: 'updatedAtAsc' })).content[0]!
+        .text,
+    ) as { sessions: Array<Record<string, any>> };
+    expect(second.sessions[0]?.pullRequests.status).toBe('available');
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(Date.now() + 31_000);
+      getIssuePullRequestSummaries.mockRejectedValueOnce(
+        new Error('temporary network failure'),
+      );
+      const stale = JSON.parse(
+        (await tool.execute({ limit: 1, sort: 'updatedAtAsc' })).content[0]!
+          .text,
+      ) as { sessions: Array<Record<string, any>> };
+      // The page cache expires after 30 seconds. A failed refresh retains only
+      // the previous successful result and marks it stale.
+      expect(stale.sessions[0]?.pullRequests).toMatchObject({
+        status: 'stale',
+        refreshFailure: 'request_failed',
+        items: [{ number: 900 }],
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('ignores path-hash status YAML for listed Issue sessions', async () => {
@@ -519,7 +718,10 @@ describe('list_operator_sessions', () => {
             modifiedAt: now,
             source: 'resume_store',
           },
-          live: { connectivity: 'reachable', checkedAt: now },
+          live: expect.objectContaining({
+            connectivity: 'reachable',
+            checkedAt: now,
+          }),
           posture: 'interact',
           coherence: 'ok',
         }),
@@ -530,7 +732,10 @@ describe('list_operator_sessions', () => {
             modifiedAt: null,
             source: 'legacy_lifecycle',
           },
-          live: { connectivity: 'unknown', checkedAt: null },
+          live: expect.objectContaining({
+            connectivity: 'unknown',
+            checkedAt: null,
+          }),
           posture: 'resume',
           coherence: 'insufficient_data',
         }),
@@ -546,7 +751,10 @@ describe('list_operator_sessions', () => {
             modifiedAt: now,
             source: 'resume_store',
           },
-          live: { connectivity: 'reachable', checkedAt: now - 1 },
+          live: expect.objectContaining({
+            connectivity: 'reachable',
+            checkedAt: now - 1,
+          }),
           posture: 'resume',
           coherence: 'insufficient_data',
           coherenceReasons: ['live_observation_predates_phase'],
@@ -612,7 +820,7 @@ describe('list_operator_sessions', () => {
       'limit must be an integer between 1 and 50',
     );
     await expect(tool.execute({ sort: 'oldest' })).rejects.toThrow(
-      'sort must be updatedAtDesc or updatedAtAsc',
+      'sort must be firstObservedAtDesc, firstObservedAtAsc, updatedAtDesc, or updatedAtAsc',
     );
     await expect(tool.execute({ hasStatusLine: 'yes' })).rejects.toThrow(
       'hasStatusLine must be a boolean',

@@ -452,7 +452,12 @@ export async function listLocatedSessionResumeStoresPage(
   } = {},
 ): Promise<SessionResumeStorePage<LocatedSessionResumeStore>> {
   const scope = resolveSessionResumeStoreScope(query);
-  const stores = (await listSessionResumeStoreLocations(repoRoot, options))
+  const stores = (
+    await listSessionResumeStoreLocations(repoRoot, {
+      ...options,
+      githubRepo: scope.githubRepo,
+    })
+  )
     .filter(({ resumeStore }) => {
       const identity = sessionIssueIdentity(resumeStore.issueUrl);
       return (
@@ -511,6 +516,7 @@ export async function listUserLocatedSessionResumeStoresPage(
     await listSessionResumeStoreLocations(userRoot, {
       onDuplicate: options.onDuplicate,
       userEnsembleRoot: userRoot,
+      githubRepo: scope.githubRepo,
     })
   )
     .filter(({ resumeStore }) => {
@@ -637,6 +643,7 @@ async function listSessionResumeStoreLocations(
   options: {
     userEnsembleRoot?: string;
     onDuplicate?: (diagnostic: SessionResumeStoreDuplicateDiagnostic) => void;
+    githubRepo?: string;
   } = {},
 ): Promise<LocatedSessionResumeStore[]> {
   const paths = resolveEnsemblePaths({
@@ -704,9 +711,11 @@ async function listSessionResumeStoreLocations(
     if (!isEnoent(error)) throw error;
     hosts = [];
   }
+  const exactRepository = options.githubRepo?.split('/');
   for (const host of hosts) {
     if (
       !host.isDirectory() ||
+      (exactRepository && host.name !== 'github.com') ||
       /^[a-f0-9]{64}$/u.test(host.name) ||
       host.name === 'pi'
     ) {
@@ -722,7 +731,12 @@ async function listSessionResumeStoreLocations(
       throw error;
     }
     for (const owner of owners) {
-      if (!owner.isDirectory()) continue;
+      if (
+        !owner.isDirectory() ||
+        (exactRepository && owner.name !== exactRepository[0])
+      ) {
+        continue;
+      }
       let repositories: Dirent[];
       try {
         repositories = await readdir(
@@ -734,7 +748,12 @@ async function listSessionResumeStoreLocations(
         throw error;
       }
       for (const repository of repositories) {
-        if (!repository.isDirectory()) continue;
+        if (
+          !repository.isDirectory() ||
+          (exactRepository && repository.name !== exactRepository[1])
+        ) {
+          continue;
+        }
         const slugRoot = join(
           paths.sessionsRoot,
           host.name,

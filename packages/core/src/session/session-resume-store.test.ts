@@ -1214,6 +1214,77 @@ describe('SessionResumeStore', () => {
     });
   });
 
+  it('pages a large exact-repository inventory without leaking other repositories', async () => {
+    tempDir = await createHome('ensemble-session-resume-store-page-');
+    const userEnsembleRoot = join(tempDir, '.ensemble');
+    const repoRoot = join(tempDir, 'clone');
+    const paths = resolveEnsemblePaths({ repoRoot, userEnsembleRoot });
+    const repositoryStores = Array.from({ length: 501 }, (_, index) => {
+      const issueUrl = `https://github.com/org/repo/issues/${index + 1}`;
+      return baseResumeStore({
+        conductorAgentId: `run-${String(index).padStart(3, '0')}`,
+        issueUrl,
+        repoRoot,
+        updatedAt: index,
+      });
+    });
+    const firstPath = paths.canonicalSessionResumeStorePath(
+      repositoryStores[0]!.issueUrl,
+      repositoryStores[0]!.conductorAgentId,
+    );
+    await mkdir(dirname(firstPath), { recursive: true });
+    await Promise.all(
+      repositoryStores.map((store) =>
+        writeFile(
+          paths.canonicalSessionResumeStorePath(
+            store.issueUrl,
+            store.conductorAgentId,
+          ),
+          `${JSON.stringify(store)}\n`,
+        ),
+      ),
+    );
+    const excluded = baseResumeStore({
+      conductorAgentId: 'other-repository-run',
+      issueUrl: 'https://github.com/org/other/issues/1',
+      repoRoot,
+    });
+    const excludedPath = paths.canonicalSessionResumeStorePath(
+      excluded.issueUrl,
+      excluded.conductorAgentId,
+    );
+    await mkdir(dirname(excludedPath), { recursive: true });
+    await writeFile(excludedPath, `${JSON.stringify(excluded)}\n`);
+
+    const firstPage = await listUserLocatedSessionResumeStoresPage(
+      { githubRepo: 'ORG/REPO', limit: 500 },
+      { userEnsembleRoot },
+    );
+    expect(firstPage.total).toBe(501);
+    expect(firstPage.sessions).toHaveLength(500);
+    expect(firstPage.nextCursor).toBeDefined();
+    const secondPage = await listUserLocatedSessionResumeStoresPage(
+      {
+        githubRepo: 'org/repo',
+        limit: 500,
+        cursor: firstPage.nextCursor,
+      },
+      { userEnsembleRoot },
+    );
+    expect(secondPage.total).toBe(501);
+    expect(secondPage.sessions).toHaveLength(1);
+    expect(
+      [...firstPage.sessions, ...secondPage.sessions].map(
+        ({ resumeStore }) => resumeStore.conductorAgentId,
+      ),
+    ).toHaveLength(501);
+    expect(
+      [...firstPage.sessions, ...secondPage.sessions].some(
+        ({ resumeStore }) => resumeStore.conductorAgentId === excluded.conductorAgentId,
+      ),
+    ).toBe(false);
+  });
+
   it('keeps sessions with the same conductor id in different slugs separate and resumes the requested issue', async () => {
     tempDir = await createHome('ensemble-session-resume-store-');
     const currentRepoRoot = join(tempDir, 'current-clone');

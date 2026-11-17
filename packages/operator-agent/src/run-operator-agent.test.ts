@@ -917,6 +917,8 @@ describe('runOperatorAgent', () => {
       'list_worker_messages',
       'register_session_watch',
       'unregister_session_watch',
+      'register_repository_watch',
+      'unregister_repository_watch',
       'register_conductor_message_listen',
       'unregister_conductor_message_listen',
       'set_report_hold',

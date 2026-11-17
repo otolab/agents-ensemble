@@ -29,7 +29,9 @@ import {
 } from './operator-dispatch.js';
 import {
   createOperatorWatchPool,
+  createRegisterRepositoryWatchTool,
   createRegisterSessionWatchTool,
+  createUnregisterRepositoryWatchTool,
   operatorWatchStatePath,
 } from './operator-watch-pool.js';
 
@@ -205,6 +207,181 @@ describe('operator watch pool', () => {
         'https://github.com/example/repo/issues/42',
       ),
     ).toThrow(/Invalid operator-agent profile name/u);
+  });
+
+  it('discovers repository runs, preserves first-observed times across restarts, and stops only automatic watches', async () => {
+    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-repository-watch-'));
+    const existingIssue = 'https://github.com/example/repo/issues/1';
+    const manualIssue = 'https://github.com/example/repo/issues/2';
+    const newIssue = 'https://github.com/example/repo/issues/3';
+    await writeResumeStore('baseline-run', 900, undefined, existingIssue);
+    await writeResumeStore('manual-run', 800, undefined, manualIssue);
+    const dispatchQueue = createOperatorDispatchQueue();
+    let pool = await createOperatorWatchPool({ repoRoot, dispatchQueue });
+    await pool.register('manual-run', {
+      pollIntervalMs: 60_000,
+      debounceMs: 0,
+    });
+    try {
+      const registration = await createRegisterRepositoryWatchTool(pool).execute({
+        githubRepo: 'example/repo',
+        scanIntervalMs: 5_000,
+        pollIntervalMs: 60_000,
+      });
+      const registrationResult = JSON.parse(
+        registration.content[0]!.text,
+      ) as { baselineRunCount: number; enabledAt: number };
+      expect(registrationResult.baselineRunCount).toBe(2);
+      const baselineObservedAt = pool.getSessionTrackingInfo(
+        'baseline-run',
+        existingIssue,
+      ).firstObservedAt;
+      expect(baselineObservedAt).not.toBeNull();
+      expect(
+        pool.getSessionTrackingInfo('manual-run', manualIssue),
+      ).toMatchObject({
+        repositoryWatchEnabled: true,
+        watchEnabled: true,
+        watchSource: 'manual',
+      });
+
+      const duplicate = await pool.registerRepository('example/repo', {
+        scanIntervalMs: 5_000,
+        pollIntervalMs: 60_000,
+      });
+      expect(duplicate.enabledAt).toBe(registrationResult.enabledAt);
+      expect(duplicate.managedSessionIds).toEqual(['baseline-run']);
+      expect(
+        pool.getSessionTrackingInfo('baseline-run', existingIssue)
+          .firstObservedAt,
+      ).toBe(baselineObservedAt);
+      await expect(pool.unregister('baseline-run')).resolves.toBe(true);
+      expect(
+        pool.getSessionTrackingInfo('baseline-run', existingIssue),
+      ).toMatchObject({
+        watchEnabled: false,
+        watchReason: 'suppressed',
+      });
+
+      await writeResumeStore('new-run', 1, undefined, newIssue);
+      await expect(pool.scanRepositoriesOnce()).resolves.toBe(1);
+      const newObservedAt = pool.getSessionTrackingInfo(
+        'new-run',
+        newIssue,
+      ).firstObservedAt;
+      expect(newObservedAt).not.toBeNull();
+      expect(newObservedAt).toBeGreaterThan(baselineObservedAt!);
+      expect(
+        pool.getSessionTrackingInfo('new-run', newIssue),
+      ).toMatchObject({
+        repositoryWatchEnabled: true,
+        watchEnabled: true,
+        watchSource: 'repository_auto',
+        repositoryScan: { status: 'fresh', error: null },
+      });
+
+      const newRunPath = resolveEnsemblePaths({
+        repoRoot,
+      }).canonicalSessionResumeStorePath(newIssue, 'new-run');
+      await writeFile(newRunPath, '{ invalid json');
+      await expect(pool.scanRepositoriesOnce()).rejects.toThrow();
+      expect(
+        pool.getSessionTrackingInfo('new-run', newIssue).repositoryScan,
+      ).toMatchObject({ status: 'stale', error: 'scan_failed' });
+      await writeResumeStore('new-run', 1, undefined, newIssue);
+      await expect(pool.scanRepositoriesOnce()).resolves.toBe(0);
+
+      pool.close();
+      pool = await createOperatorWatchPool({ repoRoot, dispatchQueue });
+      expect(pool.listRepositoryWatches()).toHaveLength(1);
+      expect(
+        pool.getSessionTrackingInfo('new-run', newIssue).firstObservedAt,
+      ).toBe(newObservedAt);
+      expect(
+        pool.getSessionTrackingInfo('baseline-run', existingIssue).watchReason,
+      ).toBe('suppressed');
+      expect(pool.list().map((watch) => watch.conductorAgentId).sort()).toEqual([
+        'manual-run',
+        'new-run',
+      ]);
+
+      const stopped = await createUnregisterRepositoryWatchTool(pool).execute({
+        githubRepo: 'example/repo',
+      });
+      expect(JSON.parse(stopped.content[0]!.text)).toEqual({
+        githubRepo: 'example/repo',
+        removed: true,
+      });
+      expect(pool.list().map((watch) => watch.conductorAgentId)).toEqual([
+        'manual-run',
+      ]);
+      expect(
+        pool.getSessionTrackingInfo('new-run', newIssue),
+      ).toMatchObject({
+        firstObservedAt: newObservedAt,
+        repositoryWatchEnabled: false,
+        watchEnabled: false,
+        watchReason: 'repository_watch_stopped',
+      });
+      await pool.registerRepository('example/repo', {
+        scanIntervalMs: 5_000,
+        pollIntervalMs: 60_000,
+      });
+      expect(
+        pool.getSessionTrackingInfo('baseline-run', existingIssue),
+      ).toMatchObject({
+        firstObservedAt: baselineObservedAt,
+        watchEnabled: true,
+        watchSource: 'repository_auto',
+      });
+    } finally {
+      pool.close();
+    }
+  });
+
+  it('caps repository auto watches at 20, keeps overflow visible, and honors registration scope', async () => {
+    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-repository-watch-cap-'));
+    await Promise.all(
+      Array.from({ length: 21 }, (_, index) =>
+        writeResumeStore(
+          `cap-${String(index).padStart(2, '0')}`,
+          index,
+          undefined,
+          `https://github.com/example/repo/issues/${100 + index}`,
+        ),
+      ),
+    );
+    const pool = await createOperatorWatchPool({
+      repoRoot,
+      dispatchQueue: createOperatorDispatchQueue(),
+      profileIncludes: ['example/*'],
+      repoFilters: ['example/repo'],
+    });
+    try {
+      const config = await pool.registerRepository('example/repo', {
+        scanIntervalMs: 5_000,
+        pollIntervalMs: 60_000,
+      });
+      expect(config.managedSessionIds).toHaveLength(21);
+      expect(pool.list()).toHaveLength(20);
+      expect(
+        pool.getSessionTrackingInfo(
+          'cap-20',
+          'https://github.com/example/repo/issues/120',
+        ),
+      ).toMatchObject({
+        watchEnabled: false,
+        watchReason: 'auto_watch_capacity',
+      });
+      await expect(
+        pool.registerRepository('outside/repo'),
+      ).rejects.toThrow('outside the selected profile include scope');
+      await expect(
+        pool.registerRepository('example/other'),
+      ).rejects.toThrow('outside the active --repo-filter scope');
+    } finally {
+      pool.close();
+    }
   });
 
   it('does not load project-local operator watch state', async () => {

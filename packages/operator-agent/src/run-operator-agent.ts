@@ -4,6 +4,10 @@ import { join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { compile, merge } from '@modular-prompt/core';
 import {
+  createGitHubClient,
+  DEFAULT_ENSEMBLE_CONFIG,
+} from '@agents-ensemble/core';
+import {
   closeConductorAgentOnce,
   createConductorAgentFactory,
   ConductorDispatchLifecycle,
@@ -48,8 +52,10 @@ import {
 import {
   createOperatorWatchPool,
   createRegisterConductorMessageListenTool,
+  createRegisterRepositoryWatchTool,
   createRegisterSessionWatchTool,
   createUnregisterConductorMessageListenTool,
+  createUnregisterRepositoryWatchTool,
   createUnregisterSessionWatchTool,
   type OperatorWatchPool,
 } from './operator-watch-pool.js';
@@ -252,6 +258,8 @@ export async function runOperatorAgent(
   const watchPool = await createOperatorWatchPool({
     userEnsembleRoot: runtime.userEnsembleRoot,
     profile: runtime.profileName,
+    profileIncludes: runtime.profile.include,
+    repoFilters: runtime.repoFilters,
     dispatchQueue,
     onError: (message) =>
       ttyChannels.harness(`watch warning: ${message}`),
@@ -288,9 +296,16 @@ export async function runOperatorAgent(
           userEnsembleRoot: runtime.userEnsembleRoot,
           profileIncludes: runtime.profile.include,
           repoFilters: runtime.repoFilters,
+          getGitHubClient: () =>
+            createGitHubClient({
+              config: DEFAULT_ENSEMBLE_CONFIG,
+              signal: AbortSignal.timeout(8_000),
+            }),
         },
         (conductorAgentId) => watchPool.getLiveStatus(conductorAgentId),
         reportResumeStoreDuplicate,
+        (conductorAgentId, issueUrl) =>
+          watchPool.getSessionTrackingInfo(conductorAgentId, issueUrl),
       ),
       list_live_open_questions: createListLiveOpenQuestionsTool(
         { userEnsembleRoot: runtime.userEnsembleRoot },
@@ -313,6 +328,10 @@ export async function runOperatorAgent(
       }),
       register_session_watch: createRegisterSessionWatchTool(watchPool),
       unregister_session_watch: createUnregisterSessionWatchTool(watchPool),
+      register_repository_watch:
+        createRegisterRepositoryWatchTool(watchPool),
+      unregister_repository_watch:
+        createUnregisterRepositoryWatchTool(watchPool),
       register_conductor_message_listen:
         createRegisterConductorMessageListenTool(watchPool),
       unregister_conductor_message_listen:
