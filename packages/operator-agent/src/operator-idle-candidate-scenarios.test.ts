@@ -34,9 +34,13 @@ interface SyntheticMetrics {
   importantNotificationWaitMs: number;
 }
 
-function createScenarioHarness(setNow: (at: number) => void) {
+function createScenarioHarness(
+  setNow: (at: number) => void,
+  scenarioScheduling = scheduling,
+) {
   setNow(startAt);
-  let queue: OperatorDispatchQueue = createOperatorDispatchQueue(scheduling);
+  let queue: OperatorDispatchQueue =
+    createOperatorDispatchQueue(scenarioScheduling);
   const state: OperatorDispatchState = { continuationConsumed: false };
   const sends: SyntheticSend[] = [];
   const reportBatchIds = new Set<string>();
@@ -682,6 +686,91 @@ describe('synthetic idle-candidate dispatch comparisons', () => {
       });
       expect(integrated.candidateSend?.reportIds).toEqual([
         'stale-running-candidate',
+      ]);
+    } finally {
+      clock.restore();
+    }
+  });
+
+  it('promotes aged idle in FIFO order during continuing normal arrivals without delaying an OQ', async () => {
+    const clock = useFakeClock();
+    const comparisonScheduling = {
+      ...scheduling,
+      batchMaxWaitMs: 0,
+      idleAgingMs: 5 * 60_000,
+    };
+    try {
+      const run = async (integrated: boolean) => {
+        const harness = createScenarioHarness(
+          clock.set,
+          comparisonScheduling,
+        );
+        if (integrated) {
+          enqueueIdleCandidate(
+            harness.queue,
+            'aged-idle-first',
+            'idle-first-session',
+          );
+          enqueueIdleCandidate(
+            harness.queue,
+            'aged-idle-second',
+            'idle-second-session',
+          );
+        }
+
+        for (let minute = 1; minute < 5; minute += 1) {
+          const at = startAt + minute * 60_000;
+          enqueueReport(harness.queue, {
+            reportId: `normal-${minute}`,
+            reportType: 'session_state',
+            sessionId: `normal-session-${minute}`,
+          });
+          await harness.dispatchAt(at);
+        }
+
+        const arrivalAt = startAt + 5 * 60_000;
+        enqueueReport(harness.queue, {
+          reportId: 'normal-five',
+          reportType: 'session_state',
+          sessionId: 'normal-session-five',
+        });
+        enqueueReport(harness.queue, {
+          reportId: 'important-oq-after-aging',
+          reportType: 'open_question',
+          sessionId: 'important-session',
+          priority: 'open_question',
+        });
+        while (await harness.dispatchAt(arrivalAt)) {
+          // Drain each selected session batch at this fixed fake-clock time.
+        }
+
+        return {
+          metrics: harness.metrics('important-oq-after-aging', arrivalAt),
+          sends: harness.sends,
+        };
+      };
+
+      const baseline = await run(false);
+      const integrated = await run(true);
+      expect(baseline.metrics).toEqual({
+        dispatchAttempts: 6,
+        reportBatches: 6,
+        fakeSendTurns: 6,
+        importantNotificationWaitMs: 0,
+      });
+      expect(integrated.metrics).toEqual({
+        dispatchAttempts: 8,
+        reportBatches: 8,
+        fakeSendTurns: 8,
+        importantNotificationWaitMs: 0,
+      });
+      expect(
+        integrated.sends.slice(4).map((send) => send.reportIds[0]),
+      ).toEqual([
+        'important-oq-after-aging',
+        'aged-idle-first',
+        'aged-idle-second',
+        'normal-five',
       ]);
     } finally {
       clock.restore();

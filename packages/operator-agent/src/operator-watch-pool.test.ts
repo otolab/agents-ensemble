@@ -2792,6 +2792,8 @@ describe('operator watch pool', () => {
 
       const durable = JSON.parse(await readFile(statePath, 'utf8'));
       const firstOrder = durable.pendingReports[0].arrivalOrder;
+      const firstEligibleAt = durable.pendingReports[0].eligibleAt;
+      expect(firstEligibleAt).toBeTypeOf('number');
       const queuedAt = Date.now();
       for (const [index, reportId] of ['local-arrival-during-lock-wait', 'peer-unsynced'].entries()) {
         durable.pendingReports.push({
@@ -2862,6 +2864,10 @@ describe('operator watch pool', () => {
       expect(batch.events.map((event) =>
         event.type === 'report' ? event.arrivalOrder : undefined,
       )).toEqual([firstOrder, firstOrder + 1]);
+      expect(batch.events[0]).toMatchObject({
+        arrivalOrder: firstOrder,
+        eligibleAt: firstEligibleAt,
+      });
       expect(
         batch.events.filter(
           (event) =>
@@ -2907,7 +2913,7 @@ describe('operator watch pool', () => {
       expect(laterCandidate.eligibleAt).toBeGreaterThanOrEqual(lockReleasedAt);
       expect(laterCandidate.frozenBatchId).toBeUndefined();
 
-      const retryAt = Date.now() + 5_000;
+      const retryAt = Date.now() + 5 * 60_000;
       await pool.recordRetry?.(batch.events, retryAt);
       pool.close();
 
@@ -2934,6 +2940,14 @@ describe('operator watch pool', () => {
         expect(retry.events.map((event) =>
           event.type === 'report' ? event.reportType : undefined,
         )).toEqual(['idle_candidate', 'open_question']);
+        expect(retry.events.map((event) =>
+          event.type === 'report'
+            ? { arrivalOrder: event.arrivalOrder, eligibleAt: event.eligibleAt }
+            : undefined,
+        )).toEqual([
+          { arrivalOrder: firstOrder, eligibleAt: firstEligibleAt },
+          { arrivalOrder: firstOrder + 1, eligibleAt: undefined },
+        ]);
         expect(retry.events.filter(
           (event) =>
             event.type === 'report' && event.reportType === 'open_question',

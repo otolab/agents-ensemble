@@ -400,6 +400,18 @@ describe('operator idle candidate evaluation', () => {
         expect(batch.events.map((event) =>
           event.type === 'report' ? event.reportId : undefined,
         )).toEqual([questionReportId, candidateReportId]);
+        const reports = batch.events.filter(
+          (event): event is Extract<typeof event, { type: 'report' }> =>
+            event.type === 'report',
+        );
+        expect(reports).toHaveLength(2);
+        expect(reports[0]!.arrivalOrder).toBeLessThan(
+          reports[1]!.arrivalOrder!,
+        );
+        expect(reports[1]).toMatchObject({
+          reportType: 'idle_candidate',
+          eligibleAt: Date.now(),
+        });
         expect(
           batch.events.filter(
             (event) =>
