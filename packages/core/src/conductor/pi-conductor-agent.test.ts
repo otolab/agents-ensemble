@@ -62,6 +62,7 @@ vi.mock('@earendil-works/pi-coding-agent', async () => {
 import {
   createPiConductorAgentFactory,
   PiConductorAgent,
+  resolvePiModelDetails,
   resolvePiModelConfig,
 } from './pi-conductor-agent.js';
 import { resolvePiConductorApiKey } from './conductor-pi-auth.js';
@@ -2369,5 +2370,194 @@ describe('PiConductorAgent', () => {
     });
     expect(requestAuth).toBe('project-command-key');
     await conductor.close();
+  });
+
+  it('resolves built-in details with modelOverrides and records their provenance', async () => {
+    const projectDir = join(cwd, '.ensemble', 'pi');
+    const commandMarkerPath = join(cwd, 'model-details-command-ran');
+    await mkdir(projectDir, { recursive: true });
+    await writeFile(
+      join(projectDir, 'models.json'),
+      JSON.stringify({
+        providers: {
+          anthropic: {
+            apiKey: `!touch ${commandMarkerPath}`,
+            modelOverrides: {
+              'model-1': {
+                name: 'Project override',
+                contextWindow: 262144,
+                headers: { 'x-private-header': 'HEADER_SENTINEL' },
+              },
+            },
+          },
+        },
+      }),
+    );
+    mockGetModel.mockReturnValue({
+      id: 'model-1',
+      name: 'Model 1',
+      provider: 'anthropic',
+      api: 'anthropic-messages',
+      baseUrl: 'https://example.invalid',
+      reasoning: false,
+      input: ['text'],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128000,
+      maxTokens: 4096,
+      headers: { Authorization: 'AUTH_HEADER_SENTINEL' },
+    });
+
+    const details = await resolvePiModelDetails({
+      cwd,
+      pi: { agentDir, projectDir },
+    });
+
+    expect(details).toEqual({
+      provider: 'anthropic',
+      id: 'model-1',
+      name: 'Project override',
+      contextWindow: 262144,
+      contextWindowSource: 'models.json',
+      maxTokens: 4096,
+      modelSource: 'pi-ai',
+      selection: {
+        model: 'settings.defaultModel',
+        provider: 'settings.defaultProvider',
+      },
+    });
+    expect(JSON.stringify(details)).not.toContain('SENTINEL');
+    expect(existsSync(commandMarkerPath)).toBe(false);
+  });
+
+  it('resolves custom models locally without exposing credentials or headers', async () => {
+    const projectDir = join(cwd, '.ensemble', 'pi');
+    await mkdir(projectDir, { recursive: true });
+    await writeFile(
+      join(agentDir, 'models.json'),
+      JSON.stringify({
+        providers: {
+          local: {
+            api: 'openai-completions',
+            baseUrl: 'http://127.0.0.1:11434/v1',
+            apiKey: 'CREDENTIAL_SENTINEL',
+            models: [{
+              id: 'review-model',
+              name: 'User model',
+              contextWindow: 65536,
+              maxTokens: 4096,
+            }, { id: 'fallback-model', name: 'Fallback model' }],
+          },
+        },
+      }),
+    );
+    await writeFile(
+      join(projectDir, 'models.json'),
+      JSON.stringify({
+        providers: {
+          local: {
+            apiKey: 'PROJECT_CREDENTIAL_SENTINEL',
+            headers: { 'x-private-header': 'HEADER_SENTINEL' },
+            modelOverrides: {
+              'review-model': {
+                name: 'Project override',
+                contextWindow: 131072,
+              },
+            },
+          },
+        },
+      }),
+    );
+    mockGetModel.mockReturnValue(undefined);
+
+    const qualified = await resolvePiModelDetails({
+      cwd,
+      pi: { agentDir, projectDir },
+      modelId: 'local/review-model',
+    });
+    const selectedByProvider = await resolvePiModelDetails({
+      cwd,
+      pi: { agentDir, projectDir },
+      modelId: 'review-model',
+      provider: 'local',
+    });
+
+    expect(qualified).toMatchObject({
+      provider: 'local',
+      id: 'review-model',
+      name: 'Project override',
+      contextWindow: 131072,
+      contextWindowSource: 'models.json',
+      maxTokens: 4096,
+      modelSource: 'models.json',
+      selection: {
+        model: 'requested',
+        provider: 'qualified-model',
+      },
+    });
+    expect(selectedByProvider.selection.provider).toBe('provider-option');
+    expect(JSON.stringify(qualified)).not.toContain('SENTINEL');
+
+    await expect(
+      resolvePiModelDetails({
+        cwd,
+        pi: { agentDir, projectDir },
+        modelId: 'local/fallback-model',
+      }),
+    ).resolves.toMatchObject({
+      id: 'fallback-model',
+      contextWindow: 128000,
+      contextWindowSource: 'pi-custom-model-default',
+      maxTokens: 16384,
+    });
+  });
+
+  it('requires an explicit provider when an unqualified ID is ambiguous', async () => {
+    await writeFile(join(agentDir, 'settings.json'), '{}');
+    mockGetProviders.mockReturnValue(['provider-a', 'provider-b']);
+    mockGetModels.mockReturnValue([{ id: 'shared-model' }]);
+
+    await expect(
+      resolvePiModelDetails({
+        cwd,
+        pi: { agentDir },
+        modelId: 'shared-model',
+      }),
+    ).rejects.toThrow(
+      'Pi model "shared-model" exists under multiple providers: provider-a, provider-b',
+    );
+  });
+
+  it('reports missing model definitions and unavailable context windows explicitly', async () => {
+    mockGetModel.mockReturnValue(undefined);
+    await expect(
+      resolvePiModelDetails({
+        cwd,
+        pi: { agentDir },
+        modelId: 'anthropic/missing-model',
+      }),
+    ).rejects.toThrow('Pi model "anthropic/missing-model" was not found');
+
+    mockGetModel.mockReturnValue({
+      id: 'model-1',
+      name: 'Model 1',
+      provider: 'anthropic',
+      api: 'anthropic-messages',
+      baseUrl: 'https://example.invalid',
+      reasoning: false,
+      input: ['text'],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: Number.NaN,
+      maxTokens: 4096,
+    });
+    await expect(
+      resolvePiModelDetails({
+        cwd,
+        pi: { agentDir },
+        modelId: 'anthropic/model-1',
+      }),
+    ).resolves.toMatchObject({
+      contextWindow: null,
+      contextWindowSource: 'unavailable',
+    });
   });
 });

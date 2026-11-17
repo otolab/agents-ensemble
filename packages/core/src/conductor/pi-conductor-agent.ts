@@ -125,6 +125,26 @@ export interface PiResolvedModel {
   apiKey?: string;
 }
 
+export type PiModelDetailsContextWindowSource =
+  | 'pi-ai'
+  | 'models.json'
+  | 'pi-custom-model-default'
+  | 'unavailable';
+
+export interface PiResolvedModelDetails {
+  provider: string;
+  id: string;
+  name: string;
+  contextWindow: number | null;
+  contextWindowSource: PiModelDetailsContextWindowSource;
+  maxTokens: number | null;
+  modelSource: 'pi-ai' | 'models.json';
+  selection: {
+    model: string;
+    provider: string;
+  };
+}
+
 /** Resolve the Pi model/auth selection from the standard resource roots. */
 export async function resolvePiModelConfig(
   options: PiResourceLoaderOptions & {
@@ -135,6 +155,84 @@ export async function resolvePiModelConfig(
   const resources = await loadPiResources(options);
   const authContext = await createPiConductorAuthContext(options, resources);
   return resolvePiModelConfigFromResources(options, resources, authContext);
+}
+
+/**
+ * Resolve the local model metadata used by the Pi conductor without resolving
+ * credentials or loading executable Pi resources.
+ */
+export async function resolvePiModelDetails(
+  options: PiResourceLoaderOptions & {
+    modelId?: string;
+    provider?: string;
+  },
+): Promise<PiResolvedModelDetails> {
+  const resources = await loadPiResources({
+    ...options,
+    loadExtensions: false,
+    loadPromptResources: false,
+    loadSkillContents: false,
+  });
+  const selection = resolvePiModelSelection(
+    options.modelId,
+    resources.settings,
+    resources.models,
+    options.provider,
+  );
+  const providerConfig = resources.models.providers[selection.provider];
+  const definition = providerConfig?.models?.find(
+    (candidate) => candidate.id === selection.modelId,
+  );
+  const override = providerConfig?.modelOverrides?.[selection.modelId];
+  const builtInModel = getModel(
+    selection.provider as never,
+    selection.modelId as never,
+  ) as Model<any> | undefined;
+  const model = resolvePiModel(
+    selection.provider,
+    selection.modelId,
+    providerConfig,
+    builtInModel,
+  );
+
+  if (!model) {
+    throw new Error(
+      `Pi model "${selection.provider}/${selection.modelId}" was not found in the local Pi model catalog or models.json.`,
+    );
+  }
+
+  const contextWindow =
+    typeof model.contextWindow === 'number' && Number.isFinite(model.contextWindow)
+      ? model.contextWindow
+      : null;
+  const contextWindowSource: PiModelDetailsContextWindowSource =
+    contextWindow === null
+      ? 'unavailable'
+      : override?.contextWindow !== undefined
+        ? 'models.json'
+        : definition?.contextWindow !== undefined
+          ? 'models.json'
+          : definition
+            ? 'pi-custom-model-default'
+            : 'pi-ai';
+  const maxTokens =
+    typeof model.maxTokens === 'number' && Number.isFinite(model.maxTokens)
+      ? model.maxTokens
+      : null;
+
+  return {
+    provider: selection.provider,
+    id: selection.modelId,
+    name: model.name || selection.modelId,
+    contextWindow,
+    contextWindowSource,
+    maxTokens,
+    modelSource: definition ? 'models.json' : 'pi-ai',
+    selection: {
+      model: selection.modelSource,
+      provider: selection.providerSource,
+    },
+  };
 }
 
 async function resolvePiModelConfigFromResources(
@@ -1409,23 +1507,64 @@ function resolvePiModelSelection(
   requestedModelId: string | undefined,
   settings: PiSettingsFile,
   models: PiModelsFile,
-): { provider: string; modelId: string } {
+  requestedProvider?: string,
+): {
+  provider: string;
+  modelId: string;
+  modelSource: string;
+  providerSource: string;
+} {
   const requested = normalizeConfiguredString(requestedModelId);
-  const configured = firstString(
-    getPiHeadlessSetting(settings, 'defaultModel', 'model-selection'),
-    getPiHeadlessSetting(settings, 'model', 'model-selection'),
-    getPiHeadlessSetting(settings, 'modelId', 'model-selection'),
+  const configuredCandidates = [
+    {
+      key: 'defaultModel',
+      value: getPiHeadlessSetting(settings, 'defaultModel', 'model-selection'),
+    },
+    {
+      key: 'model',
+      value: getPiHeadlessSetting(settings, 'model', 'model-selection'),
+    },
+    {
+      key: 'modelId',
+      value: getPiHeadlessSetting(settings, 'modelId', 'model-selection'),
+    },
+  ] as const;
+  const configured = configuredCandidates.find(
+    (candidate) => normalizeConfiguredString(candidate.value) !== undefined,
   );
-  const selected = requested ?? configured;
-  let provider = normalizeConfiguredString(
+  const selected = requested ?? normalizeConfiguredString(configured?.value);
+  const modelSource = requested
+    ? 'requested'
+    : configured
+      ? `settings.${configured.key}`
+      : 'settings';
+  const configuredProvider = normalizeConfiguredString(
     getPiHeadlessSetting(settings, 'defaultProvider', 'model-selection'),
   );
+  const explicitProvider = normalizeConfiguredString(requestedProvider);
+  let provider: string | undefined;
+  let providerSource: string;
   let modelId = selected;
 
   if (selected?.includes('/')) {
     const slash = selected.indexOf('/');
-    provider = selected.slice(0, slash);
+    const qualifiedProvider = selected.slice(0, slash);
+    if (explicitProvider && explicitProvider !== qualifiedProvider) {
+      throw new Error(
+        `Pi model "${selected}" conflicts with --provider "${explicitProvider}".`,
+      );
+    }
+    provider = qualifiedProvider;
+    providerSource = requested ? 'qualified-model' : modelSource;
     modelId = selected.slice(slash + 1);
+  } else if (explicitProvider) {
+    provider = explicitProvider;
+    providerSource = 'provider-option';
+  } else if (configuredProvider) {
+    provider = configuredProvider;
+    providerSource = 'settings.defaultProvider';
+  } else {
+    providerSource = 'unique-model-match';
   }
 
   if (!modelId) {
@@ -1444,16 +1583,28 @@ function resolvePiModelSelection(
         ? [candidate]
         : [];
     });
-    if (matches.length === 1) provider = matches[0];
+    if (matches.length === 1) {
+      provider = matches[0];
+    } else if (matches.length > 1) {
+      throw new Error(
+        `Pi model "${modelId}" exists under multiple providers: ${matches.join(', ')}. ` +
+          'Specify provider/model or pass --provider <id>.',
+      );
+    } else {
+      throw new Error(
+        `Pi model "${modelId}" was not found in the local Pi model catalog or models.json. ` +
+          'Use a known model ID or specify provider/model.',
+      );
+    }
   }
 
   if (!provider) {
     throw new Error(
-      `Pi conductor provider is not configured for model "${modelId}". Set defaultProvider in Pi settings.json or use provider/model.`,
+      `Pi provider is not configured for model "${modelId}". Set defaultProvider in Pi settings.json or use provider/model.`,
     );
   }
 
-  return { provider, modelId };
+  return { provider, modelId, modelSource, providerSource };
 }
 
 function normalizeConfiguredString(value: unknown): string | undefined {

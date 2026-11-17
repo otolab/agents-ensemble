@@ -195,6 +195,8 @@ project 層の `auth.json` にある OAuth entry は refresh 対象になりま�
 ensemble auth status
 ensemble models list
 ensemble models list --provider <provider-id>
+ensemble models show <provider>/<model-id>
+ensemble models show <model-id> --provider <provider-id> --json
 ```
 
 `auth status` は Pi の auth file の場所、provider ごとの configured 状態、credential の source を表示します。auth entry の型が分かる場合は `mode` も表示し、user `auth.json` の保存 API key は `mode=api_key; source=stored` となります。`settings.json.apiKeys[provider]` の command は `source=settings_json; mode=command` と scope / config path を表示します。別 source に隠れている場合も設定場所と `command-effective=false` を確認できます。`api_key_stored` は認証 taxonomy の識別子で、status の `mode` には使いません。既存 `source` は出所を示す値として維持します。API key、token、環境変数値、command 本文は表示しません。
@@ -220,6 +222,10 @@ Pi 1.2.0 の `AuthStatus.source?` は `stored` / `runtime` / `environment` / `fa
 request の解決順は status lookup と同じではありません。非 command の `settings.json.apiKeys[provider]` は runtime override として登録され、値が非空なら user `auth.json` より先に request で使われます。一方、scalar `settings.json.apiKey` の通常 key は runtime override ではなく、Pi が key を返さなかった場合の Ensemble fallback です。scalar `apiKey` が `!command` なら request 時に provider 設定へ登録されます。status は command を実行せず、既知の設定場所を示します。user `auth.json` や有効な非空 runtime override があれば、command が実効 source ではないことも `command-effective=false` で分かります。`configured=true` は request 成功の保証ではありません。
 
 `models list` は Pi の `ModelRegistry` と解決済み resource を使い、認証済み provider の model だけを表示します。対象 provider を `--provider` で絞れます。認証済み model が無い場合は Pi 向けの login / auth file / 環境変数の案内を含むエラーになります。
+
+`models show [model]` は Pi がローカルの組み込み情報と user → project の `models.json` から解決する provider、model ID、name、`contextWindow`、`maxTokens` を表示します。`--json` は同じ情報を機械処理しやすい形で出力します。model を省略したときは `CONDUCTOR_MODEL_ID` → merged config の `conductor.model` → Pi settings の `defaultModel` / `model` / `modelId` の順で選びます。`default` / `auto` は Pi settings の選択に委ねます。provider は `provider/model`、`--provider`、Pi settings の `defaultProvider`、model ID に一致する provider が一つだけある場合の順で解決します。同じ ID が複数 provider にあるときは推測せず、`provider/model` または `--provider` を指定してください。`provider/model` と異なる `--provider` を同時に指定するとエラーになります。
+
+この表示は Pi の組み込みモデル情報とローカル定義を使い、認証情報を解決せず remote catalog に接続しません。JSON / text の出力に credentials や headers は含めません。`models.json` の custom model に `contextWindow` がない場合、Pi の model resolver が使う既定値 `128000` を表示し、その出所も示します。値は provider の実際の上限を照会・検証したものではありません。Pi 以外の backend、たとえば Cursor SDK からは `contextWindow` を取得できないため、利用できないことを示すエラーになります。
 
 ### OpenAI 互換 provider の catalog を比較・追加する
 
