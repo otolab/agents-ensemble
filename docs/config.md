@@ -140,9 +140,22 @@ candidate は既存の session report queue / batch / hold / retry / ack 経路�
 
 #### 検証範囲と待ち時間の比較
 
-決定的な selector 比較では、次の選択機会が30秒後の場面を置きました。baseline（OQ のみ）と、同じ session に idle candidate もある場合はどちらも選択機会まで30秒で、選択 batch は各1つです。混在 batch には OQ と candidate の2 report が入り、OQ priority を保ちます。run loop が batch ごとに送る場合の turn 数はどちらも1です。profile lock 競合の回帰テストは、idle candidate を先に選択してから lock 待ち中に local OQ が queue へ届く状況で、両方が1 frozen batch / send に入り、OQ が1件だけであることを確認します。これらは selector / fixture による合成確認であり、実 `agent.send` 呼び出しの運用計測、実 agent の応答時間、実環境の通知待ち時間を測った結果ではありません。
+[場面別の比較 test](../packages/operator-agent/src/operator-idle-candidate-scenarios.test.ts) は、同じ fake-clock timeline を baseline（idle candidate なし）と統合後（条件を満たす candidate を登録）で再生します。実 `OperatorDispatchQueue` と fake `agent.send` を使います。ここで dispatch は選択された user/report batch、report batch は distinct な frozen `batchId`、turn は fake `agent.send` 呼び出しです。失敗した send retry も turn proxy に数えます。重要通知の待ち時間は OQ の投入から、それを含む最初の成功 send までです。
 
-複数 session と focus 切替、live OQ + idle candidate の同一 batch、user input / conversation / focus gate、正常な長時間処理・古い statusLine、状態不明、manual hold 中の aging、profile lock 中の local append、frozen retry / restart / ack は fixture と scheduler による試験で確認します。peer の未同期 report は後続 batch に残ることも確認します。実運用の複数 conductor / TTY を長時間動かした計測ではありません。実 agent の turn 数や重要通知の待機時間は未計測です。agent の処理時間、人間の応答、process 停止や上位 priority の連続に対する有限通知時間も保証しません。
+| シナリオ | baseline dispatch / report batch / fake turn・OQ 待ち | idle 統合 dispatch / report batch / fake turn・OQ 待ち | 観測した差 |
+|---|---:|---:|---|
+| 複数 session。別 session の OQ と、通常 report に同梱できる idle candidate | 2 / 2 / 2・0 ms | 2 / 2 / 2・0 ms | candidate が同じ session の通常 report に hitchhike し、turn は増えない |
+| 50分動いているが statusLine は5分前の正常処理 | 1 / 1 / 1・0 ms | 1 / 1 / 1・0 ms | stale-running candidate を作らず、turn は増えない |
+| pending operator input の gate 中に到着した OQ | 2 / 1 / 2・1,000 ms | 2 / 1 / 2・1,000 ms | input を先に送り、gate 解除後の candidate は OQ batch に同梱 |
+| focus session を処理し、focus を切り替えてから解除 | 2 / 2 / 2・2,000 ms | 2 / 2 / 2・2,000 ms | focus 中は candidate を入れず、解除後に OQ と同じ batch へ追加 |
+| 5分間の manual hold | 1 / 1 / 1・300,000 ms | 1 / 1 / 1・300,000 ms | hold による遅延は両方に等しく、解除後は OQ と同梱 |
+| OQ + candidate の send retry、restart replay、ack retry | 2 / 1 / 2・5,000 ms | 2 / 1 / 2・5,000 ms | 同じ frozen batch を再送。ack retry では send / turn を追加しない |
+| profile-lock wait 中に local OQ が到着し、peer report は未同期 | 2 / 2 / 2・50 ms | 2 / 2 / 2・50 ms | local OQ は commit 時の同じ send、peer report は次 batch。dispatch 数は同じ |
+| stale-running candidate が OQ と別 session にあり、同梱できない | 1 / 1 / 1・0 ms | 2 / 2 / 2・0 ms | candidate の独立 send で1 turn増えるが、OQ の待ちは増えない |
+
+lock-wait の比較は選択から commit まで100 ms、OQ 到着から commit まで50 msに固定しています。peer report は commit 時点で process-local queue に未同期として扱い、次 batch に残します。これらの数値は queue / fake-send harness による再現可能な合成比較であり、実 provider の send / turn 数や実環境の通知時間ではありません。別の `operator-watch-pool` integration test は SQLite profile lock の待機中 append、durable frozen batch、未同期 peer の後続 batch、retry / restart / ack を検証しますが、実運用レイテンシを測りません。
+
+複数 session、focus 切替、user input と conversation gate、正常な長時間処理、stale-running、manual hold、retry / restart / ack、#755 commit boundary を fixture / scheduler / integration test で確認します。実 provider / 複数 conductor / TTY の運用計測は行っていません。agent の処理時間、人間の応答、process 停止や上位 priority の継続に対する有限通知時間も保証しません。
 
 profile は `--profile` > `ENSEMBLE_OPERATOR_AGENT_PROFILE` > 再開対象 conversation に記録された profile > `defaultProfile` > 唯一の profile の順に選びます。まだ複数候補が残る場合は TTY で選択します。保存 conversation の profile が config から消えていて選び直す場合は、その差を表示します。
 
