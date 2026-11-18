@@ -414,8 +414,8 @@ export function createListOperatorSessionsTool(
       }));
       const cursorScope = JSON.stringify({
         sort,
-        keyword: search ?? null,
-        groupByIssue,
+        ...(search !== undefined ? { keyword: search } : {}),
+        ...(groupByIssue ? { groupByIssue } : {}),
         githubRepo: githubRepo ?? null,
         issueUrl: issueUrl ?? null,
         conductorAgentId: conductorAgentId ?? null,
