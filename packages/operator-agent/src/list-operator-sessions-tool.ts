@@ -152,6 +152,7 @@ interface SessionListSnapshot {
   tracking: OperatorSessionTrackingInfo;
   live?: OperatorSessionLiveStatus;
   questionHistory?: OpenQuestionHistory;
+  storeReadStartedAt: number;
   summary?: OperatorSessionSummary;
 }
 
@@ -162,6 +163,7 @@ interface OpenQuestionHistory {
     | 'resume_store_compatibility'
     | 'unavailable';
   questions: SessionResumeStore['openQuestions'];
+  observedAt: number | null;
   reason?: string;
 }
 
@@ -335,6 +337,7 @@ export function createListOperatorSessionsTool(
       const snapshots: SessionListSnapshot[] = [];
       let storeCursor: string | undefined;
       do {
+        const storeReadStartedAt = Date.now();
         const page = await listUserLocatedSessionResumeStoresPage(
           {
             ...(githubRepo ? { githubRepo } : {}),
@@ -349,6 +352,7 @@ export function createListOperatorSessionsTool(
           ...(await Promise.all(
             page.sessions.map(async (located) => ({
               located,
+              storeReadStartedAt,
               resumeStore: located.resumeStore,
               status: await loadStatusLine(root, located),
               tracking:
@@ -384,9 +388,10 @@ export function createListOperatorSessionsTool(
         for (;;) {
           const snapshot = candidates[nextIndex++];
           if (!snapshot) break;
-          snapshot.questionHistory = await loadQuestionHistory(root, snapshot.located);
+          snapshot.questionHistory = await loadQuestionHistory(root, snapshot.located, snapshot.storeReadStartedAt);
           const cached = getLiveStatus?.(snapshot.resumeStore.conductorAgentId);
-          if (cached?.checkedAt != null && now - cached.checkedAt <= LIVE_STATUS_FRESHNESS_MS &&
+          const cacheAge = cached?.checkedAt == null ? null : Date.now() - cached.checkedAt;
+          if (cached && cacheAge !== null && cacheAge >= 0 && cacheAge <= LIVE_STATUS_FRESHNESS_MS &&
               (cached.connectivity !== 'reachable' || cached.snapshot)) {
             snapshot.live = cached;
           } else if (snapshot.resumeStore.harnessSocketPath) {
@@ -397,13 +402,13 @@ export function createListOperatorSessionsTool(
               snapshot.live = { connectivity: error instanceof OpenQuestionControlTransportError && error.reason === 'connection' ? 'unreachable' : 'unknown', checkedAt: Date.now(), unreachableSince: null };
             }
           } else {
-            snapshot.live = cached;
+            snapshot.live = cached?.checkedAt != null && cached.checkedAt <= Date.now() ? cached : undefined;
           }
+          snapshot.summary = summarizeSession(snapshot.resumeStore, snapshot.status, snapshot.questionHistory, snapshot.live, snapshot.tracking);
         }
       }));
       const filtered = candidates.filter((snapshot) => {
-        const summary = summarizeSession(snapshot.resumeStore, snapshot.status, snapshot.questionHistory!, snapshot.live, snapshot.tracking);
-        snapshot.summary = summary;
+        const summary = snapshot.summary!;
         if (hasStatusLine !== undefined && (summary.statusLine !== null) !== hasStatusLine) return false;
         if (liveConnectivity !== undefined && summary.live.connectivity !== liveConnectivity) return false;
         if (harnessPhase !== undefined && summary.persisted.harnessPhase !== harnessPhase) return false;
@@ -481,6 +486,7 @@ export function createListOperatorSessionsTool(
 async function loadQuestionHistory(
   userEnsembleRoot: string,
   located: LocatedSessionResumeStore,
+  storeReadStartedAt: number,
 ): Promise<OpenQuestionHistory> {
   try {
     const paths = userSessionSnapshotPaths(
@@ -494,6 +500,7 @@ async function loadQuestionHistory(
         return {
           status: 'available',
           source: 'open_questions_yaml',
+          observedAt: Date.now(),
           questions: snapshot.openQuestions,
         };
       }
@@ -501,12 +508,14 @@ async function loadQuestionHistory(
     return {
       status: 'available',
       source: 'resume_store_compatibility',
+      observedAt: storeReadStartedAt,
       questions: located.resumeStore.openQuestions,
     };
   } catch {
     return {
       status: 'unavailable',
       source: 'unavailable',
+      observedAt: null,
       questions: [],
       reason: '保存済み Open Questions YAML を読み取れません。',
     };
@@ -867,7 +876,7 @@ function summarizeSession(
     statusLineSource: observation ? 'uds' : status ? 'conductor_report' : 'unavailable',
     statusLineObservedAt: observation ? live.checkedAt : status?.current.reportedAt ?? null,
     openQuestionCountSource: observation ? 'uds' : questionHistory.source,
-    openQuestionCountObservedAt: observation ? live.checkedAt : questionHistory.status === 'available' ? Date.now() : null,
+    openQuestionCountObservedAt: observation ? live.checkedAt : questionHistory.observedAt,
     statusLineHistory: status?.history ?? [],
     lifecycle: resumeStore.lifecycle ?? 'unknown',
     liveControlPathRecorded: Boolean(resumeStore.harnessSocketPath),
