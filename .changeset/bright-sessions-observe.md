@@ -1,5 +1,5 @@
 ---
-"@agents-ensemble/operator-agent": minor
+"@agents-ensemble/operator-agent": patch
 "@agents-ensemble/core": patch
 ---
 
