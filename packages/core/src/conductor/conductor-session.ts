@@ -166,6 +166,7 @@ import {
   saveOpenQuestionsStore,
 } from '../session/open-questions-store.js';
 import { sessionSnapshotPaths } from '../session/session-snapshot-paths.js';
+import { classifySessionWorkStatus } from '../session/session-work-status.js';
 import {
   CONDUCTOR_MESSAGE_HISTORY_MAX_ENTRIES,
   OpenQuestionControlOperationError,
@@ -2273,9 +2274,27 @@ async function runConductorSessionWithStartupGuard(
           location: 'canonical-slug',
         });
         const sessionState = await loadSessionStateStore(currentStatePath);
+        const pendingWorkerIds = new Set(
+          permissionPipeline.pending.list().map((permission) => permission.workerId),
+        );
+        const runningIdsByName = new Map(
+          workerSession.runtime.listRunning().map((worker) => [worker.name, worker.workerId]),
+        );
+        const workers = workerSession.runtime.listWorkerStatuses().map((worker) => ({
+          state: worker.state,
+          queueDepth: worker.queueDepth,
+          permissionPending: pendingWorkerIds.has(runningIdsByName.get(worker.name) ?? ''),
+        }));
         return {
           ...openQuestions.snapshot(),
           ...(sessionState ? { sessionState } : {}),
+          workStatus: classifySessionWorkStatus({
+            conductorSending: conductorSendCount > 0,
+            workers,
+            shuttingDown: teardownStarted,
+            unresolvedPermissions:
+              workerSession.inbox.pendingPermissionCount !== permissionPipeline.pending.size,
+          }),
         };
       },
       sendOperatorMessage: ({ text, delivery }) => {

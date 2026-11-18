@@ -7,6 +7,8 @@ import {
   resolveEnsemblePaths,
   type GitHubClient,
 } from '@agents-ensemble/core';
+import { evaluateOperatorIdleCandidate } from './operator-idle-candidates.js';
+import { DEFAULT_OPERATOR_AGENT_SCHEDULING } from './operator-agent-config.js';
 import { createListOperatorSessionsTool } from './list-operator-sessions-tool.js';
 
 describe('list_operator_sessions', () => {
@@ -21,6 +23,44 @@ describe('list_operator_sessions', () => {
   afterEach(async () => {
     await rm(repoRoot, { recursive: true, force: true });
     vi.unstubAllEnvs();
+  });
+
+  it('keeps stale-running confirmation distinct from live work status', async () => {
+    const now = Date.now();
+    const issue = 'https://github.com/example/project/issues/745';
+    await writeResumeStore('active', 20, issue, { harnessPhase: 'running' });
+    const tool = createListOperatorSessionsTool(repoRoot, () => ({
+      connectivity: 'reachable', checkedAt: now, unreachableSince: null,
+      snapshot: { sequence: 0, openQuestions: [], workStatus: 'working', sessionState: { current: { statusLine: 'last report', reportedAt: now - 3_600_000 }, history: [] } },
+    }));
+    const result = JSON.parse((await tool.execute({ includeGithub: false, workStatus: 'working' })).content[0]!.text);
+    expect(result.sessions[0].workStatus.status).toBe('working');
+    const candidate = evaluateOperatorIdleCandidate({ conductorAgentId: 'active', issueUrl: issue, observationVersion: 1, source: 'uds', connectivity: 'reachable', checkedAt: now, pollIntervalMs: 2000, harnessPhase: 'running', harnessModifiedAt: now - 1000, lifecycle: 'unknown', openQuestionCount: 0, statusLine: { text: 'last report', reportedAt: now - 3_600_000 } }, DEFAULT_OPERATOR_AGENT_SCHEDULING, now);
+    expect(candidate?.kind).toBe('stale_running');
+    expect(candidate?.text).toContain('停止・失敗・停滞とは断定せず');
+  });
+
+  it('filters fresh work observations and keeps old harnesses unknown', async () => {
+    const issue = 'https://github.com/example/project/issues/1';
+    for (const id of ['working', 'waiting', 'legacy', 'stale']) await writeResumeStore(id, 20, issue);
+    const checkedAt = Date.now();
+    const tool = createListOperatorSessionsTool(repoRoot, (id) => ({
+      connectivity: 'reachable', checkedAt: id === 'stale' ? checkedAt - 20_000 : checkedAt, unreachableSince: null,
+      snapshot: { sequence: 0, openQuestions: [], ...(id === 'working' || id === 'waiting' ? { workStatus: id } : id === 'stale' ? { workStatus: 'working' as const } : {}) },
+    }));
+    const working = JSON.parse((await tool.execute({ includeGithub: false, workStatus: 'working' })).content[0]!.text);
+    expect(working.sessions).toMatchObject([{ conductorAgentId: 'working', workStatus: { status: 'working', source: 'uds', observedAt: checkedAt } }]);
+    const waiting = JSON.parse((await tool.execute({ includeGithub: false, workStatus: 'waiting' })).content[0]!.text);
+    expect(waiting.sessions).toMatchObject([{ conductorAgentId: 'waiting', workStatus: { status: 'waiting', source: 'uds' } }]);
+    const unknown = JSON.parse((await tool.execute({ includeGithub: false, workStatus: 'unknown', limit: 1 })).content[0]!.text);
+    expect(unknown.total).toBe(2);
+    const next = JSON.parse((await tool.execute({ includeGithub: false, workStatus: 'unknown', limit: 1, cursor: unknown.nextCursor })).content[0]!.text);
+    expect(next.sessions).toHaveLength(1);
+    expect([...unknown.sessions, ...next.sessions]).toEqual(expect.arrayContaining([
+      expect.objectContaining({ conductorAgentId: 'legacy', workStatus: { status: 'unknown', source: 'unavailable', observedAt: null } }),
+      expect.objectContaining({ conductorAgentId: 'stale', workStatus: { status: 'unknown', source: 'uds', observedAt: checkedAt - 20_000 } }),
+    ]));
+    await expect(tool.execute({ includeGithub: false, workStatus: 'waiting', cursor: unknown.nextCursor })).rejects.toThrow('cursor');
   });
 
   it('returns recent SessionResumeStore summaries with open-question and worker details', async () => {
@@ -984,7 +1024,7 @@ openQuestions:
         socket.on('data', () => {
           if (result === 'timeout') return;
           socket.end(JSON.stringify(result === 'live'
-            ? { jsonrpc: '2.0', id: 1, result: { sequence: 0, openQuestions: [], sessionState: { current: { statusLine: 'live', reportedAt: 100 }, history: [] } } }
+            ? { jsonrpc: '2.0', id: 1, result: { sequence: 0, openQuestions: [], workStatus: 'working', sessionState: { current: { statusLine: 'live', reportedAt: 100 }, history: [] } } }
             : { jsonrpc: '2.0', id: 1, error: { code: -32601, message: 'unsupported' } }) + '\n');
         });
       });
@@ -1004,6 +1044,7 @@ openQuestions:
       const tool = createListOperatorSessionsTool(repoRoot);
       const all = JSON.parse((await tool.execute({ includeGithub: false })).content[0]!.text);
       expect(all.sessions).toEqual(expect.arrayContaining([
+        expect.objectContaining({ conductorAgentId: 'live', workStatus: expect.objectContaining({ status: 'working', source: 'uds', observedAt: expect.any(Number) }) }),
         expect.objectContaining({ conductorAgentId: 'live', statusLine: 'live', reportedAt: 100, statusLineSource: 'uds', openQuestionCount: 0, openQuestionCountSource: 'uds', persisted: expect.objectContaining({ harnessPhase: 'close' }), live: expect.objectContaining({ connectivity: 'reachable' }) }),
         expect.objectContaining({ conductorAgentId: 'missing', openQuestionCount: 1, live: expect.objectContaining({ connectivity: 'unreachable' }) }),
         expect.objectContaining({ conductorAgentId: 'old', live: expect.objectContaining({ connectivity: 'unknown' }) }),

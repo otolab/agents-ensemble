@@ -648,6 +648,7 @@ describe('runConductorSession resume / shutdown', () => {
       | {
           openQuestions: Array<{ id: string; question: string }>;
           sessionState?: { current: { statusLine: string } };
+          workStatus?: string;
         }
       | undefined;
     mockSend.mockImplementationOnce(async () => {
@@ -685,6 +686,7 @@ describe('runConductorSession resume / shutdown', () => {
         question: 'orphan slug question',
       }),
     ]);
+    expect(observation?.workStatus).toBe('unknown');
     expect(observation?.openQuestions).toEqual([
       expect.objectContaining({
         id: 'inq-1',
