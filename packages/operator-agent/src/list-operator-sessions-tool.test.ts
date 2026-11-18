@@ -106,6 +106,31 @@ describe('list_operator_sessions', () => {
     });
   });
 
+  it('searches live and saved values and paginates matching Issue groups', async () => {
+    const firstIssue = 'https://github.com/example/project/issues/1';
+    const secondIssue = 'https://github.com/example/project/issues/2';
+    await writeResumeStore('a', 40, firstIssue, { statusLine: 'saved needle' });
+    await writeResumeStore('b', 30, firstIssue, { statusLine: 'NEEDLE saved' });
+    await writeResumeStore('c', 20, secondIssue, { statusLine: 'needle saved' });
+    await writeResumeStore('d', 10, secondIssue, { statusLine: 'needle hidden' });
+    const tool = createListOperatorSessionsTool(repoRoot, (id) => id === 'd' ? {
+      connectivity: 'reachable', checkedAt: Date.now(), unreachableSince: null,
+      snapshot: { sequence: 0, openQuestions: [{ id: 'live', question: 'Live question', responseType: 'yes_no', source: 'conductor', status: 'open', askedAt: 1 }], sessionState: { current: { statusLine: 'different', reportedAt: 10 }, history: [] } },
+    } : undefined);
+    const args = { keyword: 'Needle', groupByIssue: true, sort: 'updatedAtDesc', limit: 1, includeGithub: false };
+    const first = JSON.parse((await tool.execute(args)).content[0]!.text);
+    expect(first).toMatchObject({ total: 2, returned: 1, issues: [{ issueUrl: firstIssue, runs: [{ conductorAgentId: 'a', statusLineSource: 'conductor_report' }, { conductorAgentId: 'b' }] }] });
+    const second = JSON.parse((await tool.execute({ ...args, cursor: first.nextCursor })).content[0]!.text);
+    expect(second.issues).toMatchObject([{ issueUrl: secondIssue, runs: [{ conductorAgentId: 'c' }] }]);
+    expect(second.nextCursor).toBeUndefined();
+    await expect(tool.execute({ ...args, keyword: 'other', cursor: first.nextCursor })).rejects.toThrow('cursor');
+    const questions = JSON.parse((await tool.execute({ keyword: 'proceed', includeGithub: false, limit: 1 })).content[0]!.text);
+    expect(questions.sessions[0]).toMatchObject({ openQuestionCountSource: 'resume_store_compatibility' });
+    expect(questions.nextCursor).toBeDefined();
+    const live = JSON.parse((await tool.execute({ keyword: 'live question', includeGithub: false })).content[0]!.text);
+    expect(live.sessions).toMatchObject([{ conductorAgentId: 'd', openQuestionCountSource: 'uds' }]);
+  });
+
   it('filters by statusLine and lifecycle; older Issue records without lifecycle are unknown', async () => {
     const issueUrl = 'https://github.com/example/project/issues/1';
     await writeResumeStore('legacy', 10, issueUrl);

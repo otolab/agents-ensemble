@@ -303,6 +303,8 @@ export function createListOperatorSessionsTool(
         hasOpenQuestions: { type: 'boolean' },
         minOpenQuestions: { type: 'integer', minimum: 0 },
         reportedBefore: { type: 'number', minimum: 0, description: 'Minimum age of the latest statusLine in milliseconds at dataAsOf.' },
+        keyword: { type: 'string', description: 'Case-insensitive substring of the current statusLine or unanswered Open Question text.' },
+        groupByIssue: { type: 'boolean', description: 'Group matching runs by Issue; limit and cursor apply to Issues.' },
         lifecycle: {
           type: 'string',
           enum: SESSION_LIFECYCLES,
@@ -313,6 +315,10 @@ export function createListOperatorSessionsTool(
     },
     execute: async (args) => {
       const limit = resolveLimit(args.limit);
+      const keyword = args.keyword;
+      if (keyword !== undefined && (typeof keyword !== 'string' || !keyword.trim())) throw new Error('keyword must be a non-empty string.');
+      const search = typeof keyword === 'string' ? keyword.toLowerCase() : undefined;
+      const groupByIssue = resolveOptionalBoolean(args.groupByIssue, 'groupByIssue') ?? false;
       const sort = resolveSort(args.sort);
       const hasStatusLine = resolveHasStatusLine(args.hasStatusLine);
       const lifecycle = resolveLifecycle(args.lifecycle);
@@ -408,6 +414,8 @@ export function createListOperatorSessionsTool(
       }));
       const cursorScope = JSON.stringify({
         sort,
+        keyword: search ?? null,
+        groupByIssue,
         githubRepo: githubRepo ?? null,
         issueUrl: issueUrl ?? null,
         conductorAgentId: conductorAgentId ?? null,
@@ -426,6 +434,10 @@ export function createListOperatorSessionsTool(
         const filtered = candidates.filter((snapshot) => {
           const summary = projectSummaryAt(snapshot.observedSummary!, snapshot.live, asOf);
           snapshot.summary = summary;
+          const questions = snapshot.live?.snapshot && summary.openQuestionCountSource === 'uds'
+            ? snapshot.live.snapshot.openQuestions.filter((question) => question.status === 'open')
+            : snapshot.questionHistory?.questions.filter((question) => question.status === 'open') ?? [];
+          if (search && !summary.statusLine?.toLowerCase().includes(search) && !questions.some((question) => question.question.toLowerCase().includes(search))) return false;
           if (hasStatusLine !== undefined && (summary.statusLine !== null) !== hasStatusLine) return false;
           if (liveConnectivity !== undefined && summary.live.connectivity !== liveConnectivity) return false;
           if (harnessPhase !== undefined && summary.persisted.harnessPhase !== harnessPhase) return false;
@@ -435,14 +447,24 @@ export function createListOperatorSessionsTool(
           return true;
         });
         filtered.sort((left, right) => compareSnapshots(left, right, sort));
+        const groups = new Map<string, SessionListSnapshot[]>();
+        for (const [index, snapshot] of filtered.entries()) {
+          const key = groupByIssue ? issueKeyForSnapshot(snapshot) : String(index);
+          const group = groups.get(key) ?? [];
+          group.push(snapshot);
+          groups.set(key, group);
+        }
+        const grouped = [...groups.values()];
+        const representatives = grouped.map((group) => group[0]!);
         const remaining = cursor
-          ? filtered.filter((snapshot) => compareSnapshotToCursor(snapshot, cursor, sort) > 0)
-          : filtered;
-        return { filtered, remaining, page: remaining.slice(0, limit) };
+          ? representatives.filter((snapshot) => compareSnapshotToCursor(snapshot, cursor, sort) > 0)
+          : representatives;
+        const page = remaining.slice(0, limit);
+        return { filtered, remaining, page, grouped };
       };
       const preliminary = evaluate(Date.now());
       const pullRequests = await loadPullRequestSummaries(
-        preliminary.page,
+        groupByIssue ? preliminary.grouped.filter((group) => preliminary.page.includes(group[0]!)).flat() : preliminary.page,
         includeGithub,
         getGitHubClient,
         githubSummaryCache,
@@ -450,12 +472,13 @@ export function createListOperatorSessionsTool(
       // GitHub lookup may take time. Re-evaluate all filters and page boundaries
       // at one timestamp after it completes, without discarding accepted snapshots.
       const evaluatedAt = Date.now();
-      const { filtered, remaining, page } = evaluate(evaluatedAt);
+      const { filtered, remaining, page, grouped } = evaluate(evaluatedAt);
       const dataAsOf = new Date(evaluatedAt).toISOString();
       const nextCursor = remaining.length > page.length
         ? encodeListCursor(page.at(-1)!, sort, cursorScope)
         : undefined;
-      const sessions = page.map((snapshot) => ({
+      const pageSnapshots = groupByIssue ? grouped.filter((group) => page.includes(group[0]!)).flat() : page;
+      const sessions = pageSnapshots.map((snapshot) => ({
         ...snapshot.summary!,
         pullRequests: pullRequests.get(issueKeyForResumeStore(snapshot.resumeStore.issueUrl)) ?? (includeGithub
           ? { ...notRequestedGitHubSummary(), status: 'not_checked' as const, reason: 'page_changed_during_lookup' }
@@ -463,10 +486,10 @@ export function createListOperatorSessionsTool(
       }));
       const payload = {
         dataAsOf,
-        total: filtered.length,
-        returned: sessions.length,
+        total: groupByIssue ? grouped.length : filtered.length,
+        returned: page.length,
         ...(nextCursor ? { nextCursor } : {}),
-        sessions,
+        ...(groupByIssue ? { issues: page.map((snapshot) => ({ issueUrl: snapshot.resumeStore.issueUrl, runs: sessions.filter((session) => issueKeyForResumeStore(session.issueUrl) === issueKeyForSnapshot(snapshot)) })) } : { sessions }),
       };
       const structuredContent = payload as unknown as Record<string, ConductorJsonValue>;
       return {
