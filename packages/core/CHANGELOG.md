@@ -1,5 +1,7 @@
 # @agents-ensemble/core
 
+## 0.23.2
+
 ## 0.23.1
 
 ### Patch Changes

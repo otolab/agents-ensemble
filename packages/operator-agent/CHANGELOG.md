@@ -1,5 +1,16 @@
 # @agents-ensemble/operator-agent
 
+## 0.6.2
+
+### Patch Changes
+
+- 5a0ab61: Add session report batching, priority scheduling, persisted retry batches, and focus controls.
+- f4385f0: Fix operator-agent terminal activity visibility and IME cursor positioning.
+- 84bc071: Add evidence-based idle and stale-running session check candidates.
+- 2588712: Allow operator messages to prepare or reuse a persistent conductor message listener before sending.
+- 83b45f7: Fix session report batching so reports already in the local queue while the state lock is contested join the batch before its durable freeze.
+  - @agents-ensemble/core@0.23.2
+
 ## 0.6.1
 
 ### Patch Changes
