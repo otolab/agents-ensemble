@@ -64,6 +64,9 @@ describe('operator idle candidate dispatch run loop', () => {
     let observationSequence = 0;
     let gateReleased = false;
     let modeledRefreshDelayApplied = false;
+    let blockNextQuestionObservation = false;
+    let questionPollBarrier: Promise<void> = Promise.resolve();
+    let signalBlockedQuestionPoll: () => void = () => {};
     let gateRefreshBarrier: Promise<void> = Promise.resolve();
     let signalGateRefreshStarted: () => void = () => {};
     let failGateRefresh = false;
@@ -71,13 +74,18 @@ describe('operator idle candidate dispatch run loop', () => {
       listOpenQuestions: () => currentQuestion ? [currentQuestion] : [],
       observeSession: async () => {
         if (gateReleased && !modeledRefreshDelayApplied) {
-          fakeNow += 50;
           modeledRefreshDelayApplied = true;
+          fakeNow += 50;
           signalGateRefreshStarted();
           if (failGateRefresh) {
             throw new Error('injected gate-clear refresh failure');
           }
           await gateRefreshBarrier;
+        }
+        if (blockNextQuestionObservation) {
+          blockNextQuestionObservation = false;
+          signalBlockedQuestionPoll();
+          await questionPollBarrier;
         }
         return {
           sequence: observationSequence,
@@ -168,7 +176,12 @@ describe('operator idle candidate dispatch run loop', () => {
     });
 
     const runProfile = async (
-      profile: 'baseline' | 'integrated',
+      profile:
+        | 'baseline'
+        | 'integrated'
+        | 'baseline-late'
+        | 'integrated-late'
+        | 'integrated-inflight',
     ) => {
       tuiHarness.onSubmit = undefined;
       const configProfile = `smoke-${profile}`;
@@ -186,7 +199,7 @@ describe('operator idle candidate dispatch run loop', () => {
           'profiles:',
           `  ${configProfile}:`,
           '    scheduling:',
-          `      idlePhaseThresholdMs: ${profile === 'baseline' ? 7200000 : 600000}`,
+          `      idlePhaseThresholdMs: ${profile.startsWith('baseline') ? 7200000 : 600000}`,
           '      batchMaxWaitMs: 10000',
           '',
         ].join('\n'),
@@ -195,17 +208,37 @@ describe('operator idle candidate dispatch run loop', () => {
       observationSequence = 0;
       gateReleased = false;
       modeledRefreshDelayApplied = false;
-      failGateRefresh = profile === 'baseline';
+      blockNextQuestionObservation = false;
+      failGateRefresh = profile.startsWith('baseline');
+      let gateRefreshBarrierReleased = false;
       let releaseGateRefresh!: () => void;
+      let releaseQuestionPoll!: () => void;
       let signalRefreshStarted!: () => void;
+      let signalQuestionPollStarted!: () => void;
+      let signalQuestionReportSent!: () => void;
+      let signalLateIdleReportSent!: () => void;
       const gateRefreshStarted = new Promise<void>((resolve) => {
         signalRefreshStarted = resolve;
+      });
+      const questionPollInFlight = new Promise<void>((resolve) => {
+        signalQuestionPollStarted = resolve;
+      });
+      const questionReportSent = new Promise<void>((resolve) => {
+        signalQuestionReportSent = resolve;
+      });
+      const lateIdleReportSent = new Promise<void>((resolve) => {
+        signalLateIdleReportSent = resolve;
       });
       const gateRefreshBarrierForProfile = new Promise<void>((resolve) => {
         releaseGateRefresh = resolve;
       });
+      const questionPollBarrierForProfile = new Promise<void>((resolve) => {
+        releaseQuestionPoll = resolve;
+      });
       gateRefreshBarrier = gateRefreshBarrierForProfile;
+      questionPollBarrier = questionPollBarrierForProfile;
       signalGateRefreshStarted = signalRefreshStarted;
+      signalBlockedQuestionPoll = signalQuestionPollStarted;
       fakeNow = startAt;
       const statePath = operatorWatchStatePath(userRoot, configProfile, issueUrl);
       const input = Object.assign(new PassThrough(), {
@@ -252,11 +285,16 @@ describe('operator idle candidate dispatch run loop', () => {
         async send(prompt) {
           if (prompt === 'watch the live session') {
             try {
-              for (const conductorAgentId of [
-                'conductor-idle',
-                'conductor-idle-peer',
-                'conductor-running',
-              ]) {
+              const watchedSessionIds =
+                profile.endsWith('-late') ||
+                profile === 'integrated-inflight'
+                ? ['conductor-idle']
+                : [
+                    'conductor-idle',
+                    'conductor-idle-peer',
+                    'conductor-running',
+                  ];
+              for (const conductorAgentId of watchedSessionIds) {
                 await agentOptions!.customTools!.register_session_watch!.execute({
                   conductorAgentId,
                   pollIntervalMs: 250,
@@ -272,11 +310,9 @@ describe('operator idle candidate dispatch run loop', () => {
                     cursors: Record<string, { sequence: number }>;
                   };
                   if (
-                    [
-                      'conductor-idle',
-                      'conductor-idle-peer',
-                      'conductor-running',
-                    ].every((id) => state.cursors[id]?.sequence === 0)
+                    watchedSessionIds.every(
+                      (id) => state.cursors[id]?.sequence === 0,
+                    )
                   ) {
                     cursorFound = true;
                     break;
@@ -319,6 +355,21 @@ describe('operator idle candidate dispatch run loop', () => {
                 await new Promise((resolve) => setTimeout(resolve, 10));
               }
               expect(questionFound).toBe(true);
+              if (profile === 'integrated-inflight') {
+                blockNextQuestionObservation = true;
+                await questionPollInFlight;
+              }
+              if (profile.endsWith('-late')) {
+                // Keep ordinary background polls out of this cap test so the
+                // only blocked observation is the candidate refresh pass.
+                for (const conductorAgentId of watchedSessionIds) {
+                  await agentOptions!.customTools!.register_session_watch!.execute({
+                    conductorAgentId,
+                    pollIntervalMs: 60_000,
+                    debounceMs: 0,
+                  });
+                }
+              }
             } catch (error) {
               rejectSendError(error);
               throw error;
@@ -369,7 +420,45 @@ describe('operator idle candidate dispatch run loop', () => {
           mixedBatchReports.push(batchReports);
           reportPrompts.push(prompt);
           sendTimes.push(fakeNow);
-          if (mixedBatchReports.length === 3) {
+          if (
+            batchReports.some(
+              (report) => report.reportType === 'open_question',
+            )
+          ) {
+            signalQuestionReportSent();
+          }
+          if (
+            profile === 'integrated-late' &&
+            batchReports.some(
+              (report) =>
+                report.reportType === 'idle_candidate' &&
+                report.conductorAgentId === 'conductor-idle',
+            )
+          ) {
+            tuiHarness.onSubmit?.('/exit');
+            signalLateIdleReportSent();
+          }
+          if (
+            profile === 'baseline-late' &&
+            batchReports.some(
+              (report) => report.reportType === 'open_question',
+            )
+          ) {
+            tuiHarness.onSubmit?.('/exit');
+          }
+          if (
+            profile === 'integrated-inflight' &&
+            batchReports.some(
+              (report) => report.reportType === 'open_question',
+            )
+          ) {
+            tuiHarness.onSubmit?.('/exit');
+            signalReportSent();
+          }
+          if (
+            !profile.endsWith('-late') &&
+            mixedBatchReports.length === 3
+          ) {
             tuiHarness.onSubmit?.('/exit');
             signalReportSent();
           }
@@ -436,18 +525,42 @@ describe('operator idle candidate dispatch run loop', () => {
       const questionArrivalAt = heldState.pendingReports.find(
         (report) => report.reportType === 'open_question',
       )!.firstQueuedAt;
+      if (profile === 'integrated-inflight') {
+        await Promise.race([
+          questionPollInFlight,
+          new Promise<never>((_resolve, reject) =>
+            setTimeout(
+              () => reject(new Error('same-session watch poll did not start')),
+              2_000,
+            ),
+          ),
+        ]);
+      }
       fakeNow = startAt + 10_000;
       gateReleased = true;
       releaseUserSend();
-      await Promise.race([
-        gateRefreshStarted,
-        new Promise<never>((_resolve, reject) =>
-          setTimeout(
-            () => reject(new Error('gate-clear refresh did not start')),
-            2_000,
+      if (profile === 'integrated-inflight') {
+        const duplicateRead = await Promise.race([
+          gateRefreshStarted.then(() => true),
+          new Promise<boolean>((resolve) =>
+            setTimeout(() => resolve(false), 50),
           ),
-        ),
-      ]);
+        ]);
+        expect(duplicateRead).toBe(false);
+        expect(reportPrompts).toEqual([]);
+        fakeNow = startAt + 10_100;
+        releaseQuestionPoll();
+      } else {
+        await Promise.race([
+          gateRefreshStarted,
+          new Promise<never>((_resolve, reject) =>
+            setTimeout(
+              () => reject(new Error(`gate-clear refresh did not start for ${profile}`)),
+              2_000,
+            ),
+          ),
+        ]);
+      }
       let reportPromptsWhileRefreshPending: string[] | undefined;
       let refreshHeldState:
         | { pendingReports: Array<{ reportType: string }> }
@@ -463,10 +576,48 @@ describe('operator idle candidate dispatch run loop', () => {
           pendingReports: Array<{ reportType: string }>;
         };
       }
-      releaseGateRefresh();
+      if (profile.endsWith('-late')) {
+        const questionOutcome = await Promise.race([
+          questionReportSent,
+          new Promise<'timeout'>((resolve) =>
+            setTimeout(() => resolve('timeout'), 3_000),
+          ),
+        ]);
+        if (questionOutcome === 'timeout') {
+          const state = await readFile(statePath, 'utf8');
+          gateRefreshBarrierReleased = true;
+          releaseGateRefresh();
+          tuiHarness.onSubmit?.('/exit');
+          await run;
+          throw new Error(
+            `OQ was not sent after the refresh cap; prompts=${JSON.stringify(reportPrompts)} state=${state}`,
+          );
+        }
+        if (profile === 'integrated-late') {
+          expect(gateRefreshBarrierReleased).toBe(false);
+          const questionOnlyBatch = mixedBatchReports.find((batch) =>
+            batch.some((report) => report.reportType === 'open_question'),
+          )!;
+          expect(questionOnlyBatch.map((report) => report.reportType)).toEqual([
+            'open_question',
+          ]);
+        }
+        gateRefreshBarrierReleased = true;
+        releaseGateRefresh();
+      } else {
+        gateRefreshBarrierReleased = true;
+        releaseGateRefresh();
+      }
       const reportOutcome = await Promise.race([
-        reportSent.then(() => 'sent' as const),
-        new Promise<'timeout'>((resolve) => setTimeout(() => resolve('timeout'), 2_000)),
+        (profile === 'integrated-late'
+          ? lateIdleReportSent
+          : profile === 'baseline-late'
+            ? questionReportSent
+            : reportSent
+        ).then(() => 'sent' as const),
+        new Promise<'timeout'>((resolve) =>
+          setTimeout(() => resolve('timeout'), 4_000),
+        ),
       ]);
       if (reportOutcome === 'timeout') {
         const pendingState = await readFile(statePath, 'utf8');
@@ -517,6 +668,9 @@ describe('operator idle candidate dispatch run loop', () => {
 
     const baseline = await runProfile('baseline');
     const integrated = await runProfile('integrated');
+    const baselineLate = await runProfile('baseline-late');
+    const integratedLate = await runProfile('integrated-late');
+    const integratedInflight = await runProfile('integrated-inflight');
 
     expect(baseline.metrics).toEqual({
       dispatchAttempts: 4,
@@ -525,6 +679,24 @@ describe('operator idle candidate dispatch run loop', () => {
       openQuestionWaitMs: 10_050,
     });
     expect(integrated.metrics).toEqual(baseline.metrics);
+    expect(baselineLate.metrics).toEqual({
+      dispatchAttempts: 2,
+      reportBatches: 1,
+      fakeAgentTurns: 2,
+      openQuestionWaitMs: 10_050,
+    });
+    expect(integratedLate.metrics).toEqual({
+      dispatchAttempts: 3,
+      reportBatches: 2,
+      fakeAgentTurns: 3,
+      openQuestionWaitMs: 10_050,
+    });
+    expect(integratedInflight.metrics).toEqual({
+      dispatchAttempts: 2,
+      reportBatches: 1,
+      fakeAgentTurns: 2,
+      openQuestionWaitMs: 10_100,
+    });
     expect(baseline.prompt).toContain('Review the live session?');
     expect(baseline.prompt).not.toContain('稼働 session の確認候補');
     expect(integrated.prompt).toContain('Review the live session?');
@@ -608,5 +780,48 @@ describe('operator idle candidate dispatch run loop', () => {
       integrated.persisted.idleCandidateFingerprints?.['conductor-idle-peer']
         ?.idle_phase,
     ).toBeDefined();
+    const lateQuestionBatch = integratedLate.mixedBatchReports.find((batch) =>
+      batch.some((report) => report.reportType === 'open_question'),
+    )!;
+    const lateCandidateBatches = integratedLate.mixedBatchReports.filter(
+      (batch) =>
+        batch.some(
+          (report) =>
+            report.reportType === 'idle_candidate' &&
+            report.conductorAgentId === 'conductor-idle',
+        ),
+    );
+    expect(lateQuestionBatch.map((report) => report.reportType)).toEqual([
+      'open_question',
+    ]);
+    expect(lateCandidateBatches).toHaveLength(1);
+    expect(lateCandidateBatches[0]!.map((report) => report.reportType)).toEqual([
+      'idle_candidate',
+    ]);
+    expect(
+      integratedLate.mixedBatchReports.flat().filter(
+        (report) => report.reportType === 'open_question',
+      ),
+    ).toHaveLength(1);
+    expect(
+      lateQuestionBatch[0]!.frozenBatchId,
+    ).not.toBe(lateCandidateBatches[0]![0]!.frozenBatchId);
+    const inFlightQuestionBatch = integratedInflight.mixedBatchReports.find(
+      (batch) =>
+        batch.some((report) => report.reportType === 'open_question'),
+    )!;
+    expect(inFlightQuestionBatch.map((report) => report.reportType)).toEqual([
+      'open_question',
+      'idle_candidate',
+    ]);
+    expect(inFlightQuestionBatch[0]?.priority).toBe('open_question');
+    expect(
+      inFlightQuestionBatch[0]!.arrivalOrder!,
+    ).toBeLessThan(inFlightQuestionBatch[1]!.arrivalOrder!);
+    expect(
+      integratedInflight.mixedBatchReports.flat().filter(
+        (report) => report.reportType === 'open_question',
+      ),
+    ).toHaveLength(1);
   });
 });

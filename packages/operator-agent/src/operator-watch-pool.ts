@@ -225,6 +225,10 @@ export interface OperatorWatchPool {
   refreshPendingReports?(): Promise<void>;
   getLiveStatus(conductorAgentId: string): OperatorSessionLiveStatus | undefined;
   listIdleCandidateObservations(): OperatorIdleCandidateObservation[];
+  refreshIdleCandidateObservation?(
+    conductorAgentId: string,
+    afterObservationVersion?: number,
+  ): Promise<boolean>;
   acknowledge(events: readonly OperatorDispatchEvent[]): Promise<void>;
   enqueueIdleCandidate?(input: {
     conductorAgentId: string;
@@ -431,6 +435,7 @@ export async function createOperatorWatchPool(
   const repositoryTimers = new Map<string, NodeJS.Timeout>();
   const repositoryScansInFlight = new Set<string>();
   const polling = new Set<string>();
+  const pollCompletions = new Map<string, Promise<void>>();
   const messageTimers = new Map<string, NodeJS.Timeout>();
   const messagePolling = new Set<string>();
   const liveStatuses = new Map<string, OperatorSessionLiveStatus>();
@@ -1532,10 +1537,139 @@ export async function createOperatorWatchPool(
           return observation ? [{ ...observation }] : [];
         });
     },
+    async refreshIdleCandidateObservation(
+      conductorAgentId,
+      afterObservationVersion,
+    ) {
+      const id = requireNonEmptyString(conductorAgentId, 'conductorAgentId');
+      const watch = state.watches[id];
+      const assignedWatchStatePath = pathById.get(id);
+      const assignedIssueUrl = issueUrlById.get(id);
+      if (
+        closed ||
+        !watch ||
+        !assignedWatchStatePath ||
+        !assignedIssueUrl
+      ) {
+        return false;
+      }
+
+      const knownVersion =
+        afterObservationVersion ??
+        idleCandidateObservations.get(id)?.observationVersion ??
+        0;
+      const currentObservation = idleCandidateObservations.get(id);
+      if (
+        currentObservation &&
+        currentObservation.observationVersion > knownVersion
+      ) {
+        // A normal poll completed after the gate-clear pass captured its
+        // freshness boundary. Reuse that result instead of issuing a second
+        // UDS read for the same session.
+        return true;
+      }
+      const inFlightPoll = pollCompletions.get(id);
+      if (inFlightPoll) {
+        // pollOnce may already own the profile state lock while waiting for
+        // UDS. Reuse its observation when it completes; do not let a duplicate
+        // poll return early and make the run loop freeze before admission.
+        await inFlightPoll;
+        const refreshedObservation = idleCandidateObservations.get(id);
+        return Boolean(
+          !closed &&
+            state.watches[id] &&
+            pathById.get(id) === assignedWatchStatePath &&
+            issueIdentity(issueUrlById.get(id) ?? '') ===
+              issueIdentity(assignedIssueUrl) &&
+            refreshedObservation &&
+            refreshedObservation.observationVersion > knownVersion,
+        );
+      }
+
+      // Candidate-only freshness must not hold the shared profile state lock
+      // across a UDS request. A ready OQ batch still needs that lock to freeze
+      // and send within the run loop's aggregate refresh wait cap.
+      const located = await findSession(id, { root });
+      if (
+        !located ||
+        issueIdentity(located.resumeStore.issueUrl) !==
+          issueIdentity(assignedIssueUrl)
+      ) {
+        return false;
+      }
+      const {
+        snapshot: observation,
+        source,
+        connectivity,
+      } = await readObservation(root, located);
+      const latestLocated = await findSession(id, { root });
+      const phaseObservationIsStable = Boolean(
+        source === 'uds' &&
+          connectivity === 'reachable' &&
+          latestLocated &&
+          latestLocated.path === located.path &&
+          latestLocated.location === located.location &&
+          issueIdentity(latestLocated.resumeStore.issueUrl) ===
+            issueIdentity(located.resumeStore.issueUrl) &&
+          latestLocated.resumeStore.harnessPhase ===
+            located.resumeStore.harnessPhase &&
+          latestLocated.resumeStore.modifiedAt ===
+            located.resumeStore.modifiedAt &&
+          latestLocated.resumeStore.lifecycle ===
+            located.resumeStore.lifecycle,
+      );
+      const currentWatch = state.watches[id];
+      if (
+        closed ||
+        !currentWatch ||
+        pathById.get(id) !== assignedWatchStatePath ||
+        issueIdentity(issueUrlById.get(id) ?? '') !==
+          issueIdentity(assignedIssueUrl)
+      ) {
+        return false;
+      }
+      if (!phaseObservationIsStable) {
+        idleCandidateObservations.delete(id);
+        return false;
+      }
+
+      const checkedAt = Date.now();
+      idleCandidateObservations.set(id, {
+        conductorAgentId: id,
+        issueUrl: located.resumeStore.issueUrl,
+        observationVersion: ++idleCandidateObservationVersion,
+        source,
+        connectivity,
+        checkedAt,
+        pollIntervalMs: currentWatch.pollIntervalMs,
+        harnessPhase: located.resumeStore.harnessPhase,
+        harnessModifiedAt: located.resumeStore.modifiedAt,
+        ...(located.resumeStore.lifecycle !== undefined
+          ? { lifecycle: located.resumeStore.lifecycle }
+          : {}),
+        openQuestionCount: observation.openQuestions.filter(
+          (question) => question.status === 'open',
+        ).length,
+        ...(observation.sessionState?.current
+          ? {
+              statusLine: {
+                text: observation.sessionState.current.statusLine,
+                reportedAt: observation.sessionState.current.reportedAt,
+              },
+            }
+          : {}),
+      });
+      return true;
+    },
     async pollOnce(conductorAgentId) {
       const id = requireNonEmptyString(conductorAgentId, 'conductorAgentId');
       if (closed || polling.has(id)) return 0;
       polling.add(id);
+      let resolvePollCompletion!: () => void;
+      const pollCompletion = new Promise<void>((resolve) => {
+        resolvePollCompletion = resolve;
+      });
+      pollCompletions.set(id, pollCompletion);
       try {
         return await withStateLock(async (nextArrivalOrder) => {
           const watch = state.watches[id];
@@ -1670,6 +1804,10 @@ export async function createOperatorWatchPool(
         throw error;
       } finally {
         polling.delete(id);
+        if (pollCompletions.get(id) === pollCompletion) {
+          pollCompletions.delete(id);
+        }
+        resolvePollCompletion();
       }
     },
     async pollConductorMessagesOnce(conductorAgentId) {

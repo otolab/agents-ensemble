@@ -910,7 +910,7 @@ async function runTtyConversation(options: {
     scheduling: options.scheduling,
     isAgentSendInFlight: () => agentSendInFlight,
     onError: (message) => writeChannelLine('harness', message),
-    refreshOnGateClear: async () => {
+    refreshOnGateClear: async (knownObservationVersions) => {
       for (const watch of options.watchPool.list()) {
         if (
           agentSendInFlight ||
@@ -921,7 +921,19 @@ async function runTtyConversation(options: {
           return;
         }
         try {
-          await options.watchPool.pollOnce(watch.conductorAgentId);
+          const refreshCandidateObservation =
+            options.watchPool.refreshIdleCandidateObservation;
+          if (!refreshCandidateObservation) {
+            writeChannelLine(
+              'harness',
+              `idle candidate refresh is unavailable for ${watch.conductorAgentId}`,
+            );
+            return;
+          }
+          await refreshCandidateObservation(
+            watch.conductorAgentId,
+            knownObservationVersions.get(watch.conductorAgentId) ?? 0,
+          );
         } catch (error) {
           writeChannelLine(
             'harness',
@@ -1015,7 +1027,8 @@ async function runTtyConversation(options: {
         if (didStop) return exitContinuity;
         continue;
       }
-      // Let the one-shot fresh poll admit candidates before freezing a report batch.
+      // Let gate-clear candidate refresh/admission coalesce with a ready batch
+      // for at most its aggregate policy cap before selecting and freezing.
       if (options.dispatchQueue.pendingUserCount === 0) {
         await idleCandidateMonitor.waitForGateRefresh();
       }
@@ -1074,10 +1087,17 @@ async function runTtyConversation(options: {
         if (reservation) options.recoveryInbox.release(reservation);
         continue;
       }
+      // Keep candidate generation gated while the selected batch is frozen.
+      // Committing removes its user event before agent.send begins, so that
+      // gap must not look like an actual gate-clear edge.
+      agentSendInFlight = true;
+      idleCandidateMonitor.notifyActivityChanged();
       let committed: boolean;
       try {
         committed = await options.watchPool.commitBatch(batch, dispatchState);
       } catch (error) {
+        agentSendInFlight = false;
+        idleCandidateMonitor.notifyActivityChanged();
         if (reservation) options.recoveryInbox.release(reservation);
         options.dispatchLifecycle.settleSend(lease, {
           completed: false,
@@ -1086,6 +1106,8 @@ async function runTtyConversation(options: {
         throw error;
       }
       if (!committed) {
+        agentSendInFlight = false;
+        idleCandidateMonitor.notifyActivityChanged();
         if (reservation) options.recoveryInbox.release(reservation);
         options.dispatchLifecycle.settleSend(lease, { completed: true });
         continue;
@@ -1101,8 +1123,6 @@ async function runTtyConversation(options: {
       const nextSendCount = sendCount + 1;
       let toolCallStarted = false;
       automaticReconnectResult.current = undefined;
-      agentSendInFlight = true;
-      idleCandidateMonitor.notifyActivityChanged();
       let result: ConductorSendResult | undefined;
       try {
         result = await Promise.race([

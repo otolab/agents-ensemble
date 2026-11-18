@@ -474,7 +474,8 @@ describe('operator idle candidate evaluation', () => {
     try {
       dispatchQueue.setConversationHold(false);
       let settled = false;
-      const waiting = monitor.waitForGateRefresh().then(() => {
+      const waiting = monitor.waitForGateRefresh().then((completed) => {
+        expect(completed).toBe(true);
         settled = true;
       });
       await Promise.resolve();
@@ -488,6 +489,153 @@ describe('operator idle candidate evaluation', () => {
       expect(enqueueIdleCandidate).toHaveBeenCalledTimes(1);
     } finally {
       releaseRefresh();
+      monitor.close();
+    }
+  });
+
+  it('caps one in-flight gate refresh wait and reuses its late observation after a send gate', async () => {
+    vi.useFakeTimers();
+    const dispatchQueue = createOperatorDispatchQueue();
+    dispatchQueue.setConversationHold(true);
+    let current = observation({ observationVersion: 1 });
+    let releaseRefresh!: () => void;
+    let signalAdmission!: () => void;
+    const refreshBarrier = new Promise<void>((resolve) => {
+      releaseRefresh = resolve;
+    });
+    const admitted = new Promise<void>((resolve) => {
+      signalAdmission = resolve;
+    });
+    const enqueueIdleCandidate = vi.fn(async () => {
+      signalAdmission();
+      return 'idle-after-timeout';
+    });
+    const refreshOnGateClear = vi.fn(async () => {
+      await refreshBarrier;
+      current = {
+        ...current,
+        observationVersion: current.observationVersion + 1,
+        checkedAt: Date.now(),
+      };
+    });
+    let agentSendInFlight = false;
+    const monitor = createOperatorIdleCandidateMonitor({
+      watchPool: {
+        list: () => [
+          {
+            conductorAgentId: current.conductorAgentId,
+            pollIntervalMs: current.pollIntervalMs,
+            debounceMs: 0,
+          },
+        ],
+        pollOnce: async () => 0,
+        listIdleCandidateObservations: () => [current],
+        enqueueIdleCandidate,
+      },
+      dispatchQueue,
+      scheduling: defaults,
+      isAgentSendInFlight: () => agentSendInFlight,
+      refreshOnGateClear,
+    });
+
+    try {
+      dispatchQueue.setConversationHold(false);
+      const firstWait = monitor.waitForGateRefresh();
+      await vi.advanceTimersByTimeAsync(999);
+      expect(refreshOnGateClear).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(await firstWait).toBe(false);
+
+      // The OQ send reopens then clears the gate while the same refresh pass
+      // is still pending. It must not trigger a second poll or wait interval.
+      agentSendInFlight = true;
+      monitor.notifyActivityChanged();
+      agentSendInFlight = false;
+      monitor.notifyActivityChanged();
+      expect(await monitor.waitForGateRefresh()).toBe(false);
+      expect(refreshOnGateClear).toHaveBeenCalledTimes(1);
+
+      releaseRefresh();
+      await admitted;
+      await Promise.resolve();
+      expect(enqueueIdleCandidate).toHaveBeenCalledTimes(1);
+      expect(refreshOnGateClear).toHaveBeenCalledTimes(1);
+    } finally {
+      releaseRefresh();
+      monitor.close();
+    }
+  });
+
+  it('uses one aggregate cap when a session refresh fails and admits later observations', async () => {
+    vi.useFakeTimers();
+    const dispatchQueue = createOperatorDispatchQueue();
+    dispatchQueue.setConversationHold(true);
+    const ids = ['session-a', 'session-b', 'session-c'];
+    const current = new Map(
+      ids.map((id) => [
+        id,
+        observation({ conductorAgentId: id, observationVersion: 1 }),
+      ]),
+    );
+    const polled: string[] = [];
+    const enqueueIdleCandidate = vi.fn(async () => 'admitted');
+    const watchPool = {
+      list: () =>
+        ids.map((conductorAgentId) => ({
+          conductorAgentId,
+          pollIntervalMs: 2_000,
+          debounceMs: 0,
+        })),
+      pollOnce: async (conductorAgentId: string) => {
+        polled.push(conductorAgentId);
+        if (conductorAgentId === 'session-a') {
+          throw new Error('injected per-session UDS timeout');
+        }
+        await new Promise<void>((resolve) => setTimeout(resolve, 700));
+        const observation = current.get(conductorAgentId)!;
+        current.set(conductorAgentId, {
+          ...observation,
+          observationVersion: observation.observationVersion + 1,
+          checkedAt: Date.now(),
+        });
+        return 0;
+      },
+      listIdleCandidateObservations: () => [...current.values()],
+      enqueueIdleCandidate,
+    };
+    const refreshOnGateClear = vi.fn(async () => {
+      for (const watch of watchPool.list()) {
+        try {
+          await watchPool.pollOnce(watch.conductorAgentId);
+        } catch {
+          // Match runOperatorAgent's per-session refresh failure handling.
+        }
+      }
+    });
+    const monitor = createOperatorIdleCandidateMonitor({
+      watchPool,
+      dispatchQueue,
+      scheduling: defaults,
+      isAgentSendInFlight: () => false,
+      refreshOnGateClear,
+    });
+
+    try {
+      dispatchQueue.setConversationHold(false);
+      const waiting = monitor.waitForGateRefresh();
+      await vi.advanceTimersByTimeAsync(700);
+      expect(polled).toEqual(['session-a', 'session-b', 'session-c']);
+      await vi.advanceTimersByTimeAsync(300);
+      expect(await waiting).toBe(false);
+      expect(enqueueIdleCandidate).not.toHaveBeenCalled();
+
+      // The final sequential poll completes after the single aggregate cap;
+      // failed/late session evidence does not block the OQ dispatch window.
+      await vi.advanceTimersByTimeAsync(400);
+      expect(enqueueIdleCandidate).toHaveBeenCalledTimes(2);
+      expect(refreshOnGateClear).toHaveBeenCalledTimes(1);
+      expect(polled).toEqual(['session-a', 'session-b', 'session-c']);
+    } finally {
       monitor.close();
     }
   });
@@ -554,12 +702,12 @@ describe('operator idle candidate evaluation', () => {
         continuationConsumed: false,
       })!;
       expect(userBatch.sourceKey).toBe('user');
-      expect(dispatchQueue.commitBatch(userBatch)).toBe(true);
       agentSendInFlight = true;
+      expect(dispatchQueue.commitBatch(userBatch)).toBe(true);
       monitor.notifyActivityChanged();
       await Promise.resolve();
       await Promise.resolve();
-      expect(refreshOnGateClear).toHaveBeenCalledTimes(1);
+      expect(refreshOnGateClear).not.toHaveBeenCalled();
       expect(enqueueIdleCandidate).not.toHaveBeenCalled();
 
       agentSendInFlight = false;
@@ -567,7 +715,7 @@ describe('operator idle candidate evaluation', () => {
       await Promise.resolve();
       await Promise.resolve();
       await Promise.resolve();
-      expect(refreshOnGateClear).toHaveBeenCalledTimes(2);
+      expect(refreshOnGateClear).toHaveBeenCalledTimes(1);
       expect(enqueueIdleCandidate).toHaveBeenCalledTimes(1);
     } finally {
       monitor.close();

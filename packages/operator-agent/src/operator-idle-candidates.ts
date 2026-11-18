@@ -119,21 +119,30 @@ export interface OperatorIdleCandidateMonitorOptions {
   scheduling: Required<OperatorAgentSchedulingConfig>;
   isAgentSendInFlight: () => boolean;
   onError?: (message: string) => void;
-  refreshOnGateClear?: () => Promise<void>;
+  refreshOnGateClear?: (
+    knownObservationVersions: ReadonlyMap<string, number>,
+  ) => Promise<void>;
 }
 
 export interface OperatorIdleCandidateMonitor {
   notifyActivityChanged(): void;
-  waitForGateRefresh(): Promise<void>;
+  waitForGateRefresh(): Promise<boolean>;
   close(): void;
 }
+
+export const OPERATOR_IDLE_GATE_REFRESH_WAIT_CAP_MS = 1_000;
 
 export function createOperatorIdleCandidateMonitor(
   options: OperatorIdleCandidateMonitorOptions,
 ): OperatorIdleCandidateMonitor {
+  type GateRefreshPass = {
+    promise: Promise<void>;
+    wait?: Promise<boolean>;
+  };
   let closed = false;
   let evaluationInFlight: Promise<void> | undefined;
-  let gateRefreshInFlight: Promise<void> | undefined;
+  let gateRefreshInFlight: GateRefreshPass | undefined;
+  let freshObservationVersions: Map<string, number> | undefined;
   let refreshAfterCurrentEvaluation = false;
   const isGateActive = () =>
     options.isAgentSendInFlight() ||
@@ -152,9 +161,8 @@ export function createOperatorIdleCandidateMonitor(
       let shouldRefresh = refreshCurrentState;
       do {
         refreshAfterCurrentEvaluation = false;
-        let versionsBeforeRefresh: Map<string, number> | undefined;
         if (shouldRefresh) {
-          versionsBeforeRefresh = new Map(
+          const versionsBeforeRefresh = new Map(
             options.watchPool
               .listIdleCandidateObservations()
               .map((observation) => [
@@ -164,14 +172,19 @@ export function createOperatorIdleCandidateMonitor(
           );
           try {
             if (!options.refreshOnGateClear) return;
-            await options.refreshOnGateClear();
+            await options.refreshOnGateClear(versionsBeforeRefresh);
           } catch (error) {
             options.onError?.(
               `idle candidate refresh failed: ${error instanceof Error ? error.message : String(error)}`,
             );
           }
-          if (closed || isGateActive()) return;
+          if (closed) return;
+          // If another observable gate opened during this poll, retain its
+          // freshness boundary and consume the result on the next gate clear.
+          freshObservationVersions = versionsBeforeRefresh;
         }
+        if (closed || isGateActive()) return;
+        const versionsBeforeRefresh = freshObservationVersions;
         const now = Date.now();
         for (const observation of options.watchPool.listIdleCandidateObservations()) {
           if (closed || isGateActive()) return;
@@ -215,6 +228,9 @@ export function createOperatorIdleCandidateMonitor(
             );
           }
         }
+        if (versionsBeforeRefresh === freshObservationVersions) {
+          freshObservationVersions = undefined;
+        }
         shouldRefresh = refreshAfterCurrentEvaluation;
       } while (shouldRefresh && !closed && !isGateActive());
     })().finally(() => {
@@ -227,19 +243,33 @@ export function createOperatorIdleCandidateMonitor(
     const gateActive = isGateActive();
     if (gateActive) refreshAfterCurrentEvaluation = false;
     if (previousGateActive && !gateActive) {
-      const refresh = evaluate(true).catch((error: unknown) => {
-        options.onError?.(
-          `idle candidate gate refresh failed: ${error instanceof Error ? error.message : String(error)}`,
-        );
-      });
-      let pendingRefresh: Promise<void>;
-      pendingRefresh = refresh.finally(() => {
+      if (gateRefreshInFlight) {
+        // A timed-out pass remains authoritative until it finishes. A later
+        // gate edge must not poll or admit its observation a second time.
+        previousGateActive = gateActive;
+        return;
+      }
+      const refresh = evaluate(freshObservationVersions === undefined)
+        .catch((error: unknown) => {
+          options.onError?.(
+            `idle candidate gate refresh failed: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        });
+      const pendingRefresh: GateRefreshPass = {
+        promise: Promise.resolve(),
+      };
+      gateRefreshInFlight = pendingRefresh;
+      pendingRefresh.promise = refresh.finally(async () => {
         if (gateRefreshInFlight === pendingRefresh) {
           gateRefreshInFlight = undefined;
         }
+        // Cover a gate edge that lands between evaluation completion and
+        // this pass's cleanup, without starting another fresh poll.
+        if (!closed && !isGateActive() && freshObservationVersions) {
+          await evaluate(false);
+        }
         options.dispatchQueue.wake();
       });
-      gateRefreshInFlight = pendingRefresh;
     }
     previousGateActive = gateActive;
   };
@@ -252,10 +282,25 @@ export function createOperatorIdleCandidateMonitor(
     notifyActivityChanged() {
       refreshGate();
     },
-    async waitForGateRefresh() {
-      while (gateRefreshInFlight) {
-        await gateRefreshInFlight;
-      }
+    waitForGateRefresh() {
+      const pendingRefresh = gateRefreshInFlight;
+      if (!pendingRefresh) return Promise.resolve(true);
+      if (pendingRefresh.wait) return pendingRefresh.wait;
+      let timeout: NodeJS.Timeout | undefined;
+      const deadline = new Promise<boolean>((resolve) => {
+        timeout = setTimeout(
+          () => resolve(false),
+          OPERATOR_IDLE_GATE_REFRESH_WAIT_CAP_MS,
+        );
+        timeout.unref();
+      });
+      pendingRefresh.wait = Promise.race([
+        pendingRefresh.promise.then(() => true),
+        deadline,
+      ]).finally(() => {
+        if (timeout) clearTimeout(timeout);
+      });
+      return pendingRefresh.wait;
     },
     close() {
       closed = true;

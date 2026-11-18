@@ -160,7 +160,11 @@ operator-agent は profile の session watch pool に登録された session の
 
 候補の再評価は既定1分間隔です。候補評価 cadence は threshold を再確認する時計で、idle-only batch の5分 aging や `batchMaxWaitMs` とは別です。候補が generation gate を通過し、shared scheduler に永続化された時点から idle aging が始まります。manual report hold 中もこの時計は進みますが、hold 中は送信しません。未 dispatch 候補の retry / restart / ack は他の watch report と同じ report ID lifecycle を使い、独立 queue は作りません。
 
-候補生成を止める observable gate は、operator-agent の `agent.send` 実行中、送信済み operator input の queue / conversation hold、active focus です。gate 中は候補を生成・scheduler に登録せず、解除後に全 watch 対象を一度 fresh poll し、新しい観測だけを再評価します。busy 中だけ条件を満たした一時候補は後から追いつき通知しません。手動 report hold は別の dispatch gate なので候補評価を止めません。live Open Question だけでも候補を抑止せず、候補を OQ 解決や focus 解除の代わりに扱いません。入力欄に typed-but-unsubmitted の文字や一般的な worker wait は観測できず、gate signal として使いません。現行 observation には一般的な user-wait signal がなく、OQ は未回答 question の有無だけを示します。
+候補生成を止める observable gate は、operator dispatch の freeze / `agent.send` 中、送信済み operator input の queue / conversation hold、active focus です。gate 中は候補を生成・scheduler に登録しません。解除時は watch 対象ごとに freshness boundary を取り、境界後に完了した通常 watch poll があればその observation を再利用します。進行中 poll がなければ candidate 用 UDS read を一度行います。後者は UDS を読む間 profile state lock を保持しません。
+
+fresh observation の取得と candidate admission を合わせた待機上限は、session 数にかかわらず pass 全体で1秒です。上限内に admission が終われば OQ と同じ batch / send にまとめられます。refresh pass が失敗するか、上限までに終わらなければ、ready な OQ をそれ以上 refresh 待ちさせません。続行中の refresh はキャンセルせず、後から得た観測を一度評価します。OQ が先に commit / send された後なら candidate は後続 batch に載ります。commit 前に shared scheduler に届いた場合は同じ batch に入ることもあり、cap 後の同一 send は保証されません。
+
+この上限は idle 再評価 cadence や #741 の `batchMaxWaitMs` とは別の時計で、OQ の end-to-end 配送期限でもありません。別の profile lock 操作、hold、retry、agent 処理などが続けば送信は遅れ得ます。busy 中だけ条件を満たした一時候補は後から追いつき通知しません。手動 report hold は別の dispatch gate なので候補評価を止めません。live Open Question だけでも候補を抑止せず、候補を OQ 解決や focus 解除の代わりに扱いません。入力欄に typed-but-unsubmitted の文字や一般的な worker wait は観測できず、gate signal として使いません。現行 observation には一般的な user-wait signal がなく、OQ は未回答 question の有無だけを示します。
 
 idle candidate は evidence fingerprint を durable に保持し、同じ根拠の定期的な再通知はしません。`modifiedAt` / statusLine の根拠が変わると新候補を作る場合があります。ack 後・再起動後も fingerprint は保持しますが、pending report の retry / restart replay は既存の at-least-once 契約に従い、同じ report ID が再送される可能性があります。
 
