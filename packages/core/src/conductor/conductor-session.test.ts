@@ -54,6 +54,7 @@ import {
   ONE_TIME_SECRET_ENV,
 } from '../session/one-time-secret-control.js';
 import { WorkerSession } from '../runtime/worker-session.js';
+import { ConductorInbox } from '../runtime/conductor-inbox.js';
 import * as sessionResumeStoreModule from '../session/session-resume-store.js';
 import { loadSessionStateStore } from '../session/session-state-store.js';
 import {
@@ -559,6 +560,222 @@ describe('runConductorSession resume / shutdown', () => {
     ).rejects.toThrow('stop after canonical store flush');
   });
 
+  it('observes real worker rounds, permissions and failure through operator listing', async () => {
+    const { createListOperatorSessionsTool } = await import('../../../operator-agent/src/list-operator-sessions-tool.js');
+    const { createOperatorWatchPool } = await import('../../../operator-agent/src/operator-watch-pool.js');
+    const { createOperatorDispatchQueue } = await import('../../../operator-agent/src/operator-dispatch.js');
+    const { evaluateOperatorIdleCandidate } = await import('../../../operator-agent/src/operator-idle-candidates.js');
+    let tools: ConductorAgentCreateOptions['customTools'];
+    let api: OperatorInputBindingApi | undefined;
+    const pipeline = new PermissionPipeline({});
+    const roundA = createDeferred<{ stopReason: string }>();
+    const roundB = createDeferred<{ stopReason: string }>();
+    const failingRound = createDeferred<{ stopReason: string }>();
+    const secondFailingRound = createDeferred<{ stopReason: string }>();
+    const thirdFailingRound = createDeferred<{ stopReason: string }>();
+    const failureNotificationGate = createDeferred<void>();
+    const secondFailureNotificationGate = createDeferred<void>();
+    const failureSendGate = createDeferred<void>();
+    const secondFailureSendGate = createDeferred<void>();
+    let failureBlocked = false;
+    let secondFailureBlocked = false;
+    let failureSendStarted = false;
+    let failureNotifications = 0;
+    let failureSends = 0;
+    const originalSubscribe = ConductorInbox.prototype.subscribe;
+    vi.spyOn(ConductorInbox.prototype, 'subscribe').mockImplementation(function (listener) {
+      return originalSubscribe.call(this, async (message) => {
+        if (message.type === 'worker.failed') {
+          if (++failureNotifications === 1) { failureBlocked = true; await failureNotificationGate.promise; }
+          else { secondFailureBlocked = true; await secondFailureNotificationGate.promise; }
+        }
+        return listener(message);
+      });
+    });
+    mockCreate.mockImplementationOnce(async (options) => {
+      tools = options.customTools;
+      return { agentId: 'agent-test', send: mockSend, close: mockClose, getUsage: createMockConductorGetUsage() };
+    });
+    mockSend.mockImplementation(async (message: string) => {
+      if (message.includes('worker.failed')) {
+        failureSends++;
+        if (failureSends === 1 || failureSends === 3) {
+          failureSendStarted = true;
+          await failureSendGate.promise;
+          return failureSends === 1
+            ? { runId: 'interrupted-send', status: 'cancelled' }
+            : { runId: 'failed-send', status: 'error', error: { message: 'synthetic send failure' } };
+        }
+        if (failureSends === 2) {
+          await secondFailureSendGate.promise;
+          return { runId: 'second-interrupted-send', status: 'cancelled' };
+        }
+      }
+      return { runId: 'run', status: 'finished', result: 'done' };
+    });
+    const permissions = new Map<string, PermissionHandler>();
+    let connection = 0;
+    const connectAcp = vi.fn(async () => {
+      const name = ++connection === 1 ? 'a' : 'b';
+      return {
+        newSession: vi.fn().mockResolvedValue(`session-${name}`),
+        promptSession: vi.fn(async (_id: string, prompt: string, options?: { permissionHandler?: PermissionHandler }) => {
+          if (prompt === 'round-a') { permissions.set('a', options!.permissionHandler!); return roundA.promise; }
+          if (prompt === 'round-b') return roundB.promise;
+          if (prompt === 'round-fail') { await failingRound.promise; throw new Error('worker failed'); }
+          if (prompt === 'round-fail-2') { await secondFailingRound.promise; throw new Error('second worker failed'); }
+          if (prompt === 'round-fail-3') { await thirdFailingRound.promise; throw new Error('third worker failed'); }
+          return { stopReason: 'end_turn' };
+        }),
+        cancelSession: vi.fn(), close: vi.fn().mockResolvedValue(undefined),
+      } as unknown as AcpBridge;
+    });
+    const session = runConductorSession({
+      issueUrl: TEST_ISSUE.url, repoRoot,
+      profile: { workers: [{ name: 'a', kind: 'implementer' }, { name: 'b', kind: 'reviewer' }] },
+      defaultAcp: { defaultAcpCommand: process.execPath },
+      workerWorktree: { path: repoRoot, branch: 'main', issue: TEST_ISSUE, inRepo: true },
+      connectAcp, permissionPipeline: pipeline, registerProcessSignalHandlers: false,
+      disableGitHubMonitor: true, disablePermissionDeadlockMonitor: true, waitForOperatorExit: true, maxTurns: 50,
+      continueOnConductorError: true, operatorCanInspectRecovery: true,
+      bindOperatorInput: (binding) => { api = binding; },
+    });
+    const userRoot = resolveEnsemblePaths({ repoRoot }).userRoot;
+    const list = createListOperatorSessionsTool({ userEnsembleRoot: userRoot });
+    const getStatus = async (status: string) => {
+      const result = JSON.parse((await list.execute({ includeGithub: false, workStatus: status })).content[0]!.text);
+      return result.sessions;
+    };
+    let pool: Awaited<ReturnType<typeof createOperatorWatchPool>> | undefined;
+    try {
+      await vi.waitFor(() => { expect(api).toBeDefined(); expect(tools).toBeDefined(); });
+      await vi.waitFor(async () => expect(await getStatus('waiting')).toHaveLength(1));
+      await tools!.prompt_worker!.execute({ worker: 'a', instruction: 'round-a' });
+      await tools!.prompt_worker!.execute({ worker: 'b', instruction: 'round-b' });
+      await vi.waitFor(() => expect(permissions.has('a')).toBe(true));
+      await vi.waitFor(async () => expect(await getStatus('working')).toMatchObject([{ workStatus: { status: 'working', source: 'uds', observedAt: expect.any(Number) } }]));
+      const decision = permissions.get('a')!({ sessionId: 'session-a', toolName: 'Shell', command: 'tmux kill-session -t x' });
+      await vi.waitFor(() => expect(pipeline.pending.size).toBe(1));
+      expect(await getStatus('working')).toHaveLength(1);
+      roundB.resolve({ stopReason: 'end_turn' });
+      await vi.waitFor(async () => expect(await getStatus('waiting')).toHaveLength(1));
+      await tools!.report_session_state!.execute({ statusLine: '作業状況を確認中' });
+      pool = await createOperatorWatchPool({ userEnsembleRoot: userRoot, dispatchQueue: createOperatorDispatchQueue() });
+      await pool.register('agent-test', { pollIntervalMs: 60_000, debounceMs: 0 });
+      await pool.pollOnce('agent-test');
+      const watchList = createListOperatorSessionsTool({ userEnsembleRoot: userRoot }, (id) => pool!.getLiveStatus(id));
+      const watched = JSON.parse((await watchList.execute({ includeGithub: false, workStatus: 'waiting' })).content[0]!.text);
+      expect(watched.sessions).toMatchObject([{ workStatus: { status: 'waiting', source: 'uds', observedAt: pool.getLiveStatus('agent-test')!.checkedAt } }]);
+      const candidateObservation = pool.listIdleCandidateObservations()[0];
+      expect(candidateObservation).toBeDefined();
+      const candidate = evaluateOperatorIdleCandidate(candidateObservation!, { idlePhaseThresholdMs: 0, staleRunningThresholdMs: 0 }, candidateObservation!.checkedAt);
+      expect(candidate?.kind).toBe('stale_running');
+      expect(candidate?.text).toContain('停止・失敗・停滞とは断定せず');
+      const pending = pipeline.pending.list()[0]!;
+      await tools!.resolve_permission!.execute({ requestId: pending.id, decision: 'allow' });
+      await decision;
+      await vi.waitFor(async () => expect(await getStatus('working')).toHaveLength(1));
+      roundA.resolve({ stopReason: 'end_turn' });
+      await vi.waitFor(async () => expect(await getStatus('waiting')).toHaveLength(1));
+      await tools!.prompt_worker!.execute({ worker: 'a', instruction: 'round-fail' });
+      failingRound.resolve({ stopReason: 'end_turn' });
+      await vi.waitFor(() => expect(failureBlocked).toBe(true));
+      await vi.waitFor(async () => expect(await getStatus('unknown')).toHaveLength(1));
+      expect(await getStatus('waiting')).toHaveLength(0);
+      failureNotificationGate.resolve();
+      await vi.waitFor(() => expect(failureSendStarted, JSON.stringify(mockSend.mock.calls.map((call) => call[0]))).toBe(true), { timeout: 5000 });
+      expect(await getStatus('unknown')).toHaveLength(1);
+      await tools!.prompt_worker!.execute({ worker: 'b', instruction: 'round-fail-2' });
+      secondFailingRound.resolve({ stopReason: 'end_turn' });
+      await vi.waitFor(() => expect(secondFailureBlocked).toBe(true));
+      expect(api!.submit('interrupt failure notification', { delivery: 'interrupt' })).toBe(true);
+      failureSendGate.resolve();
+      await vi.waitFor(() => expect(mockSend.mock.calls.some(([message]) => message.includes('interrupt failure notification'))).toBe(true));
+      const interruptedAttempt = api!.recoveryAttentionAttemptId!();
+      expect(interruptedAttempt).toBeDefined();
+      expect(executeRecoveryInboxCommand(api, '/recovery list').inspection?.text).toContain(`attempt ${interruptedAttempt}`);
+      expect(await getStatus('unknown')).toHaveLength(1);
+      expect(failureSends).toBe(1);
+      secondFailureNotificationGate.resolve();
+      await vi.waitFor(() => expect(failureSends).toBe(2));
+      expect(executeRecoveryInboxCommand(api, '/recovery continue').inspection?.text).toContain('再確認');
+      expect(await getStatus('unknown')).toHaveLength(1);
+      expect(api!.submit('interrupt second failure', { delivery: 'interrupt' })).toBe(true);
+      secondFailureSendGate.resolve();
+      await vi.waitFor(() => expect(mockSend.mock.calls.some(([message]) => message.includes('interrupt second failure'))).toBe(true));
+      expect(await getStatus('unknown')).toHaveLength(1);
+      expect(failureSends).toBe(2);
+      await tools!.prompt_worker!.execute({ worker: 'a', instruction: 'round-fail-3' });
+      thirdFailingRound.resolve({ stopReason: 'end_turn' });
+      await vi.waitFor(() => expect(api!.recoveryAttentionAttemptId!()).not.toBe(interruptedAttempt));
+      const laterAttempt = api!.recoveryAttentionAttemptId!();
+      expect(await getStatus('unknown')).toHaveLength(1);
+      expect(executeRecoveryInboxCommand(api, '/recovery continue').inspection?.text).toContain('再確認');
+      expect(executeRecoveryInboxCommand(api, `/recovery continue ${interruptedAttempt}`).inspection?.text).toContain('再確認');
+      expect(api!.recoveryAttentionAttemptId!()).toBe(laterAttempt);
+      expect(await getStatus('unknown')).toHaveLength(1);
+      expect(executeRecoveryInboxCommand(api, '/recovery list').inspection?.text).toContain(`attempt ${laterAttempt}`);
+      expect(executeRecoveryInboxCommand(api, '/recovery continue').inspection?.text).toContain(`attempt ${laterAttempt} の確認`);
+      expect(api!.recoveryAttentionAttemptId!()).toBe(interruptedAttempt);
+      expect(await getStatus('unknown')).toHaveLength(1);
+      expect(executeRecoveryInboxCommand(api, '/recovery continue').inspection?.text).toContain('再確認');
+      expect(executeRecoveryInboxCommand(api, '/recovery list').inspection?.text).toContain(`attempt ${interruptedAttempt}`);
+      expect(executeRecoveryInboxCommand(api, `/recovery continue ${interruptedAttempt}`).inspection?.text).toContain('確認を受け付けました');
+      expect(executeRecoveryInboxCommand(api, '/recovery continue').inspection?.text).toContain('再確認');
+      const secondInterruptedAttempt = api!.recoveryAttentionAttemptId!();
+      expect(secondInterruptedAttempt).toBeDefined();
+      expect(secondInterruptedAttempt).not.toBe(interruptedAttempt);
+      expect(await getStatus('unknown')).toHaveLength(1);
+      expect(executeRecoveryInboxCommand(api, '/recovery list').inspection?.text).toContain(`attempt ${secondInterruptedAttempt}`);
+      expect(executeRecoveryInboxCommand(api, '/recovery continue').inspection?.text).toContain('確認を受け付けました');
+      await vi.waitFor(async () => expect(await getStatus('waiting')).toHaveLength(1));
+      expect(failureSends).toBe(3);
+    } finally {
+      failureNotificationGate.resolve(); failureSendGate.resolve();
+      secondFailureSendGate.resolve();
+      secondFailureNotificationGate.resolve(); secondFailingRound.resolve({ stopReason: 'end_turn' });
+      thirdFailingRound.resolve({ stopReason: 'end_turn' });
+      roundA.resolve({ stopReason: 'end_turn' }); roundB.resolve({ stopReason: 'end_turn' });
+      pool?.close(); api?.submit('/exit');
+      await settleWithin(session, 10_000);
+    }
+  }, 30_000);
+
+  it('requires renewed selection after successive no-list recoveries in an Issue session', async () => {
+    let api: OperatorInputBindingApi | undefined;
+    mockSend.mockImplementation(async (message: string) =>
+      message.includes('first failure') || message.includes('second failure')
+        ? { runId: 'failed', status: 'error', error: { message: 'synthetic failure' } }
+        : { runId: 'ready', status: 'finished', result: 'ready' },
+    );
+    const session = runConductorSession({
+      issueUrl: TEST_ISSUE.url, repoRoot,
+      profile: { workers: [] }, permissionPipeline: new PermissionPipeline({}),
+      registerProcessSignalHandlers: false, disableGitHubMonitor: true,
+      waitForOperatorExit: true, continueOnConductorError: true,
+      operatorCanInspectRecovery: true,
+      bindOperatorInput: (binding) => { api = binding; },
+    });
+    try {
+      await vi.waitFor(() => expect(api).toBeDefined());
+      expect(api!.submit('first failure')).toBe(true);
+      await vi.waitFor(() => expect(api!.recoveryAttentionAttemptId!()).toBeDefined());
+      const first = api!.recoveryAttentionAttemptId!();
+      expect(executeRecoveryInboxCommand(api, '/recovery continue').inspection?.text).toContain(`attempt ${first} の確認`);
+      expect(api!.submit('second failure')).toBe(true);
+      await vi.waitFor(() => expect(api!.recoveryAttentionAttemptId!()).toBeDefined());
+      const second = api!.recoveryAttentionAttemptId!();
+      expect(second).not.toBe(first);
+      expect(executeRecoveryInboxCommand(api, '/recovery continue').inspection?.text).toContain('再確認');
+      expect(api!.recoveryAttentionAttemptId!()).toBe(second);
+      expect(executeRecoveryInboxCommand(api, `/recovery continue ${second}`).inspection?.text).toContain(`attempt ${second} の確認`);
+      expect(executeRecoveryInboxCommand(api, `/recovery continue ${second}`).inspection?.text).toContain('再確認');
+    } finally {
+      api?.submit('/exit');
+      await settleWithin(session, 10_000);
+    }
+  }, 30_000);
+
   it('resumes migrated Issue data and ignores path-hash sidecars', async () => {
     const agentId = 'resume-hash-location-snapshot';
     const paths = resolveEnsemblePaths({ repoRoot });
@@ -648,6 +865,7 @@ describe('runConductorSession resume / shutdown', () => {
       | {
           openQuestions: Array<{ id: string; question: string }>;
           sessionState?: { current: { statusLine: string } };
+          workStatus?: string;
         }
       | undefined;
     mockSend.mockImplementationOnce(async () => {
@@ -685,6 +903,7 @@ describe('runConductorSession resume / shutdown', () => {
         question: 'orphan slug question',
       }),
     ]);
+    expect(observation?.workStatus).toBe('unknown');
     expect(observation?.openQuestions).toEqual([
       expect.objectContaining({
         id: 'inq-1',

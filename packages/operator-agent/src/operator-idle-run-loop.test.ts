@@ -70,9 +70,12 @@ describe('operator idle candidate dispatch run loop', () => {
     let gateRefreshBarrier: Promise<void> = Promise.resolve();
     let signalGateRefreshStarted: () => void = () => {};
     let failGateRefresh = false;
+    let refreshReadActive = false;
+    let overlappingReads = 0;
     const questionServer = await startOpenQuestionControlServer({
       listOpenQuestions: () => currentQuestion ? [currentQuestion] : [],
       observeSession: async () => {
+        if (refreshReadActive) overlappingReads++;
         if (gateReleased && !modeledRefreshDelayApplied) {
           modeledRefreshDelayApplied = true;
           fakeNow += 50;
@@ -80,7 +83,8 @@ describe('operator idle candidate dispatch run loop', () => {
           if (failGateRefresh) {
             throw new Error('injected gate-clear refresh failure');
           }
-          await gateRefreshBarrier;
+          refreshReadActive = true;
+          try { await gateRefreshBarrier; } finally { refreshReadActive = false; }
         }
         if (blockNextQuestionObservation) {
           blockNextQuestionObservation = false;
@@ -181,7 +185,9 @@ describe('operator idle candidate dispatch run loop', () => {
         | 'integrated'
         | 'baseline-late'
         | 'integrated-late'
-        | 'integrated-inflight',
+        | 'integrated-inflight'
+        | 'integrated-inflight-late'
+        | 'integrated-inflight-fail',
     ) => {
       tuiHarness.onSubmit = undefined;
       const configProfile = `smoke-${profile}`;
@@ -209,7 +215,8 @@ describe('operator idle candidate dispatch run loop', () => {
       gateReleased = false;
       modeledRefreshDelayApplied = false;
       blockNextQuestionObservation = false;
-      failGateRefresh = profile.startsWith('baseline');
+      failGateRefresh = profile.startsWith('baseline') || profile === 'integrated-inflight-fail';
+      overlappingReads = 0;
       let gateRefreshBarrierReleased = false;
       let releaseGateRefresh!: () => void;
       let releaseQuestionPoll!: () => void;
@@ -287,7 +294,7 @@ describe('operator idle candidate dispatch run loop', () => {
             try {
               const watchedSessionIds =
                 profile.endsWith('-late') ||
-                profile === 'integrated-inflight'
+                profile.startsWith('integrated-inflight')
                 ? ['conductor-idle']
                 : [
                     'conductor-idle',
@@ -355,11 +362,11 @@ describe('operator idle candidate dispatch run loop', () => {
                 await new Promise((resolve) => setTimeout(resolve, 10));
               }
               expect(questionFound).toBe(true);
-              if (profile === 'integrated-inflight') {
+              if (profile.startsWith('integrated-inflight')) {
                 blockNextQuestionObservation = true;
                 await questionPollInFlight;
               }
-              if (profile.endsWith('-late')) {
+              if (profile.endsWith('-late') && !profile.startsWith('integrated-inflight')) {
                 // Keep ordinary background polls out of this cap test so the
                 // only blocked observation is the candidate refresh pass.
                 for (const conductorAgentId of watchedSessionIds) {
@@ -428,7 +435,7 @@ describe('operator idle candidate dispatch run loop', () => {
             signalQuestionReportSent();
           }
           if (
-            profile === 'integrated-late' &&
+            (profile === 'integrated-late' || profile === 'integrated-inflight-late') &&
             batchReports.some(
               (report) =>
                 report.reportType === 'idle_candidate' &&
@@ -447,7 +454,7 @@ describe('operator idle candidate dispatch run loop', () => {
             tuiHarness.onSubmit?.('/exit');
           }
           if (
-            profile === 'integrated-inflight' &&
+            (profile === 'integrated-inflight' || profile === 'integrated-inflight-fail') &&
             batchReports.some(
               (report) => report.reportType === 'open_question',
             )
@@ -525,7 +532,7 @@ describe('operator idle candidate dispatch run loop', () => {
       const questionArrivalAt = heldState.pendingReports.find(
         (report) => report.reportType === 'open_question',
       )!.firstQueuedAt;
-      if (profile === 'integrated-inflight') {
+      if (profile.startsWith('integrated-inflight')) {
         await Promise.race([
           questionPollInFlight,
           new Promise<never>((_resolve, reject) =>
@@ -539,7 +546,7 @@ describe('operator idle candidate dispatch run loop', () => {
       fakeNow = startAt + 10_000;
       gateReleased = true;
       releaseUserSend();
-      if (profile === 'integrated-inflight') {
+      if (profile.startsWith('integrated-inflight')) {
         const duplicateRead = await Promise.race([
           gateRefreshStarted.then(() => true),
           new Promise<boolean>((resolve) =>
@@ -593,7 +600,8 @@ describe('operator idle candidate dispatch run loop', () => {
             `OQ was not sent after the refresh cap; prompts=${JSON.stringify(reportPrompts)} state=${state}`,
           );
         }
-        if (profile === 'integrated-late') {
+        if (profile === 'integrated-late' || profile === 'integrated-inflight-late') {
+          expect(overlappingReads).toBe(0);
           expect(gateRefreshBarrierReleased).toBe(false);
           const questionOnlyBatch = mixedBatchReports.find((batch) =>
             batch.some((report) => report.reportType === 'open_question'),
@@ -609,7 +617,7 @@ describe('operator idle candidate dispatch run loop', () => {
         releaseGateRefresh();
       }
       const reportOutcome = await Promise.race([
-        (profile === 'integrated-late'
+        (profile === 'integrated-late' || profile === 'integrated-inflight-late'
           ? lateIdleReportSent
           : profile === 'baseline-late'
             ? questionReportSent
@@ -671,6 +679,11 @@ describe('operator idle candidate dispatch run loop', () => {
     const baselineLate = await runProfile('baseline-late');
     const integratedLate = await runProfile('integrated-late');
     const integratedInflight = await runProfile('integrated-inflight');
+    const integratedInflightLate = await runProfile('integrated-inflight-late');
+    const integratedInflightFail = await runProfile('integrated-inflight-fail');
+    expect(integratedInflightLate.mixedBatchReports[0]!.map((report) => report.reportType)).toEqual(['open_question']);
+    expect(integratedInflightLate.mixedBatchReports.flat().filter((report) => report.reportType === 'idle_candidate')).toHaveLength(1);
+    expect(integratedInflightFail.mixedBatchReports[0]!.map((report) => report.reportType)).toEqual(['open_question']);
 
     expect(baseline.metrics).toEqual({
       dispatchAttempts: 4,
@@ -695,7 +708,7 @@ describe('operator idle candidate dispatch run loop', () => {
       dispatchAttempts: 2,
       reportBatches: 1,
       fakeAgentTurns: 2,
-      openQuestionWaitMs: 10_100,
+      openQuestionWaitMs: 10_150,
     });
     expect(baseline.prompt).toContain('Review the live session?');
     expect(baseline.prompt).not.toContain('稼働 session の確認候補');

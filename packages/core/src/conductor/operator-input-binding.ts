@@ -46,6 +46,8 @@ export interface OperatorInputBindingApi {
   ) => ConductorRecoverySnapshot | undefined;
   clearRecoverySnapshot?: (recoveryId: string) => boolean;
   continueAfterRecovery?: () => boolean;
+  /** Atomically confirm only the still-current attempt; false leaves it untouched. */
+  continueAfterRecoveryForAttempt?: (expectedAttemptId: string) => boolean;
   recoveryAttentionAttemptId?: () => string | undefined;
   getCursorBootstrapStatus?: () => CursorBootstrapStatus;
   resolveCursorBootstrapUnknown?: (

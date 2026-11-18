@@ -854,6 +854,8 @@ async function runTtyConversation(options: {
     clearRecoverySnapshot: (recoveryId: string) =>
       options.recoveryInbox.remove(recoveryId),
     continueAfterRecovery: () => options.dispatchLifecycle.confirmRecovery(),
+    continueAfterRecoveryForAttempt: (expectedAttemptId: string) =>
+      options.dispatchLifecycle.confirmRecovery(expectedAttemptId),
     recoveryAttentionAttemptId: () =>
       options.dispatchLifecycle.pendingAttemptId,
   };

@@ -6,6 +6,7 @@ import type { Server, Socket } from 'node:net';
 import type { OpenQuestion } from '../escalation/open-question.js';
 import type { OpenQuestionRegistrySnapshot } from '../escalation/open-question.js';
 import type { SessionStateStore } from './session-state-store.js';
+import type { SessionWorkStatus } from './session-work-status.js';
 import type { OperatorMessageDelivery } from '../conductor/session/session-event.js';
 
 export const OPEN_QUESTION_CONTROL_METHODS = {
@@ -77,6 +78,7 @@ export interface OpenQuestionControlConductorMessagesResult {
 
 export interface SessionObservationSnapshot extends OpenQuestionRegistrySnapshot {
   sessionState?: SessionStateStore;
+  workStatus?: SessionWorkStatus;
 }
 
 export interface OpenQuestionControlErrorData {

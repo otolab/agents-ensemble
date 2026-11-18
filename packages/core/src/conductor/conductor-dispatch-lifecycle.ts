@@ -269,8 +269,12 @@ export class ConductorDispatchLifecycle<T> {
   }
 
   /** Explicit operator confirmation releases the later-dispatch gate. */
-  confirmRecovery(): boolean {
-    if (this.activeLease !== undefined || this.attentionAttemptId === undefined) {
+  confirmRecovery(expectedAttemptId?: string): boolean {
+    if (
+      this.activeLease !== undefined ||
+      this.attentionAttemptId === undefined ||
+      (expectedAttemptId !== undefined && expectedAttemptId !== this.attentionAttemptId)
+    ) {
       return false;
     }
     this.attentionAttemptId = undefined;

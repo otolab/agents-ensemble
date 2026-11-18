@@ -166,6 +166,7 @@ import {
   saveOpenQuestionsStore,
 } from '../session/open-questions-store.js';
 import { sessionSnapshotPaths } from '../session/session-snapshot-paths.js';
+import { classifySessionWorkStatus } from '../session/session-work-status.js';
 import {
   CONDUCTOR_MESSAGE_HISTORY_MAX_ENTRIES,
   OpenQuestionControlOperationError,
@@ -507,6 +508,14 @@ async function runConductorSessionWithStartupGuard(
     null;
   const conductorMessages: OpenQuestionControlConductorMessage[] = [];
   const eventQueue = new SessionEventQueue();
+  // A failed round becomes idle before its inbox notification is dispatched.
+  // Keep each failure until delivery succeeds or the operator confirms
+  // recovery from its unconfirmed delivery attempt.
+  let nextWorkerFailureId = 0;
+  const pendingWorkerFailures = new Set<number>();
+  const unconfirmedWorkerFailures = new Map<string, Set<number>>();
+  const unassignedWorkerFailures = new Map<string, number[]>();
+  const workerFailureIds = new WeakMap<WorkerFailureRecord, number>();
   const resumeNoticeDetails = new Set<string>();
   const reportResumeNotice = (message: string): void => {
     if (resumeNoticeDetails.has(message)) return;
@@ -1174,6 +1183,12 @@ async function runConductorSessionWithStartupGuard(
       });
     },
     onWorkerFailed: (failure) => {
+      // Notifications are serialized by the inbox, preserving each worker's
+      // telemetry order even if a later round fails before this one is sent.
+      const pending = unassignedWorkerFailures.get(failure.workerId);
+      const id = pending?.shift();
+      if (id !== undefined) workerFailureIds.set(failure, id);
+      if (pending?.length === 0) unassignedWorkerFailures.delete(failure.workerId);
       sessionLogger.emit({ type: 'worker.failed', failure });
       eventQueue.enqueue({ type: 'worker.failed', failure });
     },
@@ -1200,7 +1215,12 @@ async function runConductorSessionWithStartupGuard(
             stopReason: event.stopReason!,
           });
           break;
-        case 'failed':
+        case 'failed': {
+          const id = ++nextWorkerFailureId;
+          pendingWorkerFailures.add(id);
+          const pending = unassignedWorkerFailures.get(event.workerId) ?? [];
+          pending.push(id);
+          unassignedWorkerFailures.set(event.workerId, pending);
           reportHarnessActivity('worker', false);
           sessionLogger.emit({
             type: 'harness.worker.prompt.failed',
@@ -1211,6 +1231,7 @@ async function runConductorSessionWithStartupGuard(
             error: event.error!,
           });
           break;
+        }
       }
     },
     onAcpUpdate: (event) => {
@@ -2112,6 +2133,19 @@ async function runConductorSessionWithStartupGuard(
   };
 
   if (options.bindOperatorInput) {
+    const continueAfterRecovery = (expectedAttemptId?: string): boolean => {
+      const gatedAttempt = dispatchLifecycle.pendingAttemptId;
+      const attempt = gatedAttempt ?? unconfirmedWorkerFailures.keys().next().value;
+      if (!attempt || (expectedAttemptId !== undefined && expectedAttemptId !== attempt)) return false;
+      if (gatedAttempt) {
+        if (!dispatchLifecycle.confirmRecovery(attempt)) return false;
+      } else if (dispatchLifecycle.state === 'in_flight' || dispatchLifecycle.state === 'reconnecting') {
+        return false;
+      }
+      for (const id of unconfirmedWorkerFailures.get(attempt) ?? []) pendingWorkerFailures.delete(id);
+      unconfirmedWorkerFailures.delete(attempt);
+      return true;
+    };
     const bindingDispose = options.bindOperatorInput({
       submit: (message, submitOptions) => {
         if (isOperatorExitCommand(message)) {
@@ -2162,8 +2196,10 @@ async function runConductorSessionWithStartupGuard(
           }
         : {}),
       clearRecoverySnapshot: (recoveryId) => recoveryInbox.remove(recoveryId),
-      continueAfterRecovery: () => dispatchLifecycle.confirmRecovery(),
-      recoveryAttentionAttemptId: () => dispatchLifecycle.pendingAttemptId,
+      continueAfterRecovery: () => continueAfterRecovery(),
+      continueAfterRecoveryForAttempt: (attemptId) => continueAfterRecovery(attemptId),
+      recoveryAttentionAttemptId: () =>
+        dispatchLifecycle.pendingAttemptId ?? unconfirmedWorkerFailures.keys().next().value,
       ...(cursorBootstrapState && operatorCanInspectRecovery
         ? {
             getCursorBootstrapStatus: () => cursorBootstrapState.status,
@@ -2273,9 +2309,28 @@ async function runConductorSessionWithStartupGuard(
           location: 'canonical-slug',
         });
         const sessionState = await loadSessionStateStore(currentStatePath);
+        const pendingWorkerIds = new Set(
+          permissionPipeline.pending.list().map((permission) => permission.workerId),
+        );
+        const runningIdsByName = new Map(
+          workerSession.runtime.listRunning().map((worker) => [worker.name, worker.workerId]),
+        );
+        const workers = workerSession.runtime.listWorkerStatuses().map((worker) => ({
+          state: worker.state,
+          queueDepth: worker.queueDepth,
+          permissionPending: pendingWorkerIds.has(runningIdsByName.get(worker.name) ?? ''),
+        }));
         return {
           ...openQuestions.snapshot(),
           ...(sessionState ? { sessionState } : {}),
+          workStatus: classifySessionWorkStatus({
+            conductorSending: conductorSendCount > 0,
+            workers,
+            shuttingDown: teardownStarted,
+            pendingWorkerFailures: pendingWorkerFailures.size > 0,
+            unresolvedPermissions:
+              workerSession.inbox.pendingPermissionCount !== permissionPipeline.pending.size,
+          }),
         };
       },
       sendOperatorMessage: ({ text, delivery }) => {
@@ -2461,6 +2516,28 @@ async function runConductorSessionWithStartupGuard(
       onOperatorQueueChanged: () => {
         sessionLogger.emit({ type: 'operator.queue.changed' });
       },
+      onWorkerFailuresDelivered: (events) => {
+        for (const event of events) {
+          if (event.type !== 'worker.failed') continue;
+          const id = workerFailureIds.get(event.failure);
+          if (id !== undefined) {
+            pendingWorkerFailures.delete(id);
+            for (const [attempt, failures] of unconfirmedWorkerFailures) {
+              failures.delete(id);
+              if (failures.size === 0) unconfirmedWorkerFailures.delete(attempt);
+            }
+          }
+        }
+      },
+      onWorkerFailuresUnconfirmed: (attempt, events) => {
+        const failures = new Set<number>();
+        for (const event of events) {
+          if (event.type !== 'worker.failed') continue;
+          const id = workerFailureIds.get(event.failure);
+          if (id !== undefined) failures.add(id);
+        }
+        if (failures.size > 0) unconfirmedWorkerFailures.set(attempt, failures);
+      },
       onOperatorDispatched: (events) => {
         for (const event of events) {
           if (event.type === 'operator.message') {
@@ -2516,7 +2593,9 @@ async function runConductorSessionWithStartupGuard(
           ? operatorCanInspectRecovery
             ? '状態を確認してから必要な続きを新しい指示で送り、後続 dispatch を再開するには /recovery continue を実行してください。'
             : '失敗した入力は自動再送せず、後続 dispatch も停止しています。非 TTY では本文を確認できないため、状態を確かめてから安全な再開方法を判断してください。'
-          : '明示的な interrupt 入力が queue に残っているため、その入力を次に処理します。/recovery continue は不要です。';
+          : unconfirmedWorkerFailures.has(attemptId)
+            ? '明示的な interrupt 入力を次に処理します。worker failure の通知結果は未確認です。/recovery list で attempt を確認し、/recovery continue で確認を記録してください。'
+            : '明示的な interrupt 入力が queue に残っているため、その入力を次に処理します。/recovery continue は不要です。';
         sessionLogger.emit({
           type: 'harness.warning',
           message: [

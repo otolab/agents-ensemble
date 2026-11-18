@@ -24,6 +24,7 @@ import {
   type SessionObservationSnapshot,
 } from '@agents-ensemble/core';
 import { listUserLocatedSessionResumeStoresPage } from '@agents-ensemble/core/operator-runtime';
+import * as operatorRuntime from '@agents-ensemble/core/operator-runtime';
 import {
   createOperatorDispatchQueue,
   formatOperatorDispatchBatch,
@@ -1220,6 +1221,43 @@ describe('operator watch pool', () => {
     } finally {
       pool.close();
     }
+  });
+
+  it('does not refresh the watch timestamp after a delayed observation', async () => {
+    repoRoot = await mkdtemp(join(tmpdir(), 'watch-observed-at-'));
+    const initial = Date.now();
+    let now = initial;
+    let observations = 0;
+    let delayNextLocate = false;
+    vi.spyOn(Date, 'now').mockImplementation(() => now);
+    const findSession = operatorRuntime.findUserSessionResumeStore;
+    vi.spyOn(operatorRuntime, 'findUserSessionResumeStore').mockImplementation(async (...args) => {
+      if (delayNextLocate) { delayNextLocate = false; now += 11_000; }
+      return findSession(...args);
+    });
+    const server = await startOpenQuestionControlServer({
+      listOpenQuestions: () => [],
+      observeSession: async () => {
+        observations++;
+        if (observations === 1) { delayNextLocate = true; return { sequence: 0, openQuestions: [], workStatus: 'working' }; }
+        return { sequence: 0, openQuestions: [], workStatus: 'waiting' };
+      },
+      answerOpenQuestion: async () => { throw new Error('unused'); },
+    });
+    closeServers.push(() => server.close());
+    await writeResumeStore('delayed', 1, server.socketPath);
+    const pool = await createOperatorWatchPool({ repoRoot, dispatchQueue: createOperatorDispatchQueue() });
+    try {
+      await pool.register('delayed', { pollIntervalMs: 60_000, debounceMs: 0 });
+      await pool.pollOnce('delayed');
+      expect(pool.getLiveStatus('delayed')).toMatchObject({ checkedAt: initial, snapshot: { workStatus: 'working' } });
+      const tool = createListOperatorSessionsTool(repoRoot, (id) => pool.getLiveStatus(id));
+      const result = JSON.parse((await tool.execute({ includeGithub: false, workStatus: 'waiting' })).content[0]!.text);
+      expect(result.sessions).toMatchObject([{ conductorAgentId: 'delayed', workStatus: { status: 'waiting', source: 'uds', observedAt: initial + 11_000 } }]);
+      expect(observations).toBe(2);
+      const old = JSON.parse((await tool.execute({ includeGithub: false, workStatus: 'working' })).content[0]!.text);
+      expect(old.total).toBe(0);
+    } finally { pool.close(); vi.restoreAllMocks(); }
   });
 
   it('watches multiple sessions through live UDS and persists cursors without replay', async () => {

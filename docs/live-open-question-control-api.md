@@ -153,8 +153,10 @@ Request:
 Response:
 
 ```json
-{"jsonrpc":"2.0","id":3,"result":{"sequence":2,"openQuestions":[{"id":"inq-1","question":"Proceed?","responseType":"yes_no","source":"conductor","status":"open","askedAt":1792512000000}],"sessionState":{"current":{"statusLine":"CI 待ち","reportedAt":1792512001000},"history":[]}}}
+{"jsonrpc":"2.0","id":3,"result":{"sequence":2,"openQuestions":[{"id":"inq-1","question":"Proceed?","responseType":"yes_no","source":"conductor","status":"open","askedAt":1792512000000}],"workStatus":"waiting","sessionState":{"current":{"statusLine":"CI 待ち","reportedAt":1792512001000},"history":[]}}}
 ```
+
+`workStatus` は harness の live 状態から判定した `working` / `waiting` / `unknown` です。旧 harness では含まれません。判定条件、観測時刻の扱い、内部の待ちや進捗を観測できない限界は [operator input reference](operator-input.md) を参照してください。
 
 `openQuestions` は live Registry の全質問（未回答・回答済み）です。`sessionState` は報告がある場合だけ含みます。`sequence` は質問の enqueue cursor です。operator-agent は質問 ID ごとの fingerprint に加え、直近の質問文・status・`askedAt` を cursor に保存し、状態差分と UDS / YAML 間の重複排除に使います。Open Question cursor がないときは初回 snapshot 内の質問を silent baseline とします。これは Open Question report だけに適用され、session-state report は別 cursor で判定されます。その後、未登録 ID の `open` 質問を新規追加として、既知 ID の `open → answered` を回答として報告します。前回 `open` だった ID が次の snapshot から消えた場合も一覧からの消失を報告します。回答済みで初めて観測した ID は解決報告せず、既知 ID の回答遷移を新規追加として二重計上しません。
 

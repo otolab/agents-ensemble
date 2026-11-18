@@ -1595,10 +1595,16 @@ export async function createOperatorWatchPool(
         afterObservationVersion ??
         idleCandidateObservations.get(id)?.observationVersion ??
         0;
+      const isFresh = (observation: OperatorIdleCandidateObservation) => {
+        const now = Date.now();
+        return observation.checkedAt <= now &&
+          now - observation.checkedAt <= Math.max(10_000, observation.pollIntervalMs * 2);
+      };
       const currentObservation = idleCandidateObservations.get(id);
       if (
         currentObservation &&
-        currentObservation.observationVersion > knownVersion
+        currentObservation.observationVersion > knownVersion &&
+        isFresh(currentObservation)
       ) {
         // A normal poll completed after the gate-clear pass captured its
         // freshness boundary. Reuse that result instead of issuing a second
@@ -1612,91 +1618,112 @@ export async function createOperatorWatchPool(
         // poll return early and make the run loop freeze before admission.
         await inFlightPoll;
         const refreshedObservation = idleCandidateObservations.get(id);
-        return Boolean(
-          !closed &&
-            state.watches[id] &&
-            pathById.get(id) === assignedWatchStatePath &&
-            issueIdentity(issueUrlById.get(id) ?? '') ===
-              issueIdentity(assignedIssueUrl) &&
-            refreshedObservation &&
-            refreshedObservation.observationVersion > knownVersion,
-        );
+        if (
+          closed || !state.watches[id] ||
+          pathById.get(id) !== assignedWatchStatePath ||
+          issueIdentity(issueUrlById.get(id) ?? '') !== issueIdentity(assignedIssueUrl)
+        ) return false;
+        if (!refreshedObservation || refreshedObservation.observationVersion <= knownVersion) {
+          return false;
+        }
+        if (isFresh(refreshedObservation)) {
+          return true;
+        }
+        // A poll that crossed the gate may have started too long ago to be
+        // fresh. Refresh after it completes; never overlap the same poll.
       }
 
       // Candidate-only freshness must not hold the shared profile state lock
       // across a UDS request. A ready OQ batch still needs that lock to freeze
       // and send within the run loop's aggregate refresh wait cap.
-      const located = await findSession(id, { root });
-      if (
-        !located ||
-        issueIdentity(located.resumeStore.issueUrl) !==
-          issueIdentity(assignedIssueUrl)
-      ) {
-        return false;
-      }
-      const {
-        snapshot: observation,
-        source,
-        connectivity,
-      } = await readObservation(root, located);
-      const latestLocated = await findSession(id, { root });
-      const phaseObservationIsStable = Boolean(
-        source === 'uds' &&
-          connectivity === 'reachable' &&
-          latestLocated &&
-          latestLocated.path === located.path &&
-          latestLocated.location === located.location &&
-          issueIdentity(latestLocated.resumeStore.issueUrl) ===
-            issueIdentity(located.resumeStore.issueUrl) &&
-          latestLocated.resumeStore.harnessPhase ===
-            located.resumeStore.harnessPhase &&
-          latestLocated.resumeStore.modifiedAt ===
-            located.resumeStore.modifiedAt &&
-          latestLocated.resumeStore.lifecycle ===
-            located.resumeStore.lifecycle,
-      );
-      const currentWatch = state.watches[id];
-      if (
-        closed ||
-        !currentWatch ||
-        pathById.get(id) !== assignedWatchStatePath ||
-        issueIdentity(issueUrlById.get(id) ?? '') !==
-          issueIdentity(assignedIssueUrl)
-      ) {
-        return false;
-      }
-      if (!phaseObservationIsStable) {
-        idleCandidateObservations.delete(id);
-        return false;
-      }
-
-      const checkedAt = Date.now();
-      idleCandidateObservations.set(id, {
-        conductorAgentId: id,
-        issueUrl: located.resumeStore.issueUrl,
-        observationVersion: ++idleCandidateObservationVersion,
-        source,
-        connectivity,
-        checkedAt,
-        pollIntervalMs: currentWatch.pollIntervalMs,
-        harnessPhase: located.resumeStore.harnessPhase,
-        harnessModifiedAt: located.resumeStore.modifiedAt,
-        ...(located.resumeStore.lifecycle !== undefined
-          ? { lifecycle: located.resumeStore.lifecycle }
-          : {}),
-        openQuestionCount: observation.openQuestions.filter(
-          (question) => question.status === 'open',
-        ).length,
-        ...(observation.sessionState?.current
-          ? {
-              statusLine: {
-                text: observation.sessionState.current.statusLine,
-                reportedAt: observation.sessionState.current.reportedAt,
-              },
-            }
-          : {}),
+      // Reserve the same per-session slot used by ordinary polls, including
+      // while locating the session and validating the completed read.
+      if (polling.has(id)) return false;
+      polling.add(id);
+      let resolveRefreshCompletion!: () => void;
+      const refreshCompletion = new Promise<void>((resolve) => {
+        resolveRefreshCompletion = resolve;
       });
-      return true;
+      pollCompletions.set(id, refreshCompletion);
+      try {
+        const located = await findSession(id, { root });
+        if (
+          !located ||
+          issueIdentity(located.resumeStore.issueUrl) !==
+            issueIdentity(assignedIssueUrl)
+        ) {
+          return false;
+        }
+        const {
+          snapshot: observation,
+          source,
+          connectivity,
+          checkedAt,
+        } = await readObservation(root, located);
+        const latestLocated = await findSession(id, { root });
+        const phaseObservationIsStable = Boolean(
+          source === 'uds' &&
+            connectivity === 'reachable' &&
+            latestLocated &&
+            latestLocated.path === located.path &&
+            latestLocated.location === located.location &&
+            issueIdentity(latestLocated.resumeStore.issueUrl) ===
+              issueIdentity(located.resumeStore.issueUrl) &&
+            latestLocated.resumeStore.harnessPhase ===
+              located.resumeStore.harnessPhase &&
+            latestLocated.resumeStore.modifiedAt ===
+              located.resumeStore.modifiedAt &&
+            latestLocated.resumeStore.lifecycle ===
+              located.resumeStore.lifecycle,
+        );
+        const currentWatch = state.watches[id];
+        if (
+          closed ||
+          !currentWatch ||
+          pathById.get(id) !== assignedWatchStatePath ||
+          issueIdentity(issueUrlById.get(id) ?? '') !==
+            issueIdentity(assignedIssueUrl)
+        ) {
+          return false;
+        }
+        if (!phaseObservationIsStable) {
+          idleCandidateObservations.delete(id);
+          return false;
+        }
+
+        idleCandidateObservations.set(id, {
+          conductorAgentId: id,
+          issueUrl: located.resumeStore.issueUrl,
+          observationVersion: ++idleCandidateObservationVersion,
+          source,
+          connectivity,
+          checkedAt,
+          pollIntervalMs: currentWatch.pollIntervalMs,
+          harnessPhase: located.resumeStore.harnessPhase,
+          harnessModifiedAt: located.resumeStore.modifiedAt,
+          ...(located.resumeStore.lifecycle !== undefined
+            ? { lifecycle: located.resumeStore.lifecycle }
+            : {}),
+          openQuestionCount: observation.openQuestions.filter(
+            (question) => question.status === 'open',
+          ).length,
+          ...(observation.sessionState?.current
+            ? {
+                statusLine: {
+                  text: observation.sessionState.current.statusLine,
+                  reportedAt: observation.sessionState.current.reportedAt,
+                },
+              }
+            : {}),
+        });
+        return true;
+      } finally {
+        polling.delete(id);
+        if (pollCompletions.get(id) === refreshCompletion) {
+          pollCompletions.delete(id);
+        }
+        resolveRefreshCompletion();
+      }
     },
     async pollOnce(conductorAgentId) {
       const id = requireNonEmptyString(conductorAgentId, 'conductorAgentId');
@@ -1734,6 +1761,7 @@ export async function createOperatorWatchPool(
             snapshot: observation,
             source,
             connectivity,
+            checkedAt,
           } = await readObservation(root, located);
           const resumeStore = located.resumeStore;
           let phaseObservationIsStable = false;
@@ -1756,7 +1784,6 @@ export async function createOperatorWatchPool(
             );
           }
           const previousLiveStatus = liveStatuses.get(id);
-          const checkedAt = Date.now();
           if (
             phaseObservationIsStable &&
             resumeStore.harnessPhase !== undefined &&
@@ -2531,7 +2558,11 @@ async function readObservation(
   snapshot: SessionObservationSnapshot;
   source: 'uds' | 'resume_store';
   connectivity: OperatorSessionLiveStatus['connectivity'];
+  checkedAt: number;
 }> {
+  // The snapshot can already be old when the response or later store reads
+  // finish. Use the request start as a conservative freshness boundary.
+  const checkedAt = Date.now();
   const { resumeStore } = located;
   if (resumeStore.harnessSocketPath) {
     try {
@@ -2542,6 +2573,7 @@ async function readObservation(
         ),
         source: 'uds',
         connectivity: 'reachable',
+        checkedAt,
       };
     } catch (error) {
       if (
@@ -2576,6 +2608,7 @@ async function readObservation(
         },
         source: 'resume_store',
         connectivity,
+        checkedAt,
       };
     }
   }
@@ -2595,6 +2628,7 @@ async function readObservation(
     },
     source: 'resume_store',
     connectivity: 'unknown',
+    checkedAt,
   };
 }
 

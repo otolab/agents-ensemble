@@ -84,6 +84,7 @@ interface OperatorSessionSummary {
     freshness: 'fresh' | 'stale' | 'not_observed';
     ageMs: number | null;
   };
+  workStatus: { status: 'working' | 'waiting' | 'unknown'; source: 'uds' | 'unavailable'; observedAt: number | null };
   discovery: {
     firstObservedAt: number | null;
     timeSource: 'repository_watch_first_observed' | 'unavailable';
@@ -250,7 +251,7 @@ export function createListOperatorSessionsTool(
   return {
     name: LIST_OPERATOR_SESSIONS_TOOL,
     description:
-      'List one row per saved Issue run. Saved phase and live connectivity are separate facts; reachable does not mean working and unknown does not mean stopped. Connectivity and live values may change between cursor pages. Freshness and reportedBefore are evaluated at dataAsOf; accepted observations retain their original timestamps even if stale. Includes bounded GitHub summaries.',
+      'List one row per saved Issue run. Saved phase and live connectivity are separate facts; reachable does not mean working and unknown does not mean stopped. Connectivity and work status may change between cursor pages. Work status reflects harness activity, not guaranteed progress; unknown is not stopped. Freshness and reportedBefore are evaluated at dataAsOf; accepted observations retain their original timestamps even if stale. Includes bounded GitHub summaries.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -299,6 +300,7 @@ export function createListOperatorSessionsTool(
           description: 'Filter for sessions with (true) or without (false) a current statusLine, using live observation when available.',
         },
         liveConnectivity: { type: 'string', enum: ['reachable', 'unreachable', 'unknown'] },
+        workStatus: { type: 'string', enum: ['working', 'waiting', 'unknown'], description: 'Filter by fresh harness work observation; unknown includes unsupported or stale observations.' },
         harnessPhase: { type: 'string', enum: ['running', 'idle', 'close', 'abort', 'exit'] },
         hasOpenQuestions: { type: 'boolean' },
         minOpenQuestions: { type: 'integer', minimum: 0 },
@@ -324,6 +326,7 @@ export function createListOperatorSessionsTool(
       const lifecycle = resolveLifecycle(args.lifecycle);
       const includeGithub = resolveIncludeGithub(args.includeGithub);
       const liveConnectivity = resolveEnum(args.liveConnectivity, 'liveConnectivity', ['reachable', 'unreachable', 'unknown']);
+      const workStatus = resolveEnum(args.workStatus, 'workStatus', ['working', 'waiting', 'unknown']);
       const harnessPhase = resolveEnum(args.harnessPhase, 'harnessPhase', ['running', 'idle', 'close', 'abort', 'exit']);
       const hasOpenQuestions = resolveOptionalBoolean(args.hasOpenQuestions, 'hasOpenQuestions');
       const minOpenQuestions = resolveNonnegative(args.minOpenQuestions, 'minOpenQuestions', true);
@@ -400,11 +403,12 @@ export function createListOperatorSessionsTool(
               (cached.connectivity !== 'reachable' || cached.snapshot)) {
             snapshot.live = cached;
           } else if (snapshot.resumeStore.harnessSocketPath) {
+            const checkedAt = Date.now();
             try {
               const observed = await sendOpenQuestionControlRequest<SessionObservationSnapshot>(snapshot.resumeStore.harnessSocketPath, { method: OPEN_QUESTION_CONTROL_METHODS.observe }, { timeoutMs: OBSERVE_TIMEOUT_MS });
-              snapshot.live = { connectivity: 'reachable', checkedAt: Date.now(), unreachableSince: null, snapshot: observed };
+              snapshot.live = { connectivity: 'reachable', checkedAt, unreachableSince: null, snapshot: observed };
             } catch (error) {
-              snapshot.live = { connectivity: error instanceof OpenQuestionControlTransportError && error.reason === 'connection' ? 'unreachable' : 'unknown', checkedAt: Date.now(), unreachableSince: null };
+              snapshot.live = { connectivity: error instanceof OpenQuestionControlTransportError && error.reason === 'connection' ? 'unreachable' : 'unknown', checkedAt, unreachableSince: null };
             }
           } else {
             snapshot.live = cached?.checkedAt != null && cached.checkedAt <= Date.now() ? cached : undefined;
@@ -422,6 +426,7 @@ export function createListOperatorSessionsTool(
         hasStatusLine: hasStatusLine ?? null,
         lifecycle: lifecycle ?? null,
         liveConnectivity: liveConnectivity ?? null,
+        ...(workStatus !== undefined ? { workStatus } : {}),
         harnessPhase: harnessPhase ?? null,
         hasOpenQuestions: hasOpenQuestions ?? null,
         minOpenQuestions: minOpenQuestions ?? null,
@@ -440,6 +445,7 @@ export function createListOperatorSessionsTool(
           if (search && !summary.statusLine?.toLowerCase().includes(search) && !questions.some((question) => question.question.toLowerCase().includes(search))) return false;
           if (hasStatusLine !== undefined && (summary.statusLine !== null) !== hasStatusLine) return false;
           if (liveConnectivity !== undefined && summary.live.connectivity !== liveConnectivity) return false;
+          if (workStatus !== undefined && summary.workStatus.status !== workStatus) return false;
           if (harnessPhase !== undefined && summary.persisted.harnessPhase !== harnessPhase) return false;
           if (hasOpenQuestions !== undefined && (summary.openQuestionCount === null || (summary.openQuestionCount > 0) !== hasOpenQuestions)) return false;
           if (minOpenQuestions !== undefined && (summary.openQuestionCount === null || summary.openQuestionCount < minOpenQuestions)) return false;
@@ -838,7 +844,10 @@ function projectSummaryAt(
     cached?.unreachableSince ?? null,
   );
   const { coherenceReasons: _previousReasons, ...base } = observed;
-  return { ...base, live, ...projection };
+  const status = cached?.snapshot?.workStatus;
+  const valid = cached?.connectivity === 'reachable' && (status === 'working' || status === 'waiting' || status === 'unknown');
+  const workStatus = { status: valid && freshness === 'fresh' ? status : 'unknown' as const, source: valid ? 'uds' as const : 'unavailable' as const, observedAt: valid ? checkedAt : null };
+  return { ...base, live, workStatus, ...projection };
 }
 
 function summarizeSession(
@@ -933,6 +942,7 @@ function summarizeSession(
       source: resumeStore.harnessPhase ? 'resume_store' : 'legacy_lifecycle',
     },
     live,
+    workStatus: { status: 'unknown', source: 'unavailable', observedAt: null },
     discovery: {
       firstObservedAt: tracking.firstObservedAt,
       timeSource:
