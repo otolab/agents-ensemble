@@ -378,6 +378,8 @@ export async function runOperatorAgent(
       send_operator_message: createSendOperatorMessageTool(
         { userEnsembleRoot: runtime.userEnsembleRoot },
         reportResumeStoreDuplicate,
+        (id) => watchPool.ensureConductorMessageListen(id),
+        (message) => ttyChannels.observation(message),
       ),
       shutdown_issue_session: createShutdownIssueSessionTool(
         { userEnsembleRoot: runtime.userEnsembleRoot },

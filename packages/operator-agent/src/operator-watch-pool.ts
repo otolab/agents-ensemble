@@ -196,6 +196,10 @@ export interface OperatorWatchPool {
     conductorAgentId: string,
     options?: { messageDebounceMs?: number },
   ): Promise<ConductorMessageListenConfig>;
+  ensureConductorMessageListen(conductorAgentId: string): Promise<{
+    listener: ConductorMessageListenConfig;
+    created: boolean;
+  }>;
   unregisterConductorMessageListen(conductorAgentId: string): Promise<boolean>;
   listConductorMessageListens(): ConductorMessageListenConfig[];
   pollOnce(conductorAgentId: string): Promise<number>;
@@ -1333,6 +1337,38 @@ export async function createOperatorWatchPool(
             }
           : {}),
       };
+    },
+    async ensureConductorMessageListen(conductorAgentId) {
+      const id = requireNonEmptyString(conductorAgentId, 'conductorAgentId');
+      let created = false;
+      const listener = await withStateLock(async () => {
+        const located = await locateSession(id);
+        if (!located) throw new Error(`No saved session found for ${id}.`);
+        const binding = bindLocatedSession(id, located);
+        if (!binding.assigned) throw new Error(`Watch state for ${id} remains unresolved: ${binding.reason}.`);
+        const existing = state.messageListeners[id];
+        const selected = existing ?? { conductorAgentId: id, messageDebounceMs: DEFAULT_MESSAGE_DEBOUNCE_MS };
+        if (state.messageCursors[id] === undefined) {
+          const socketPath = located.resumeStore.harnessSocketPath;
+          if (!socketPath) throw new Error(`No live harness socket for ${id}.`);
+          const baseline = await readConductorMessageBaseline(socketPath);
+          state.messageCursors[id] = baseline;
+        }
+        if (!existing) {
+          created = true;
+          state.messageListeners[id] = selected;
+          deferWatchPendingReports(id, Math.max(selected.messageDebounceMs, state.watches[id]?.debounceMs ?? 0));
+        }
+        await persist();
+        return selected;
+      });
+      if (created) {
+        options.dispatchQueue.deferWatchReports?.(
+          id, Math.max(listener.messageDebounceMs, state.watches[id]?.debounceMs ?? 0),
+        );
+      }
+      if (!messageTimers.has(id)) startMessageTimer(listener);
+      return { listener, created };
     },
     async registerConductorMessageListen(conductorAgentId, input = {}) {
       const id = requireNonEmptyString(conductorAgentId, 'conductorAgentId');
