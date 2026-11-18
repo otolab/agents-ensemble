@@ -58,13 +58,17 @@ tool は SessionResumeStore に保存した conductor backend / cwd から provi
 
 `discovery.firstObservedAt` は repository watch がその run を初めて列挙した時刻です。SessionResumeStore の `updatedAt` は flush 時刻であり、作成・開始時刻や新着判定には使いません。観測時刻がない旧 run は `null` として first-observed sort の末尾に置きます。`live.connectivity` は最後の probe から10秒を超えると `unknown` になり、`live.lastKnownConnectivity` と `checkedAt` に古い観測を残します。watch がなく観測が一度もなければ `freshness: "not_observed"` です。
 
-`openQuestionObservation` は watch pool が保存する未回答（`status: open`）の Open Question 件数を返します。回答済みの質問は含めません。現在・前回の件数と各観測時刻・出典、前回からの増減 `delta`、比較元の時刻 `comparedAt` を示し、回答による件数の減少も反映します。比較元がないときの `previous` / `delta` は `null` です。これは保存 YAML の質問履歴件数 `openQuestionCount` と役割が異なります。
+`openQuestionObservation` は watch pool が保存する未回答（`status: open`）の Open Question 件数を返します。回答済みの質問は含めません。現在・前回の件数と各観測時刻・出典、前回からの増減 `delta`、比較元の時刻 `comparedAt` を示し、回答による件数の減少も反映します。比較元がないときの `previous` / `delta` は `null` です。`openQuestionCount` は現在の一覧取得で選択した live または保存値です。
+
+一覧は保存 phase が終了済みでも socket path があれば `session.observe` を試みます。watch pool の10秒以内の観測は再利用し、それ以外の問い合わせは同時8件、1件あたり1秒で打ち切ります。ローカル UDS の通常応答を待ちつつ、多数の停止・無応答 run による遅延と接続数を抑えるための上限です。応答ありは `reachable`、socket 不在・接続拒否は `unreachable`、時間切れ・未対応やその他の判定不能は `unknown` です。保存 phase と接続状態は別の事実で、接続可能は worker の作業中を意味しません。
+
+`statusLine` / `reportedAt` と `openQuestionCount` は live 応答があればその snapshot、なければ保存値を使い、それぞれ `statusLineSource` / `statusLineObservedAt`、`openQuestionCountSource` / `openQuestionCountObservedAt` で出典と観測時刻を示します。履歴は保存値です。`liveConnectivity`、`harnessPhase`、`hasOpenQuestions`、`minOpenQuestions`、`reportedBefore`（最新報告からの経過ミリ秒）で絞り込めます。`reportedAtDesc` / `reportedAtAsc` は報告時刻順で、報告がない run は末尾です。filter と sort はページ分割前に適用され、cursor は条件に紐づきます。接続結果や報告はページ間で変化するため、重複や欠落が起こり得ます。
 
 `pullRequests` は Issue ごとの GitHub API snapshot で、PR の head、各 check run / status context、`reviewDecision` とその出典を含みます。1一覧ページで問い合わせるのは最大5つの異なる Issue、各 Issue 最大5件の PR、各 PR 最大20件の check context です。成功値は30秒 cache し、更新に失敗して cache を使う場合は `status: "stale"` と失敗理由を示します。`none` は repository、Issue、timeline を確認したうえで PR reference が0件だった状態です。repository / Issue / timeline が欠けていて確認できない場合や問い合わせに失敗した場合は `unavailable` と理由を示し、未照会は `not_checked`、GitHub 側で結果を切り詰めた場合は `partial` です。check が0件、または review decision が `null` でも成功・承認を意味しません。`includeGithub: false` は外部問い合わせをせず `not_requested` を返します。
 
 `list_worker_messages` は Issue URL、run ID、worker 名を必須とし、保存された ACP session ID / cwd に対応する Pi / Codex / Cursor transcript を読みます。既定は最新20件、最大100件です。`nextCursor` は Issue URL / run ID / worker / `order` / reader と transcript 内の境界位置に結び付いた不透明な値です。続きは同じ対象・同じ `order` で取得してください。別 run などから cursor を流用した場合や、現在の transcript に境界がない場合は `paginationStatus: invalid_cursor` と理由を返し、メッセージを返しません。先頭から取得し直してください。応答の `status` は `supported`（読めた）、`unsupported`（preset / reader 未対応）、`unavailable`（保存 session や transcript がない、または照合できない）を区別します。profile に構成がある worker の session record がない場合も `unavailable` と理由を返します。これは prompt failure の証拠ではありません。SessionResumeStore は worker failure event を保存せず、終了 JSON の `workerFailureCount` も件数だけを示します。どの worker が失敗したかを確認するには captured harness log などの詳細な記録が必要です。
 
-これらは停止後の保存データを読む read-only tool です。`list_live_open_questions` などの live control が停止時に保存 YAML へ fallback する方針は変更しません。Open Question の質問・回答は保存値のまま返り、secret redaction は行われません。
+これらは read-only tool です。`list_live_open_questions` などの live control が停止時に保存 YAML へ fallback する方針は変更しません。Open Question の質問・回答は保存値のまま返り、secret redaction は行われません。
 
 `list_worker_messages`:
 
