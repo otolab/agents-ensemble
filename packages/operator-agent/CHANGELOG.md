@@ -1,5 +1,17 @@
 # @agents-ensemble/operator-agent
 
+## 0.6.3
+
+### Patch Changes
+
+- 824dbc8: Add keyword search and Issue-grouped pagination to operator session listings.
+- ebaf4ca: 一覧で harness のライブ接続を確認し、接続状態・保存 phase・Open Question・報告時刻で絞り込めるようにする。
+- ad1b5f8: Load profile workspace AGENTS.md as operator-agent instructions on startup and resume.
+- 1e4140b: Expose conservative live harness work status in operator session listings.
+- Updated dependencies [ebaf4ca]
+- Updated dependencies [1e4140b]
+  - @agents-ensemble/core@0.23.3
+
 ## 0.6.2
 
 ### Patch Changes
