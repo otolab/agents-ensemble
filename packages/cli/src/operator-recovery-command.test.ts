@@ -45,6 +45,7 @@ function createApi(): RecoveryInboxCommandApi {
       recoveryId === snapshot.recoveryId,
     ),
     continueAfterRecovery: vi.fn(() => true),
+    continueAfterRecoveryForAttempt: vi.fn(() => true),
     recoveryAttentionAttemptId: vi.fn(() => '12'),
     getCursorBootstrapStatus: vi.fn(() => bootstrapStatus),
     resolveCursorBootstrapUnknown: vi.fn((assumption) => {
@@ -168,7 +169,8 @@ describe('executeRecoveryInboxCommand', () => {
 
     const continued = executeRecoveryInboxCommand(api, '/recovery continue');
     expect(continued.inspection?.text).toContain('attempt 12 の確認を受け付けました');
-    expect(api.continueAfterRecovery).toHaveBeenCalledOnce();
+    expect(api.continueAfterRecoveryForAttempt).toHaveBeenCalledOnce();
+    expect(api.continueAfterRecovery).not.toHaveBeenCalled();
 
     const hidden = executeRecoveryInboxCommand(
       api,
@@ -183,7 +185,7 @@ describe('executeRecoveryInboxCommand', () => {
     let current: string | undefined = '1';
     let busy = false;
     api.recoveryAttentionAttemptId = () => current;
-    api.continueAfterRecovery = vi.fn((expected) => {
+    api.continueAfterRecoveryForAttempt = vi.fn((expected) => {
       if (busy || expected !== current) return false;
       current = current === '2' ? '1' : undefined;
       return true;
@@ -210,14 +212,14 @@ describe('executeRecoveryInboxCommand', () => {
   it('keeps the no-list continue operation for an ordinary recovery', () => {
     const api = createApi();
     expect(executeRecoveryInboxCommand(api, '/recovery continue').inspection?.text).toContain('attempt 12 の確認');
-    expect(api.continueAfterRecovery).toHaveBeenCalledWith('12');
+    expect(api.continueAfterRecoveryForAttempt).toHaveBeenCalledWith('12');
   });
 
   it('requires a new list or explicit ID after a no-list confirmation', () => {
     const api = createApi();
     let current: string | undefined = '1';
     api.recoveryAttentionAttemptId = () => current;
-    api.continueAfterRecovery = vi.fn((expected) => {
+    api.continueAfterRecoveryForAttempt = vi.fn((expected) => {
       if (expected !== current) return false;
       current = undefined;
       return true;
@@ -233,12 +235,28 @@ describe('executeRecoveryInboxCommand', () => {
   it('preserves the legacy callback-only binding without claiming ID matching', () => {
     const callback = vi.fn().mockReturnValueOnce(true).mockReturnValueOnce(false);
     const legacy: RecoveryInboxCommandApi = { continueAfterRecovery: callback };
-    expect(executeRecoveryInboxCommand(legacy, '/recovery continue 1').inspection?.text).toContain('ID を提供しません');
+    expect(executeRecoveryInboxCommand(legacy, '/recovery continue 1').inspection?.text).toContain('原子的な照合に対応していません');
     expect(callback).not.toHaveBeenCalled();
     executeRecoveryInboxCommand(legacy, '/recovery list');
     expect(executeRecoveryInboxCommand(legacy, '/recovery continue').inspection?.text).toContain('対象の照合は binding に委ねられます');
     expect(callback).toHaveBeenCalledExactlyOnceWith();
     expect(executeRecoveryInboxCommand(legacy, '/recovery continue').inspection?.text).toContain('確認できません');
+  });
+
+  it('never treats a legacy getter and no-argument callback as atomic confirmation', () => {
+    let current: string | undefined = '1';
+    const callback = vi.fn(() => { current = undefined; return true; });
+    const legacy: RecoveryInboxCommandApi = {
+      recoveryAttentionAttemptId: () => current,
+      continueAfterRecovery: callback,
+    };
+    expect(executeRecoveryInboxCommand(legacy, '/recovery list').inspection?.text).toContain('attempt 1');
+    current = '2';
+    for (const command of ['/recovery continue', '/recovery continue 1', '/recovery continue 2']) {
+      expect(executeRecoveryInboxCommand(legacy, command).inspection?.text).toContain('原子的な照合に対応していません');
+      expect(current).toBe('2');
+    }
+    expect(callback).not.toHaveBeenCalled();
   });
 
   it('does not confirm a new attempt after listing an empty inbox', () => {
@@ -248,7 +266,7 @@ describe('executeRecoveryInboxCommand', () => {
     executeRecoveryInboxCommand(api, '/recovery list');
     current = '3';
     expect(executeRecoveryInboxCommand(api, '/recovery continue').inspection?.text).toContain('再確認');
-    expect(api.continueAfterRecovery).not.toHaveBeenCalled();
+    expect(api.continueAfterRecoveryForAttempt).not.toHaveBeenCalled();
   });
 
   it('requires an interactive TTY to choose how an unknown Cursor bootstrap is handled', () => {

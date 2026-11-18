@@ -2133,6 +2133,19 @@ async function runConductorSessionWithStartupGuard(
   };
 
   if (options.bindOperatorInput) {
+    const continueAfterRecovery = (expectedAttemptId?: string): boolean => {
+      const gatedAttempt = dispatchLifecycle.pendingAttemptId;
+      const attempt = gatedAttempt ?? unconfirmedWorkerFailures.keys().next().value;
+      if (!attempt || (expectedAttemptId !== undefined && expectedAttemptId !== attempt)) return false;
+      if (gatedAttempt) {
+        if (!dispatchLifecycle.confirmRecovery(attempt)) return false;
+      } else if (dispatchLifecycle.state === 'in_flight' || dispatchLifecycle.state === 'reconnecting') {
+        return false;
+      }
+      for (const id of unconfirmedWorkerFailures.get(attempt) ?? []) pendingWorkerFailures.delete(id);
+      unconfirmedWorkerFailures.delete(attempt);
+      return true;
+    };
     const bindingDispose = options.bindOperatorInput({
       submit: (message, submitOptions) => {
         if (isOperatorExitCommand(message)) {
@@ -2183,19 +2196,8 @@ async function runConductorSessionWithStartupGuard(
           }
         : {}),
       clearRecoverySnapshot: (recoveryId) => recoveryInbox.remove(recoveryId),
-      continueAfterRecovery: (expectedAttemptId) => {
-        const gatedAttempt = dispatchLifecycle.pendingAttemptId;
-        const attempt = gatedAttempt ?? unconfirmedWorkerFailures.keys().next().value;
-        if (!attempt || (expectedAttemptId !== undefined && expectedAttemptId !== attempt)) return false;
-        if (gatedAttempt) {
-          if (!dispatchLifecycle.confirmRecovery(attempt)) return false;
-        } else if (dispatchLifecycle.state === 'in_flight' || dispatchLifecycle.state === 'reconnecting') {
-          return false;
-        }
-        for (const id of unconfirmedWorkerFailures.get(attempt) ?? []) pendingWorkerFailures.delete(id);
-        unconfirmedWorkerFailures.delete(attempt);
-        return true;
-      },
+      continueAfterRecovery: () => continueAfterRecovery(),
+      continueAfterRecoveryForAttempt: (attemptId) => continueAfterRecovery(attemptId),
       recoveryAttentionAttemptId: () =>
         dispatchLifecycle.pendingAttemptId ?? unconfirmedWorkerFailures.keys().next().value,
       ...(cursorBootstrapState && operatorCanInspectRecovery

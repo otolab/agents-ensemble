@@ -39,7 +39,10 @@ interface OperatorInputBindingApi {
   // TTY binding のみ。非 TTY では本文を取得できない
   getRecoverySnapshot?: (recoveryId: string) => ConductorRecoverySnapshot | undefined;
   clearRecoverySnapshot?: (recoveryId: string) => boolean;
+  // 旧 binding 向け。対象 ID の照合は保証しない
   continueAfterRecovery?: () => boolean;
+  // 対象がまだ現在の attempt と一致するときだけ原子的に確認する
+  continueAfterRecoveryForAttempt?: (attemptId: string) => boolean;
   recoveryAttentionAttemptId?: () => string | undefined;
   getCursorBootstrapStatus?: () => 'unknown' | 'saving' | 'complete' | 'incomplete';
   resolveCursorBootstrapUnknown?: (
@@ -367,7 +370,7 @@ TTY operator input binding で次を実行します。
 
 `/recovery list` の後に引数なしの `continue` を実行すると、その list で表示された attempt を確認します。`continue <attemptId>` では対象を明示できます。表示後に確認対象が変わった場合や、既に確認済みの場合は解除せず、再度 `list` での確認を求めます。送信・再接続中も確認できません。list を使わず最初に引数なしで `continue` を実行した場合は、その時点の確認待ち attempt が対象です。その後は同じ ID を保持するため、別の attempt を確認するときは、誤った重複確認を防ぐために `list` を再表示するか ID を明示してください。
 
-attempt ID を提供しない旧 binding では、引数なし `continue` は従来どおり binding の callback に委ねます。この場合、共通コマンドは対象 ID を照合できません。ID を明示する操作は利用できません。
+attempt ID の取得と原子的な照合は別の capability です。getter と旧 `continueAfterRecovery` だけを持つ binding では、表示後に対象が変わっても callback が別の attempt を解除し得るため、共通コマンドは callback を呼びません。binding は `continueAfterRecoveryForAttempt` を実装し、指定 ID と現在の対象の比較および確認を一体で行う必要があります。ID getter のない旧 callback 専用 binding では、引数なし `continue` は従来どおり callback に委ねます。この場合、共通コマンドは対象 ID を照合できません。ID を明示する操作は利用できません。
 
 snapshot は stdin / stdout / stderr がすべて TTY の対話実行に限り保存・取得できます。非 TTY では本文を保存・表示せず、この実行環境では同一 process 内でも本文を確認できないことを本文なしで知らせます。非 TTY one-shot は未確定 send の後に error 終了し、inbox 本文をログや summary に退避しません。
 
