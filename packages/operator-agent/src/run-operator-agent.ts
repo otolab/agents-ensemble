@@ -1,5 +1,5 @@
 import { createInterface } from 'node:readline';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { compile, merge } from '@modular-prompt/core';
@@ -539,7 +539,8 @@ async function resolveOperatorRuntime(
         instructions: profile.prompt.instructions,
       })
     : operatorBaseModule;
-  const systemPrompt = renderCompiledPrompt(
+  const workspaceInstructions = await loadWorkspaceInstructions(workspace);
+  const basePrompt = renderCompiledPrompt(
     compile(
       promptModule,
       {
@@ -549,6 +550,10 @@ async function resolveOperatorRuntime(
       },
     ),
   );
+
+  const systemPrompt = workspaceInstructions
+    ? `${basePrompt}\n\n### Profile workspace instructions (AGENTS.md)\n\n${workspaceInstructions}`
+    : basePrompt;
 
   return {
     userEnsembleRoot,
@@ -614,6 +619,22 @@ async function selectSavedConversation(
     stdout,
   );
   return states.find((state) => state.operatorAgentId === selected)!;
+}
+
+async function loadWorkspaceInstructions(workspace: string): Promise<string | undefined> {
+  const path = join(workspace, 'AGENTS.md');
+  try {
+    const bytes = await readFile(path);
+    return new TextDecoder('utf-8', { fatal: true }).decode(bytes).trim() || undefined;
+  } catch (error) {
+    if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') {
+      return undefined;
+    }
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(`Failed to read profile workspace instructions at ${path}: ${detail}`, {
+      cause: error,
+    });
+  }
 }
 
 async function selectProfileName(
