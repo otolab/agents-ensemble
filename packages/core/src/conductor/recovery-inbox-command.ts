@@ -82,14 +82,15 @@ export function executeRecoveryInboxCommand(
   }
 
   if (command === 'continue' && recoveryId === undefined) {
+    const attemptId = api?.recoveryAttentionAttemptId?.();
     const continued = api?.continueAfterRecovery?.() ?? false;
     return {
       handled: true,
       inspection: {
         title: 'Conductor recovery',
         text: continued
-          ? '未確定だった send の確認を受け付けました。失敗した入力は再送せず、後続 queue の dispatch を再開します。'
-          : '確認待ちの send はありません。',
+          ? `attempt ${attemptId ?? '不明'} の確認を受け付けました。失敗した入力は再送しません。/recovery list で次の確認待ちを確認できます。`
+          : '確認可能な send はありません。送信・再接続中は完了を待ってください。',
       },
     };
   }
@@ -288,6 +289,9 @@ function formatRecoverySnapshotList(
 
   return [
     ...heading,
+    ...(attentionAttemptId
+      ? [`attempt ${attentionAttemptId} の結果確認後に /recovery continue を実行できます。`]
+      : []),
     '容量が満杯の間は対象の入力をqueueに残してdispatchを待ちます。/recovery clear <id> またはTTL後に再開します。',
     '',
     ...snapshots.map((snapshot) =>

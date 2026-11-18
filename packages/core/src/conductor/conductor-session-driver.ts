@@ -132,7 +132,7 @@ export interface ConductorSessionDriverOptions {
   onOperatorQueueChanged?: () => void;
   onOperatorDispatched?: (events: SessionEvent[]) => void;
   onWorkerFailuresDelivered?: (events: SessionEvent[]) => void;
-  onWorkerFailuresUnconfirmed?: (events: SessionEvent[]) => void;
+  onWorkerFailuresUnconfirmed?: (attemptId: string, events: SessionEvent[]) => void;
   onSendStarted?: (info: ConductorSendStartedInfo) => void;
   onSendProgress?: (info: ConductorSendProgressInfo) => void;
   onSendComplete: (info: ConductorSendCompleteInfo) => void;
@@ -831,7 +831,7 @@ export async function runConductorSessionDriver(
             event.delivery === 'interrupt',
         );
       if (!isIssueDispatchCompleted(result)) {
-        options.onWorkerFailuresUnconfirmed?.(batch);
+        options.onWorkerFailuresUnconfirmed?.(lease.attemptId, batch);
       }
       settleAttempt({
         lease,

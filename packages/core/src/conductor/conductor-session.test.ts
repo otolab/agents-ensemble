@@ -601,7 +601,9 @@ describe('runConductorSession resume / shutdown', () => {
         if (failureSends === 1 || failureSends === 3) {
           failureSendStarted = true;
           await failureSendGate.promise;
-          return { runId: 'failed-send', status: 'error', error: { message: 'synthetic send failure' } };
+          return failureSends === 1
+            ? { runId: 'interrupted-send', status: 'cancelled' }
+            : { runId: 'failed-send', status: 'error', error: { message: 'synthetic send failure' } };
         }
       }
       return { runId: 'run', status: 'finished', result: 'done' };
@@ -681,21 +683,26 @@ describe('runConductorSession resume / shutdown', () => {
       await tools!.prompt_worker!.execute({ worker: 'b', instruction: 'round-fail-2' });
       secondFailingRound.resolve({ stopReason: 'end_turn' });
       await vi.waitFor(() => expect(secondFailureBlocked).toBe(true));
+      expect(api!.submit('interrupt failure notification', { delivery: 'interrupt' })).toBe(true);
       failureSendGate.resolve();
-      await vi.waitFor(() => expect(api!.recoveryAttentionAttemptId!()).toBeDefined());
-      expect(await getStatus('unknown')).toHaveLength(1);
-      expect(api!.continueAfterRecovery!()).toBe(true);
-      expect(api!.continueAfterRecovery!()).toBe(false);
+      await vi.waitFor(() => expect(mockSend.mock.calls.some(([message]) => message.includes('interrupt failure notification'))).toBe(true));
+      const interruptedAttempt = api!.recoveryAttentionAttemptId!();
+      expect(interruptedAttempt).toBeDefined();
       expect(await getStatus('unknown')).toHaveLength(1);
       expect(failureSends).toBe(1);
       secondFailureNotificationGate.resolve();
-      await vi.waitFor(async () => expect(await getStatus('waiting')).toHaveLength(1));
+      await vi.waitFor(() => expect(failureSends).toBe(2));
+      expect(await getStatus('unknown')).toHaveLength(1);
       expect(failureSends).toBe(2);
       await tools!.prompt_worker!.execute({ worker: 'a', instruction: 'round-fail-3' });
       thirdFailingRound.resolve({ stopReason: 'end_turn' });
-      await vi.waitFor(() => expect(api!.recoveryAttentionAttemptId!()).toBeDefined());
+      await vi.waitFor(() => expect(api!.recoveryAttentionAttemptId!()).not.toBe(interruptedAttempt));
       expect(await getStatus('unknown')).toHaveLength(1);
       expect(api!.continueAfterRecovery!()).toBe(true);
+      expect(api!.recoveryAttentionAttemptId!()).toBe(interruptedAttempt);
+      expect(await getStatus('unknown')).toHaveLength(1);
+      expect(api!.continueAfterRecovery!()).toBe(true);
+      expect(api!.continueAfterRecovery!()).toBe(false);
       await vi.waitFor(async () => expect(await getStatus('waiting')).toHaveLength(1));
       expect(failureSends).toBe(3);
     } finally {

@@ -513,7 +513,7 @@ async function runConductorSessionWithStartupGuard(
   // recovery from its unconfirmed delivery attempt.
   let nextWorkerFailureId = 0;
   const pendingWorkerFailures = new Set<number>();
-  const unconfirmedWorkerFailures = new Set<number>();
+  const unconfirmedWorkerFailures = new Map<string, Set<number>>();
   const unassignedWorkerFailures = new Map<string, number[]>();
   const workerFailureIds = new WeakMap<WorkerFailureRecord, number>();
   const resumeNoticeDetails = new Set<string>();
@@ -2184,14 +2184,20 @@ async function runConductorSessionWithStartupGuard(
         : {}),
       clearRecoverySnapshot: (recoveryId) => recoveryInbox.remove(recoveryId),
       continueAfterRecovery: () => {
-        const confirmed = dispatchLifecycle.confirmRecovery();
-        if (confirmed) {
-          for (const id of unconfirmedWorkerFailures) pendingWorkerFailures.delete(id);
-          unconfirmedWorkerFailures.clear();
+        const gatedAttempt = dispatchLifecycle.pendingAttemptId;
+        const attempt = gatedAttempt ?? unconfirmedWorkerFailures.keys().next().value;
+        if (!attempt) return false;
+        if (gatedAttempt) {
+          if (!dispatchLifecycle.confirmRecovery()) return false;
+        } else if (dispatchLifecycle.state === 'in_flight' || dispatchLifecycle.state === 'reconnecting') {
+          return false;
         }
-        return confirmed;
+        for (const id of unconfirmedWorkerFailures.get(attempt) ?? []) pendingWorkerFailures.delete(id);
+        unconfirmedWorkerFailures.delete(attempt);
+        return true;
       },
-      recoveryAttentionAttemptId: () => dispatchLifecycle.pendingAttemptId,
+      recoveryAttentionAttemptId: () =>
+        dispatchLifecycle.pendingAttemptId ?? unconfirmedWorkerFailures.keys().next().value,
       ...(cursorBootstrapState && operatorCanInspectRecovery
         ? {
             getCursorBootstrapStatus: () => cursorBootstrapState.status,
@@ -2514,16 +2520,21 @@ async function runConductorSessionWithStartupGuard(
           const id = workerFailureIds.get(event.failure);
           if (id !== undefined) {
             pendingWorkerFailures.delete(id);
-            unconfirmedWorkerFailures.delete(id);
+            for (const [attempt, failures] of unconfirmedWorkerFailures) {
+              failures.delete(id);
+              if (failures.size === 0) unconfirmedWorkerFailures.delete(attempt);
+            }
           }
         }
       },
-      onWorkerFailuresUnconfirmed: (events) => {
+      onWorkerFailuresUnconfirmed: (attempt, events) => {
+        const failures = new Set<number>();
         for (const event of events) {
           if (event.type !== 'worker.failed') continue;
           const id = workerFailureIds.get(event.failure);
-          if (id !== undefined) unconfirmedWorkerFailures.add(id);
+          if (id !== undefined) failures.add(id);
         }
+        if (failures.size > 0) unconfirmedWorkerFailures.set(attempt, failures);
       },
       onOperatorDispatched: (events) => {
         for (const event of events) {
@@ -2580,7 +2591,9 @@ async function runConductorSessionWithStartupGuard(
           ? operatorCanInspectRecovery
             ? '状態を確認してから必要な続きを新しい指示で送り、後続 dispatch を再開するには /recovery continue を実行してください。'
             : '失敗した入力は自動再送せず、後続 dispatch も停止しています。非 TTY では本文を確認できないため、状態を確かめてから安全な再開方法を判断してください。'
-          : '明示的な interrupt 入力が queue に残っているため、その入力を次に処理します。/recovery continue は不要です。';
+          : unconfirmedWorkerFailures.has(attemptId)
+            ? '明示的な interrupt 入力を次に処理します。worker failure の通知結果は未確認です。/recovery list で attempt を確認し、/recovery continue で確認を記録してください。'
+            : '明示的な interrupt 入力が queue に残っているため、その入力を次に処理します。/recovery continue は不要です。';
         sessionLogger.emit({
           type: 'harness.warning',
           message: [

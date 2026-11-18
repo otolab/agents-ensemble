@@ -62,6 +62,7 @@ describe('executeRecoveryInboxCommand', () => {
 
     expect(result.handled).toBe(true);
     expect(result.inspection?.text).toContain(snapshot.recoveryId);
+    expect(result.inspection?.text).toContain('attempt 12 の結果確認後');
     expect(result.inspection?.text).toContain('本文は表示せず');
     expect(result.inspection?.text).not.toContain('private task');
     expect(api.listRecoverySnapshots).toHaveBeenCalledOnce();
@@ -166,7 +167,7 @@ describe('executeRecoveryInboxCommand', () => {
     expect(cleared.inspection?.text).toContain('完全消去は保証しません');
 
     const continued = executeRecoveryInboxCommand(api, '/recovery continue');
-    expect(continued.inspection?.text).toContain('確認を受け付けました');
+    expect(continued.inspection?.text).toContain('attempt 12 の確認を受け付けました');
     expect(api.continueAfterRecovery).toHaveBeenCalledOnce();
 
     const hidden = executeRecoveryInboxCommand(

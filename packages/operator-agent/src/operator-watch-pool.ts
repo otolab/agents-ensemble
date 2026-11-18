@@ -1636,77 +1636,94 @@ export async function createOperatorWatchPool(
       // Candidate-only freshness must not hold the shared profile state lock
       // across a UDS request. A ready OQ batch still needs that lock to freeze
       // and send within the run loop's aggregate refresh wait cap.
-      const located = await findSession(id, { root });
-      if (
-        !located ||
-        issueIdentity(located.resumeStore.issueUrl) !==
-          issueIdentity(assignedIssueUrl)
-      ) {
-        return false;
-      }
-      const {
-        snapshot: observation,
-        source,
-        connectivity,
-        checkedAt,
-      } = await readObservation(root, located);
-      const latestLocated = await findSession(id, { root });
-      const phaseObservationIsStable = Boolean(
-        source === 'uds' &&
-          connectivity === 'reachable' &&
-          latestLocated &&
-          latestLocated.path === located.path &&
-          latestLocated.location === located.location &&
-          issueIdentity(latestLocated.resumeStore.issueUrl) ===
-            issueIdentity(located.resumeStore.issueUrl) &&
-          latestLocated.resumeStore.harnessPhase ===
-            located.resumeStore.harnessPhase &&
-          latestLocated.resumeStore.modifiedAt ===
-            located.resumeStore.modifiedAt &&
-          latestLocated.resumeStore.lifecycle ===
-            located.resumeStore.lifecycle,
-      );
-      const currentWatch = state.watches[id];
-      if (
-        closed ||
-        !currentWatch ||
-        pathById.get(id) !== assignedWatchStatePath ||
-        issueIdentity(issueUrlById.get(id) ?? '') !==
-          issueIdentity(assignedIssueUrl)
-      ) {
-        return false;
-      }
-      if (!phaseObservationIsStable) {
-        idleCandidateObservations.delete(id);
-        return false;
-      }
-
-      idleCandidateObservations.set(id, {
-        conductorAgentId: id,
-        issueUrl: located.resumeStore.issueUrl,
-        observationVersion: ++idleCandidateObservationVersion,
-        source,
-        connectivity,
-        checkedAt,
-        pollIntervalMs: currentWatch.pollIntervalMs,
-        harnessPhase: located.resumeStore.harnessPhase,
-        harnessModifiedAt: located.resumeStore.modifiedAt,
-        ...(located.resumeStore.lifecycle !== undefined
-          ? { lifecycle: located.resumeStore.lifecycle }
-          : {}),
-        openQuestionCount: observation.openQuestions.filter(
-          (question) => question.status === 'open',
-        ).length,
-        ...(observation.sessionState?.current
-          ? {
-              statusLine: {
-                text: observation.sessionState.current.statusLine,
-                reportedAt: observation.sessionState.current.reportedAt,
-              },
-            }
-          : {}),
+      // Reserve the same per-session slot used by ordinary polls, including
+      // while locating the session and validating the completed read.
+      if (polling.has(id)) return false;
+      polling.add(id);
+      let resolveRefreshCompletion!: () => void;
+      const refreshCompletion = new Promise<void>((resolve) => {
+        resolveRefreshCompletion = resolve;
       });
-      return true;
+      pollCompletions.set(id, refreshCompletion);
+      try {
+        const located = await findSession(id, { root });
+        if (
+          !located ||
+          issueIdentity(located.resumeStore.issueUrl) !==
+            issueIdentity(assignedIssueUrl)
+        ) {
+          return false;
+        }
+        const {
+          snapshot: observation,
+          source,
+          connectivity,
+          checkedAt,
+        } = await readObservation(root, located);
+        const latestLocated = await findSession(id, { root });
+        const phaseObservationIsStable = Boolean(
+          source === 'uds' &&
+            connectivity === 'reachable' &&
+            latestLocated &&
+            latestLocated.path === located.path &&
+            latestLocated.location === located.location &&
+            issueIdentity(latestLocated.resumeStore.issueUrl) ===
+              issueIdentity(located.resumeStore.issueUrl) &&
+            latestLocated.resumeStore.harnessPhase ===
+              located.resumeStore.harnessPhase &&
+            latestLocated.resumeStore.modifiedAt ===
+              located.resumeStore.modifiedAt &&
+            latestLocated.resumeStore.lifecycle ===
+              located.resumeStore.lifecycle,
+        );
+        const currentWatch = state.watches[id];
+        if (
+          closed ||
+          !currentWatch ||
+          pathById.get(id) !== assignedWatchStatePath ||
+          issueIdentity(issueUrlById.get(id) ?? '') !==
+            issueIdentity(assignedIssueUrl)
+        ) {
+          return false;
+        }
+        if (!phaseObservationIsStable) {
+          idleCandidateObservations.delete(id);
+          return false;
+        }
+
+        idleCandidateObservations.set(id, {
+          conductorAgentId: id,
+          issueUrl: located.resumeStore.issueUrl,
+          observationVersion: ++idleCandidateObservationVersion,
+          source,
+          connectivity,
+          checkedAt,
+          pollIntervalMs: currentWatch.pollIntervalMs,
+          harnessPhase: located.resumeStore.harnessPhase,
+          harnessModifiedAt: located.resumeStore.modifiedAt,
+          ...(located.resumeStore.lifecycle !== undefined
+            ? { lifecycle: located.resumeStore.lifecycle }
+            : {}),
+          openQuestionCount: observation.openQuestions.filter(
+            (question) => question.status === 'open',
+          ).length,
+          ...(observation.sessionState?.current
+            ? {
+                statusLine: {
+                  text: observation.sessionState.current.statusLine,
+                  reportedAt: observation.sessionState.current.reportedAt,
+                },
+              }
+            : {}),
+        });
+        return true;
+      } finally {
+        polling.delete(id);
+        if (pollCompletions.get(id) === refreshCompletion) {
+          pollCompletions.delete(id);
+        }
+        resolveRefreshCompletion();
+      }
     },
     async pollOnce(conductorAgentId) {
       const id = requireNonEmptyString(conductorAgentId, 'conductorAgentId');

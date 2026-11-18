@@ -219,7 +219,7 @@ describe('runConductorSessionDriver', () => {
       expect(onWorkerFailuresUnconfirmed).not.toHaveBeenCalled();
     } else {
       expect(onWorkerFailuresDelivered).not.toHaveBeenCalled();
-      expect(onWorkerFailuresUnconfirmed).toHaveBeenCalledExactlyOnceWith([failure]);
+      expect(onWorkerFailuresUnconfirmed).toHaveBeenCalledExactlyOnceWith(expect.any(String), [failure]);
     }
   });
 
