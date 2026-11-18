@@ -571,14 +571,23 @@ describe('runConductorSession resume / shutdown', () => {
     const roundA = createDeferred<{ stopReason: string }>();
     const roundB = createDeferred<{ stopReason: string }>();
     const failingRound = createDeferred<{ stopReason: string }>();
+    const secondFailingRound = createDeferred<{ stopReason: string }>();
+    const thirdFailingRound = createDeferred<{ stopReason: string }>();
     const failureNotificationGate = createDeferred<void>();
+    const secondFailureNotificationGate = createDeferred<void>();
     const failureSendGate = createDeferred<void>();
     let failureBlocked = false;
+    let secondFailureBlocked = false;
     let failureSendStarted = false;
+    let failureNotifications = 0;
+    let failureSends = 0;
     const originalSubscribe = ConductorInbox.prototype.subscribe;
     vi.spyOn(ConductorInbox.prototype, 'subscribe').mockImplementation(function (listener) {
       return originalSubscribe.call(this, async (message) => {
-        if (message.type === 'worker.failed') { failureBlocked = true; await failureNotificationGate.promise; }
+        if (message.type === 'worker.failed') {
+          if (++failureNotifications === 1) { failureBlocked = true; await failureNotificationGate.promise; }
+          else { secondFailureBlocked = true; await secondFailureNotificationGate.promise; }
+        }
         return listener(message);
       });
     });
@@ -587,7 +596,14 @@ describe('runConductorSession resume / shutdown', () => {
       return { agentId: 'agent-test', send: mockSend, close: mockClose, getUsage: createMockConductorGetUsage() };
     });
     mockSend.mockImplementation(async (message: string) => {
-      if (message.includes('worker.failed')) { failureSendStarted = true; await failureSendGate.promise; }
+      if (message.includes('worker.failed')) {
+        failureSends++;
+        if (failureSends === 1 || failureSends === 3) {
+          failureSendStarted = true;
+          await failureSendGate.promise;
+          return { runId: 'failed-send', status: 'error', error: { message: 'synthetic send failure' } };
+        }
+      }
       return { runId: 'run', status: 'finished', result: 'done' };
     });
     const permissions = new Map<string, PermissionHandler>();
@@ -600,6 +616,8 @@ describe('runConductorSession resume / shutdown', () => {
           if (prompt === 'round-a') { permissions.set('a', options!.permissionHandler!); return roundA.promise; }
           if (prompt === 'round-b') return roundB.promise;
           if (prompt === 'round-fail') { await failingRound.promise; throw new Error('worker failed'); }
+          if (prompt === 'round-fail-2') { await secondFailingRound.promise; throw new Error('second worker failed'); }
+          if (prompt === 'round-fail-3') { await thirdFailingRound.promise; throw new Error('third worker failed'); }
           return { stopReason: 'end_turn' };
         }),
         cancelSession: vi.fn(), close: vi.fn().mockResolvedValue(undefined),
@@ -612,6 +630,7 @@ describe('runConductorSession resume / shutdown', () => {
       workerWorktree: { path: repoRoot, branch: 'main', issue: TEST_ISSUE, inRepo: true },
       connectAcp, permissionPipeline: pipeline, registerProcessSignalHandlers: false,
       disableGitHubMonitor: true, disablePermissionDeadlockMonitor: true, waitForOperatorExit: true, maxTurns: 50,
+      continueOnConductorError: true, operatorCanInspectRecovery: true,
       bindOperatorInput: (binding) => { api = binding; },
     });
     const userRoot = resolveEnsemblePaths({ repoRoot }).userRoot;
@@ -659,10 +678,30 @@ describe('runConductorSession resume / shutdown', () => {
       failureNotificationGate.resolve();
       await vi.waitFor(() => expect(failureSendStarted, JSON.stringify(mockSend.mock.calls.map((call) => call[0]))).toBe(true), { timeout: 5000 });
       expect(await getStatus('unknown')).toHaveLength(1);
+      await tools!.prompt_worker!.execute({ worker: 'b', instruction: 'round-fail-2' });
+      secondFailingRound.resolve({ stopReason: 'end_turn' });
+      await vi.waitFor(() => expect(secondFailureBlocked).toBe(true));
       failureSendGate.resolve();
+      await vi.waitFor(() => expect(api!.recoveryAttentionAttemptId!()).toBeDefined());
+      expect(await getStatus('unknown')).toHaveLength(1);
+      expect(api!.continueAfterRecovery!()).toBe(true);
+      expect(api!.continueAfterRecovery!()).toBe(false);
+      expect(await getStatus('unknown')).toHaveLength(1);
+      expect(failureSends).toBe(1);
+      secondFailureNotificationGate.resolve();
       await vi.waitFor(async () => expect(await getStatus('waiting')).toHaveLength(1));
+      expect(failureSends).toBe(2);
+      await tools!.prompt_worker!.execute({ worker: 'a', instruction: 'round-fail-3' });
+      thirdFailingRound.resolve({ stopReason: 'end_turn' });
+      await vi.waitFor(() => expect(api!.recoveryAttentionAttemptId!()).toBeDefined());
+      expect(await getStatus('unknown')).toHaveLength(1);
+      expect(api!.continueAfterRecovery!()).toBe(true);
+      await vi.waitFor(async () => expect(await getStatus('waiting')).toHaveLength(1));
+      expect(failureSends).toBe(3);
     } finally {
       failureNotificationGate.resolve(); failureSendGate.resolve();
+      secondFailureNotificationGate.resolve(); secondFailingRound.resolve({ stopReason: 'end_turn' });
+      thirdFailingRound.resolve({ stopReason: 'end_turn' });
       roundA.resolve({ stopReason: 'end_turn' }); roundB.resolve({ stopReason: 'end_turn' });
       pool?.close(); api?.submit('/exit');
       await settleWithin(session, 10_000);

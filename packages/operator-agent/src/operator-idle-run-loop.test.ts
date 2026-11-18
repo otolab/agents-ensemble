@@ -695,7 +695,7 @@ describe('operator idle candidate dispatch run loop', () => {
       dispatchAttempts: 2,
       reportBatches: 1,
       fakeAgentTurns: 2,
-      openQuestionWaitMs: 10_100,
+      openQuestionWaitMs: 10_150,
     });
     expect(baseline.prompt).toContain('Review the live session?');
     expect(baseline.prompt).not.toContain('稼働 session の確認候補');

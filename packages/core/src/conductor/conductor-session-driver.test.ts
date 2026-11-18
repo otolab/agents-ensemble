@@ -204,16 +204,23 @@ describe('runConductorSessionDriver', () => {
     expect(send).toHaveBeenCalledWith(kickoff, expect.any(Object));
   });
 
-  it.each(['finished', 'error'] as const)('acknowledges worker failure delivery only after a successful send (%s)', async (status) => {
+  it.each(['finished', 'completed', 'running', 'error'] as const)('tracks worker failure delivery after the send settles (%s)', async (status) => {
     const eventQueue = new SessionEventQueue();
     const failure = { type: 'worker.failed' as const, failure: { workerId: 'worker-1', name: 'worker', kind: 'implementer', error: 'round failed', issueUrl: TEST_ISSUE.url } };
     eventQueue.enqueue(failure);
     const send = vi.fn().mockResolvedValueOnce({ runId: 'initial', status: 'finished', result: 'ready' }).mockResolvedValueOnce({ runId: 'failure', status, result: 'handled' });
     const conductor = { agentId: 'agent-1', send, close: vi.fn() } as unknown as ConductorAgent;
-    const onWorkerFailuresDelivered = vi.fn();
-    await runConductorSessionDriver({ ...createDriverOptions({ eventQueue, conductor }), onWorkerFailuresDelivered });
-    if (status === 'finished') expect(onWorkerFailuresDelivered).toHaveBeenCalledWith([failure]);
-    else expect(onWorkerFailuresDelivered).not.toHaveBeenCalled();
+    const shutdown = new AbortController();
+    const onWorkerFailuresDelivered = vi.fn(() => shutdown.abort());
+    const onWorkerFailuresUnconfirmed = vi.fn(() => shutdown.abort());
+    await runConductorSessionDriver({ ...createDriverOptions({ eventQueue, conductor }), shutdownSignal: shutdown.signal, onWorkerFailuresDelivered, onWorkerFailuresUnconfirmed });
+    if (status !== 'error') {
+      expect(onWorkerFailuresDelivered).toHaveBeenCalledExactlyOnceWith([failure]);
+      expect(onWorkerFailuresUnconfirmed).not.toHaveBeenCalled();
+    } else {
+      expect(onWorkerFailuresDelivered).not.toHaveBeenCalled();
+      expect(onWorkerFailuresUnconfirmed).toHaveBeenCalledExactlyOnceWith([failure]);
+    }
   });
 
   it('drains worker outcome notifications before stopping on an idle queue', async () => {

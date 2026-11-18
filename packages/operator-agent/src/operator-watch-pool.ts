@@ -1595,10 +1595,16 @@ export async function createOperatorWatchPool(
         afterObservationVersion ??
         idleCandidateObservations.get(id)?.observationVersion ??
         0;
+      const isFresh = (observation: OperatorIdleCandidateObservation) => {
+        const now = Date.now();
+        return observation.checkedAt <= now &&
+          now - observation.checkedAt <= Math.max(10_000, observation.pollIntervalMs * 2);
+      };
       const currentObservation = idleCandidateObservations.get(id);
       if (
         currentObservation &&
-        currentObservation.observationVersion > knownVersion
+        currentObservation.observationVersion > knownVersion &&
+        isFresh(currentObservation)
       ) {
         // A normal poll completed after the gate-clear pass captured its
         // freshness boundary. Reuse that result instead of issuing a second
@@ -1612,15 +1618,19 @@ export async function createOperatorWatchPool(
         // poll return early and make the run loop freeze before admission.
         await inFlightPoll;
         const refreshedObservation = idleCandidateObservations.get(id);
-        return Boolean(
-          !closed &&
-            state.watches[id] &&
-            pathById.get(id) === assignedWatchStatePath &&
-            issueIdentity(issueUrlById.get(id) ?? '') ===
-              issueIdentity(assignedIssueUrl) &&
-            refreshedObservation &&
-            refreshedObservation.observationVersion > knownVersion,
-        );
+        if (
+          closed || !state.watches[id] ||
+          pathById.get(id) !== assignedWatchStatePath ||
+          issueIdentity(issueUrlById.get(id) ?? '') !== issueIdentity(assignedIssueUrl)
+        ) return false;
+        if (!refreshedObservation || refreshedObservation.observationVersion <= knownVersion) {
+          return false;
+        }
+        if (isFresh(refreshedObservation)) {
+          return true;
+        }
+        // A poll that crossed the gate may have started too long ago to be
+        // fresh. Refresh after it completes; never overlap the same poll.
       }
 
       // Candidate-only freshness must not hold the shared profile state lock

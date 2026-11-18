@@ -509,9 +509,11 @@ async function runConductorSessionWithStartupGuard(
   const conductorMessages: OpenQuestionControlConductorMessage[] = [];
   const eventQueue = new SessionEventQueue();
   // A failed round becomes idle before its inbox notification is dispatched.
-  // Keep each failure until the conductor successfully receives that event.
+  // Keep each failure until delivery succeeds or the operator confirms
+  // recovery from its unconfirmed delivery attempt.
   let nextWorkerFailureId = 0;
   const pendingWorkerFailures = new Set<number>();
+  const unconfirmedWorkerFailures = new Set<number>();
   const unassignedWorkerFailures = new Map<string, number[]>();
   const workerFailureIds = new WeakMap<WorkerFailureRecord, number>();
   const resumeNoticeDetails = new Set<string>();
@@ -2181,7 +2183,14 @@ async function runConductorSessionWithStartupGuard(
           }
         : {}),
       clearRecoverySnapshot: (recoveryId) => recoveryInbox.remove(recoveryId),
-      continueAfterRecovery: () => dispatchLifecycle.confirmRecovery(),
+      continueAfterRecovery: () => {
+        const confirmed = dispatchLifecycle.confirmRecovery();
+        if (confirmed) {
+          for (const id of unconfirmedWorkerFailures) pendingWorkerFailures.delete(id);
+          unconfirmedWorkerFailures.clear();
+        }
+        return confirmed;
+      },
       recoveryAttentionAttemptId: () => dispatchLifecycle.pendingAttemptId,
       ...(cursorBootstrapState && operatorCanInspectRecovery
         ? {
@@ -2503,7 +2512,17 @@ async function runConductorSessionWithStartupGuard(
         for (const event of events) {
           if (event.type !== 'worker.failed') continue;
           const id = workerFailureIds.get(event.failure);
-          if (id !== undefined) pendingWorkerFailures.delete(id);
+          if (id !== undefined) {
+            pendingWorkerFailures.delete(id);
+            unconfirmedWorkerFailures.delete(id);
+          }
+        }
+      },
+      onWorkerFailuresUnconfirmed: (events) => {
+        for (const event of events) {
+          if (event.type !== 'worker.failed') continue;
+          const id = workerFailureIds.get(event.failure);
+          if (id !== undefined) unconfirmedWorkerFailures.add(id);
         }
       },
       onOperatorDispatched: (events) => {
