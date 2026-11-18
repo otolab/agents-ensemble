@@ -1,4 +1,11 @@
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import {
+  resolveEnsemblePaths,
+  startOpenQuestionControlServer,
+} from '@agents-ensemble/core';
 import {
   DEFAULT_OPERATOR_AGENT_SCHEDULING,
 } from './operator-agent-config.js';
@@ -10,6 +17,7 @@ import {
   type OperatorDispatchState,
 } from './operator-dispatch.js';
 import { evaluateOperatorIdleCandidate } from './operator-idle-candidates.js';
+import { createOperatorWatchPool } from './operator-watch-pool.js';
 import type { OperatorIdleCandidateObservation } from './operator-watch-pool.js';
 
 const issueUrl = 'https://github.com/example/repo/issues/745';
@@ -300,6 +308,182 @@ describe('synthetic idle-candidate dispatch comparisons', () => {
         importantNotificationWaitMs: 0,
       });
       expect(integrated).toEqual(baseline);
+    } finally {
+      clock.restore();
+    }
+  });
+
+  it('compares unchanged evidence across reevaluations without duplicate candidate sends', async () => {
+    const clock = useFakeClock();
+    try {
+      const run = async (integrated: boolean) => {
+        const harness = createScenarioHarness(clock.set);
+        const repoRoot = await mkdtemp(
+          join(tmpdir(), 'ensemble-idle-unchanged-evidence-'),
+        );
+        const userEnsembleRoot = join(repoRoot, '.ensemble');
+        const sessionId = 'important-session';
+        const statusLineReportedAt =
+          startAt - scheduling.staleRunningThresholdMs;
+        let liveQuestion:
+          | {
+              id: string;
+              question: string;
+              responseType: 'text';
+              source: 'conductor';
+              status: 'open';
+              askedAt: number;
+            }
+          | undefined;
+        let watchPool:
+          | Awaited<ReturnType<typeof createOperatorWatchPool>>
+          | undefined;
+        const liveServer = await startOpenQuestionControlServer({
+          listOpenQuestions: () =>
+            liveQuestion ? [liveQuestion] : [],
+          observeSession: async () => ({
+            sequence: liveQuestion ? 1 : 0,
+            openQuestions: liveQuestion ? [liveQuestion] : [],
+            sessionState: {
+              current: {
+                statusLine: '同じ状態が続いている',
+                reportedAt: statusLineReportedAt,
+              },
+              history: [],
+            },
+          }),
+          answerOpenQuestion: async () => {
+            throw new Error('unused');
+          },
+        });
+        const fingerprints = new Set<string>();
+        const admittedIds: string[] = [];
+        try {
+          const resumeStorePath = resolveEnsemblePaths({
+            repoRoot,
+            userEnsembleRoot,
+          }).canonicalSessionResumeStorePath(issueUrl, sessionId);
+          await mkdir(dirname(resumeStorePath), { recursive: true });
+          await writeFile(
+            resumeStorePath,
+            JSON.stringify({
+              version: 1,
+              conductorBackend: 'pi',
+              repoRoot,
+              profile: { workers: [], agents: {} },
+              openQuestions: [],
+              sequence: 0,
+              workers: {},
+              updatedAt: startAt,
+              conductorAgentId: sessionId,
+              issueUrl,
+              harnessSocketPath: liveServer.socketPath,
+              harnessPhase: 'running',
+              modifiedAt: startAt - 50 * 60_000,
+              lifecycle: 'unknown',
+            }),
+          );
+          watchPool = await createOperatorWatchPool({
+            repoRoot,
+            userEnsembleRoot,
+            dispatchQueue: harness.queue,
+          });
+          await watchPool.register(sessionId, {
+            pollIntervalMs: 60_000,
+            debounceMs: 0,
+          });
+          await watchPool.pollOnce(sessionId);
+          liveQuestion = {
+            id: 'inq-unchanged-evidence',
+            question: 'Review the unchanged live session?',
+            responseType: 'text',
+            source: 'conductor',
+            status: 'open',
+            askedAt: startAt,
+          };
+          await watchPool.pollOnce(sessionId);
+          if (integrated) {
+            let observation = watchPool
+              .listIdleCandidateObservations()
+              .find((item) => item.conductorAgentId === sessionId)!;
+            for (let reevaluation = 0; reevaluation < 4; reevaluation += 1) {
+              const at = startAt + reevaluation * 1_000;
+              clock.set(at);
+              if (reevaluation > 0) {
+                expect(
+                  await watchPool.refreshIdleCandidateObservation!(
+                    sessionId,
+                    observation.observationVersion,
+                  ),
+                ).toBe(true);
+                observation = watchPool
+                  .listIdleCandidateObservations()
+                  .find((item) => item.conductorAgentId === sessionId)!;
+              }
+              const candidate = evaluateOperatorIdleCandidate(
+                observation,
+                scheduling,
+                at,
+              );
+              expect(candidate?.kind).toBe('stale_running');
+              if (!candidate) continue;
+              fingerprints.add(candidate.fingerprint);
+              const reportId = await watchPool.enqueueIdleCandidate!({
+                conductorAgentId: sessionId,
+                text: candidate.text,
+                kind: candidate.kind,
+                fingerprint: candidate.fingerprint,
+                eligibleAt: at,
+              });
+              if (reportId) admittedIds.push(reportId);
+            }
+          }
+          const sent = await harness.dispatchAt(startAt + 3_000);
+          const questionReportId = sent?.events.find(
+            (event) =>
+              event.type === 'report' &&
+              event.reportType === 'open_question',
+          )?.reportId;
+          expect(questionReportId).toBeTypeOf('string');
+          return {
+            metrics: harness.metrics(
+              questionReportId!,
+              startAt,
+            ),
+            sent,
+            fingerprints,
+            admittedIds,
+          };
+        } finally {
+          watchPool?.close();
+          await liveServer.close();
+          await rm(repoRoot, { recursive: true, force: true });
+        }
+      };
+
+      const baseline = await run(false);
+      const integrated = await run(true);
+      expect(baseline.metrics).toEqual({
+        dispatchAttempts: 1,
+        reportBatches: 1,
+        fakeSendTurns: 1,
+        importantNotificationWaitMs: 3_000,
+      });
+      expect(integrated.metrics).toEqual(baseline.metrics);
+      expect(integrated.fingerprints.size).toBe(1);
+      expect(integrated.admittedIds).toHaveLength(1);
+      const integratedReportEvents = integrated.sent?.events.filter(
+        (event): event is Extract<
+          OperatorDispatchEvent,
+          { type: 'report' }
+        > => event.type === 'report',
+      );
+      expect(
+        integratedReportEvents?.map((event) => event.reportType),
+      ).toEqual(['session_state', 'open_question', 'idle_candidate']);
+      expect(integratedReportEvents?.[2]?.reportId).toBe(
+        integrated.admittedIds[0],
+      );
     } finally {
       clock.restore();
     }
