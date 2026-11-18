@@ -1343,4 +1343,164 @@ describe('operator dispatch batching', () => {
       now.mockRestore();
     }
   });
+
+  it('keeps idle age and arrival order through focus service and report refresh', () => {
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_000);
+    const queue = createOperatorDispatchQueue({
+      ...DEFAULT_OPERATOR_DISPATCH_SCHEDULING,
+      batchMaxWaitMs: 0,
+      idleAgingMs: 5_000,
+    });
+    const state = { continuationConsumed: true };
+    const idleCandidate = {
+      type: 'report' as const,
+      reportType: 'idle_candidate' as const,
+      reportId: 'idle-aged-through-focus',
+      conductorAgentId: 'idle-session',
+      issueUrl: 'https://github.com/example/repo/issues/1',
+      text: 'idle candidate',
+      priority: 'idle' as const,
+      eligibleAt: 1_000,
+      arrivalOrder: 11,
+    };
+    try {
+      queue.reconcileReports?.([
+        { event: idleCandidate, readyAt: 1_000 },
+      ]);
+      queue.setFocus('focused-session');
+      now.mockReturnValue(2_000);
+      const focusedReport = {
+        type: 'report' as const,
+        reportType: 'open_question' as const,
+        reportId: 'focused-open-question',
+        conductorAgentId: 'focused-session',
+        issueUrl: 'https://github.com/example/repo/issues/2',
+        text: 'focused OQ',
+        priority: 'open_question' as const,
+        arrivalOrder: 12,
+      };
+      queue.enqueueReport(focusedReport, 0);
+      queue.reconcileReports?.([
+        { event: idleCandidate, readyAt: 1_000 },
+        { event: focusedReport, readyAt: 2_000 },
+      ]);
+
+      const focusedBatch = queue.takeBatch(state, 2_000)!;
+      expect(focusedBatch.events.map((event) => event.reportId)).toEqual([
+        'focused-open-question',
+      ]);
+      expect(focusedBatch.priority).toBe('open_question');
+
+      now.mockReturnValue(7_000);
+      queue.setFocus(undefined);
+      const agedIdleBatch = queue.takeBatch(state, 7_000)!;
+      expect(agedIdleBatch.events.map((event) => event.reportId)).toEqual([
+        'idle-aged-through-focus',
+      ]);
+      expect(agedIdleBatch.priority).toBe('normal');
+      expect(agedIdleBatch.events[0]).toMatchObject({
+        eligibleAt: 1_000,
+        arrivalOrder: 11,
+      });
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it('does not starve aged idle under continuing normal arrivals and preserves FIFO ties', () => {
+    const now = vi.spyOn(Date, 'now').mockReturnValue(0);
+    const queue = createOperatorDispatchQueue({
+      ...DEFAULT_OPERATOR_DISPATCH_SCHEDULING,
+      batchMaxWaitMs: 0,
+      idleAgingMs: 5_000,
+    });
+    const state = { continuationConsumed: true };
+    try {
+      for (const [index, sessionId] of [
+        'idle-first',
+        'idle-second',
+      ].entries()) {
+        queue.enqueueReport(
+          {
+            type: 'report',
+            reportType: 'idle_candidate',
+            reportId: sessionId,
+            conductorAgentId: sessionId,
+            issueUrl: 'https://github.com/example/repo/issues/1',
+            text: sessionId,
+            priority: 'idle',
+            eligibleAt: 0,
+            arrivalOrder: index,
+          },
+          0,
+        );
+      }
+
+      for (let second = 1; second < 5; second += 1) {
+        now.mockReturnValue(second * 1_000);
+        const reportId = `normal-${second}`;
+        queue.enqueueReport(
+          {
+            type: 'report',
+            reportType: 'session_state',
+            reportId,
+            conductorAgentId: reportId,
+            issueUrl: 'https://github.com/example/repo/issues/1',
+            text: reportId,
+          },
+          0,
+        );
+        const batch = queue.takeBatch(state, second * 1_000)!;
+        expect(batch.events.map((event) =>
+          event.type === 'report' ? event.reportId : undefined,
+        )).toEqual([reportId]);
+      }
+
+      now.mockReturnValue(5_000);
+      queue.enqueueReport(
+        {
+          type: 'report',
+          reportType: 'session_state',
+          reportId: 'normal-5',
+          conductorAgentId: 'normal-5',
+          issueUrl: 'https://github.com/example/repo/issues/1',
+          text: 'normal-5',
+        },
+        0,
+      );
+
+      const firstAgedIdle = queue.takeBatch(state, 5_000)!;
+      now.mockReturnValue(6_000);
+      queue.enqueueReport(
+        {
+          type: 'report',
+          reportType: 'session_state',
+          reportId: 'normal-6',
+          conductorAgentId: 'normal-6',
+          issueUrl: 'https://github.com/example/repo/issues/1',
+          text: 'normal-6',
+        },
+        0,
+      );
+      const secondAgedIdle = queue.takeBatch(state, 6_000)!;
+      const continuingNormal = queue.takeBatch(state, 6_000)!;
+      const nextNormal = queue.takeBatch(state, 6_000)!;
+      expect(firstAgedIdle.priority).toBe('normal');
+      expect(secondAgedIdle.priority).toBe('normal');
+      expect(firstAgedIdle.events.map((event) =>
+        event.type === 'report' ? event.reportId : undefined,
+      )).toEqual(['idle-first']);
+      expect(secondAgedIdle.events.map((event) =>
+        event.type === 'report' ? event.reportId : undefined,
+      )).toEqual(['idle-second']);
+      expect(continuingNormal.events.map((event) =>
+        event.type === 'report' ? event.reportId : undefined,
+      )).toEqual(['normal-5']);
+      expect(nextNormal.events.map((event) =>
+        event.type === 'report' ? event.reportId : undefined,
+      )).toEqual(['normal-6']);
+    } finally {
+      now.mockRestore();
+    }
+  });
 });

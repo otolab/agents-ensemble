@@ -2382,11 +2382,13 @@ describe('operator watch pool', () => {
         frozenBatchId: first.batchId,
         frozenPayload,
       });
-      idleReportId = await firstPool.enqueueIdleCandidate!({
+      idleReportId = (await firstPool.enqueueIdleCandidate!({
         conductorAgentId: sessionId,
         text: '中立的な idle 確認候補',
+        kind: 'idle_phase',
+        fingerprint: 'idle-evidence-v1',
         eligibleAt: Date.now(),
-      });
+      }))!;
       const afterPostCommitEnqueue = JSON.parse(
         await readFile(statePath, 'utf8'),
       ) as {
@@ -2461,6 +2463,290 @@ describe('operator watch pool', () => {
     }
   });
 
+  it('records fresh live phase evidence and keeps idle fingerprints through acknowledgement and restart', async () => {
+    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-idle-fingerprint-'));
+    const sessionId = 'idle-fingerprint-session';
+    const harnessModifiedAt = Date.now() - 31 * 60_000;
+    const liveServer = await startOpenQuestionControlServer({
+      listOpenQuestions: () => [],
+      observeSession: async () => ({
+        sequence: 0,
+        openQuestions: [],
+      }),
+      answerOpenQuestion: async () => {
+        throw new Error('unused');
+      },
+    });
+    closeServers.push(() => liveServer.close());
+    await writeResumeStore(
+      sessionId,
+      Date.now(),
+      liveServer.socketPath,
+      DEFAULT_ISSUE_URL,
+      {
+        harnessPhase: 'idle',
+        modifiedAt: harnessModifiedAt,
+        lifecycle: 'unknown',
+      },
+    );
+
+    const queue = createOperatorDispatchQueue();
+    let pool = await createOperatorWatchPool({ repoRoot, dispatchQueue: queue });
+    let firstReportId = '';
+    let retryReadyAt = 0;
+    const fingerprint = 'sha256:idle-phase-v1';
+    try {
+      await pool.register(sessionId, { pollIntervalMs: 60_000, debounceMs: 0 });
+      await pool.pollOnce(sessionId);
+      expect(pool.listIdleCandidateObservations()).toMatchObject([
+        {
+          conductorAgentId: sessionId,
+          source: 'uds',
+          connectivity: 'reachable',
+          harnessPhase: 'idle',
+          harnessModifiedAt,
+        },
+      ]);
+      firstReportId = (await pool.enqueueIdleCandidate!({
+        conductorAgentId: sessionId,
+        text: 'idle phase candidate',
+        kind: 'idle_phase',
+        fingerprint,
+        eligibleAt: Date.now(),
+      }))!;
+      expect(firstReportId).toBeTypeOf('string');
+      await expect(
+        pool.enqueueIdleCandidate!({
+          conductorAgentId: sessionId,
+          text: 'same evidence',
+          kind: 'idle_phase',
+          fingerprint,
+          eligibleAt: Date.now(),
+        }),
+      ).resolves.toBeUndefined();
+
+      const batch = queue.selectBatch(
+        { continuationConsumed: false },
+        Date.now(),
+      )!;
+      expect(batch.events.map((event) =>
+        event.type === 'report' ? event.reportId : undefined,
+      )).toEqual([firstReportId]);
+      expect(await pool.commitBatch(batch)).toBe(true);
+      retryReadyAt = Date.now() + 5_000;
+      await pool.recordRetry?.(batch.events, retryReadyAt);
+    } finally {
+      pool.close();
+    }
+
+    const retryQueue = createOperatorDispatchQueue();
+    pool = await createOperatorWatchPool({
+      repoRoot,
+      dispatchQueue: retryQueue,
+    });
+    try {
+      await pool.pollOnce(sessionId);
+      expect(
+        retryQueue.selectBatch({ continuationConsumed: false }, retryReadyAt - 1),
+      ).toBeUndefined();
+      const retried = retryQueue.selectBatch(
+        { continuationConsumed: false },
+        retryReadyAt,
+      )!;
+      expect(retried.events.map((event) =>
+        event.type === 'report' ? event.reportId : undefined,
+      )).toEqual([firstReportId]);
+      expect(retried.batchId).toBeDefined();
+      expect(await pool.commitBatch(retried)).toBe(true);
+      await pool.acknowledge(retried.events);
+      const persisted = JSON.parse(
+        await readFile(currentWatchStatePath(repoRoot), 'utf8'),
+      ) as {
+        idleCandidateFingerprints: Record<string, Record<string, string>>;
+        pendingReports: unknown[];
+      };
+      expect(persisted.idleCandidateFingerprints[sessionId]?.idle_phase)
+        .toBe(fingerprint);
+      expect(persisted.pendingReports).toEqual([]);
+      await expect(
+        pool.enqueueIdleCandidate!({
+          conductorAgentId: sessionId,
+          text: 'same evidence after restart',
+          kind: 'idle_phase',
+          fingerprint: 'sha256:idle-phase-v1',
+          eligibleAt: Date.now(),
+        }),
+      ).resolves.toBeUndefined();
+      expect(pool.listIdleCandidateObservations()).toHaveLength(1);
+    } finally {
+      pool.close();
+    }
+  });
+
+  it('releases process-local holds on restart and replays a held pending idle candidate', async () => {
+    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-idle-held-restart-'));
+    const sessionId = 'idle-held-restart-session';
+    await writeResumeStore(sessionId, Date.now(), undefined, DEFAULT_ISSUE_URL, {
+      harnessPhase: 'idle',
+      modifiedAt: Date.now() - 31 * 60_000,
+      lifecycle: 'unknown',
+    });
+
+    const fingerprint = 'sha256:held-idle-replay-v1';
+    const firstQueue = createOperatorDispatchQueue();
+    firstQueue.setHold(true);
+    firstQueue.setConversationHold(true);
+    let pool = await createOperatorWatchPool({
+      repoRoot,
+      dispatchQueue: firstQueue,
+    });
+    let reportId = '';
+    try {
+      reportId = (await pool.enqueueIdleCandidate!({
+        conductorAgentId: sessionId,
+        text: 'held idle candidate survives restart',
+        kind: 'idle_phase',
+        fingerprint,
+        eligibleAt: Date.now(),
+      }))!;
+      expect(reportId).toBeTypeOf('string');
+      expect(firstQueue.hold).toBe(true);
+      expect(firstQueue.heldEventCount).toBe(1);
+      const persisted = JSON.parse(
+        await readFile(currentWatchStatePath(repoRoot), 'utf8'),
+      ) as {
+        idleCandidateFingerprints: Record<string, Record<string, string>>;
+        pendingReports: Array<{ reportId: string }>;
+      };
+      expect(persisted.idleCandidateFingerprints[sessionId]?.idle_phase)
+        .toBe(fingerprint);
+      expect(persisted.pendingReports.map((report) => report.reportId)).toEqual([
+        reportId,
+      ]);
+    } finally {
+      pool.close();
+    }
+
+    const restartedQueue = createOperatorDispatchQueue();
+    expect(restartedQueue.hold).toBe(false);
+    pool = await createOperatorWatchPool({
+      repoRoot,
+      dispatchQueue: restartedQueue,
+    });
+    let firstReplayBatchId: string | undefined;
+    let firstReplayPayload: string | undefined;
+    try {
+      expect(restartedQueue.heldEventCount).toBe(0);
+      const replay = restartedQueue.selectBatch({
+        continuationConsumed: false,
+      })!;
+      expect(replay.events.map((event) =>
+        event.type === 'report' ? event.reportId : undefined,
+      )).toEqual([reportId]);
+      expect(await pool.commitBatch(replay)).toBe(true);
+      firstReplayBatchId = replay.batchId;
+      firstReplayPayload = replay.payload;
+    } finally {
+      pool.close();
+    }
+
+    const replayQueue = createOperatorDispatchQueue();
+    pool = await createOperatorWatchPool({
+      repoRoot,
+      dispatchQueue: replayQueue,
+    });
+    try {
+      const replay = replayQueue.selectBatch({
+        continuationConsumed: false,
+      })!;
+      expect(replay.events.map((event) =>
+        event.type === 'report' ? event.reportId : undefined,
+      )).toEqual([reportId]);
+      expect(replay.batchId).toBe(firstReplayBatchId);
+      expect(replay.payload).toBe(firstReplayPayload);
+      await pool.acknowledge(replay.events);
+      const persisted = JSON.parse(
+        await readFile(currentWatchStatePath(repoRoot), 'utf8'),
+      ) as {
+        idleCandidateFingerprints: Record<string, Record<string, string>>;
+        pendingReports: unknown[];
+      };
+      expect(persisted.idleCandidateFingerprints[sessionId]?.idle_phase)
+        .toBe(fingerprint);
+      expect(persisted.pendingReports).toEqual([]);
+    } finally {
+      pool.close();
+    }
+  });
+
+  it('combines a pending live Open Question and idle candidate into one shared send in the normal path', async () => {
+    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-idle-oq-batch-'));
+    const sessionId = 'idle-oq-session';
+    const liveQuestions: SessionObservationSnapshot['openQuestions'] = [];
+    const liveServer = await startOpenQuestionControlServer({
+      listOpenQuestions: () => liveQuestions,
+      observeSession: async () => ({
+        sequence: liveQuestions.length,
+        openQuestions: liveQuestions,
+      }),
+      answerOpenQuestion: async () => {
+        throw new Error('unused');
+      },
+    });
+    closeServers.push(() => liveServer.close());
+    await writeResumeStore(
+      sessionId,
+      Date.now(),
+      liveServer.socketPath,
+      DEFAULT_ISSUE_URL,
+      {
+        harnessPhase: 'idle',
+        modifiedAt: Date.now() - 31 * 60_000,
+        lifecycle: 'unknown',
+      },
+    );
+    const queue = createOperatorDispatchQueue();
+    const pool = await createOperatorWatchPool({ repoRoot, dispatchQueue: queue });
+    try {
+      await pool.register(sessionId, { pollIntervalMs: 60_000, debounceMs: 0 });
+      await pool.pollOnce(sessionId);
+      liveQuestions.push({
+        id: 'inq-live',
+        question: 'Which option should we use?',
+        responseType: 'choice',
+        source: 'conductor',
+        status: 'open',
+        askedAt: Date.now(),
+      });
+      expect(await pool.pollOnce(sessionId)).toBe(1);
+      const idleReportId = await pool.enqueueIdleCandidate!({
+        conductorAgentId: sessionId,
+        text: 'idle phase candidate',
+        kind: 'idle_phase',
+        fingerprint: 'idle-oq-evidence',
+        eligibleAt: Date.now(),
+      });
+
+      const batch = queue.selectBatch(
+        { continuationConsumed: false },
+        Date.now(),
+      )!;
+      expect(batch.priority).toBe('open_question');
+      expect(batch.events.map((event) =>
+        event.type === 'report' ? event.reportType : undefined,
+      )).toEqual(['open_question', 'idle_candidate']);
+      expect(batch.events.map((event) =>
+        event.type === 'report' ? event.reportId : undefined,
+      )).toEqual([expect.any(String), idleReportId]);
+      expect(await pool.commitBatch(batch)).toBe(true);
+      expect(batch.payload).toContain('Which option should we use?');
+      expect(batch.payload).toContain('idle phase candidate');
+      await pool.acknowledge(batch.events);
+    } finally {
+      pool.close();
+    }
+  });
+
   it('includes local arrivals during lock wait but leaves unsynchronized peer reports for the next batch', async () => {
     repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-watch-commit-cutoff-'));
     await mkdir(join(repoRoot, '.ensemble', 'sessions'), { recursive: true });
@@ -2489,11 +2775,13 @@ describe('operator watch pool', () => {
     let stateLock: DatabaseSync | undefined;
     let lockHeld = false;
     try {
-      const firstReportId = await pool.enqueueIdleCandidate!({
+      const firstReportId = (await pool.enqueueIdleCandidate!({
         conductorAgentId: sessionId,
         text: 'first candidate',
+        kind: 'idle_phase',
+        fingerprint: 'idle-first',
         eligibleAt: Date.now(),
-      });
+      }))!;
       const batch = dispatchQueue.selectBatch(
         { continuationConsumed: false },
         Date.now(),
@@ -2504,6 +2792,8 @@ describe('operator watch pool', () => {
 
       const durable = JSON.parse(await readFile(statePath, 'utf8'));
       const firstOrder = durable.pendingReports[0].arrivalOrder;
+      const firstEligibleAt = durable.pendingReports[0].eligibleAt;
+      expect(firstEligibleAt).toBeTypeOf('number');
       const queuedAt = Date.now();
       for (const [index, reportId] of ['local-arrival-during-lock-wait', 'peer-unsynced'].entries()) {
         durable.pendingReports.push({
@@ -2552,6 +2842,8 @@ describe('operator watch pool', () => {
       const laterCandidatePromise = pool.enqueueIdleCandidate!({
         conductorAgentId: sessionId,
         text: 'arrived during lock wait',
+        kind: 'stale_running',
+        fingerprint: 'stale-during-lock',
         eligibleAt: staleEligibility,
       });
 
@@ -2562,11 +2854,28 @@ describe('operator watch pool', () => {
       lockHeld = false;
 
       expect(await commitPromise).toBe(true);
-      const laterReportId = await laterCandidatePromise;
+      const laterReportId = (await laterCandidatePromise)!;
       expect(batch.events.map((event) =>
         event.type === 'report' ? event.reportId : undefined,
       )).toEqual([firstReportId, 'local-arrival-during-lock-wait']);
+      expect(batch.events.map((event) =>
+        event.type === 'report' ? event.reportType : undefined,
+      )).toEqual(['idle_candidate', 'open_question']);
+      expect(batch.events.map((event) =>
+        event.type === 'report' ? event.arrivalOrder : undefined,
+      )).toEqual([firstOrder, firstOrder + 1]);
+      expect(batch.events[0]).toMatchObject({
+        arrivalOrder: firstOrder,
+        eligibleAt: firstEligibleAt,
+      });
+      expect(
+        batch.events.filter(
+          (event) =>
+            event.type === 'report' && event.reportType === 'open_question',
+        ),
+      ).toHaveLength(1);
       expect(batch.priority).toBe('open_question');
+      expect(batch.payload).toContain('first candidate');
       expect(batch.payload).toContain('local arrival during lock wait');
       expect(batch.payload).not.toContain('peer-unsynced');
       expect(batch.payload).not.toContain('arrived during lock wait');
@@ -2604,6 +2913,10 @@ describe('operator watch pool', () => {
       expect(laterCandidate.eligibleAt).toBeGreaterThanOrEqual(lockReleasedAt);
       expect(laterCandidate.frozenBatchId).toBeUndefined();
 
+      const retryAt = Date.now() + 5 * 60_000;
+      await pool.recordRetry?.(batch.events, retryAt);
+      pool.close();
+
       const replayQueue = createOperatorDispatchQueue();
       const replayPool = await createOperatorWatchPool({
         repoRoot,
@@ -2611,27 +2924,60 @@ describe('operator watch pool', () => {
         dispatchQueue: replayQueue,
       });
       try {
-        const replay = replayQueue.selectBatch(
+        expect(
+          replayQueue.selectBatch(
+            { continuationConsumed: false },
+            retryAt - 1,
+          ),
+        ).toBeUndefined();
+        const retry = replayQueue.selectBatch(
           { continuationConsumed: false },
-          Date.now(),
+          retryAt,
         )!;
-        expect(replay.events.map((event) =>
+        expect(retry.events.map((event) =>
           event.type === 'report' ? event.reportId : undefined,
         )).toEqual([firstReportId, 'local-arrival-during-lock-wait']);
-        expect(replay.batchId).toBe(batch.batchId);
-        expect(replay.payload).toBe(batch.payload);
+        expect(retry.events.map((event) =>
+          event.type === 'report' ? event.reportType : undefined,
+        )).toEqual(['idle_candidate', 'open_question']);
+        expect(retry.events.map((event) =>
+          event.type === 'report'
+            ? { arrivalOrder: event.arrivalOrder, eligibleAt: event.eligibleAt }
+            : undefined,
+        )).toEqual([
+          { arrivalOrder: firstOrder, eligibleAt: firstEligibleAt },
+          { arrivalOrder: firstOrder + 1, eligibleAt: undefined },
+        ]);
+        expect(retry.events.filter(
+          (event) =>
+            event.type === 'report' && event.reportType === 'open_question',
+        )).toHaveLength(1);
+        expect(retry.batchId).toBe(batch.batchId);
+        expect(retry.payload).toBe(batch.payload);
+        expect(retry.priority).toBe('open_question');
+        expect(await replayPool.commitBatch(retry)).toBe(true);
+        await replayPool.acknowledge(retry.events);
+
+        const peerBatch = replayQueue.selectBatch(
+          { continuationConsumed: false },
+          retryAt,
+        )!;
+        expect(peerBatch.events.map((event) =>
+          event.type === 'report' ? event.reportId : undefined,
+        )).toEqual(['peer-unsynced', laterReportId]);
+        expect(await replayPool.commitBatch(peerBatch)).toBe(true);
+        await replayPool.acknowledge(peerBatch.events);
       } finally {
         replayPool.close();
       }
 
-      await pool.acknowledge(batch.events);
-      const next = dispatchQueue.selectBatch(
-        { continuationConsumed: false },
-        Date.now(),
-      )!;
-      expect(next.events.map((event) =>
-        event.type === 'report' ? event.reportId : undefined,
-      )).toEqual(['peer-unsynced', laterReportId]);
+      const afterAck = JSON.parse(await readFile(statePath, 'utf8')) as {
+        idleCandidateFingerprints: Record<string, Record<string, string>>;
+        pendingReports: Array<{ reportId: string }>;
+      };
+      expect(afterAck.idleCandidateFingerprints[sessionId]?.idle_phase)
+        .toBe('idle-first');
+      expect(afterAck.pendingReports).toEqual([]);
     } finally {
       if (lockHeld) stateLock?.exec('ROLLBACK');
       stateLock?.close();
@@ -2651,7 +2997,11 @@ describe('operator watch pool', () => {
     });
     try {
       const enqueue = (pool: typeof local, text: string) => pool.enqueueIdleCandidate!({
-        conductorAgentId: sessionId, text, eligibleAt: Date.now(),
+        conductorAgentId: sessionId,
+        text,
+        kind: 'idle_phase',
+        fingerprint: `peer-order:${text}`,
+        eligibleAt: Date.now(),
       });
       const first = await enqueue(local, 'first local');
       const second = await enqueue(peer, 'peer');
@@ -2679,8 +3029,20 @@ describe('operator watch pool', () => {
         'default', 'watch', 'watch-state-lock.sqlite');
       let lock: DatabaseSync | undefined;
       try {
-        await pool.enqueueIdleCandidate!({ conductorAgentId: 'reselect-a', text: 'A', eligibleAt: Date.now() });
-        await pool.enqueueIdleCandidate!({ conductorAgentId: 'reselect-b', text: 'B', eligibleAt: Date.now() });
+        await pool.enqueueIdleCandidate!({
+          conductorAgentId: 'reselect-a',
+          text: 'A',
+          kind: 'idle_phase',
+          fingerprint: 'reselect:a',
+          eligibleAt: Date.now(),
+        });
+        await pool.enqueueIdleCandidate!({
+          conductorAgentId: 'reselect-b',
+          text: 'B',
+          kind: 'idle_phase',
+          fingerprint: 'reselect:b',
+          eligibleAt: Date.now(),
+        });
         const state = { continuationConsumed: false };
         if (change === 'focus') queue.setFocus('reselect-a');
         const batch = queue.selectBatch(state)!;
@@ -2734,6 +3096,8 @@ describe('operator watch pool', () => {
       const firstId = await pool.enqueueIdleCandidate!({
         conductorAgentId: sessionId,
         text: 'durable first report',
+        kind: 'idle_phase',
+        fingerprint: 'freeze-failure:first',
         eligibleAt: Date.now(),
       });
       const batch = queue.selectBatch({ continuationConsumed: false })!;
@@ -2772,7 +3136,11 @@ describe('operator watch pool', () => {
     const pool = await createOperatorWatchPool({ repoRoot, dispatchQueue: queue });
     try {
       const reportId = await pool.enqueueIdleCandidate!({
-        conductorAgentId: sessionId, text: 'persisted report', eligibleAt: Date.now(),
+        conductorAgentId: sessionId,
+        text: 'persisted report',
+        kind: 'idle_phase',
+        fingerprint: 'restore-failure',
+        eligibleAt: Date.now(),
       });
       const batch = queue.selectBatch({ continuationConsumed: false })!;
       const statePath = currentWatchStatePath(repoRoot);
@@ -2811,7 +3179,11 @@ describe('operator watch pool', () => {
     let reportId: string;
     try {
       reportId = await pool.enqueueIdleCandidate!({
-        conductorAgentId: sessionId, text: 'frozen before release', eligibleAt: Date.now(),
+        conductorAgentId: sessionId,
+        text: 'frozen before release',
+        kind: 'idle_phase',
+        fingerprint: 'uncertain-release',
+        eligibleAt: Date.now(),
       });
       const batch = queue.selectBatch({ continuationConsumed: false })!;
       const exec = DatabaseSync.prototype.exec;
@@ -2892,11 +3264,13 @@ describe('operator watch pool', () => {
         reportId: 'legacy-report',
         firstQueuedAt: readyAt,
       });
-      const laterReportId = await pool.enqueueIdleCandidate!({
+      const laterReportId = (await pool.enqueueIdleCandidate!({
         conductorAgentId: sessionId,
         text: '後から queue した確認候補',
+        kind: 'idle_phase',
+        fingerprint: 'idle-later',
         eligibleAt: Date.now(),
-      });
+      }))!;
       expect(
         queue
           .selectBatch({ continuationConsumed: false }, readyAt)
@@ -4683,6 +5057,11 @@ describe('operator watch pool', () => {
     updatedAt: number,
     harnessSocketPath?: string,
     issueUrl = 'https://github.com/example/repo/issues/1',
+    phase?: {
+      harnessPhase: 'running' | 'idle' | 'close' | 'abort' | 'exit';
+      modifiedAt: number;
+      lifecycle?: 'unknown' | 'closed' | 'exited' | 'interrupted';
+    },
   ) {
     const path = resolveEnsemblePaths({
       repoRoot,
@@ -4696,6 +5075,7 @@ describe('operator watch pool', () => {
         issueUrl,
         repoRoot,
         ...(harnessSocketPath ? { harnessSocketPath } : {}),
+        ...(phase ?? {}),
         profile: { workers: [], agents: {} },
         openQuestions: [],
         sequence: 0,

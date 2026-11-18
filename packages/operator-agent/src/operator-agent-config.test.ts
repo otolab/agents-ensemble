@@ -216,4 +216,22 @@ describe('operator-agent config', () => {
       ).toThrow(new RegExp(`${key}.*milliseconds`, 'u'));
     }
   });
+
+  it.each([
+    ['idlePhaseThresholdMs', 10 * 60_000, 120 * 60_000],
+    ['staleRunningThresholdMs', 30 * 60_000, 240 * 60_000],
+    ['idleAgingMs', 60_000, 30 * 60_000],
+    ['idleReevaluationIntervalMs', 30_000, 5 * 60_000],
+  ])('accepts the documented minimum and maximum for %s', (key, minimum, maximum) => {
+    for (const value of [minimum, maximum]) {
+      expect(() =>
+        parseOperatorAgentConfiguration({
+          version: 1,
+          profiles: {
+            work: { scheduling: { [key]: value } },
+          },
+        }),
+      ).not.toThrow();
+    }
+  });
 });

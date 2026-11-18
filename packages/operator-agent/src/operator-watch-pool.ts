@@ -119,6 +119,24 @@ export interface OperatorSessionLiveStatus {
   unreachableSince: number | null;
 }
 
+export interface OperatorIdleCandidateObservation {
+  conductorAgentId: string;
+  issueUrl: string;
+  observationVersion: number;
+  source: 'uds' | 'resume_store';
+  connectivity: OperatorSessionLiveStatus['connectivity'];
+  checkedAt: number;
+  pollIntervalMs: number;
+  harnessPhase?: SessionResumeStore['harnessPhase'];
+  harnessModifiedAt?: number;
+  lifecycle?: SessionResumeStore['lifecycle'];
+  openQuestionCount?: number;
+  statusLine?: {
+    text: string;
+    reportedAt: number;
+  };
+}
+
 export interface OperatorSessionTrackingInfo {
   firstObservedAt: number | null;
   repositoryWatchEnabled: boolean;
@@ -145,6 +163,10 @@ interface OperatorWatchState {
   cursors: Record<string, SessionCursor>;
   messageListeners: Record<string, ConductorMessageListenConfig>;
   messageCursors: Record<string, number>;
+  idleCandidateFingerprints: Record<
+    string,
+    Partial<Record<'idle_phase' | 'stale_running', string>>
+  >;
   pendingReports: Array<{
     reportId: string;
     reportType:
@@ -202,13 +224,22 @@ export interface OperatorWatchPool {
   pollConductorMessagesOnce(conductorAgentId: string): Promise<number>;
   refreshPendingReports?(): Promise<void>;
   getLiveStatus(conductorAgentId: string): OperatorSessionLiveStatus | undefined;
+  listIdleCandidateObservations(): OperatorIdleCandidateObservation[];
+  refreshIdleCandidateObservation?(
+    conductorAgentId: string,
+    afterObservationVersion?: number,
+  ): Promise<boolean>;
   acknowledge(events: readonly OperatorDispatchEvent[]): Promise<void>;
   enqueueIdleCandidate?(input: {
     conductorAgentId: string;
     text: string;
+    kind: 'idle_phase' | 'stale_running';
+    fingerprint: string;
+    /** Rechecked after the durable profile lock is acquired. */
+    shouldAdmit?: () => boolean;
     /** Requested by the producer; the pool records its actual admission time instead. */
     eligibleAt: number;
-  }): Promise<string>;
+  }): Promise<string | undefined>;
   commitBatch(batch: OperatorDispatchBatch, state?: OperatorDispatchState): Promise<boolean>;
   recordRetry?(
     events: readonly OperatorDispatchEvent[],
@@ -404,9 +435,15 @@ export async function createOperatorWatchPool(
   const repositoryTimers = new Map<string, NodeJS.Timeout>();
   const repositoryScansInFlight = new Set<string>();
   const polling = new Set<string>();
+  const pollCompletions = new Map<string, Promise<void>>();
   const messageTimers = new Map<string, NodeJS.Timeout>();
   const messagePolling = new Set<string>();
   const liveStatuses = new Map<string, OperatorSessionLiveStatus>();
+  const idleCandidateObservations = new Map<
+    string,
+    OperatorIdleCandidateObservation
+  >();
+  let idleCandidateObservationVersion = 0;
   const reportedResumeStoreDuplicates = new Map<string, string>();
   const onResumeStoreDuplicate = (
     diagnostic: SessionResumeStoreDuplicateDiagnostic,
@@ -573,6 +610,7 @@ export async function createOperatorWatchPool(
     options.dispatchQueue.discardQueuedReports?.(
       activeBundle.pendingReports.map((report) => report.reportId),
     );
+    idleCandidateObservations.delete(id);
     const watchTimer = timers.get(id);
     if (watchTimer) clearInterval(watchTimer);
     timers.delete(id);
@@ -1082,6 +1120,7 @@ export async function createOperatorWatchPool(
         return true;
       });
       if (!removed) return false;
+      idleCandidateObservations.delete(id);
       const timer = timers.get(id);
       if (timer) clearInterval(timer);
       timers.delete(id);
@@ -1490,10 +1529,147 @@ export async function createOperatorWatchPool(
       if (!status || status.checkedAt === null) return undefined;
       return { ...status };
     },
+    listIdleCandidateObservations() {
+      return Object.keys(state.watches)
+        .sort()
+        .flatMap((id) => {
+          const observation = idleCandidateObservations.get(id);
+          return observation ? [{ ...observation }] : [];
+        });
+    },
+    async refreshIdleCandidateObservation(
+      conductorAgentId,
+      afterObservationVersion,
+    ) {
+      const id = requireNonEmptyString(conductorAgentId, 'conductorAgentId');
+      const watch = state.watches[id];
+      const assignedWatchStatePath = pathById.get(id);
+      const assignedIssueUrl = issueUrlById.get(id);
+      if (
+        closed ||
+        !watch ||
+        !assignedWatchStatePath ||
+        !assignedIssueUrl
+      ) {
+        return false;
+      }
+
+      const knownVersion =
+        afterObservationVersion ??
+        idleCandidateObservations.get(id)?.observationVersion ??
+        0;
+      const currentObservation = idleCandidateObservations.get(id);
+      if (
+        currentObservation &&
+        currentObservation.observationVersion > knownVersion
+      ) {
+        // A normal poll completed after the gate-clear pass captured its
+        // freshness boundary. Reuse that result instead of issuing a second
+        // UDS read for the same session.
+        return true;
+      }
+      const inFlightPoll = pollCompletions.get(id);
+      if (inFlightPoll) {
+        // pollOnce may already own the profile state lock while waiting for
+        // UDS. Reuse its observation when it completes; do not let a duplicate
+        // poll return early and make the run loop freeze before admission.
+        await inFlightPoll;
+        const refreshedObservation = idleCandidateObservations.get(id);
+        return Boolean(
+          !closed &&
+            state.watches[id] &&
+            pathById.get(id) === assignedWatchStatePath &&
+            issueIdentity(issueUrlById.get(id) ?? '') ===
+              issueIdentity(assignedIssueUrl) &&
+            refreshedObservation &&
+            refreshedObservation.observationVersion > knownVersion,
+        );
+      }
+
+      // Candidate-only freshness must not hold the shared profile state lock
+      // across a UDS request. A ready OQ batch still needs that lock to freeze
+      // and send within the run loop's aggregate refresh wait cap.
+      const located = await findSession(id, { root });
+      if (
+        !located ||
+        issueIdentity(located.resumeStore.issueUrl) !==
+          issueIdentity(assignedIssueUrl)
+      ) {
+        return false;
+      }
+      const {
+        snapshot: observation,
+        source,
+        connectivity,
+      } = await readObservation(root, located);
+      const latestLocated = await findSession(id, { root });
+      const phaseObservationIsStable = Boolean(
+        source === 'uds' &&
+          connectivity === 'reachable' &&
+          latestLocated &&
+          latestLocated.path === located.path &&
+          latestLocated.location === located.location &&
+          issueIdentity(latestLocated.resumeStore.issueUrl) ===
+            issueIdentity(located.resumeStore.issueUrl) &&
+          latestLocated.resumeStore.harnessPhase ===
+            located.resumeStore.harnessPhase &&
+          latestLocated.resumeStore.modifiedAt ===
+            located.resumeStore.modifiedAt &&
+          latestLocated.resumeStore.lifecycle ===
+            located.resumeStore.lifecycle,
+      );
+      const currentWatch = state.watches[id];
+      if (
+        closed ||
+        !currentWatch ||
+        pathById.get(id) !== assignedWatchStatePath ||
+        issueIdentity(issueUrlById.get(id) ?? '') !==
+          issueIdentity(assignedIssueUrl)
+      ) {
+        return false;
+      }
+      if (!phaseObservationIsStable) {
+        idleCandidateObservations.delete(id);
+        return false;
+      }
+
+      const checkedAt = Date.now();
+      idleCandidateObservations.set(id, {
+        conductorAgentId: id,
+        issueUrl: located.resumeStore.issueUrl,
+        observationVersion: ++idleCandidateObservationVersion,
+        source,
+        connectivity,
+        checkedAt,
+        pollIntervalMs: currentWatch.pollIntervalMs,
+        harnessPhase: located.resumeStore.harnessPhase,
+        harnessModifiedAt: located.resumeStore.modifiedAt,
+        ...(located.resumeStore.lifecycle !== undefined
+          ? { lifecycle: located.resumeStore.lifecycle }
+          : {}),
+        openQuestionCount: observation.openQuestions.filter(
+          (question) => question.status === 'open',
+        ).length,
+        ...(observation.sessionState?.current
+          ? {
+              statusLine: {
+                text: observation.sessionState.current.statusLine,
+                reportedAt: observation.sessionState.current.reportedAt,
+              },
+            }
+          : {}),
+      });
+      return true;
+    },
     async pollOnce(conductorAgentId) {
       const id = requireNonEmptyString(conductorAgentId, 'conductorAgentId');
       if (closed || polling.has(id)) return 0;
       polling.add(id);
+      let resolvePollCompletion!: () => void;
+      const pollCompletion = new Promise<void>((resolve) => {
+        resolvePollCompletion = resolve;
+      });
+      pollCompletions.set(id, pollCompletion);
       try {
         return await withStateLock(async (nextArrivalOrder) => {
           const watch = state.watches[id];
@@ -1502,20 +1678,81 @@ export async function createOperatorWatchPool(
           try {
             located = await locateSession(id);
           } catch (error) {
-            if (isAmbiguousResumeStoreError(error)) return 0;
+            if (isAmbiguousResumeStoreError(error)) {
+              idleCandidateObservations.delete(id);
+              return 0;
+            }
             throw error;
           }
-          if (!located) return 0;
+          if (!located) {
+            idleCandidateObservations.delete(id);
+            return 0;
+          }
           const binding = bindLocatedSession(id, located);
-          if (!binding.assigned) return 0;
+          if (!binding.assigned) {
+            idleCandidateObservations.delete(id);
+            return 0;
+          }
           const {
             snapshot: observation,
             source,
             connectivity,
           } = await readObservation(root, located);
           const resumeStore = located.resumeStore;
+          let phaseObservationIsStable = false;
+          if (source === 'uds' && connectivity === 'reachable') {
+            const latestLocated = await locateSession(id);
+            if (
+              !latestLocated ||
+              latestLocated.path !== located.path ||
+              latestLocated.location !== located.location ||
+              latestLocated.resumeStore.issueUrl !== resumeStore.issueUrl
+            ) {
+              idleCandidateObservations.delete(id);
+              return 0;
+            }
+            phaseObservationIsStable = Boolean(
+              latestLocated.resumeStore.harnessPhase ===
+                resumeStore.harnessPhase &&
+                latestLocated.resumeStore.modifiedAt === resumeStore.modifiedAt &&
+                latestLocated.resumeStore.lifecycle === resumeStore.lifecycle,
+            );
+          }
           const previousLiveStatus = liveStatuses.get(id);
           const checkedAt = Date.now();
+          if (
+            phaseObservationIsStable &&
+            resumeStore.harnessPhase !== undefined &&
+            resumeStore.modifiedAt !== undefined
+          ) {
+            idleCandidateObservations.set(id, {
+              conductorAgentId: id,
+              issueUrl: resumeStore.issueUrl,
+              observationVersion: ++idleCandidateObservationVersion,
+              source,
+              connectivity,
+              checkedAt,
+              pollIntervalMs: watch.pollIntervalMs,
+              harnessPhase: resumeStore.harnessPhase,
+              harnessModifiedAt: resumeStore.modifiedAt,
+              ...(resumeStore.lifecycle !== undefined
+                ? { lifecycle: resumeStore.lifecycle }
+                : {}),
+              openQuestionCount: observation.openQuestions.filter(
+                (question) => question.status === 'open',
+              ).length,
+              ...(observation.sessionState?.current
+                ? {
+                    statusLine: {
+                      text: observation.sessionState.current.statusLine,
+                      reportedAt: observation.sessionState.current.reportedAt,
+                    },
+                  }
+                : {}),
+            });
+          } else {
+            idleCandidateObservations.delete(id);
+          }
           liveStatuses.set(id, {
             connectivity,
             checkedAt,
@@ -1562,8 +1799,15 @@ export async function createOperatorWatchPool(
           if (reports.length > 0 || cursorChanged) await persist();
           return reports.length;
         });
+      } catch (error) {
+        idleCandidateObservations.delete(id);
+        throw error;
       } finally {
         polling.delete(id);
+        if (pollCompletions.get(id) === pollCompletion) {
+          pollCompletions.delete(id);
+        }
+        resolvePollCompletion();
       }
     },
     async pollConductorMessagesOnce(conductorAgentId) {
@@ -1722,8 +1966,18 @@ export async function createOperatorWatchPool(
         );
       }
       const reportId = randomUUID();
-      await withStateLock(async (nextArrivalOrder) => {
+      const fingerprint = requireNonEmptyString(
+        input.fingerprint,
+        'fingerprint',
+      );
+      const admitted = await withStateLock(async (nextArrivalOrder) => {
+        if (input.shouldAdmit && !input.shouldAdmit()) return false;
+        const fingerprints =
+          (state.idleCandidateFingerprints[conductorAgentId] ??= {});
+        if (fingerprints[input.kind] === fingerprint) return false;
         const queuedAt = Date.now();
+        const previousFingerprint = fingerprints[input.kind];
+        fingerprints[input.kind] = fingerprint;
         retainReadyBatch(conductorAgentId, queuedAt);
         state.pendingReports.push({
           reportId,
@@ -1742,9 +1996,25 @@ export async function createOperatorWatchPool(
           // waits outside the scheduler.
           eligibleAt: queuedAt,
         });
-        await persist();
+        try {
+          await persist();
+        } catch (error) {
+          state.pendingReports = state.pendingReports.filter(
+            (report) => report.reportId !== reportId,
+          );
+          if (previousFingerprint === undefined) {
+            delete fingerprints[input.kind];
+            if (Object.keys(fingerprints).length === 0) {
+              delete state.idleCandidateFingerprints[conductorAgentId];
+            }
+          } else {
+            fingerprints[input.kind] = previousFingerprint;
+          }
+          throw error;
+        }
+        return true;
       });
-      return reportId;
+      return admitted ? reportId : undefined;
     },
     async commitBatch(batch, dispatchState) {
       // User input and already frozen retries do not need a new manifest.
@@ -2577,6 +2847,7 @@ function emptyWatchState(): OperatorWatchState {
     cursors: {},
     messageListeners: {},
     messageCursors: {},
+    idleCandidateFingerprints: {},
     pendingReports: [],
   };
 }
@@ -2587,6 +2858,7 @@ function watchStateSessionIds(state: OperatorWatchState): Set<string> {
     ...Object.keys(state.cursors),
     ...Object.keys(state.messageListeners),
     ...Object.keys(state.messageCursors),
+    ...Object.keys(state.idleCandidateFingerprints),
     ...state.pendingReports.map((report) => report.conductorAgentId),
   ]);
 }
@@ -2609,6 +2881,13 @@ function extractWatchStateForSession(
     messageCursors: state.messageCursors[conductorAgentId] !== undefined
       ? { [conductorAgentId]: state.messageCursors[conductorAgentId]! }
       : {},
+    idleCandidateFingerprints:
+      state.idleCandidateFingerprints[conductorAgentId]
+        ? {
+            [conductorAgentId]:
+              state.idleCandidateFingerprints[conductorAgentId]!,
+          }
+        : {},
     pendingReports: state.pendingReports.filter(
       (report) => report.conductorAgentId === conductorAgentId,
     ),
@@ -2623,6 +2902,7 @@ function removeWatchStateForSession(
   delete state.cursors[conductorAgentId];
   delete state.messageListeners[conductorAgentId];
   delete state.messageCursors[conductorAgentId];
+  delete state.idleCandidateFingerprints[conductorAgentId];
   state.pendingReports = state.pendingReports.filter(
     (report) => report.conductorAgentId !== conductorAgentId,
   );
@@ -2661,6 +2941,7 @@ function mergeWatchStates(
     'cursors',
     'messageListeners',
     'messageCursors',
+    'idleCandidateFingerprints',
   ] as const) {
     Object.assign(merged[field], fallback[field], preferred[field]);
   }
@@ -2693,6 +2974,7 @@ function partitionWatchState(
     'cursors',
     'messageListeners',
     'messageCursors',
+    'idleCandidateFingerprints',
   ] as const) {
     for (const [id, value] of Object.entries(state[field])) {
       const path = pathById.get(id);
@@ -2940,6 +3222,39 @@ async function loadWatchState(path: string): Promise<OperatorWatchState> {
       }
       messageCursors[id] = cursor as number;
     }
+    const rawIdleCandidateFingerprints =
+      value.idleCandidateFingerprints ?? {};
+    if (!isRecord(rawIdleCandidateFingerprints)) {
+      throw new Error(
+        'Invalid operator-agent watch state: idleCandidateFingerprints.',
+      );
+    }
+    const idleCandidateFingerprints: OperatorWatchState['idleCandidateFingerprints'] =
+      {};
+    for (const [id, rawFingerprints] of Object.entries(
+      rawIdleCandidateFingerprints,
+    )) {
+      if (!isRecord(rawFingerprints)) {
+        throw new Error(
+          `Invalid operator-agent watch state: idle candidate fingerprints ${id}.`,
+        );
+      }
+      const fingerprints: OperatorWatchState['idleCandidateFingerprints'][string] =
+        {};
+      for (const [kind, fingerprint] of Object.entries(rawFingerprints)) {
+        if (
+          (kind !== 'idle_phase' && kind !== 'stale_running') ||
+          typeof fingerprint !== 'string' ||
+          fingerprint.trim().length === 0
+        ) {
+          throw new Error(
+            `Invalid operator-agent watch state: idle candidate fingerprint ${id}/${kind}.`,
+          );
+        }
+        fingerprints[kind] = fingerprint;
+      }
+      idleCandidateFingerprints[id] = fingerprints;
+    }
     const pendingReports = value.pendingReports;
     if (!Array.isArray(pendingReports)) {
       throw new Error('Invalid operator-agent watch state: pendingReports.');
@@ -3091,6 +3406,7 @@ async function loadWatchState(path: string): Promise<OperatorWatchState> {
       cursors,
       messageListeners,
       messageCursors,
+      idleCandidateFingerprints,
       pendingReports: normalizedPendingReports,
     };
   } catch (error) {
@@ -3101,6 +3417,7 @@ async function loadWatchState(path: string): Promise<OperatorWatchState> {
         cursors: {},
         messageListeners: {},
         messageCursors: {},
+        idleCandidateFingerprints: {},
         pendingReports: [],
       };
     }
