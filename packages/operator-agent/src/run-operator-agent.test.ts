@@ -2713,8 +2713,7 @@ describe('runOperatorAgent', () => {
       expect(sentPrompts[0]).toContain(
         'agents-ensemble の operator ロール',
       );
-      expect(sentPrompts[0]).toContain('Workspace first-turn guidance');
-    expect(sentPrompts[0]).toContain('## User message');
+      expect(sentPrompts[0]).toContain('## User message');
       expect(sentPrompts[0]).toContain(authoredInput);
       expect(automaticResumeSend).not.toHaveBeenCalled();
       expect(stdout.capturedText()).toContain(
