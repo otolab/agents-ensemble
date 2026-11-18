@@ -1,5 +1,12 @@
 # @agents-ensemble/core
 
+## 0.23.3
+
+### Patch Changes
+
+- ebaf4ca: 一覧で harness のライブ接続を確認し、接続状態・保存 phase・Open Question・報告時刻で絞り込めるようにする。
+- 1e4140b: Expose conservative live harness work status in operator session listings.
+
 ## 0.23.2
 
 ## 0.23.1
