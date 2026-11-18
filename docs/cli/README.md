@@ -214,6 +214,8 @@ profile は `--profile` > `ENSEMBLE_OPERATOR_AGENT_PROFILE` > 選択した保存
 
 session list は user store 内の全 canonical GitHub slug group を既定 scope とし、GitHub API で repository を列挙しません。profile の `include` と複数の `--repo-filter <owner/repo|owner/*>` を指定すると、両者の一致を取り、同じ項目内ではいずれかの filter に合う repository を対象にします。list tool は `limit` / `cursor` / `nextCursor` で続きのページを返し、件数上限で結果を黙って捨てません。
 
+選択 profile の workspace 直下に `AGENTS.md` を置くと、起動時に `prompt.instructions` に続けて読み込みます。実行中の編集は次回起動・resume 時に反映されます。読み込みエラーは起動を失敗させます。Pi と Cursor の resume 時の違いや読み込み条件は [operator-agent 専用設定](../config.md#operator-agent-専用設定) を参照してください。
+
 会話 record は repository や profile に結び付けず、`operatorAgentId` ごとに `~/.ensemble/operator-agents/conversations/<operatorAgentId>/conversation.json` へ保存します。起動時は `--resume <operatorAgentId>` で指定でき、保存会話が一件なら自動再開、複数なら TTY で選択します。`--new` は別の会話を作り、既存 record を消しません。Pi transcript も会話 ID ごとに同じ directory の `pi-sessions/` に保存します。起動 cwd が変わっただけでは再開を拒否しません。再現できない context / resource は通知した上で選択中設定による再開を試し、backend が復元できない場合は失敗します。その場合も既存 record は保持します。`/exit` は現在の record だけを削除し、Pi transcript を削除しません。
 
 #### profile workspace のファイル操作

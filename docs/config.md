@@ -91,6 +91,10 @@ profiles:
         - github-read-only
 ```
 
+profile workspace 直下の `AGENTS.md` は起動時に読み、system prompt の基本指示、profile の `prompt.instructions` に続けて追加します。両方とも指示として扱い、後者だけが前者を置き換えることはありません。起動元 repository・cwd・`~/.ensemble/AGENTS.md` は読みません。ファイルがない場合や空白だけの場合は追加せず、`AGENTS.md` の symlink はリンク先にかかわらず拒否します。読み込みエラーや不正な UTF-8 は path を示して起動を失敗させます。
+
+実行中の変更は反映されず、再起動または resume 時に読み直します。Pi の resume では system prompt を差し替えます。Cursor の resume では起動後の最初の送信の先頭に現在の system prompt を付けるため、会話履歴に残ります。
+
 #### operator-agent の scheduler 設定
 
 report の集約・選択・focus 用設定は `common.scheduling` に置き、profile で上書きする場合は `profiles.<name>.scheduling` に同じ項目を指定します。profile の値は項目ごとに common の値を上書きします。watch の `pollIntervalMs` / `debounceMs` や conductor message listener の `messageDebounceMs` は、それぞれの watch / listener に属する既存設定で、scheduler の設定とは独立しています。

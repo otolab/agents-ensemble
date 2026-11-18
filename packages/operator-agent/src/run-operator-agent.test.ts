@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { DatabaseSync } from 'node:sqlite';
 import { dirname, join } from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -370,6 +370,132 @@ describe('runOperatorAgent', () => {
       reasoning: 'high',
     });
     expect(createdOptions[1]).not.toHaveProperty('pi');
+  });
+
+  it.each(['pi', 'cursor'] as const)(
+    'loads only workspace instructions for %s create and resume',
+    async (backend) => {
+      await writeOperatorSettings(repoRoot, backend);
+      const userRoot = join(repoRoot, '.ensemble');
+      const workspace = join(userRoot, 'operator-agents', 'smoke');
+      await mkdir(workspace, { recursive: true });
+      await writeFile(join(userRoot, 'AGENTS.md'), 'GLOBAL SECRET');
+      await writeFile(join(repoRoot, 'AGENTS.md'), 'REPOSITORY SECRET');
+      await writeFile(join(workspace, 'AGENTS.md'), 'first workspace guidance');
+      const prompts: string[] = [];
+      const fakeAgent = createFakeAgent({ send: async () => ({ runId: 'unused', status: 'completed', result: '' }) });
+      const factory: ConductorAgentFactory = {
+        create: async (options) => { prompts.push(options.systemPrompt); return fakeAgent; },
+        resume: async (_id, options) => { prompts.push(options.systemPrompt); return fakeAgent; },
+      };
+      await runOperatorAgent({ newSession: true }, { stdin: createInput('/exit\n'), stdout: createOutput(), agentFactory: factory });
+      await writeFile(join(workspace, 'AGENTS.md'), 'updated workspace guidance');
+      const statePath = operatorAgentStatePath(userRoot, 'saved-operator');
+      await mkdir(dirname(statePath), { recursive: true });
+      await writeFile(statePath, JSON.stringify({
+        version: 2, operatorAgentId: 'saved-operator', providerSessionId: 'operator-agent-id',
+        backend, profile: 'smoke', workspace, createdAt: 1, updatedAt: 1,
+        ...(backend === 'pi' ? { piResourceRoots: { agentDir: join(userRoot, 'pi-user'), projectDir: join(workspace, 'pi-project') } } : {}),
+      }));
+      await runOperatorAgent({ resumeId: 'saved-operator' }, { stdin: createInput('/exit\n'), stdout: createOutput(), agentFactory: factory });
+      expect(prompts[0]).toContain('first workspace guidance');
+      expect(prompts[1]).toContain('updated workspace guidance');
+      expect(prompts[1]).not.toContain('first workspace guidance');
+      for (const prompt of prompts) {
+        expect(prompt).not.toContain('GLOBAL SECRET');
+        expect(prompt).not.toContain('REPOSITORY SECRET');
+        expect(prompt.indexOf('Profile operator guidance.')).toBeGreaterThanOrEqual(0);
+        expect(prompt.indexOf('Profile operator guidance.')).toBeLessThan(prompt.indexOf('Profile workspace instructions'));
+      }
+    },
+  );
+
+  it('ignores absent or blank workspace instructions and rejects unreadable or invalid UTF-8', async () => {
+    const workspace = join(repoRoot, '.ensemble', 'operator-agents', 'smoke');
+    await mkdir(workspace, { recursive: true });
+    const path = join(workspace, 'AGENTS.md');
+    const prompts: string[] = [];
+    const factory: ConductorAgentFactory = {
+      create: async (options) => { prompts.push(options.systemPrompt); return createFakeAgent({ send: async () => ({ runId: 'unused', status: 'completed', result: '' }) }); },
+      resume: async () => { throw new Error('not used'); },
+    };
+    const run = () => runOperatorAgent({ newSession: true }, { stdin: createInput('/exit\n'), stdout: createOutput(), agentFactory: factory });
+    await run();
+    await writeFile(path, '  \n');
+    await run();
+    expect(prompts).toHaveLength(2);
+    expect(prompts[0]).toBe(prompts[1]);
+    await writeFile(path, Buffer.from([0xff]));
+    await expect(run()).rejects.toThrow('Failed to read profile workspace instructions');
+    await rm(path);
+    await mkdir(path);
+    await expect(run()).rejects.toThrow('Failed to read profile workspace instructions');
+  });
+
+  it('rejects workspace instructions symlinks before starting an agent', async () => {
+    const userRoot = join(repoRoot, '.ensemble');
+    const workspace = join(userRoot, 'operator-agents', 'smoke');
+    await mkdir(workspace, { recursive: true });
+    const path = join(workspace, 'AGENTS.md');
+    const factory: ConductorAgentFactory = {
+      create: async () => { throw new Error('agent must not start'); },
+      resume: async () => { throw new Error('agent must not start'); },
+    };
+    const run = () => runOperatorAgent({ newSession: true }, {
+      stdin: createInput('/exit\n'), stdout: createOutput(), agentFactory: factory,
+    });
+    for (const target of [join(repoRoot, 'AGENTS.md'), join(userRoot, 'AGENTS.md'), join(workspace, 'inside.md'), join(repoRoot, 'missing.md')]) {
+      if (!target.endsWith('missing.md')) await writeFile(target, 'must not be read');
+      await symlink(target, path);
+      await expect(run()).rejects.toThrow(/Failed to read profile workspace instructions.*symbolic link/u);
+      await rm(path);
+    }
+  });
+
+  it('keeps the startup snapshot during a Cursor run and sends refreshed instructions on resume', async () => {
+    await writeOperatorSettings(repoRoot, 'cursor');
+    const userRoot = join(repoRoot, '.ensemble');
+    const workspace = join(userRoot, 'operator-agents', 'smoke');
+    await mkdir(workspace, { recursive: true });
+    const path = join(workspace, 'AGENTS.md');
+    await writeFile(path, 'initial workspace instruction');
+    const sent: string[] = [];
+    const agent = createFakeAgent({ send: async (prompt) => {
+      sent.push(prompt);
+      return { runId: 'run-1', status: 'completed', result: 'done' };
+    } });
+    const factory: ConductorAgentFactory = {
+      create: async () => agent,
+      resume: async () => agent,
+    };
+    const input = createInteractiveInput();
+    input.isTTY = true;
+    const output = createOutput();
+    const firstRun = runOperatorAgent({ newSession: true }, { stdin: input, stdout: output, agentFactory: factory });
+    await vi.waitFor(() => expect(output.capturedText()).toContain('user>'));
+    await writeFile(path, 'updated workspace instruction');
+    input.write('first message\n');
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0]).toContain('initial workspace instruction');
+    expect(sent[0]).not.toContain('updated workspace instruction');
+    await vi.waitFor(() => expect(output.capturedText()).toContain('done'));
+    input.write('/exit\n');
+    await firstRun;
+
+    const statePath = operatorAgentStatePath(userRoot, 'saved-operator');
+    await mkdir(dirname(statePath), { recursive: true });
+    await writeFile(statePath, JSON.stringify({
+      version: 2, operatorAgentId: 'saved-operator', providerSessionId: 'operator-agent-id',
+      backend: 'cursor', profile: 'smoke', workspace, createdAt: 1, updatedAt: 1,
+    }));
+    await runOperatorAgent({ resumeId: 'saved-operator' }, {
+      stdin: createInput('resumed message\n/exit\n'), stdout: createOutput(), agentFactory: factory,
+    });
+    expect(sent).toHaveLength(2);
+    expect(sent[1]).toContain('updated workspace instruction');
+    expect(sent[1]).not.toContain('initial workspace instruction');
+    expect(sent[1].indexOf('updated workspace instruction')).toBeLessThan(sent[1].indexOf('## User message'));
+    expect(sent[1]).toContain('resumed message');
   });
 
   it('prompts for an operator profile when no default or unique profile exists', async () => {
@@ -3521,6 +3647,9 @@ describe('runOperatorAgent', () => {
     const input = createInput('hello\n/exit\n');
     const output = createOutput();
     await writeOperatorSettings(repoRoot, 'cursor');
+    const workspace = join(repoRoot, '.ensemble', 'operator-agents', 'smoke');
+    await mkdir(workspace, { recursive: true });
+    await writeFile(join(workspace, 'AGENTS.md'), 'Workspace first-turn guidance');
     const sentPrompts: string[] = [];
     let agentOptions: ConductorAgentCreateOptions | undefined;
     const fakeAgent = createFakeAgent({
@@ -3554,6 +3683,7 @@ describe('runOperatorAgent', () => {
     });
     expect(agentOptions).not.toHaveProperty('pi');
     expect(sentPrompts[0]).toContain('agents-ensemble の operator ロール');
+    expect(sentPrompts[0]).toContain('Workspace first-turn guidance');
     expect(sentPrompts[0]).toContain('## User message');
     expect(sentPrompts[0]).toContain('hello');
   });

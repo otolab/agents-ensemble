@@ -1,5 +1,6 @@
 import { createInterface } from 'node:readline';
-import { mkdir } from 'node:fs/promises';
+import { constants as fsConstants } from 'node:fs';
+import { lstat, mkdir, open } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { compile, merge } from '@modular-prompt/core';
@@ -539,7 +540,10 @@ async function resolveOperatorRuntime(
         instructions: profile.prompt.instructions,
       })
     : operatorBaseModule;
-  const systemPrompt = renderCompiledPrompt(
+  const workspaceInstructions = await loadWorkspaceInstructions(
+    await resolveOperatorWorkspaceRoot(workspace),
+  );
+  const basePrompt = renderCompiledPrompt(
     compile(
       promptModule,
       {
@@ -549,6 +553,10 @@ async function resolveOperatorRuntime(
       },
     ),
   );
+
+  const systemPrompt = workspaceInstructions
+    ? `${basePrompt}\n\n### Profile workspace instructions (AGENTS.md)\n\n${workspaceInstructions}`
+    : basePrompt;
 
   return {
     userEnsembleRoot,
@@ -614,6 +622,39 @@ async function selectSavedConversation(
     stdout,
   );
   return states.find((state) => state.operatorAgentId === selected)!;
+}
+
+async function loadWorkspaceInstructions(workspace: string): Promise<string | undefined> {
+  const path = join(workspace, 'AGENTS.md');
+  try {
+    let metadata;
+    try {
+      metadata = await lstat(path);
+    } catch (error) {
+      if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') {
+        return undefined;
+      }
+      throw error;
+    }
+    if (metadata.isSymbolicLink()) {
+      throw new Error('AGENTS.md must not be a symbolic link.');
+    }
+    const handle = await open(path, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0));
+    try {
+      if (!(await handle.stat()).isFile()) {
+        throw new Error('AGENTS.md must be a regular file.');
+      }
+      const bytes = await handle.readFile();
+      return new TextDecoder('utf-8', { fatal: true }).decode(bytes).trim() || undefined;
+    } finally {
+      await handle.close();
+    }
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(`Failed to read profile workspace instructions at ${path}: ${detail}`, {
+      cause: error,
+    });
+  }
 }
 
 async function selectProfileName(
