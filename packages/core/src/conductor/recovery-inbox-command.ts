@@ -20,7 +20,7 @@ export interface RecoveryInboxCommandApi {
     recoveryId: string,
   ) => ConductorRecoverySnapshot | undefined;
   clearRecoverySnapshot?: (recoveryId: string) => boolean;
-  continueAfterRecovery?: () => boolean;
+  continueAfterRecovery?: (expectedAttemptId?: string) => boolean;
   recoveryAttentionAttemptId?: () => string | undefined;
   getCursorBootstrapStatus?: () => CursorBootstrapStatus;
   resolveCursorBootstrapUnknown?: (
@@ -48,6 +48,7 @@ export interface ExecuteRecoveryInboxCommandOptions {
 
 const RECOVERY_COMMAND_PATTERN = /^[\t ]*\/recovery(?=$|[\t ])([\s\S]*)$/iu;
 const RECOVERY_SNAPSHOT_ID_PATTERN = /^conductor-recovery-\d+$/u;
+const displayedAttempts = new WeakMap<RecoveryInboxCommandApi, string | null>();
 
 /** Executes local-only recovery commands before text reaches a conductor. */
 export function executeRecoveryInboxCommand(
@@ -69,28 +70,34 @@ export function executeRecoveryInboxCommand(
   }
 
   if (command === 'list' && recoveryId === undefined) {
+    const attemptId = api?.recoveryAttentionAttemptId?.();
+    if (api) displayedAttempts.set(api, attemptId ?? null);
     return {
       handled: true,
       inspection: {
         title: 'Conductor recovery inbox',
         text: formatRecoverySnapshotList(
           api?.listRecoverySnapshots?.(),
-          api?.recoveryAttentionAttemptId?.(),
+          attemptId,
         ),
       },
     };
   }
 
-  if (command === 'continue' && recoveryId === undefined) {
-    const attemptId = api?.recoveryAttentionAttemptId?.();
-    const continued = api?.continueAfterRecovery?.() ?? false;
+  if (command === 'continue' && extraArgs.length === 0 && (recoveryId === undefined || /^\d+$/u.test(recoveryId))) {
+    const attemptId = recoveryId ?? (api && displayedAttempts.has(api)
+      ? displayedAttempts.get(api) ?? undefined
+      : api?.recoveryAttentionAttemptId?.());
+    const continued = attemptId !== undefined &&
+      (api?.continueAfterRecovery?.(attemptId) ?? false);
+    if (api && attemptId !== undefined) displayedAttempts.set(api, attemptId);
     return {
       handled: true,
       inspection: {
         title: 'Conductor recovery',
         text: continued
           ? `attempt ${attemptId ?? '不明'} の確認を受け付けました。失敗した入力は再送しません。/recovery list で次の確認待ちを確認できます。`
-          : '確認可能な send はありません。送信・再接続中は完了を待ってください。',
+          : '対象の attempt は確認できません。状態が変わったか、送信・再接続中の可能性があります。/recovery list で再確認してください。',
       },
     };
   }
@@ -234,7 +241,7 @@ export function executeRecoveryInboxCommand(
         '  /recovery list',
         '  /recovery show <recoveryId>',
         '  /recovery clear <recoveryId>',
-        '  /recovery continue',
+        '  /recovery continue [attemptId]',
         '  /recovery hide',
         '  /recovery bootstrap [assume-complete|assume-incomplete]',
         '',
@@ -282,7 +289,7 @@ function formatRecoverySnapshotList(
       ...heading,
       '確認できる snapshot はありません。',
       ...(attentionAttemptId
-        ? [`attempt ${attentionAttemptId} の結果確認後に /recovery continue を実行できます。`]
+        ? [`attempt ${attentionAttemptId} の結果確認後に /recovery continue ${attentionAttemptId} を実行できます。`]
         : []),
     ].join('\n');
   }
@@ -290,7 +297,7 @@ function formatRecoverySnapshotList(
   return [
     ...heading,
     ...(attentionAttemptId
-      ? [`attempt ${attentionAttemptId} の結果確認後に /recovery continue を実行できます。`]
+      ? [`attempt ${attentionAttemptId} の結果確認後に /recovery continue ${attentionAttemptId} を実行できます。`]
       : []),
     '容量が満杯の間は対象の入力をqueueに残してdispatchを待ちます。/recovery clear <id> またはTTL後に再開します。',
     '',

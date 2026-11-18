@@ -37,7 +37,12 @@ describe('ConductorDispatchLifecycle', () => {
     expect(lifecycle.pendingAttemptId).toBe(lease.attemptId);
     expect(lifecycle.lastFailure).toBe('transport');
     expect(lifecycle.beginSend('later input')).toBeUndefined();
-    expect(lifecycle.confirmRecovery()).toBe(true);
+    expect(lifecycle.confirmRecovery('other-attempt')).toBe(false);
+    const reconnect = lifecycle.beginReconnect()!;
+    expect(lifecycle.confirmRecovery(lease.attemptId)).toBe(false);
+    lifecycle.settleReconnect(reconnect, true);
+    expect(lifecycle.confirmRecovery(lease.attemptId)).toBe(true);
+    expect(lifecycle.confirmRecovery(lease.attemptId)).toBe(false);
     expect(lifecycle.state).toBe('ready');
     expect(lifecycle.lastFailure).toBe('transport');
   });

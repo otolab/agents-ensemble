@@ -576,6 +576,7 @@ describe('runConductorSession resume / shutdown', () => {
     const failureNotificationGate = createDeferred<void>();
     const secondFailureNotificationGate = createDeferred<void>();
     const failureSendGate = createDeferred<void>();
+    const secondFailureSendGate = createDeferred<void>();
     let failureBlocked = false;
     let secondFailureBlocked = false;
     let failureSendStarted = false;
@@ -604,6 +605,10 @@ describe('runConductorSession resume / shutdown', () => {
           return failureSends === 1
             ? { runId: 'interrupted-send', status: 'cancelled' }
             : { runId: 'failed-send', status: 'error', error: { message: 'synthetic send failure' } };
+        }
+        if (failureSends === 2) {
+          await secondFailureSendGate.promise;
+          return { runId: 'second-interrupted-send', status: 'cancelled' };
         }
       }
       return { runId: 'run', status: 'finished', result: 'done' };
@@ -688,25 +693,46 @@ describe('runConductorSession resume / shutdown', () => {
       await vi.waitFor(() => expect(mockSend.mock.calls.some(([message]) => message.includes('interrupt failure notification'))).toBe(true));
       const interruptedAttempt = api!.recoveryAttentionAttemptId!();
       expect(interruptedAttempt).toBeDefined();
+      expect(executeRecoveryInboxCommand(api, '/recovery list').inspection?.text).toContain(`attempt ${interruptedAttempt}`);
       expect(await getStatus('unknown')).toHaveLength(1);
       expect(failureSends).toBe(1);
       secondFailureNotificationGate.resolve();
       await vi.waitFor(() => expect(failureSends).toBe(2));
+      expect(executeRecoveryInboxCommand(api, '/recovery continue').inspection?.text).toContain('再確認');
+      expect(await getStatus('unknown')).toHaveLength(1);
+      expect(api!.submit('interrupt second failure', { delivery: 'interrupt' })).toBe(true);
+      secondFailureSendGate.resolve();
+      await vi.waitFor(() => expect(mockSend.mock.calls.some(([message]) => message.includes('interrupt second failure'))).toBe(true));
       expect(await getStatus('unknown')).toHaveLength(1);
       expect(failureSends).toBe(2);
       await tools!.prompt_worker!.execute({ worker: 'a', instruction: 'round-fail-3' });
       thirdFailingRound.resolve({ stopReason: 'end_turn' });
       await vi.waitFor(() => expect(api!.recoveryAttentionAttemptId!()).not.toBe(interruptedAttempt));
+      const laterAttempt = api!.recoveryAttentionAttemptId!();
       expect(await getStatus('unknown')).toHaveLength(1);
-      expect(api!.continueAfterRecovery!()).toBe(true);
+      expect(executeRecoveryInboxCommand(api, '/recovery continue').inspection?.text).toContain('再確認');
+      expect(executeRecoveryInboxCommand(api, `/recovery continue ${interruptedAttempt}`).inspection?.text).toContain('再確認');
+      expect(api!.recoveryAttentionAttemptId!()).toBe(laterAttempt);
+      expect(await getStatus('unknown')).toHaveLength(1);
+      expect(executeRecoveryInboxCommand(api, '/recovery list').inspection?.text).toContain(`attempt ${laterAttempt}`);
+      expect(executeRecoveryInboxCommand(api, '/recovery continue').inspection?.text).toContain(`attempt ${laterAttempt} の確認`);
       expect(api!.recoveryAttentionAttemptId!()).toBe(interruptedAttempt);
       expect(await getStatus('unknown')).toHaveLength(1);
-      expect(api!.continueAfterRecovery!()).toBe(true);
-      expect(api!.continueAfterRecovery!()).toBe(false);
+      expect(executeRecoveryInboxCommand(api, '/recovery continue').inspection?.text).toContain('再確認');
+      expect(executeRecoveryInboxCommand(api, '/recovery list').inspection?.text).toContain(`attempt ${interruptedAttempt}`);
+      expect(executeRecoveryInboxCommand(api, `/recovery continue ${interruptedAttempt}`).inspection?.text).toContain('確認を受け付けました');
+      expect(executeRecoveryInboxCommand(api, '/recovery continue').inspection?.text).toContain('再確認');
+      const secondInterruptedAttempt = api!.recoveryAttentionAttemptId!();
+      expect(secondInterruptedAttempt).toBeDefined();
+      expect(secondInterruptedAttempt).not.toBe(interruptedAttempt);
+      expect(await getStatus('unknown')).toHaveLength(1);
+      expect(executeRecoveryInboxCommand(api, '/recovery list').inspection?.text).toContain(`attempt ${secondInterruptedAttempt}`);
+      expect(executeRecoveryInboxCommand(api, '/recovery continue').inspection?.text).toContain('確認を受け付けました');
       await vi.waitFor(async () => expect(await getStatus('waiting')).toHaveLength(1));
       expect(failureSends).toBe(3);
     } finally {
       failureNotificationGate.resolve(); failureSendGate.resolve();
+      secondFailureSendGate.resolve();
       secondFailureNotificationGate.resolve(); secondFailingRound.resolve({ stopReason: 'end_turn' });
       thirdFailingRound.resolve({ stopReason: 'end_turn' });
       roundA.resolve({ stopReason: 'end_turn' }); roundB.resolve({ stopReason: 'end_turn' });

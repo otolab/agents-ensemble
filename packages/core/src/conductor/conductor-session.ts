@@ -2183,12 +2183,12 @@ async function runConductorSessionWithStartupGuard(
           }
         : {}),
       clearRecoverySnapshot: (recoveryId) => recoveryInbox.remove(recoveryId),
-      continueAfterRecovery: () => {
+      continueAfterRecovery: (expectedAttemptId) => {
         const gatedAttempt = dispatchLifecycle.pendingAttemptId;
         const attempt = gatedAttempt ?? unconfirmedWorkerFailures.keys().next().value;
-        if (!attempt) return false;
+        if (!attempt || (expectedAttemptId !== undefined && expectedAttemptId !== attempt)) return false;
         if (gatedAttempt) {
-          if (!dispatchLifecycle.confirmRecovery()) return false;
+          if (!dispatchLifecycle.confirmRecovery(attempt)) return false;
         } else if (dispatchLifecycle.state === 'in_flight' || dispatchLifecycle.state === 'reconnecting') {
           return false;
         }

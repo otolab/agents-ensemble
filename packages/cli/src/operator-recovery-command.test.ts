@@ -178,6 +178,51 @@ describe('executeRecoveryInboxCommand', () => {
     expect(hidden).toEqual({ handled: true });
   });
 
+  it('pins the listed attempt and rejects changes, expired attempts, and duplicate confirmations', () => {
+    const api = createApi();
+    let current: string | undefined = '1';
+    let busy = false;
+    api.recoveryAttentionAttemptId = () => current;
+    api.continueAfterRecovery = vi.fn((expected) => {
+      if (busy || expected !== current) return false;
+      current = current === '2' ? '1' : undefined;
+      return true;
+    });
+    expect(executeRecoveryInboxCommand(api, '/recovery list').inspection?.text).toContain('attempt 1');
+    current = '2';
+    expect(executeRecoveryInboxCommand(api, '/recovery continue').inspection?.text).toContain('再確認');
+    expect(current).toBe('2');
+    expect(executeRecoveryInboxCommand(api, '/recovery list').inspection?.text).toContain('attempt 2');
+    busy = true;
+    expect(executeRecoveryInboxCommand(api, '/recovery continue').inspection?.text).toContain('再確認');
+    busy = false;
+    expect(executeRecoveryInboxCommand(api, '/recovery continue 2').inspection?.text).toContain('attempt 2 の確認');
+    expect(executeRecoveryInboxCommand(api, '/recovery continue').inspection?.text).toContain('再確認');
+    expect(current).toBe('1');
+    expect(executeRecoveryInboxCommand(api, '/recovery list').inspection?.text).toContain('attempt 1');
+    current = undefined;
+    expect(executeRecoveryInboxCommand(api, '/recovery continue').inspection?.text).toContain('再確認');
+    current = '3';
+    expect(executeRecoveryInboxCommand(api, '/recovery continue').inspection?.text).toContain('再確認');
+    expect(current).toBe('3');
+  });
+
+  it('keeps the no-list continue operation for an ordinary recovery', () => {
+    const api = createApi();
+    expect(executeRecoveryInboxCommand(api, '/recovery continue').inspection?.text).toContain('attempt 12 の確認');
+    expect(api.continueAfterRecovery).toHaveBeenCalledWith('12');
+  });
+
+  it('does not confirm a new attempt after listing an empty inbox', () => {
+    const api = createApi();
+    let current: string | undefined;
+    api.recoveryAttentionAttemptId = () => current;
+    executeRecoveryInboxCommand(api, '/recovery list');
+    current = '3';
+    expect(executeRecoveryInboxCommand(api, '/recovery continue').inspection?.text).toContain('再確認');
+    expect(api.continueAfterRecovery).not.toHaveBeenCalled();
+  });
+
   it('requires an interactive TTY to choose how an unknown Cursor bootstrap is handled', () => {
     const api = createApi();
     const nonTty = executeRecoveryInboxCommand(
