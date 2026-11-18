@@ -741,6 +741,41 @@ describe('runConductorSession resume / shutdown', () => {
     }
   }, 30_000);
 
+  it('requires renewed selection after successive no-list recoveries in an Issue session', async () => {
+    let api: OperatorInputBindingApi | undefined;
+    mockSend.mockImplementation(async (message: string) =>
+      message.includes('first failure') || message.includes('second failure')
+        ? { runId: 'failed', status: 'error', error: { message: 'synthetic failure' } }
+        : { runId: 'ready', status: 'finished', result: 'ready' },
+    );
+    const session = runConductorSession({
+      issueUrl: TEST_ISSUE.url, repoRoot,
+      profile: { workers: [] }, permissionPipeline: new PermissionPipeline({}),
+      registerProcessSignalHandlers: false, disableGitHubMonitor: true,
+      waitForOperatorExit: true, continueOnConductorError: true,
+      operatorCanInspectRecovery: true,
+      bindOperatorInput: (binding) => { api = binding; },
+    });
+    try {
+      await vi.waitFor(() => expect(api).toBeDefined());
+      expect(api!.submit('first failure')).toBe(true);
+      await vi.waitFor(() => expect(api!.recoveryAttentionAttemptId!()).toBeDefined());
+      const first = api!.recoveryAttentionAttemptId!();
+      expect(executeRecoveryInboxCommand(api, '/recovery continue').inspection?.text).toContain(`attempt ${first} の確認`);
+      expect(api!.submit('second failure')).toBe(true);
+      await vi.waitFor(() => expect(api!.recoveryAttentionAttemptId!()).toBeDefined());
+      const second = api!.recoveryAttentionAttemptId!();
+      expect(second).not.toBe(first);
+      expect(executeRecoveryInboxCommand(api, '/recovery continue').inspection?.text).toContain('再確認');
+      expect(api!.recoveryAttentionAttemptId!()).toBe(second);
+      expect(executeRecoveryInboxCommand(api, `/recovery continue ${second}`).inspection?.text).toContain(`attempt ${second} の確認`);
+      expect(executeRecoveryInboxCommand(api, `/recovery continue ${second}`).inspection?.text).toContain('再確認');
+    } finally {
+      api?.submit('/exit');
+      await settleWithin(session, 10_000);
+    }
+  }, 30_000);
+
   it('resumes migrated Issue data and ignores path-hash sidecars', async () => {
     const agentId = 'resume-hash-location-snapshot';
     const paths = resolveEnsemblePaths({ repoRoot });

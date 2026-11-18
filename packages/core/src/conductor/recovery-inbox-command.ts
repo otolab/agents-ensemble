@@ -85,6 +85,21 @@ export function executeRecoveryInboxCommand(
   }
 
   if (command === 'continue' && extraArgs.length === 0 && (recoveryId === undefined || /^\d+$/u.test(recoveryId))) {
+    // Older bindings expose only the callback. They cannot identify an
+    // attempt, so preserve their original no-argument contract without
+    // pretending that attempt matching was performed.
+    if (api && !api.recoveryAttentionAttemptId) {
+      const continued = recoveryId === undefined && (api.continueAfterRecovery?.() ?? false);
+      return {
+        handled: true,
+        inspection: {
+          title: 'Conductor recovery',
+          text: continued
+            ? '確認を受け付けました。この binding は attempt ID を提供しないため、対象の照合は binding に委ねられます。失敗した入力は再送しません。'
+            : '確認できませんでした。この binding は attempt ID を提供しません。',
+        },
+      };
+    }
     const attemptId = recoveryId ?? (api && displayedAttempts.has(api)
       ? displayedAttempts.get(api) ?? undefined
       : api?.recoveryAttentionAttemptId?.());
@@ -97,7 +112,7 @@ export function executeRecoveryInboxCommand(
         title: 'Conductor recovery',
         text: continued
           ? `attempt ${attemptId ?? '不明'} の確認を受け付けました。失敗した入力は再送しません。/recovery list で次の確認待ちを確認できます。`
-          : '対象の attempt は確認できません。状態が変わったか、送信・再接続中の可能性があります。/recovery list で再確認してください。',
+          : '対象の attempt は確認できません。状態が変わったか、送信・再接続中の可能性があります。/recovery list で再確認するか、/recovery continue <attemptId> で対象を明示してください。',
       },
     };
   }

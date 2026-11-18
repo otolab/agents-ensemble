@@ -365,7 +365,9 @@ TTY operator input binding で次を実行します。
 
 `list` は本文を表示せず、workflow / backend、failure class、send・event metadata、byte 数、reconnect の結果、tool 開始 callback の観測有無、期限を示します。`show` は operator が明示したときだけ本文を表示し、conductor send / replay を起こしません。`clear` は inbox から該当 snapshot の参照を外します。`hide` / TUI の Escape は表示 pane を閉じます。`continue` は表示中の確認待ち attempt を一つだけ確認し、failure の内容を再送しません。通常の確認待ちであれば後続 queue の dispatch も再開します。明示 interrupt で中断された worker failure 通知は interrupt の処理を妨げませんが、配信結果が不明なため別途確認が必要です。後続の send にも確認待ちがある場合はそちらを先に表示し、その確認後に interrupt された attempt を表示します。agent が unavailable の場合は先に `/reconnect` を実行します。
 
-`/recovery list` の後に引数なしの `continue` を実行すると、その list で表示された attempt を確認します。`continue <attemptId>` では対象を明示できます。表示後に確認対象が変わった場合や、既に確認済みの場合は解除せず、再度 `list` での確認を求めます。送信・再接続中も確認できません。従来どおり、list を使わず引数なしで `continue` を実行することもできます。その場合は操作時点の確認待ち attempt が対象です。
+`/recovery list` の後に引数なしの `continue` を実行すると、その list で表示された attempt を確認します。`continue <attemptId>` では対象を明示できます。表示後に確認対象が変わった場合や、既に確認済みの場合は解除せず、再度 `list` での確認を求めます。送信・再接続中も確認できません。list を使わず最初に引数なしで `continue` を実行した場合は、その時点の確認待ち attempt が対象です。その後は同じ ID を保持するため、別の attempt を確認するときは、誤った重複確認を防ぐために `list` を再表示するか ID を明示してください。
+
+attempt ID を提供しない旧 binding では、引数なし `continue` は従来どおり binding の callback に委ねます。この場合、共通コマンドは対象 ID を照合できません。ID を明示する操作は利用できません。
 
 snapshot は stdin / stdout / stderr がすべて TTY の対話実行に限り保存・取得できます。非 TTY では本文を保存・表示せず、この実行環境では同一 process 内でも本文を確認できないことを本文なしで知らせます。非 TTY one-shot は未確定 send の後に error 終了し、inbox 本文をログや summary に退避しません。
 

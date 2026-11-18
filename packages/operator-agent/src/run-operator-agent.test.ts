@@ -3400,6 +3400,44 @@ describe('runOperatorAgent', () => {
     expect(stderr.capturedText()).toContain('ensemble operator-agent');
   });
 
+  it('requires renewed selection between no-list recoveries in the operator run loop', async () => {
+    const stdout = createOutput();
+    const stderr = createOutput();
+    const stdin = createInteractiveInput();
+    stdin.isTTY = true;
+    const send = vi.fn(async () => ({
+      runId: 'failed', status: 'error' as const,
+      error: { message: 'synthetic operator failure' },
+    }));
+    const run = runOperatorAgent(
+      { repoRoot },
+      { stdin, stdout, stderr, agentFactory: { create: async () => createFakeAgent({ send }) } },
+    );
+    try {
+      await vi.waitFor(() => expect(stdout.capturedText()).toContain('user>'));
+      stdin.write('first failure\n');
+      await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(1));
+      await vi.waitFor(() => expect(normalizeTtyText(stdout.capturedText())).toContain('operator send が未完了'));
+      stdin.write('/recovery continue\n');
+      await vi.waitFor(() => expect(stdout.capturedText()).toContain('attempt 1 の確認'));
+      stdin.write('/recovery continue\n');
+      await vi.waitFor(() => expect(stdout.capturedText()).toContain('は確認できません'));
+      stdin.write('second failure\n');
+      await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(2));
+      await vi.waitFor(() => expect(normalizeTtyText(stdout.capturedText()).match(/operator send が未完了/g)).toHaveLength(2));
+      const before = stdout.capturedText().length;
+      stdin.write('/recovery continue\n');
+      await vi.waitFor(() => expect(stdout.capturedText().slice(before)).toContain('は確認できません'));
+      stdin.write('/recovery continue 2\n');
+      await vi.waitFor(() => expect(stdout.capturedText()).toContain('attempt 2 の確認'));
+      expect(send).toHaveBeenCalledTimes(2);
+    } finally {
+      stdin.write('/exit\n');
+      stdin.end();
+      await run;
+    }
+  });
+
   it('prints Pi auth recovery steps to stderr after reconnect when the send still fails', async () => {
     const projectDir = join(
       repoRoot,

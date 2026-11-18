@@ -213,6 +213,34 @@ describe('executeRecoveryInboxCommand', () => {
     expect(api.continueAfterRecovery).toHaveBeenCalledWith('12');
   });
 
+  it('requires a new list or explicit ID after a no-list confirmation', () => {
+    const api = createApi();
+    let current: string | undefined = '1';
+    api.recoveryAttentionAttemptId = () => current;
+    api.continueAfterRecovery = vi.fn((expected) => {
+      if (expected !== current) return false;
+      current = undefined;
+      return true;
+    });
+    expect(executeRecoveryInboxCommand(api, '/recovery continue').inspection?.text).toContain('attempt 1 の確認');
+    current = '2';
+    expect(executeRecoveryInboxCommand(api, '/recovery continue').inspection?.text).toContain('再確認');
+    expect(current).toBe('2');
+    expect(executeRecoveryInboxCommand(api, '/recovery continue 2').inspection?.text).toContain('attempt 2 の確認');
+    expect(executeRecoveryInboxCommand(api, '/recovery continue 2').inspection?.text).toContain('再確認');
+  });
+
+  it('preserves the legacy callback-only binding without claiming ID matching', () => {
+    const callback = vi.fn().mockReturnValueOnce(true).mockReturnValueOnce(false);
+    const legacy: RecoveryInboxCommandApi = { continueAfterRecovery: callback };
+    expect(executeRecoveryInboxCommand(legacy, '/recovery continue 1').inspection?.text).toContain('ID を提供しません');
+    expect(callback).not.toHaveBeenCalled();
+    executeRecoveryInboxCommand(legacy, '/recovery list');
+    expect(executeRecoveryInboxCommand(legacy, '/recovery continue').inspection?.text).toContain('対象の照合は binding に委ねられます');
+    expect(callback).toHaveBeenCalledExactlyOnceWith();
+    expect(executeRecoveryInboxCommand(legacy, '/recovery continue').inspection?.text).toContain('確認できません');
+  });
+
   it('does not confirm a new attempt after listing an empty inbox', () => {
     const api = createApi();
     let current: string | undefined;
