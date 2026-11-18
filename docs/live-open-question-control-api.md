@@ -58,6 +58,10 @@ tool は SessionResumeStore に保存した conductor backend / cwd から provi
 
 `discovery.firstObservedAt` は repository watch がその run を初めて列挙した時刻です。SessionResumeStore の `updatedAt` は flush 時刻であり、作成・開始時刻や新着判定には使いません。観測時刻がない旧 run は `null` として first-observed sort の末尾に置きます。`live.connectivity` は応答直前の `dataAsOf` で最後の probe から10秒を超えると `unknown` になり、`live.lastKnownConnectivity` と `checkedAt` に古い観測を残します。watch がなく観測が一度もなければ `freshness: "not_observed"` です。
 
+`keyword` は現在の statusLine または未回答 Open Question の本文を大文字・小文字を区別しない部分一致で検索します。各 run で live snapshot があればそれを使い、なければ保存値を使います。検索対象の出典は `statusLineSource` と `openQuestionCountSource` で確認できます。`groupByIssue: true` は絞り込み後の run を Issue ごとにまとめて `issues[].runs` で返します。`limit`、`total`、`returned` と cursor は Issue 単位になり、各 Issue の順序は指定 sort で最初に現れる run に従います。個々の run には接続、保存 phase、最終報告を含みます。ページ間で観測が変わると重複・欠落があり得ます。
+
+組み合わせ例: ライブ接続中で未回答の質問がある run は `{ "liveConnectivity": "reachable", "hasOpenQuestions": true }`、終了済みは `{ "harnessPhase": "close" }`、接続状態が未確認の run は `{ "liveConnectivity": "unknown" }`。これらに `keyword` や `groupByIssue` を組み合わせられます。
+
 `openQuestionObservation` は watch pool が保存する未回答（`status: open`）の Open Question 件数を返します。回答済みの質問は含めません。現在・前回の件数と各観測時刻・出典、前回からの増減 `delta`、比較元の時刻 `comparedAt` を示し、回答による件数の減少も反映します。比較元がないときの `previous` / `delta` は `null` です。`openQuestionCount` は現在の一覧取得で選択した live または保存値です。
 
 一覧は保存 phase が終了済みでも socket path があれば `session.observe` を試みます。watch pool の10秒以内の観測は再利用し、それ以外の問い合わせは同時8件、1件あたり1秒で打ち切ります。ローカル UDS の通常応答を待ちつつ、多数の停止・無応答 run による遅延と接続数を抑えるための上限です。応答ありは `reachable`、socket 不在・接続拒否は `unreachable`、時間切れ・未対応やその他の判定不能は `unknown` です。保存 phase と接続状態は別の事実で、接続可能は worker の作業中を意味しません。

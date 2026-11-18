@@ -106,6 +106,116 @@ describe('list_operator_sessions', () => {
     });
   });
 
+  it('searches live and saved values and paginates matching Issue groups', async () => {
+    const firstIssue = 'https://github.com/example/project/issues/1';
+    const secondIssue = 'https://github.com/example/project/issues/2';
+    await writeResumeStore('a', 40, firstIssue, { statusLine: 'saved needle' });
+    await writeResumeStore('b', 30, firstIssue, { statusLine: 'NEEDLE saved' });
+    await writeResumeStore('c', 20, secondIssue, { statusLine: 'needle saved' });
+    await writeResumeStore('d', 10, secondIssue, { statusLine: 'needle hidden' });
+    const tool = createListOperatorSessionsTool(repoRoot, (id) => id === 'd' ? {
+      connectivity: 'reachable', checkedAt: Date.now(), unreachableSince: null,
+      snapshot: { sequence: 0, openQuestions: [{ id: 'live', question: 'Live question', responseType: 'yes_no', source: 'conductor', status: 'open', askedAt: 1 }], sessionState: { current: { statusLine: 'different', reportedAt: 10 }, history: [] } },
+    } : undefined);
+    const args = { keyword: 'Needle', groupByIssue: true, sort: 'updatedAtDesc', limit: 1, includeGithub: false };
+    const first = JSON.parse((await tool.execute(args)).content[0]!.text);
+    expect(first).toMatchObject({ total: 2, returned: 1, issues: [{ issueUrl: firstIssue, runs: [{ conductorAgentId: 'a', statusLineSource: 'conductor_report' }, { conductorAgentId: 'b' }] }] });
+    const second = JSON.parse((await tool.execute({ ...args, cursor: first.nextCursor })).content[0]!.text);
+    expect(second.issues).toMatchObject([{ issueUrl: secondIssue, runs: [{ conductorAgentId: 'c' }] }]);
+    expect(second.nextCursor).toBeUndefined();
+    await expect(tool.execute({ ...args, keyword: 'other', cursor: first.nextCursor })).rejects.toThrow('cursor');
+    const questions = JSON.parse((await tool.execute({ keyword: 'proceed', includeGithub: false, limit: 1 })).content[0]!.text);
+    expect(questions.sessions[0]).toMatchObject({ openQuestionCountSource: 'resume_store_compatibility' });
+    expect(questions.nextCursor).toBeDefined();
+    const live = JSON.parse((await tool.execute({ keyword: 'live question', includeGithub: false })).content[0]!.text);
+    expect(live.sessions).toMatchObject([{ conductorAgentId: 'd', openQuestionCountSource: 'uds' }]);
+  });
+
+  it('accepts a cursor issued by the previous version for the ungrouped listing', async () => {
+    const issue = 'https://github.com/example/project/issues/1';
+    await writeResumeStore('first', 20, issue);
+    await writeResumeStore('second', 10, issue);
+    const scope = JSON.stringify({
+      sort: 'updatedAtDesc', githubRepo: null, issueUrl: null,
+      conductorAgentId: null, hasStatusLine: null, lifecycle: null,
+      liveConnectivity: null, harnessPhase: null, hasOpenQuestions: null,
+      minOpenQuestions: null, reportedBefore: null, profileIncludes: null, repoFilters: null,
+    });
+    const cursor = Buffer.from(JSON.stringify({ version: 2, sort: 'updatedAtDesc', scope,
+      sortValue: 20, issueKey: 'example/project#1', conductorAgentId: 'first' })).toString('base64url');
+    const tool = createListOperatorSessionsTool(repoRoot);
+    const page = JSON.parse((await tool.execute({ sort: 'updatedAtDesc', limit: 1, cursor, includeGithub: false })).content[0]!.text);
+    expect(page.sessions).toMatchObject([{ conductorAgentId: 'second' }]);
+    expect(page.issues).toBeUndefined();
+    await expect(tool.execute({ sort: 'updatedAtDesc', cursor, groupByIssue: true })).rejects.toThrow('cursor');
+  });
+
+  it('searches selected live and YAML values, excluding answered questions', async () => {
+    const issue = 'https://github.com/example/project/issues/1';
+    await writeResumeStore('saved', 20, issue, { statusLine: 'saved status' });
+    await writeResumeStore('live', 10, issue, { statusLine: 'hidden saved status' });
+    for (const id of ['saved', 'live']) {
+      const path = resolveEnsemblePaths({ repoRoot }).canonicalOpenQuestionsPath(issue, id);
+      await mkdir(dirname(path), { recursive: true });
+      await writeFile(path, `version: 1
+sequence: 2
+openQuestions:
+  - id: open
+    question: YAML pending
+    responseType: yes_no
+    source: conductor
+    status: open
+    askedAt: 1
+  - id: answered
+    question: YAML resolved
+    responseType: yes_no
+    source: conductor
+    status: answered
+    askedAt: 1
+    answer: Yes
+`);
+    }
+    const tool = createListOperatorSessionsTool(repoRoot, (id) => id === 'live' ? {
+      connectivity: 'reachable', checkedAt: Date.now(), unreachableSince: null,
+      snapshot: { sequence: 2, openQuestions: [
+        { id: 'open', question: 'Live pending', responseType: 'yes_no', source: 'conductor', status: 'open', askedAt: 1 },
+        { id: 'answered', question: 'Live resolved', responseType: 'yes_no', source: 'conductor', status: 'answered', askedAt: 1, answer: 'Yes' },
+      ], sessionState: { current: { statusLine: 'Live status', reportedAt: 15 }, history: [] } },
+    } : undefined);
+    const search = async (keyword: string) => JSON.parse((await tool.execute({ keyword, includeGithub: false })).content[0]!.text).sessions;
+    expect(await search('live status')).toMatchObject([{ conductorAgentId: 'live', statusLineSource: 'uds' }]);
+    expect(await search('yaml pending')).toMatchObject([{ conductorAgentId: 'saved', openQuestionCountSource: 'open_questions_yaml' }]);
+    expect(await search('live pending')).toMatchObject([{ conductorAgentId: 'live', openQuestionCountSource: 'uds' }]);
+    expect(await search('hidden saved status')).toEqual([]);
+    expect(await search('resolved')).toEqual([]);
+  });
+
+  it('keeps each run state together across grouped page boundaries', async () => {
+    const firstIssue = 'https://github.com/example/project/issues/1';
+    const secondIssue = 'https://github.com/example/project/issues/2';
+    await writeResumeStore('a', 40, firstIssue, { harnessPhase: 'running', statusLine: 'match saved' });
+    await writeResumeStore('c', 30, secondIssue, { harnessPhase: 'close', statusLine: 'match second' });
+    await writeResumeStore('b', 20, firstIssue, { harnessPhase: 'idle', statusLine: 'old saved' });
+    const tool = createListOperatorSessionsTool(repoRoot, (id) => id === 'b' ? {
+      connectivity: 'reachable', checkedAt: Date.now(), unreachableSince: null,
+      snapshot: { sequence: 0, openQuestions: [], sessionState: { current: { statusLine: 'match live', reportedAt: 99 }, history: [] } },
+    } : undefined);
+    const args = { keyword: 'match', groupByIssue: true, sort: 'updatedAtDesc', limit: 1, includeGithub: false };
+    const first = JSON.parse((await tool.execute(args)).content[0]!.text);
+    expect(first.issues).toMatchObject([{ issueUrl: firstIssue, runs: [
+      { conductorAgentId: 'a', live: { connectivity: 'unknown' }, persisted: { harnessPhase: 'running' }, statusLine: 'match saved', reportedAt: 41 },
+      { conductorAgentId: 'b', live: { connectivity: 'reachable' }, persisted: { harnessPhase: 'idle' }, statusLine: 'match live', reportedAt: 99 },
+    ] }]);
+    const second = JSON.parse((await tool.execute({ ...args, cursor: first.nextCursor })).content[0]!.text);
+    expect(second.issues).toMatchObject([{ issueUrl: secondIssue, runs: [{ conductorAgentId: 'c', persisted: { harnessPhase: 'close' } }] }]);
+    expect(second.nextCursor).toBeUndefined();
+    await expect(tool.execute({ ...args, groupByIssue: false, cursor: first.nextCursor })).rejects.toThrow('cursor');
+    const plain = JSON.parse((await tool.execute({ ...args, groupByIssue: false, limit: 2 })).content[0]!.text);
+    expect(plain.sessions.map((run: { conductorAgentId: string }) => run.conductorAgentId)).toEqual(['a', 'c']);
+    const plainNext = JSON.parse((await tool.execute({ ...args, groupByIssue: false, limit: 2, cursor: plain.nextCursor })).content[0]!.text);
+    expect(plainNext.sessions.map((run: { conductorAgentId: string }) => run.conductorAgentId)).toEqual(['b']);
+  });
+
   it('filters by statusLine and lifecycle; older Issue records without lifecycle are unknown', async () => {
     const issueUrl = 'https://github.com/example/project/issues/1';
     await writeResumeStore('legacy', 10, issueUrl);
