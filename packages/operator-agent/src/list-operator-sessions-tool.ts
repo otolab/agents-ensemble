@@ -154,6 +154,7 @@ interface SessionListSnapshot {
   questionHistory?: OpenQuestionHistory;
   storeReadStartedAt: number;
   summary?: OperatorSessionSummary;
+  observedSummary?: OperatorSessionSummary;
 }
 
 interface OpenQuestionHistory {
@@ -249,7 +250,7 @@ export function createListOperatorSessionsTool(
   return {
     name: LIST_OPERATOR_SESSIONS_TOOL,
     description:
-      'List one row per saved Issue run. Saved phase and live connectivity are separate facts; reachable does not mean working and unknown does not mean stopped. Connectivity and live values may change between cursor pages. Includes timestamped observations and bounded GitHub summaries.',
+      'List one row per saved Issue run. Saved phase and live connectivity are separate facts; reachable does not mean working and unknown does not mean stopped. Connectivity and live values may change between cursor pages. Freshness and reportedBefore are evaluated at dataAsOf; accepted observations retain their original timestamps even if stale. Includes bounded GitHub summaries.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -301,7 +302,7 @@ export function createListOperatorSessionsTool(
         harnessPhase: { type: 'string', enum: ['running', 'idle', 'close', 'abort', 'exit'] },
         hasOpenQuestions: { type: 'boolean' },
         minOpenQuestions: { type: 'integer', minimum: 0 },
-        reportedBefore: { type: 'number', minimum: 0, description: 'Minimum age of the latest statusLine in milliseconds.' },
+        reportedBefore: { type: 'number', minimum: 0, description: 'Minimum age of the latest statusLine in milliseconds at dataAsOf.' },
         lifecycle: {
           type: 'string',
           enum: SESSION_LIFECYCLES,
@@ -321,13 +322,11 @@ export function createListOperatorSessionsTool(
       const hasOpenQuestions = resolveOptionalBoolean(args.hasOpenQuestions, 'hasOpenQuestions');
       const minOpenQuestions = resolveNonnegative(args.minOpenQuestions, 'minOpenQuestions', true);
       const reportedBefore = resolveNonnegative(args.reportedBefore, 'reportedBefore', false);
-      const now = Date.now();
       const githubRepo = resolveGithubRepo(args.githubRepo);
       const issueUrl = resolveIssueUrl(args.issueUrl);
       const conductorAgentId = resolveConductorAgentId(
         args.conductorAgentId,
       );
-      const dataAsOf = new Date().toISOString();
       const normalizedRepoFilters = repoFilters?.length
         ? repoFilters.map((pattern) => normalizeRepositoryPattern(pattern))
         : undefined;
@@ -404,22 +403,9 @@ export function createListOperatorSessionsTool(
           } else {
             snapshot.live = cached?.checkedAt != null && cached.checkedAt <= Date.now() ? cached : undefined;
           }
-          snapshot.summary = summarizeSession(snapshot.resumeStore, snapshot.status, snapshot.questionHistory, snapshot.live, snapshot.tracking);
+          snapshot.observedSummary = summarizeSession(snapshot.resumeStore, snapshot.status, snapshot.questionHistory, snapshot.live, snapshot.tracking);
         }
       }));
-      const filtered = candidates.filter((snapshot) => {
-        const summary = snapshot.summary!;
-        if (hasStatusLine !== undefined && (summary.statusLine !== null) !== hasStatusLine) return false;
-        if (liveConnectivity !== undefined && summary.live.connectivity !== liveConnectivity) return false;
-        if (harnessPhase !== undefined && summary.persisted.harnessPhase !== harnessPhase) return false;
-        if (hasOpenQuestions !== undefined && (summary.openQuestionCount === null || (summary.openQuestionCount > 0) !== hasOpenQuestions)) return false;
-        if (minOpenQuestions !== undefined && (summary.openQuestionCount === null || summary.openQuestionCount < minOpenQuestions)) return false;
-        if (reportedBefore !== undefined && (summary.reportedAt === null || now - summary.reportedAt < reportedBefore)) return false;
-        return true;
-      });
-      filtered.sort((left, right) => {
-        return compareSnapshots(left, right, sort);
-      });
       const cursorScope = JSON.stringify({
         sort,
         githubRepo: githubRepo ?? null,
@@ -436,31 +422,44 @@ export function createListOperatorSessionsTool(
         repoFilters: normalizedRepoFilters ?? null,
       });
       const cursor = resolveListCursor(args.cursor, sort, cursorScope);
-      const remaining = cursor
-        ? filtered.filter(
-            (snapshot) => compareSnapshotToCursor(snapshot, cursor, sort) > 0,
-          )
-        : filtered;
-      const page = remaining.slice(0, limit);
-      const nextCursor =
-        remaining.length > page.length
-          ? encodeListCursor(page.at(-1)!, sort, cursorScope)
-          : undefined;
-      const pageWithQuestions = await Promise.all(
-        page.map(async (snapshot) => ({
-          ...snapshot,
-          questionHistory: snapshot.questionHistory!,
-        })),
-      );
+      const evaluate = (asOf: number) => {
+        const filtered = candidates.filter((snapshot) => {
+          const summary = projectSummaryAt(snapshot.observedSummary!, snapshot.live, asOf);
+          snapshot.summary = summary;
+          if (hasStatusLine !== undefined && (summary.statusLine !== null) !== hasStatusLine) return false;
+          if (liveConnectivity !== undefined && summary.live.connectivity !== liveConnectivity) return false;
+          if (harnessPhase !== undefined && summary.persisted.harnessPhase !== harnessPhase) return false;
+          if (hasOpenQuestions !== undefined && (summary.openQuestionCount === null || (summary.openQuestionCount > 0) !== hasOpenQuestions)) return false;
+          if (minOpenQuestions !== undefined && (summary.openQuestionCount === null || summary.openQuestionCount < minOpenQuestions)) return false;
+          if (reportedBefore !== undefined && (summary.reportedAt === null || asOf - summary.reportedAt < reportedBefore)) return false;
+          return true;
+        });
+        filtered.sort((left, right) => compareSnapshots(left, right, sort));
+        const remaining = cursor
+          ? filtered.filter((snapshot) => compareSnapshotToCursor(snapshot, cursor, sort) > 0)
+          : filtered;
+        return { filtered, remaining, page: remaining.slice(0, limit) };
+      };
+      const preliminary = evaluate(Date.now());
       const pullRequests = await loadPullRequestSummaries(
-        pageWithQuestions,
+        preliminary.page,
         includeGithub,
         getGitHubClient,
         githubSummaryCache,
       );
-      const sessions = pageWithQuestions.map((snapshot) => ({
+      // GitHub lookup may take time. Re-evaluate all filters and page boundaries
+      // at one timestamp after it completes, without discarding accepted snapshots.
+      const evaluatedAt = Date.now();
+      const { filtered, remaining, page } = evaluate(evaluatedAt);
+      const dataAsOf = new Date(evaluatedAt).toISOString();
+      const nextCursor = remaining.length > page.length
+        ? encodeListCursor(page.at(-1)!, sort, cursorScope)
+        : undefined;
+      const sessions = page.map((snapshot) => ({
         ...snapshot.summary!,
-        pullRequests: pullRequests.get(issueKeyForResumeStore(snapshot.resumeStore.issueUrl)) ?? notRequestedGitHubSummary(),
+        pullRequests: pullRequests.get(issueKeyForResumeStore(snapshot.resumeStore.issueUrl)) ?? (includeGithub
+          ? { ...notRequestedGitHubSummary(), status: 'not_checked' as const, reason: 'page_changed_during_lookup' }
+          : notRequestedGitHubSummary()),
       }));
       const payload = {
         dataAsOf,
@@ -792,6 +791,31 @@ function compareSortValues(
   if (left === null) return 1;
   if (right === null) return -1;
   return direction * (left - right);
+}
+
+function projectSummaryAt(
+  observed: OperatorSessionSummary,
+  cached: OperatorSessionLiveStatus | undefined,
+  asOf: number,
+): OperatorSessionSummary {
+  const checkedAt = observed.live.checkedAt;
+  const ageMs = checkedAt === null ? null : Math.max(0, asOf - checkedAt);
+  const freshness: OperatorSessionSummary['live']['freshness'] = ageMs === null ? 'not_observed' : ageMs > LIVE_STATUS_FRESHNESS_MS ? 'stale' : 'fresh';
+  const live = {
+    ...observed.live,
+    connectivity: freshness === 'stale' ? 'unknown' as const : observed.live.connectivity,
+    freshness,
+    ageMs,
+  };
+  const projection = projectSessionPosture(
+    observed.persisted.harnessPhase,
+    live.connectivity,
+    checkedAt,
+    observed.persisted.modifiedAt,
+    cached?.unreachableSince ?? null,
+  );
+  const { coherenceReasons: _previousReasons, ...base } = observed;
+  return { ...base, live, ...projection };
 }
 
 function summarizeSession(

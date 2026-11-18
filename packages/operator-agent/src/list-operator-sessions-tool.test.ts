@@ -969,8 +969,8 @@ describe('list_operator_sessions', () => {
       const tool = createListOperatorSessionsTool(repoRoot, (id) => id === 'watched-long' ? { connectivity: 'reachable', checkedAt: start, unreachableSince: null, snapshot: { sequence: 0, openQuestions: [], sessionState: { current: { statusLine: 'watch', reportedAt: 50 }, history: [] } } } : undefined);
       const result = JSON.parse((await tool.execute({ includeGithub: false })).content[0]!.text);
       expect(result.sessions).toEqual(expect.arrayContaining([
-        expect.objectContaining({ conductorAgentId: 'live', statusLine: 'live', openQuestionCount: 0, live: expect.objectContaining({ connectivity: 'reachable', checkedAt: start }) }),
-        expect.objectContaining({ conductorAgentId: 'watched-long', statusLine: 'watch', live: expect.objectContaining({ connectivity: 'reachable', checkedAt: start }) }),
+        expect.objectContaining({ conductorAgentId: 'live', statusLine: 'live', openQuestionCount: 0, live: expect.objectContaining({ connectivity: 'unknown', lastKnownConnectivity: 'reachable', freshness: 'stale', ageMs: 11_000, checkedAt: start }) }),
+        expect.objectContaining({ conductorAgentId: 'watched-long', statusLine: 'watch', live: expect.objectContaining({ connectivity: 'unknown', lastKnownConnectivity: 'reachable', freshness: 'stale', ageMs: 11_000, checkedAt: start }) }),
         expect.objectContaining({ conductorAgentId: 'saved', openQuestionCount: 1, openQuestionCountSource: 'open_questions_yaml', openQuestionCountObservedAt: start }),
       ]));
       const current = JSON.parse((await createListOperatorSessionsTool(repoRoot).execute({ includeGithub: false, conductorAgentId: 'saved' })).content[0]!.text);
@@ -994,10 +994,10 @@ describe('list_operator_sessions', () => {
     try {
       await writeResumeStore('a-live', 9999, issue, { harnessSocketPath: livePath });
       for (let i = 0; i < 88; i++) await writeResumeStore(`z-${String(i).padStart(3, '0')}`, i + 2, issue, { harnessSocketPath: slowPath });
-      const result = JSON.parse((await createListOperatorSessionsTool(repoRoot).execute({ includeGithub: false, liveConnectivity: 'reachable' })).content[0]!.text);
-      expect(result.total).toBe(1);
-      expect(result.sessions[0]).toMatchObject({ conductorAgentId: 'a-live', statusLine: 'early', openQuestionCount: 0, live: { connectivity: 'reachable' } });
-      expect(Date.now() - result.sessions[0].live.checkedAt).toBeGreaterThan(10_000);
+      const result = JSON.parse((await createListOperatorSessionsTool(repoRoot).execute({ includeGithub: false, liveConnectivity: 'unknown', sort: 'updatedAtDesc' })).content[0]!.text);
+      expect(result.total).toBe(89);
+      expect(result.sessions[0]).toMatchObject({ conductorAgentId: 'a-live', statusLine: 'early', openQuestionCount: 0, live: { connectivity: 'unknown', lastKnownConnectivity: 'reachable', freshness: 'stale' } });
+      expect(result.sessions[0].live.ageMs).toBeGreaterThan(10_000);
     } finally {
       for (const socket of sockets) socket.destroy();
       await Promise.all([live, slow].map((server) => new Promise<void>((resolve) => server.close(() => resolve()))));
@@ -1031,6 +1031,65 @@ describe('list_operator_sessions', () => {
       dateSpy.mockRestore();
       await new Promise<void>((resolve) => server.close(() => resolve()));
       await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('evaluates reportedBefore at dataAsOf for reports made during the listing and threshold crossings', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'ls-reported-age-'));
+    const issue = 'https://github.com/example/project/issues/772';
+    let clock = Date.now();
+    const start = clock;
+    const spy = vi.spyOn(Date, 'now').mockImplementation(() => clock);
+    const servers: Server[] = [];
+    const listen = async (name: string, reportedAt: number, delay: boolean) => {
+      const path = join(dir, name);
+      const server = createServer((socket) => socket.once('data', () => setTimeout(() => {
+        if (delay) clock = start + 6_000;
+        socket.end(JSON.stringify({ jsonrpc: '2.0', id: 1, result: { sequence: 0, openQuestions: [], sessionState: { current: { statusLine: name, reportedAt }, history: [] } } }) + '\n');
+      }, delay ? 50 : 0)));
+      await new Promise<void>((resolve, reject) => server.once('error', reject).listen(path, resolve));
+      servers.push(server);
+      return path;
+    };
+    try {
+      await writeResumeStore('crossed', 10, issue, { harnessSocketPath: await listen('crossed', start + 1_000, false) });
+      await writeResumeStore('young', 20, issue, { harnessSocketPath: await listen('young', start + 1_001, true) });
+      const tool = createListOperatorSessionsTool(repoRoot);
+      const result = JSON.parse((await tool.execute({ includeGithub: false, reportedBefore: 5_000 })).content[0]!.text);
+      expect(Date.parse(result.dataAsOf)).toBe(start + 6_000);
+      expect(result.sessions.map((item: { conductorAgentId: string }) => item.conductorAgentId)).toEqual(['crossed']);
+      clock = start;
+      const zero = JSON.parse((await tool.execute({ includeGithub: false, reportedBefore: 0 })).content[0]!.text);
+      expect(zero.total).toBe(2);
+    } finally {
+      spy.mockRestore();
+      await Promise.all(servers.map((server) => new Promise<void>((resolve) => server.close(() => resolve()))));
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('re-evaluates freshness and page after a slow GitHub lookup', async () => {
+    let clock = Date.now();
+    const start = clock;
+    const spy = vi.spyOn(Date, 'now').mockImplementation(() => clock);
+    try {
+      await writeResumeStore('a', 20, 'https://github.com/example/project/issues/773');
+      await writeResumeStore('b', 10, 'https://github.com/example/project/issues/774');
+      const client = { getIssuePullRequestSummaries: async () => {
+        clock = start + 11_000;
+        return { status: 'available', pullRequests: [], pullRequestsTruncated: false };
+      } } as unknown as GitHubClient;
+      const tool = createListOperatorSessionsTool({ userEnsembleRoot: join(repoRoot, '.user-ensemble'), getGitHubClient: async () => client }, (id) => ({
+        connectivity: 'reachable', checkedAt: start, unreachableSince: null,
+        snapshot: { sequence: 0, openQuestions: [], sessionState: { current: { statusLine: id, reportedAt: id === 'a' ? start - 20_000 : start - 4_000 }, history: [] } },
+      }));
+      const result = JSON.parse((await tool.execute({ reportedBefore: 5_000, sort: 'updatedAtAsc', limit: 1 })).content[0]!.text);
+      expect(result.total).toBe(2);
+      expect(Date.parse(result.dataAsOf)).toBe(start + 11_000);
+      expect(result.sessions[0]).toMatchObject({ conductorAgentId: 'b', statusLine: 'b', live: { connectivity: 'unknown', lastKnownConnectivity: 'reachable', freshness: 'stale', ageMs: 11_000 }, pullRequests: { status: 'not_checked', reason: 'page_changed_during_lookup' } });
+      expect(result.nextCursor).toBeTruthy();
+    } finally {
+      spy.mockRestore();
     }
   });
 
