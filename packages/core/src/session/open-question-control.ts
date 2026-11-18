@@ -124,6 +124,7 @@ export class OpenQuestionControlTransportError extends Error {
   constructor(
     message: string,
     public readonly outcome: 'not_sent' | 'unknown',
+    public readonly reason: 'timeout' | 'connection' | 'other' = 'other',
   ) {
     super(message);
     this.name = 'OpenQuestionControlTransportError';
@@ -281,6 +282,7 @@ export async function sendOpenQuestionControlRequest<T>(
     method: string;
     params?: Record<string, unknown>;
   },
+  options: { timeoutMs?: number } = {},
 ): Promise<T> {
   const requestId = 1;
   const request = JSON.stringify({
@@ -297,13 +299,13 @@ export async function sendOpenQuestionControlRequest<T>(
     const socket = net.createConnection(socketPath);
     let settled = false;
     let requestSent = false;
-    socket.setTimeout(SOCKET_TIMEOUT_MS, () => {
-      finishWithTransportError('Open Question control request timed out.');
-    });
+    const timer = setTimeout(() => {
+      finishWithTransportError('Open Question control request timed out.', 'timeout');
+    }, options.timeoutMs ?? SOCKET_TIMEOUT_MS);
 
     let buffer = Buffer.alloc(0);
     const cleanup = () => {
-      socket.setTimeout(0);
+      clearTimeout(timer);
       socket.off('connect', onConnect);
       socket.off('data', onData);
       socket.off('end', onEnd);
@@ -317,7 +319,7 @@ export async function sendOpenQuestionControlRequest<T>(
       callback();
       socket.destroy();
     };
-    const finishWithTransportError = (message: string) => {
+    const finishWithTransportError = (message: string, reason: 'timeout' | 'connection' | 'other' = 'other') => {
       settle(() => {
         reject(
           new OpenQuestionControlTransportError(
@@ -325,6 +327,7 @@ export async function sendOpenQuestionControlRequest<T>(
               ? `${message} The request outcome is unknown. Do not retry automatically; inspect the live session before taking further action.`
               : message,
             requestSent ? 'unknown' : 'not_sent',
+            reason,
           ),
         );
       });
@@ -352,6 +355,7 @@ export async function sendOpenQuestionControlRequest<T>(
     const onError = (error: Error) => {
       finishWithTransportError(
         `Open Question control connection failed: ${error.message}`,
+        !requestSent && ['ENOENT', 'ECONNREFUSED'].includes((error as NodeJS.ErrnoException).code ?? '') ? 'connection' : 'other',
       );
     };
     const onData = (chunk: Buffer) => {

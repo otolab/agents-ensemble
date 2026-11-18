@@ -117,6 +117,7 @@ export interface OperatorSessionLiveStatus {
   connectivity: 'reachable' | 'unreachable' | 'unknown';
   checkedAt: number | null;
   unreachableSince: number | null;
+  snapshot?: SessionObservationSnapshot;
 }
 
 export interface OperatorIdleCandidateObservation {
@@ -1792,6 +1793,7 @@ export async function createOperatorWatchPool(
           liveStatuses.set(id, {
             connectivity,
             checkedAt,
+            ...(source === 'uds' ? { snapshot: observation } : {}),
             unreachableSince:
               connectivity === 'unreachable'
                 ? previousLiveStatus?.connectivity === 'unreachable'
@@ -2555,7 +2557,7 @@ async function readObservation(
       // or an older server does not implement snapshots, mark persisted data
       // as the observation source instead of presenting it as live.
       const connectivity =
-        error instanceof OpenQuestionControlTransportError
+        error instanceof OpenQuestionControlTransportError && error.reason === 'connection'
           ? 'unreachable'
           : 'unknown';
       const questions = await loadPersistedOpenQuestions(

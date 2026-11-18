@@ -1,5 +1,6 @@
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
+import { createServer, type Server } from 'node:net';
 import { tmpdir } from 'node:os';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -862,6 +863,277 @@ describe('list_operator_sessions', () => {
     });
   });
 
+  it('observes mixed live outcomes before filtering, sorting and cursor pagination', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'ls-uds-'));
+    const servers: Server[] = [];
+    const sockets: import('node:net').Socket[] = [];
+    const listen = async (name: string, result: 'live' | 'unsupported' | 'timeout') => {
+      const path = join(dir, name);
+      const server = createServer((socket) => {
+        sockets.push(socket);
+        socket.on('data', () => {
+          if (result === 'timeout') return;
+          socket.end(JSON.stringify(result === 'live'
+            ? { jsonrpc: '2.0', id: 1, result: { sequence: 0, openQuestions: [], sessionState: { current: { statusLine: 'live', reportedAt: 100 }, history: [] } } }
+            : { jsonrpc: '2.0', id: 1, error: { code: -32601, message: 'unsupported' } }) + '\n');
+        });
+      });
+      await new Promise<void>((resolve, reject) => server.once('error', reject).listen(path, resolve));
+      servers.push(server);
+      return path;
+    };
+    try {
+      const live = await listen('live', 'live');
+      const unsupported = await listen('old', 'unsupported');
+      const timeout = await listen('slow', 'timeout');
+      const issue = 'https://github.com/example/project/issues/764';
+      await writeResumeStore('live', 10, issue, { harnessPhase: 'close', harnessSocketPath: live, statusLine: 'saved' });
+      await writeResumeStore('old', 20, issue, { harnessSocketPath: unsupported });
+      await writeResumeStore('slow', 30, issue, { harnessSocketPath: timeout });
+      await writeResumeStore('missing', 40, issue, { harnessSocketPath: join(dir, 'missing') });
+      const tool = createListOperatorSessionsTool(repoRoot);
+      const all = JSON.parse((await tool.execute({ includeGithub: false })).content[0]!.text);
+      expect(all.sessions).toEqual(expect.arrayContaining([
+        expect.objectContaining({ conductorAgentId: 'live', statusLine: 'live', reportedAt: 100, statusLineSource: 'uds', openQuestionCount: 0, openQuestionCountSource: 'uds', persisted: expect.objectContaining({ harnessPhase: 'close' }), live: expect.objectContaining({ connectivity: 'reachable' }) }),
+        expect.objectContaining({ conductorAgentId: 'missing', openQuestionCount: 1, live: expect.objectContaining({ connectivity: 'unreachable' }) }),
+        expect.objectContaining({ conductorAgentId: 'old', live: expect.objectContaining({ connectivity: 'unknown' }) }),
+        expect.objectContaining({ conductorAgentId: 'slow', live: expect.objectContaining({ connectivity: 'unknown' }) }),
+      ]));
+      const first = JSON.parse((await tool.execute({ includeGithub: false, liveConnectivity: 'unknown', hasOpenQuestions: true, sort: 'reportedAtDesc', limit: 1 })).content[0]!.text);
+      expect(first.total).toBe(2);
+      const second = JSON.parse((await tool.execute({ includeGithub: false, liveConnectivity: 'unknown', hasOpenQuestions: true, sort: 'reportedAtDesc', limit: 1, cursor: first.nextCursor })).content[0]!.text);
+      expect(second.sessions[0].conductorAgentId).not.toBe(first.sessions[0].conductorAgentId);
+      await expect(tool.execute({ liveConnectivity: 'reachable', sort: 'reportedAtDesc', cursor: first.nextCursor })).rejects.toThrow('cursor');
+      const selected = JSON.parse((await tool.execute({ includeGithub: false, harnessPhase: 'close', minOpenQuestions: 0, reportedBefore: 1 })).content[0]!.text);
+      expect(selected.sessions.map((item: { conductorAgentId: string }) => item.conductorAgentId)).toEqual(['live']);
+    } finally {
+      for (const socket of sockets) socket.destroy();
+      await Promise.all(servers.map((server) => new Promise<void>((resolve) => server.close(() => resolve()))));
+      await rm(dir, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  it('limits concurrent observation requests to eight', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'ls-limit-'));
+    const path = join(dir, 's');
+    let active = 0;
+    let maximum = 0;
+    const server = createServer((socket) => {
+      active++;
+      maximum = Math.max(maximum, active);
+      socket.once('close', () => active--);
+      socket.once('data', () => setTimeout(() => socket.end(JSON.stringify({ jsonrpc: '2.0', id: 1, result: { sequence: 0, openQuestions: [] } }) + '\n'), 100));
+    });
+    await new Promise<void>((resolve, reject) => server.once('error', reject).listen(path, resolve));
+    try {
+      const issue = 'https://github.com/example/project/issues/766';
+      for (let index = 0; index < 12; index++) await writeResumeStore(`limit-${index}`, index, issue, { harnessSocketPath: path });
+      const result = JSON.parse((await createListOperatorSessionsTool(repoRoot).execute({ includeGithub: false })).content[0]!.text);
+      expect(result.total).toBe(12);
+      expect(result.sessions.every((item: { live: { connectivity: string } }) => item.live.connectivity === 'reachable')).toBe(true);
+      expect(maximum).toBe(8);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps earlier live results and the saved read time across a long batch', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'ls-long-'));
+    const issue = 'https://github.com/example/project/issues/768';
+    let clock = Date.now();
+    const start = clock;
+    const dateSpy = vi.spyOn(Date, 'now').mockImplementation(() => clock);
+    const servers: Server[] = [];
+    const listen = async (name: string, handler: (socket: import('node:net').Socket) => void) => {
+      const path = join(dir, name);
+      const server = createServer(handler);
+      await new Promise<void>((resolve, reject) => server.once('error', reject).listen(path, resolve));
+      servers.push(server);
+      return path;
+    };
+    try {
+      const live = await listen('live', (socket) => socket.once('data', () => socket.end(JSON.stringify({ jsonrpc: '2.0', id: 1, result: { sequence: 0, openQuestions: [], sessionState: { current: { statusLine: 'live', reportedAt: 100 }, history: [] } } }) + '\n')));
+      const saved = await listen('saved', (socket) => socket.once('data', () => setTimeout(async () => {
+        clock = start + 11_000;
+        const path = resolveEnsemblePaths({ repoRoot }).canonicalOpenQuestionsPath(issue, 'saved');
+        await writeFile(path, 'version: 1\nsequence: 0\nopenQuestions: []\n');
+        socket.end();
+      }, 100)));
+      await writeResumeStore('live', 10, issue, { harnessSocketPath: live });
+      await writeResumeStore('watched-long', 15, issue, { harnessSocketPath: join(dir, 'missing') });
+      await writeResumeStore('saved', 20, issue, { harnessSocketPath: saved });
+      const path = resolveEnsemblePaths({ repoRoot }).canonicalOpenQuestionsPath(issue, 'saved');
+      await mkdir(dirname(path), { recursive: true });
+      await writeFile(path, 'version: 1\nsequence: 1\nopenQuestions:\n  - id: q\n    question: Test?\n    responseType: yes_no\n    source: conductor\n    status: open\n    askedAt: 1\n');
+      const tool = createListOperatorSessionsTool(repoRoot, (id) => id === 'watched-long' ? { connectivity: 'reachable', checkedAt: start, unreachableSince: null, snapshot: { sequence: 0, openQuestions: [], sessionState: { current: { statusLine: 'watch', reportedAt: 50 }, history: [] } } } : undefined);
+      const result = JSON.parse((await tool.execute({ includeGithub: false })).content[0]!.text);
+      expect(result.sessions).toEqual(expect.arrayContaining([
+        expect.objectContaining({ conductorAgentId: 'live', statusLine: 'live', openQuestionCount: 0, live: expect.objectContaining({ connectivity: 'unknown', lastKnownConnectivity: 'reachable', freshness: 'stale', ageMs: 11_000, checkedAt: start }) }),
+        expect.objectContaining({ conductorAgentId: 'watched-long', statusLine: 'watch', live: expect.objectContaining({ connectivity: 'unknown', lastKnownConnectivity: 'reachable', freshness: 'stale', ageMs: 11_000, checkedAt: start }) }),
+        expect.objectContaining({ conductorAgentId: 'saved', openQuestionCount: 1, openQuestionCountSource: 'open_questions_yaml', openQuestionCountObservedAt: start }),
+      ]));
+      const current = JSON.parse((await createListOperatorSessionsTool(repoRoot).execute({ includeGithub: false, conductorAgentId: 'saved' })).content[0]!.text);
+      expect(current.sessions[0]).toMatchObject({ openQuestionCount: 0, openQuestionCountObservedAt: start + 11_000 });
+    } finally {
+      dateSpy.mockRestore();
+      await Promise.all(servers.map((server) => new Promise<void>((resolve) => server.close(() => resolve()))));
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('retains a successful observation while more than ten seconds of timeouts complete', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'ls-timeouts-'));
+    const issue = 'https://github.com/example/project/issues/771';
+    const livePath = join(dir, 'live');
+    const slowPath = join(dir, 'slow');
+    const sockets: import('node:net').Socket[] = [];
+    const live = createServer((socket) => socket.once('data', () => socket.end(JSON.stringify({ jsonrpc: '2.0', id: 1, result: { sequence: 0, openQuestions: [], sessionState: { current: { statusLine: 'early', reportedAt: 1 }, history: [] } } }) + '\n')));
+    const slow = createServer((socket) => { sockets.push(socket); socket.on('error', () => {}); });
+    await Promise.all([new Promise<void>((resolve, reject) => live.once('error', reject).listen(livePath, resolve)), new Promise<void>((resolve, reject) => slow.once('error', reject).listen(slowPath, resolve))]);
+    try {
+      await writeResumeStore('a-live', 9999, issue, { harnessSocketPath: livePath });
+      for (let i = 0; i < 88; i++) await writeResumeStore(`z-${String(i).padStart(3, '0')}`, i + 2, issue, { harnessSocketPath: slowPath });
+      const result = JSON.parse((await createListOperatorSessionsTool(repoRoot).execute({ includeGithub: false, liveConnectivity: 'unknown', sort: 'updatedAtDesc' })).content[0]!.text);
+      expect(result.total).toBe(89);
+      expect(result.sessions[0]).toMatchObject({ conductorAgentId: 'a-live', statusLine: 'early', openQuestionCount: 0, live: { connectivity: 'unknown', lastKnownConnectivity: 'reachable', freshness: 'stale' } });
+      expect(result.sessions[0].live.ageMs).toBeGreaterThan(10_000);
+    } finally {
+      for (const socket of sockets) socket.destroy();
+      await Promise.all([live, slow].map((server) => new Promise<void>((resolve) => server.close(() => resolve()))));
+      await rm(dir, { recursive: true, force: true });
+    }
+  }, 25_000);
+
+  it('checks watch freshness when a queued candidate is processed', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'ls-watch-age-'));
+    const path = join(dir, 's');
+    const issue = 'https://github.com/example/project/issues/769';
+    let clock = Date.now();
+    const start = clock;
+    const dateSpy = vi.spyOn(Date, 'now').mockImplementation(() => clock);
+    const server = createServer((socket) => socket.once('data', () => setTimeout(() => {
+      clock = start + 12_000;
+      socket.end(JSON.stringify({ jsonrpc: '2.0', id: 1, result: { sequence: 0, openQuestions: [], sessionState: { current: { statusLine: 'direct', reportedAt: 1 }, history: [] } } }) + '\n');
+    }, 50)));
+    await new Promise<void>((resolve, reject) => server.once('error', reject).listen(path, resolve));
+    try {
+      for (let i = 0; i < 9; i++) await writeResumeStore(`queued-${i}`, i, issue, { harnessSocketPath: path });
+      const checkedIds: string[] = [];
+      const tool = createListOperatorSessionsTool(repoRoot, (id) => {
+        checkedIds.push(id);
+        return { connectivity: 'reachable', checkedAt: start + 1_000, unreachableSince: null, snapshot: { sequence: 0, openQuestions: [], sessionState: { current: { statusLine: 'old watch', reportedAt: 1 }, history: [] } } };
+      });
+      const result = JSON.parse((await tool.execute({ includeGithub: false })).content[0]!.text);
+      expect(checkedIds).toHaveLength(9);
+      expect(result.sessions.find((entry: { conductorAgentId: string }) => entry.conductorAgentId === checkedIds[8])).toMatchObject({ statusLine: 'direct', statusLineSource: 'uds' });
+    } finally {
+      dateSpy.mockRestore();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('evaluates reportedBefore at dataAsOf for reports made during the listing and threshold crossings', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'ls-reported-age-'));
+    const issue = 'https://github.com/example/project/issues/772';
+    let clock = Date.now();
+    const start = clock;
+    const spy = vi.spyOn(Date, 'now').mockImplementation(() => clock);
+    const servers: Server[] = [];
+    const listen = async (name: string, reportedAt: number, delay: boolean) => {
+      const path = join(dir, name);
+      const server = createServer((socket) => socket.once('data', () => setTimeout(() => {
+        if (delay) clock = start + 6_000;
+        socket.end(JSON.stringify({ jsonrpc: '2.0', id: 1, result: { sequence: 0, openQuestions: [], sessionState: { current: { statusLine: name, reportedAt }, history: [] } } }) + '\n');
+      }, delay ? 50 : 0)));
+      await new Promise<void>((resolve, reject) => server.once('error', reject).listen(path, resolve));
+      servers.push(server);
+      return path;
+    };
+    try {
+      await writeResumeStore('crossed', 10, issue, { harnessSocketPath: await listen('crossed', start + 1_000, false) });
+      await writeResumeStore('young', 20, issue, { harnessSocketPath: await listen('young', start + 1_001, true) });
+      const tool = createListOperatorSessionsTool(repoRoot);
+      const result = JSON.parse((await tool.execute({ includeGithub: false, reportedBefore: 5_000 })).content[0]!.text);
+      expect(Date.parse(result.dataAsOf)).toBe(start + 6_000);
+      expect(result.sessions.map((item: { conductorAgentId: string }) => item.conductorAgentId)).toEqual(['crossed']);
+      clock = start;
+      const zero = JSON.parse((await tool.execute({ includeGithub: false, reportedBefore: 0 })).content[0]!.text);
+      expect(zero.total).toBe(2);
+    } finally {
+      spy.mockRestore();
+      await Promise.all(servers.map((server) => new Promise<void>((resolve) => server.close(() => resolve()))));
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('re-evaluates freshness and page after a slow GitHub lookup', async () => {
+    let clock = Date.now();
+    const start = clock;
+    const spy = vi.spyOn(Date, 'now').mockImplementation(() => clock);
+    try {
+      await writeResumeStore('a', 20, 'https://github.com/example/project/issues/773');
+      await writeResumeStore('b', 10, 'https://github.com/example/project/issues/774');
+      const client = { getIssuePullRequestSummaries: async () => {
+        clock = start + 11_000;
+        return { status: 'available', pullRequests: [], pullRequestsTruncated: false };
+      } } as unknown as GitHubClient;
+      const tool = createListOperatorSessionsTool({ userEnsembleRoot: join(repoRoot, '.user-ensemble'), getGitHubClient: async () => client }, (id) => ({
+        connectivity: 'reachable', checkedAt: start, unreachableSince: null,
+        snapshot: { sequence: 0, openQuestions: [], sessionState: { current: { statusLine: id, reportedAt: id === 'a' ? start - 20_000 : start - 4_000 }, history: [] } },
+      }));
+      const result = JSON.parse((await tool.execute({ reportedBefore: 5_000, sort: 'updatedAtAsc', limit: 1 })).content[0]!.text);
+      expect(result.total).toBe(2);
+      expect(Date.parse(result.dataAsOf)).toBe(start + 11_000);
+      expect(result.sessions[0]).toMatchObject({ conductorAgentId: 'b', statusLine: 'b', live: { connectivity: 'unknown', lastKnownConnectivity: 'reachable', freshness: 'stale', ageMs: 11_000 }, pullRequests: { status: 'not_checked', reason: 'page_changed_during_lookup' } });
+      expect(result.nextCursor).toBeTruthy();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('re-evaluates live filters when connectivity changes between pages', async () => {
+    const issue = 'https://github.com/example/project/issues/770';
+    for (const id of ['a', 'b', 'c']) await writeResumeStore(id, 10, issue);
+    let disconnected = false;
+    const tool = createListOperatorSessionsTool(repoRoot, (id) => ({
+      connectivity: disconnected && id === 'b' ? 'unreachable' : 'reachable',
+      checkedAt: Date.now(), unreachableSince: null,
+      snapshot: { sequence: 0, openQuestions: [] },
+    }));
+    const first = JSON.parse((await tool.execute({ includeGithub: false, liveConnectivity: 'reachable', limit: 1 })).content[0]!.text);
+    expect(first.sessions[0].conductorAgentId).toBe('a');
+    disconnected = true;
+    const second = JSON.parse((await tool.execute({ includeGithub: false, liveConnectivity: 'reachable', limit: 1, cursor: first.nextCursor })).content[0]!.text);
+    expect(second.total).toBe(2);
+    expect(second.sessions[0].conductorAgentId).toBe('c');
+  });
+
+  it('orders reportedAt in both directions with missing reports last', async () => {
+    const issue = 'https://github.com/example/project/issues/767';
+    await writeResumeStore('early', 10, issue, { statusLine: 'early' });
+    await writeResumeStore('late', 20, issue, { statusLine: 'late' });
+    await writeResumeStore('none', 30, issue);
+    const tool = createListOperatorSessionsTool(repoRoot);
+    for (const [sort, expected] of [
+      ['reportedAtAsc', ['early', 'late', 'none']],
+      ['reportedAtDesc', ['late', 'early', 'none']],
+    ] as const) {
+      const result = JSON.parse((await tool.execute({ sort, includeGithub: false })).content[0]!.text);
+      expect(result.sessions.map((item: { conductorAgentId: string }) => item.conductorAgentId)).toEqual(expected);
+    }
+  });
+
+  it('reuses a fresh watch snapshot without connecting to its recorded path', async () => {
+    const issue = 'https://github.com/example/project/issues/765';
+    await writeResumeStore('watched', 10, issue, { harnessSocketPath: join(tmpdir(), 'missing-watch-socket') });
+    const checkedAt = Date.now();
+    const tool = createListOperatorSessionsTool(repoRoot, () => ({ connectivity: 'reachable', checkedAt, unreachableSince: null, snapshot: { sequence: 0, openQuestions: [], sessionState: { current: { statusLine: 'watched', reportedAt: 42 }, history: [] } } }));
+    const result = JSON.parse((await tool.execute({ includeGithub: false, liveConnectivity: 'reachable' })).content[0]!.text);
+    expect(result.sessions[0]).toMatchObject({ statusLine: 'watched', statusLineObservedAt: checkedAt, openQuestionCount: 0, openQuestionCountObservedAt: checkedAt });
+  });
+
   it('returns an empty result when this repository has no session directory', async () => {
     const emptyRepoRoot = await mkdtemp(join(tmpdir(), 'ensemble-empty-sessions-'));
     try {
@@ -886,7 +1158,7 @@ describe('list_operator_sessions', () => {
       'limit must be an integer between 1 and 50',
     );
     await expect(tool.execute({ sort: 'oldest' })).rejects.toThrow(
-      'sort must be firstObservedAtDesc, firstObservedAtAsc, updatedAtDesc, or updatedAtAsc',
+      'sort must be firstObservedAtDesc, firstObservedAtAsc, updatedAtDesc, updatedAtAsc, reportedAtDesc, or reportedAtAsc',
     );
     await expect(tool.execute({ hasStatusLine: 'yes' })).rejects.toThrow(
       'hasStatusLine must be a boolean',
@@ -905,6 +1177,7 @@ describe('list_operator_sessions', () => {
       harnessPhase?: 'running' | 'idle' | 'close' | 'abort' | 'exit';
       modifiedAt?: number;
       statusLine?: string;
+      harnessSocketPath?: string;
     } = {},
   ): Promise<void> {
     const path = resolveEnsemblePaths({
@@ -916,6 +1189,7 @@ describe('list_operator_sessions', () => {
       JSON.stringify({
         version: 1,
         conductorAgentId: agentId,
+        ...(options.harnessSocketPath ? { harnessSocketPath: options.harnessSocketPath } : {}),
         issueUrl,
         repoRoot,
         ...(options.lifecycle ? { lifecycle: options.lifecycle } : {}),

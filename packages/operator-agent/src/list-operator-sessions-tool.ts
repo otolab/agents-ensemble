@@ -9,6 +9,10 @@ import {
 } from '@agents-ensemble/core';
 import {
   listUserLocatedSessionResumeStoresPage,
+  OPEN_QUESTION_CONTROL_METHODS,
+  sendOpenQuestionControlRequest,
+  OpenQuestionControlTransportError,
+  type SessionObservationSnapshot,
   harnessPhaseFromLegacyLifecycle,
   loadOpenQuestionsStore,
   loadSessionStateStore,
@@ -40,6 +44,8 @@ const MAX_LIMIT = 50;
 const MAX_GITHUB_ISSUES_PER_PAGE = 5;
 const GITHUB_SUMMARY_CACHE_TTL_MS = 30_000;
 const LIVE_STATUS_FRESHNESS_MS = 10_000;
+const OBSERVE_TIMEOUT_MS = 1_000;
+const OBSERVE_CONCURRENCY = 8;
 const SESSION_LIFECYCLES: SessionLifecycle[] = [
   'closed',
   'exited',
@@ -59,7 +65,10 @@ interface OperatorSessionSummary {
   updatedAtMeaning: 'resume_store_flush_time';
   statusLine: string | null;
   reportedAt: number | null;
-  statusLineSource: 'conductor_report' | 'unavailable';
+  statusLineSource: 'conductor_report' | 'unavailable' | 'uds';
+  statusLineObservedAt: number | null;
+  openQuestionCountSource: 'uds' | 'open_questions_yaml' | 'resume_store_compatibility' | 'unavailable';
+  openQuestionCountObservedAt: number | null;
   statusLineHistory: SessionStateStore['history'];
   lifecycle: SessionLifecycle;
   liveControlPathRecorded: boolean;
@@ -132,13 +141,20 @@ type SessionSort =
   | 'firstObservedAtDesc'
   | 'firstObservedAtAsc'
   | 'updatedAtDesc'
-  | 'updatedAtAsc';
+  | 'updatedAtAsc'
+  | 'reportedAtDesc'
+  | 'reportedAtAsc';
 
 interface SessionListSnapshot {
   located: LocatedSessionResumeStore;
   resumeStore: SessionResumeStore;
   status: SessionStateStore | undefined;
   tracking: OperatorSessionTrackingInfo;
+  live?: OperatorSessionLiveStatus;
+  questionHistory?: OpenQuestionHistory;
+  storeReadStartedAt: number;
+  summary?: OperatorSessionSummary;
+  observedSummary?: OperatorSessionSummary;
 }
 
 interface OpenQuestionHistory {
@@ -148,6 +164,7 @@ interface OpenQuestionHistory {
     | 'resume_store_compatibility'
     | 'unavailable';
   questions: SessionResumeStore['openQuestions'];
+  observedAt: number | null;
   reason?: string;
 }
 
@@ -233,7 +250,7 @@ export function createListOperatorSessionsTool(
   return {
     name: LIST_OPERATOR_SESSIONS_TOOL,
     description:
-      'List one row per saved Issue run. Separates persisted harness phase from timestamped live observation; includes repository discovery/watch state, observed Open Question count changes, and bounded GitHub pull-request head/check/review summaries.',
+      'List one row per saved Issue run. Saved phase and live connectivity are separate facts; reachable does not mean working and unknown does not mean stopped. Connectivity and live values may change between cursor pages. Freshness and reportedBefore are evaluated at dataAsOf; accepted observations retain their original timestamps even if stale. Includes bounded GitHub summaries.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -266,9 +283,11 @@ export function createListOperatorSessionsTool(
             'firstObservedAtAsc',
             'updatedAtDesc',
             'updatedAtAsc',
+            'reportedAtDesc',
+            'reportedAtAsc',
           ],
           description:
-            'Sort by repository-watch first-observed time (default firstObservedAtDesc; unknown times last) or by SessionResumeStore flush time. updatedAt is not a run creation time.',
+            'Sort by first-observed time (default), SessionResumeStore flush time, or latest reportedAt. Unknown times are last. updatedAt is not a run creation time.',
         },
         includeGithub: {
           type: 'boolean',
@@ -277,8 +296,13 @@ export function createListOperatorSessionsTool(
         },
         hasStatusLine: {
           type: 'boolean',
-          description: 'Filter for sessions with (true) or without (false) a saved statusLine.',
+          description: 'Filter for sessions with (true) or without (false) a current statusLine, using live observation when available.',
         },
+        liveConnectivity: { type: 'string', enum: ['reachable', 'unreachable', 'unknown'] },
+        harnessPhase: { type: 'string', enum: ['running', 'idle', 'close', 'abort', 'exit'] },
+        hasOpenQuestions: { type: 'boolean' },
+        minOpenQuestions: { type: 'integer', minimum: 0 },
+        reportedBefore: { type: 'number', minimum: 0, description: 'Minimum age of the latest statusLine in milliseconds at dataAsOf.' },
         lifecycle: {
           type: 'string',
           enum: SESSION_LIFECYCLES,
@@ -293,12 +317,16 @@ export function createListOperatorSessionsTool(
       const hasStatusLine = resolveHasStatusLine(args.hasStatusLine);
       const lifecycle = resolveLifecycle(args.lifecycle);
       const includeGithub = resolveIncludeGithub(args.includeGithub);
+      const liveConnectivity = resolveEnum(args.liveConnectivity, 'liveConnectivity', ['reachable', 'unreachable', 'unknown']);
+      const harnessPhase = resolveEnum(args.harnessPhase, 'harnessPhase', ['running', 'idle', 'close', 'abort', 'exit']);
+      const hasOpenQuestions = resolveOptionalBoolean(args.hasOpenQuestions, 'hasOpenQuestions');
+      const minOpenQuestions = resolveNonnegative(args.minOpenQuestions, 'minOpenQuestions', true);
+      const reportedBefore = resolveNonnegative(args.reportedBefore, 'reportedBefore', false);
       const githubRepo = resolveGithubRepo(args.githubRepo);
       const issueUrl = resolveIssueUrl(args.issueUrl);
       const conductorAgentId = resolveConductorAgentId(
         args.conductorAgentId,
       );
-      const dataAsOf = new Date().toISOString();
       const normalizedRepoFilters = repoFilters?.length
         ? repoFilters.map((pattern) => normalizeRepositoryPattern(pattern))
         : undefined;
@@ -308,6 +336,7 @@ export function createListOperatorSessionsTool(
       const snapshots: SessionListSnapshot[] = [];
       let storeCursor: string | undefined;
       do {
+        const storeReadStartedAt = Date.now();
         const page = await listUserLocatedSessionResumeStoresPage(
           {
             ...(githubRepo ? { githubRepo } : {}),
@@ -322,6 +351,7 @@ export function createListOperatorSessionsTool(
           ...(await Promise.all(
             page.sessions.map(async (located) => ({
               located,
+              storeReadStartedAt,
               resumeStore: located.resumeStore,
               status: await loadStatusLine(root, located),
               tracking:
@@ -334,7 +364,7 @@ export function createListOperatorSessionsTool(
         );
         storeCursor = page.nextCursor;
       } while (storeCursor);
-      const filtered = snapshots.filter(({ resumeStore, status }) => {
+      const candidates = snapshots.filter(({ resumeStore }) => {
         const repository = repositoryForIssueUrl(resumeStore.issueUrl);
         if (githubRepo && repository !== githubRepo) return false;
         if (
@@ -349,18 +379,33 @@ export function createListOperatorSessionsTool(
         ) {
           return false;
         }
-        if (
-          hasStatusLine !== undefined &&
-          Boolean(status) !== hasStatusLine
-        ) {
-          return false;
-        }
         const sessionLifecycle = resumeStore.lifecycle ?? 'unknown';
         return lifecycle === undefined || sessionLifecycle === lifecycle;
       });
-      filtered.sort((left, right) => {
-        return compareSnapshots(left, right, sort);
-      });
+      let nextIndex = 0;
+      await Promise.all(Array.from({ length: Math.min(OBSERVE_CONCURRENCY, candidates.length) }, async () => {
+        for (;;) {
+          const snapshot = candidates[nextIndex++];
+          if (!snapshot) break;
+          snapshot.questionHistory = await loadQuestionHistory(root, snapshot.located, snapshot.storeReadStartedAt);
+          const cached = getLiveStatus?.(snapshot.resumeStore.conductorAgentId);
+          const cacheAge = cached?.checkedAt == null ? null : Date.now() - cached.checkedAt;
+          if (cached && cacheAge !== null && cacheAge >= 0 && cacheAge <= LIVE_STATUS_FRESHNESS_MS &&
+              (cached.connectivity !== 'reachable' || cached.snapshot)) {
+            snapshot.live = cached;
+          } else if (snapshot.resumeStore.harnessSocketPath) {
+            try {
+              const observed = await sendOpenQuestionControlRequest<SessionObservationSnapshot>(snapshot.resumeStore.harnessSocketPath, { method: OPEN_QUESTION_CONTROL_METHODS.observe }, { timeoutMs: OBSERVE_TIMEOUT_MS });
+              snapshot.live = { connectivity: 'reachable', checkedAt: Date.now(), unreachableSince: null, snapshot: observed };
+            } catch (error) {
+              snapshot.live = { connectivity: error instanceof OpenQuestionControlTransportError && error.reason === 'connection' ? 'unreachable' : 'unknown', checkedAt: Date.now(), unreachableSince: null };
+            }
+          } else {
+            snapshot.live = cached?.checkedAt != null && cached.checkedAt <= Date.now() ? cached : undefined;
+          }
+          snapshot.observedSummary = summarizeSession(snapshot.resumeStore, snapshot.status, snapshot.questionHistory, snapshot.live, snapshot.tracking);
+        }
+      }));
       const cursorScope = JSON.stringify({
         sort,
         githubRepo: githubRepo ?? null,
@@ -368,44 +413,54 @@ export function createListOperatorSessionsTool(
         conductorAgentId: conductorAgentId ?? null,
         hasStatusLine: hasStatusLine ?? null,
         lifecycle: lifecycle ?? null,
+        liveConnectivity: liveConnectivity ?? null,
+        harnessPhase: harnessPhase ?? null,
+        hasOpenQuestions: hasOpenQuestions ?? null,
+        minOpenQuestions: minOpenQuestions ?? null,
+        reportedBefore: reportedBefore ?? null,
         profileIncludes: normalizedProfileIncludes ?? null,
         repoFilters: normalizedRepoFilters ?? null,
       });
       const cursor = resolveListCursor(args.cursor, sort, cursorScope);
-      const remaining = cursor
-        ? filtered.filter(
-            (snapshot) => compareSnapshotToCursor(snapshot, cursor, sort) > 0,
-          )
-        : filtered;
-      const page = remaining.slice(0, limit);
-      const nextCursor =
-        remaining.length > page.length
-          ? encodeListCursor(page.at(-1)!, sort, cursorScope)
-          : undefined;
-      const pageWithQuestions = await Promise.all(
-        page.map(async (snapshot) => ({
-          ...snapshot,
-          questionHistory: await loadQuestionHistory(root, snapshot.located),
-        })),
-      );
+      const evaluate = (asOf: number) => {
+        const filtered = candidates.filter((snapshot) => {
+          const summary = projectSummaryAt(snapshot.observedSummary!, snapshot.live, asOf);
+          snapshot.summary = summary;
+          if (hasStatusLine !== undefined && (summary.statusLine !== null) !== hasStatusLine) return false;
+          if (liveConnectivity !== undefined && summary.live.connectivity !== liveConnectivity) return false;
+          if (harnessPhase !== undefined && summary.persisted.harnessPhase !== harnessPhase) return false;
+          if (hasOpenQuestions !== undefined && (summary.openQuestionCount === null || (summary.openQuestionCount > 0) !== hasOpenQuestions)) return false;
+          if (minOpenQuestions !== undefined && (summary.openQuestionCount === null || summary.openQuestionCount < minOpenQuestions)) return false;
+          if (reportedBefore !== undefined && (summary.reportedAt === null || asOf - summary.reportedAt < reportedBefore)) return false;
+          return true;
+        });
+        filtered.sort((left, right) => compareSnapshots(left, right, sort));
+        const remaining = cursor
+          ? filtered.filter((snapshot) => compareSnapshotToCursor(snapshot, cursor, sort) > 0)
+          : filtered;
+        return { filtered, remaining, page: remaining.slice(0, limit) };
+      };
+      const preliminary = evaluate(Date.now());
       const pullRequests = await loadPullRequestSummaries(
-        pageWithQuestions,
+        preliminary.page,
         includeGithub,
         getGitHubClient,
         githubSummaryCache,
       );
-      const sessions = pageWithQuestions.map(
-        ({ resumeStore, status, questionHistory, tracking }) =>
-          summarizeSession(
-            resumeStore,
-            status,
-            questionHistory,
-            getLiveStatus?.(resumeStore.conductorAgentId),
-            tracking,
-            pullRequests.get(issueKeyForResumeStore(resumeStore.issueUrl)) ??
-              notRequestedGitHubSummary(),
-          ),
-      );
+      // GitHub lookup may take time. Re-evaluate all filters and page boundaries
+      // at one timestamp after it completes, without discarding accepted snapshots.
+      const evaluatedAt = Date.now();
+      const { filtered, remaining, page } = evaluate(evaluatedAt);
+      const dataAsOf = new Date(evaluatedAt).toISOString();
+      const nextCursor = remaining.length > page.length
+        ? encodeListCursor(page.at(-1)!, sort, cursorScope)
+        : undefined;
+      const sessions = page.map((snapshot) => ({
+        ...snapshot.summary!,
+        pullRequests: pullRequests.get(issueKeyForResumeStore(snapshot.resumeStore.issueUrl)) ?? (includeGithub
+          ? { ...notRequestedGitHubSummary(), status: 'not_checked' as const, reason: 'page_changed_during_lookup' }
+          : notRequestedGitHubSummary()),
+      }));
       const payload = {
         dataAsOf,
         total: filtered.length,
@@ -430,6 +485,7 @@ export function createListOperatorSessionsTool(
 async function loadQuestionHistory(
   userEnsembleRoot: string,
   located: LocatedSessionResumeStore,
+  storeReadStartedAt: number,
 ): Promise<OpenQuestionHistory> {
   try {
     const paths = userSessionSnapshotPaths(
@@ -443,6 +499,7 @@ async function loadQuestionHistory(
         return {
           status: 'available',
           source: 'open_questions_yaml',
+          observedAt: Date.now(),
           questions: snapshot.openQuestions,
         };
       }
@@ -450,16 +507,34 @@ async function loadQuestionHistory(
     return {
       status: 'available',
       source: 'resume_store_compatibility',
+      observedAt: storeReadStartedAt,
       questions: located.resumeStore.openQuestions,
     };
   } catch {
     return {
       status: 'unavailable',
       source: 'unavailable',
+      observedAt: null,
       questions: [],
       reason: '保存済み Open Questions YAML を読み取れません。',
     };
   }
+}
+
+function resolveEnum(value: ConductorJsonValue | undefined, name: string, allowed: readonly string[]): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string' || !allowed.includes(value)) throw new Error(`Invalid ${name}.`);
+  return value;
+}
+function resolveOptionalBoolean(value: ConductorJsonValue | undefined, name: string): boolean | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'boolean') throw new Error(`${name} must be a boolean.`);
+  return value;
+}
+function resolveNonnegative(value: ConductorJsonValue | undefined, name: string, integer: boolean): number | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || (integer && !Number.isInteger(value))) throw new Error(`Invalid ${name}.`);
+  return value;
 }
 
 function resolveLimit(value: ConductorJsonValue | undefined): number {
@@ -481,12 +556,14 @@ function resolveSort(value: ConductorJsonValue | undefined): SessionSort {
     value === 'firstObservedAtDesc' ||
     value === 'firstObservedAtAsc' ||
     value === 'updatedAtDesc' ||
-    value === 'updatedAtAsc'
+    value === 'updatedAtAsc' ||
+    value === 'reportedAtDesc' ||
+    value === 'reportedAtAsc'
   ) {
     return value;
   }
   throw new Error(
-    'sort must be firstObservedAtDesc, firstObservedAtAsc, updatedAtDesc, or updatedAtAsc',
+    'sort must be firstObservedAtDesc, firstObservedAtAsc, updatedAtDesc, updatedAtAsc, reportedAtDesc, or reportedAtAsc',
   );
 }
 
@@ -699,6 +776,7 @@ function getSnapshotSortValue(
   snapshot: SessionListSnapshot,
   sort: SessionSort,
 ): number | null {
+  if (sort.startsWith('reportedAt')) return snapshot.summary?.reportedAt ?? null;
   return sort.startsWith('firstObservedAt')
     ? snapshot.tracking.firstObservedAt
     : snapshot.resumeStore.updatedAt;
@@ -713,6 +791,31 @@ function compareSortValues(
   if (left === null) return 1;
   if (right === null) return -1;
   return direction * (left - right);
+}
+
+function projectSummaryAt(
+  observed: OperatorSessionSummary,
+  cached: OperatorSessionLiveStatus | undefined,
+  asOf: number,
+): OperatorSessionSummary {
+  const checkedAt = observed.live.checkedAt;
+  const ageMs = checkedAt === null ? null : Math.max(0, asOf - checkedAt);
+  const freshness: OperatorSessionSummary['live']['freshness'] = ageMs === null ? 'not_observed' : ageMs > LIVE_STATUS_FRESHNESS_MS ? 'stale' : 'fresh';
+  const live = {
+    ...observed.live,
+    connectivity: freshness === 'stale' ? 'unknown' as const : observed.live.connectivity,
+    freshness,
+    ageMs,
+  };
+  const projection = projectSessionPosture(
+    observed.persisted.harnessPhase,
+    live.connectivity,
+    checkedAt,
+    observed.persisted.modifiedAt,
+    cached?.unreachableSince ?? null,
+  );
+  const { coherenceReasons: _previousReasons, ...base } = observed;
+  return { ...base, live, ...projection };
 }
 
 function summarizeSession(
@@ -769,6 +872,9 @@ function summarizeSession(
     freshness: liveFreshness,
     ageMs: liveAgeMs,
   };
+  const observation = live.connectivity === 'reachable' ? cachedLiveStatus?.snapshot : undefined;
+  const currentStatus = observation ? observation.sessionState?.current : status?.current;
+  const currentQuestions = observation?.openQuestions.filter((question) => question.status === 'open');
   const projection = projectSessionPosture(
     harnessPhase,
     live.connectivity,
@@ -789,9 +895,12 @@ function summarizeSession(
       'unknown',
     updatedAt: resumeStore.updatedAt,
     updatedAtMeaning: 'resume_store_flush_time',
-    statusLine: status?.current.statusLine ?? null,
-    reportedAt: status?.current.reportedAt ?? null,
-    statusLineSource: status ? 'conductor_report' : 'unavailable',
+    statusLine: currentStatus?.statusLine ?? null,
+    reportedAt: currentStatus?.reportedAt ?? null,
+    statusLineSource: observation ? 'uds' : status ? 'conductor_report' : 'unavailable',
+    statusLineObservedAt: observation ? live.checkedAt : status?.current.reportedAt ?? null,
+    openQuestionCountSource: observation ? 'uds' : questionHistory.source,
+    openQuestionCountObservedAt: observation ? live.checkedAt : questionHistory.observedAt,
     statusLineHistory: status?.history ?? [],
     lifecycle: resumeStore.lifecycle ?? 'unknown',
     liveControlPathRecorded: Boolean(resumeStore.harnessSocketPath),
@@ -832,7 +941,7 @@ function summarizeSession(
     pullRequests,
     ...projection,
     openQuestionCount:
-      questionHistory.status === 'available' ? openQuestions.length : null,
+      observation ? currentQuestions!.length : questionHistory.status === 'available' ? openQuestions.length : null,
     workers: Object.keys(resumeStore.workers).sort(),
     configuredWorkers,
     workersWithoutSavedSession: configuredWorkers
