@@ -30,6 +30,8 @@ operator-agent tool の input は次のとおりです。
 {"conductorAgentId":"agent-123","text":"Please wait for active work to settle.","delivery":"idle"}
 ```
 
+operator-agent tool は任意の `listen: true` も受け付けます。この場合、送信前に対象 session の persistent message listen を準備し、既存登録があれば cursor と debounce を変更せず再利用します。新規登録では live baseline の確立と保存が成功するまで送信しません。結果には対象 `conductorAgentId` と `listen: "created" | "reused"` を含めます。準備失敗は未送信ですが、準備後の送信で接続が切れた場合は従来の unknown outcome 契約に従い、自動再送しません。`queued` は受理だけを示します。listen は特定送信への返答を識別せず、返答の有無も判定しません。通常の persistent listen と同じ report 経路、hold、debounce、再起動時の扱いを使い、focus は変更しません。切断中の offline replay は保証しません。`listen` を省略または `false` にすると従来どおり準備せず送信します。
+
 `get_last_conductor_message`:
 
 ```json

@@ -280,12 +280,14 @@ export function createAnswerLiveOpenQuestionTool(
 export function createSendOperatorMessageTool(
   repoRoot: OperatorSessionStoreLocation,
   onDuplicate?: SessionResumeStoreDiagnosticHandler,
+  prepareListen?: (conductorAgentId: string) => Promise<{ created: boolean }>,
+  onListenPrepared?: (message: string) => void,
 ): ConductorTool {
   const root = normalizeStoreRoot(repoRoot);
   return {
     name: SEND_OPERATOR_MESSAGE_TOOL,
     description:
-      'Send a message to the conductor of a running Issue session. Use delivery next by default; idle waits until the conductor has no active autonomous work, and interrupt attempts to cancel its current run before dispatch.',
+      'Send a message to a running conductor. Set listen to true to prepare or reuse its persistent message listener before sending. Queued does not mean processed or answered.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -302,6 +304,10 @@ export function createSendOperatorMessageTool(
           enum: ['idle', 'next', 'interrupt'],
           description: 'Delivery timing; defaults to next.',
         },
+        listen: {
+          type: 'boolean',
+          description: 'Prepare or reuse the persistent conductor message listener before sending.',
+        },
       },
       required: ['conductorAgentId', 'text'],
       additionalProperties: false,
@@ -313,21 +319,38 @@ export function createSendOperatorMessageTool(
         args.delivery === undefined
           ? 'next'
           : requireDelivery(args.delivery);
+      if (args.listen !== undefined && typeof args.listen !== 'boolean') {
+        throw new Error('listen must be a boolean.');
+      }
       const resumeStore = await requireSession(
         root,
         conductorAgentId,
         onDuplicate,
       );
+      const socketPath = requireSocketPath(resumeStore);
+      let listen: { created: boolean } | undefined;
+      if (args.listen === true) {
+        if (!prepareListen) throw new Error('Conductor message listen preparation is unavailable; message was not sent.');
+        try {
+          listen = await prepareListen(conductorAgentId);
+        } catch (error) {
+          throw new Error(`Conductor message listen preparation failed; message was not sent: ${String(error)}`);
+        }
+        onListenPrepared?.(`session=${conductorAgentId}: conductor message listen を${listen.created ? '開始' : '再利用'}しました。送信します。`);
+      }
       const result = await sendOpenQuestionControlRequest<{
         queued: true;
         delivery: 'idle' | 'next' | 'interrupt';
-      }>(requireSocketPath(resumeStore), {
+      }>(socketPath, {
         method: OPEN_QUESTION_CONTROL_METHODS.sendMessage,
         params: { text, delivery },
       });
+      const output = listen
+        ? { ...result, conductorAgentId, listen: listen.created ? 'created' : 'reused' }
+        : result;
       return {
-        content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
-        structuredContent: result,
+        content: [{ type: 'text', text: JSON.stringify(output, null, 2) }],
+        structuredContent: output,
       };
     },
   };

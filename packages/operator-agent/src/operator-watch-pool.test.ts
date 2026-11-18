@@ -36,6 +36,7 @@ import {
   operatorWatchStatePath,
 } from './operator-watch-pool.js';
 import { createListOperatorSessionsTool } from './list-operator-sessions-tool.js';
+import { createSendOperatorMessageTool } from './open-question-control-tools.js';
 
 const DEFAULT_ISSUE_URL = 'https://github.com/example/repo/issues/1';
 
@@ -4175,6 +4176,70 @@ describe('operator watch pool', () => {
       ).rejects.toThrow('pollIntervalMs must be an integer');
       await expect(pool.unregister('session-one')).resolves.toBe(true);
       expect(pool.list()).toEqual([]);
+    } finally {
+      pool.close();
+    }
+  });
+
+  it('prepares or reuses a listener before sending and reports an immediate response once', async () => {
+    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-send-listen-'));
+    const messages: Array<{ text: string; inbound: string; at: number; sendCount: number }> = [];
+    const send = vi.fn(({ text }: { text: string }) => {
+      messages.push({ text: 'immediate response', inbound: text, at: Date.now(), sendCount: messages.length + 1 });
+      return true;
+    });
+    const liveServer = await startOpenQuestionControlServer({
+      listOpenQuestions: () => [],
+      listConductorMessages: () => messages,
+      sendOperatorMessage: send,
+      answerOpenQuestion: async () => { throw new Error('unused'); },
+    });
+    closeServers.push(() => liveServer.close());
+    await writeResumeStore('send-listen', 1, liveServer.socketPath);
+    const queue = createOperatorDispatchQueue();
+    queue.setFocus('another-session');
+    const pool = await createOperatorWatchPool({ repoRoot, dispatchQueue: queue });
+    const tool = createSendOperatorMessageTool(repoRoot, undefined, (id) => pool.ensureConductorMessageListen(id));
+    try {
+      const first = await tool.execute({ conductorAgentId: 'send-listen', text: 'first', listen: true });
+      expect(first.structuredContent).toMatchObject({ queued: true, listen: 'created', conductorAgentId: 'send-listen' });
+      expect(queue.focusSessionId).toBe('another-session');
+      expect(await pool.pollConductorMessagesOnce('send-listen')).toBe(1);
+      await pool.registerConductorMessageListen('send-listen', { messageDebounceMs: 321 });
+      const path = currentWatchStatePath(repoRoot);
+      const before = JSON.parse(await readFile(path, 'utf8'));
+      const second = await tool.execute({ conductorAgentId: 'send-listen', text: 'second', listen: true });
+      expect(second.structuredContent).toMatchObject({ queued: true, listen: 'reused' });
+      const after = JSON.parse(await readFile(path, 'utf8'));
+      expect(after.messageListeners).toEqual(before.messageListeners);
+      expect(after.messageListeners['send-listen'].messageDebounceMs).toBe(321);
+      expect(after.messageCursors).toEqual(before.messageCursors);
+      expect(await pool.pollConductorMessagesOnce('send-listen')).toBe(1);
+      const final = JSON.parse(await readFile(path, 'utf8'));
+      expect(final.pendingReports.map((report: { sendCount: number }) => report.sendCount)).toEqual([1, 2]);
+      expect(send).toHaveBeenCalledTimes(2);
+    } finally {
+      pool.close();
+    }
+  });
+
+  it('does not send when listener preparation fails', async () => {
+    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-send-listen-fail-'));
+    const send = vi.fn().mockReturnValue(true);
+    const liveServer = await startOpenQuestionControlServer({
+      listOpenQuestions: () => [],
+      sendOperatorMessage: send,
+      answerOpenQuestion: async () => { throw new Error('unused'); },
+    });
+    closeServers.push(() => liveServer.close());
+    await writeResumeStore('send-listen-fail', 1, liveServer.socketPath);
+    const pool = await createOperatorWatchPool({ repoRoot, dispatchQueue: createOperatorDispatchQueue() });
+    const tool = createSendOperatorMessageTool(repoRoot, undefined, (id) => pool.ensureConductorMessageListen(id));
+    try {
+      await expect(tool.execute({ conductorAgentId: 'send-listen-fail', text: 'never sent', listen: true }))
+        .rejects.toThrow(/preparation failed; message was not sent/);
+      expect(send).not.toHaveBeenCalled();
+      expect(pool.listConductorMessageListens()).toEqual([]);
     } finally {
       pool.close();
     }

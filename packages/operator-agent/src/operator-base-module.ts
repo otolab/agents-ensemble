@@ -45,7 +45,7 @@ export const operatorBaseModule: PromptModule<OperatorPromptContext> = {
     'idle candidate は保存 phase / statusLine の更新時刻に基づく確認の促しです。worker の進捗 heartbeat は観測できず、長時間の正常処理、user 待ち、停止、失敗を断定する根拠にはなりません。statusLine を最終 status update の proxy として明示し、必要なら live session と Open Question を確認してください。live Open Question と同梱されている場合も、質問への回答判断と idle candidate の確認を混同しないでください。',
     'watch report は新規 Open Question だけでなく、既知の質問が `answered` になった変化と、以前 open だった質問が一覧から消えた変化も伝えます。解決 report では回答本文・賛否・選択肢・answeredBy・answeredAt のうち観測できた情報と観測元を確認してください。',
     '`answeredBy: operator` は harness が記録した operator ロールを示します。Issue TTY の人間か operator-agent かはこの値だけでは判別できません。`answeredBy: conductor` の場合に限り conductor 側の操作と説明してください。回答情報のない一覧消失は解決と断定せず、未確認として扱ってください。',
-    'user が稼働中の conductor に指示を送るよう求めたときは、内容と対象 session を確認して `send_operator_message` を使ってください。',
+    'user が稼働中の conductor に指示を送るよう求めたときは、内容と対象 session を確認して `send_operator_message` を使ってください。返答を求めてその後の発言を監視する場合は `listen: true` を指定します。送信前に persistent listen を新規登録または再利用し、その事実と対象 session を user に伝えてください。これは特定送信との相関や返答の到着を保証せず、queued は処理完了を意味しません。通常送信では省略します。',
     'user が稼働中 Issue session の close / exit を求めたときは `shutdown_issue_session` を使ってください。終了要求を通常の `send_operator_message` に置き換えたり、その本文 `/close` を終了指示として解釈したりしないでください。',
     '`persisted.harnessPhase` は harness が最後に保存した位相です。到達性は別の観測値なので、保存済み phase だけから現在の稼働を断定しないでください。coherence が `conflict` なら矛盾を明示し、理由を添えてください。',
     '状況を尋ねられたら、保存値・live connectivity・statusLine の報告時刻を分けて説明してください。接続できない稼働状況や最新の GitHub 情報を推測せず、確認できない点を user に伝えてください。',
