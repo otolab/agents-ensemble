@@ -403,11 +403,12 @@ export function createListOperatorSessionsTool(
               (cached.connectivity !== 'reachable' || cached.snapshot)) {
             snapshot.live = cached;
           } else if (snapshot.resumeStore.harnessSocketPath) {
+            const checkedAt = Date.now();
             try {
               const observed = await sendOpenQuestionControlRequest<SessionObservationSnapshot>(snapshot.resumeStore.harnessSocketPath, { method: OPEN_QUESTION_CONTROL_METHODS.observe }, { timeoutMs: OBSERVE_TIMEOUT_MS });
-              snapshot.live = { connectivity: 'reachable', checkedAt: Date.now(), unreachableSince: null, snapshot: observed };
+              snapshot.live = { connectivity: 'reachable', checkedAt, unreachableSince: null, snapshot: observed };
             } catch (error) {
-              snapshot.live = { connectivity: error instanceof OpenQuestionControlTransportError && error.reason === 'connection' ? 'unreachable' : 'unknown', checkedAt: Date.now(), unreachableSince: null };
+              snapshot.live = { connectivity: error instanceof OpenQuestionControlTransportError && error.reason === 'connection' ? 'unreachable' : 'unknown', checkedAt, unreachableSince: null };
             }
           } else {
             snapshot.live = cached?.checkedAt != null && cached.checkedAt <= Date.now() ? cached : undefined;

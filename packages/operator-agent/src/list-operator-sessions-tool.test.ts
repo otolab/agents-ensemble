@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   resolveEnsemblePaths,
+  startOpenQuestionControlServer,
   type GitHubClient,
 } from '@agents-ensemble/core';
 import { evaluateOperatorIdleCandidate } from './operator-idle-candidates.js';
@@ -38,6 +39,23 @@ describe('list_operator_sessions', () => {
     const candidate = evaluateOperatorIdleCandidate({ conductorAgentId: 'active', issueUrl: issue, observationVersion: 1, source: 'uds', connectivity: 'reachable', checkedAt: now, pollIntervalMs: 2000, harnessPhase: 'running', harnessModifiedAt: now - 1000, lifecycle: 'unknown', openQuestionCount: 0, statusLine: { text: 'last report', reportedAt: now - 3_600_000 } }, DEFAULT_OPERATOR_AGENT_SCHEDULING, now);
     expect(candidate?.kind).toBe('stale_running');
     expect(candidate?.text).toContain('停止・失敗・停滞とは断定せず');
+  });
+
+  it('uses the probe start time when a direct observation is delayed', async () => {
+    const start = Date.now();
+    let now = start;
+    vi.spyOn(Date, 'now').mockImplementation(() => now);
+    const server = await startOpenQuestionControlServer({
+      listOpenQuestions: () => [],
+      observeSession: async () => { now += 11_000; return { sequence: 0, openQuestions: [], workStatus: 'working' }; },
+      answerOpenQuestion: async () => { throw new Error('unused'); },
+    });
+    try {
+      await writeResumeStore('slow-observation', 10, 'https://github.com/example/project/issues/766', { harnessSocketPath: server.socketPath });
+      const tool = createListOperatorSessionsTool(repoRoot);
+      const result = JSON.parse((await tool.execute({ includeGithub: false, workStatus: 'unknown' })).content[0]!.text);
+      expect(result.sessions).toMatchObject([{ workStatus: { status: 'unknown', source: 'uds', observedAt: start }, live: { freshness: 'stale' } }]);
+    } finally { await server.close(); vi.restoreAllMocks(); }
   });
 
   it('filters fresh work observations and keeps old harnesses unknown', async () => {

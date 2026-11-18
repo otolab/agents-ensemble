@@ -508,6 +508,12 @@ async function runConductorSessionWithStartupGuard(
     null;
   const conductorMessages: OpenQuestionControlConductorMessage[] = [];
   const eventQueue = new SessionEventQueue();
+  // A failed round becomes idle before its inbox notification is dispatched.
+  // Keep each failure until the conductor successfully receives that event.
+  let nextWorkerFailureId = 0;
+  const pendingWorkerFailures = new Set<number>();
+  const unassignedWorkerFailures = new Map<string, number[]>();
+  const workerFailureIds = new WeakMap<WorkerFailureRecord, number>();
   const resumeNoticeDetails = new Set<string>();
   const reportResumeNotice = (message: string): void => {
     if (resumeNoticeDetails.has(message)) return;
@@ -1175,6 +1181,12 @@ async function runConductorSessionWithStartupGuard(
       });
     },
     onWorkerFailed: (failure) => {
+      // Notifications are serialized by the inbox, preserving each worker's
+      // telemetry order even if a later round fails before this one is sent.
+      const pending = unassignedWorkerFailures.get(failure.workerId);
+      const id = pending?.shift();
+      if (id !== undefined) workerFailureIds.set(failure, id);
+      if (pending?.length === 0) unassignedWorkerFailures.delete(failure.workerId);
       sessionLogger.emit({ type: 'worker.failed', failure });
       eventQueue.enqueue({ type: 'worker.failed', failure });
     },
@@ -1201,7 +1213,12 @@ async function runConductorSessionWithStartupGuard(
             stopReason: event.stopReason!,
           });
           break;
-        case 'failed':
+        case 'failed': {
+          const id = ++nextWorkerFailureId;
+          pendingWorkerFailures.add(id);
+          const pending = unassignedWorkerFailures.get(event.workerId) ?? [];
+          pending.push(id);
+          unassignedWorkerFailures.set(event.workerId, pending);
           reportHarnessActivity('worker', false);
           sessionLogger.emit({
             type: 'harness.worker.prompt.failed',
@@ -1212,6 +1229,7 @@ async function runConductorSessionWithStartupGuard(
             error: event.error!,
           });
           break;
+        }
       }
     },
     onAcpUpdate: (event) => {
@@ -2292,6 +2310,7 @@ async function runConductorSessionWithStartupGuard(
             conductorSending: conductorSendCount > 0,
             workers,
             shuttingDown: teardownStarted,
+            pendingWorkerFailures: pendingWorkerFailures.size > 0,
             unresolvedPermissions:
               workerSession.inbox.pendingPermissionCount !== permissionPipeline.pending.size,
           }),
@@ -2479,6 +2498,13 @@ async function runConductorSessionWithStartupGuard(
       },
       onOperatorQueueChanged: () => {
         sessionLogger.emit({ type: 'operator.queue.changed' });
+      },
+      onWorkerFailuresDelivered: (events) => {
+        for (const event of events) {
+          if (event.type !== 'worker.failed') continue;
+          const id = workerFailureIds.get(event.failure);
+          if (id !== undefined) pendingWorkerFailures.delete(id);
+        }
       },
       onOperatorDispatched: (events) => {
         for (const event of events) {

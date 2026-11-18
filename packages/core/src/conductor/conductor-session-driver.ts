@@ -131,6 +131,7 @@ export interface ConductorSessionDriverOptions {
   onConductorInbound?: (info: ConductorInboundInfo) => void;
   onOperatorQueueChanged?: () => void;
   onOperatorDispatched?: (events: SessionEvent[]) => void;
+  onWorkerFailuresDelivered?: (events: SessionEvent[]) => void;
   onSendStarted?: (info: ConductorSendStartedInfo) => void;
   onSendProgress?: (info: ConductorSendProgressInfo) => void;
   onSendComplete: (info: ConductorSendCompleteInfo) => void;
@@ -840,6 +841,9 @@ export async function runConductorSessionDriver(
           ? { requiresConfirmation: false }
           : {}),
       });
+      if (result.status === 'finished' || result.status === 'completed') {
+        options.onWorkerFailuresDelivered?.(batch);
+      }
       if (
         options.onDispatchBatchSettled &&
         batch.some((event) => event.type === 'operator.message')

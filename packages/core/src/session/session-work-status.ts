@@ -8,6 +8,7 @@ export function classifySessionWorkStatus(input: {
   workers: Array<{ state: WorkerLifecycleState; queueDepth: number; permissionPending: boolean }>;
   shuttingDown: boolean;
   unresolvedPermissions: boolean;
+  pendingWorkerFailures: boolean;
 }): SessionWorkStatus {
   if (input.shuttingDown || input.unresolvedPermissions) return 'unknown';
   if (input.workers.some(
@@ -15,6 +16,7 @@ export function classifySessionWorkStatus(input: {
   )) return 'working';
   if (
     input.conductorSending ||
+    input.pendingWorkerFailures ||
     input.workers.some((worker) =>
       worker.state === 'attaching' ||
       worker.state === 'failed' ||

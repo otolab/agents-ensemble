@@ -1638,6 +1638,7 @@ export async function createOperatorWatchPool(
         snapshot: observation,
         source,
         connectivity,
+        checkedAt,
       } = await readObservation(root, located);
       const latestLocated = await findSession(id, { root });
       const phaseObservationIsStable = Boolean(
@@ -1670,7 +1671,6 @@ export async function createOperatorWatchPool(
         return false;
       }
 
-      const checkedAt = Date.now();
       idleCandidateObservations.set(id, {
         conductorAgentId: id,
         issueUrl: located.resumeStore.issueUrl,
@@ -1734,6 +1734,7 @@ export async function createOperatorWatchPool(
             snapshot: observation,
             source,
             connectivity,
+            checkedAt,
           } = await readObservation(root, located);
           const resumeStore = located.resumeStore;
           let phaseObservationIsStable = false;
@@ -1756,7 +1757,6 @@ export async function createOperatorWatchPool(
             );
           }
           const previousLiveStatus = liveStatuses.get(id);
-          const checkedAt = Date.now();
           if (
             phaseObservationIsStable &&
             resumeStore.harnessPhase !== undefined &&
@@ -2531,7 +2531,11 @@ async function readObservation(
   snapshot: SessionObservationSnapshot;
   source: 'uds' | 'resume_store';
   connectivity: OperatorSessionLiveStatus['connectivity'];
+  checkedAt: number;
 }> {
+  // The snapshot can already be old when the response or later store reads
+  // finish. Use the request start as a conservative freshness boundary.
+  const checkedAt = Date.now();
   const { resumeStore } = located;
   if (resumeStore.harnessSocketPath) {
     try {
@@ -2542,6 +2546,7 @@ async function readObservation(
         ),
         source: 'uds',
         connectivity: 'reachable',
+        checkedAt,
       };
     } catch (error) {
       if (
@@ -2576,6 +2581,7 @@ async function readObservation(
         },
         source: 'resume_store',
         connectivity,
+        checkedAt,
       };
     }
   }
@@ -2595,6 +2601,7 @@ async function readObservation(
     },
     source: 'resume_store',
     connectivity: 'unknown',
+    checkedAt,
   };
 }
 
