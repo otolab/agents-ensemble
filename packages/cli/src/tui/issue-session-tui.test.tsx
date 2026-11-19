@@ -1480,6 +1480,19 @@ describe('IssueSessionTui', () => {
     expect(lines).toHaveLength(liveFrameRows);
   });
 
+  it('renders the observed conductor status and elapsed time', () => {
+    const viewModel = createTuiViewModel();
+    viewModel.setDisplayState({
+      workers: { conductor: { kind: 'conductor', status: 'running' } },
+      conductorOutput: null, openQuestions: [],
+      dispatchHold: { hold: false, heldEventCount: 0 },
+    });
+    viewModel.setConductorStatus('compacting (overflow)');
+    const { lastFrame, unmount } = render(<IssueSessionTui viewModel={viewModel} onSubmit={() => {}} />);
+    expect(lastFrame()).toContain('conductor: compacting (overflow) (0s)');
+    unmount();
+  });
+
   it('shows conductor thinking during in-flight send then idle on completion', () => {
     const viewModel = createTuiViewModel();
     viewModel.setDisplayState({

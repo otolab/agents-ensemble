@@ -3,6 +3,23 @@ import { createTuiTelemetrySink } from './create-tui-telemetry-sink.js';
 import { createTuiViewModel } from './tui-view-model.js';
 
 describe('createTuiTelemetrySink', () => {
+  it('tracks overlapping conductor compaction and retry notifications', () => {
+    const model = createTuiViewModel();
+    const sink = createTuiTelemetrySink(model);
+    sink({ type: 'conductor.send.started', sendCount: 1 });
+    expect(model.getSnapshot().conductorStatus?.text).toBe('処理中');
+    sink({ type: 'conductor.output_phase', phase: 'thinking' });
+    expect(model.getSnapshot().conductorStatus?.text).toBe('thinking');
+    sink({ type: 'conductor.compaction', event: { type: 'start', reason: 'overflow' } });
+    expect(model.getSnapshot().conductorStatus?.text).toBe('compacting (overflow)');
+    sink({ type: 'conductor.retry', event: { type: 'summarization_retry_scheduled', attempt: 1, maxAttempts: 3, delayMs: 1, errorMessage: 'failed' } });
+    expect(model.getSnapshot().conductorStatus?.text).toBe('retrying 1/3');
+    sink({ type: 'conductor.retry', event: { type: 'summarization_retry_finished' } });
+    expect(model.getSnapshot().conductorStatus?.text).toBe('compacting (overflow)');
+    sink({ type: 'conductor.compaction', event: { type: 'end', reason: 'overflow', outcome: 'failed' } });
+    expect(model.getSnapshot().conductorStatus?.text).toBe('compaction failed');
+    expect(model.getSnapshot().activityLog.some((entry) => entry.text.includes('compaction failed'))).toBe(true);
+  });
   it('separates harness from observation entries in the activity log', () => {
     const viewModel = createTuiViewModel();
     const sink = createTuiTelemetrySink(viewModel);

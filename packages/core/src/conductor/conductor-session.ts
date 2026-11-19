@@ -2571,6 +2571,7 @@ async function runConductorSessionWithStartupGuard(
           dispatchSource: info.dispatchSource,
         });
       },
+      onOutputPhase: (phase) => sessionLogger.emit({ type: 'conductor.output_phase', phase }),
       onSendProgress: (info) => {
         sessionLogger.emit({
           type: 'conductor.send.progress',

@@ -12,6 +12,7 @@ import type { OperatorRecoveryInspection } from '../operator-recovery-command.js
 
 export interface TuiViewSnapshot {
   displayState: SessionDisplayState;
+  conductorStatus: { text: string; since: number } | undefined;
   activityLog: ActivityLogEntry[];
   activityLogGeneration: number;
   postLoopWaiting: boolean;
@@ -37,6 +38,7 @@ export interface TuiViewModel {
   subscribe: (listener: () => void) => () => void;
   getSnapshot: () => TuiViewSnapshot;
   setDisplayState: (state: SessionDisplayState) => void;
+  setConductorStatus: (text: string) => void;
   appendActivityLog: (label: ActivityLogLabel, text: string) => void;
   appendActivityLogSeparator: () => void;
   requestActivityLogReplay: () => void;
@@ -57,6 +59,7 @@ export function createTuiViewModel(options: {
       ? ACTIVITY_LOG_WINDOW_SIZE
       : options.activityLogWindowSize;
   let displayState = INITIAL_SESSION_DISPLAY_STATE;
+  let conductorStatus: TuiViewSnapshot['conductorStatus'];
   let activityLog: ActivityLogEntry[] = [];
   let activityLogGeneration = 0;
   let postLoopWaiting = false;
@@ -65,6 +68,7 @@ export function createTuiViewModel(options: {
   let recoveryInspection: OperatorRecoveryInspection | undefined;
   let snapshot: TuiViewSnapshot = {
     displayState,
+    conductorStatus,
     activityLog,
     activityLogGeneration,
     postLoopWaiting,
@@ -77,6 +81,7 @@ export function createTuiViewModel(options: {
   const rebuildSnapshot = () => {
     snapshot = {
       displayState,
+      conductorStatus,
       activityLog,
       activityLogGeneration,
       postLoopWaiting,
@@ -105,6 +110,11 @@ export function createTuiViewModel(options: {
     },
     setDisplayState(state) {
       displayState = state;
+      notify();
+    },
+    setConductorStatus(text) {
+      if (conductorStatus?.text === text) return;
+      conductorStatus = { text, since: Date.now() };
       notify();
     },
     appendActivityLog(label, text) {

@@ -123,11 +123,11 @@ export function formatHarnessLogBody(
       return undefined;
     case 'conductor.compaction':
       return event.event.type === 'end' && event.event.outcome === 'failed'
-        ? `conductor.compaction failed reason=${event.event.reason} error=${event.event.errorMessage ?? 'unknown'}`
+        ? `conductor.compaction failed reason=${event.event.reason} error=${escapeTerminalControlCharacters(event.event.errorMessage ?? 'unknown')}`
         : undefined;
     case 'conductor.retry':
       return event.event.type === 'auto_retry_end' && !event.event.success
-        ? `conductor.retry failed attempt=${event.event.attempt} error=${event.event.finalError ?? 'unknown'}`
+        ? `conductor.retry failed attempt=${event.event.attempt} error=${escapeTerminalControlCharacters(event.event.finalError ?? 'unknown')}`
         : undefined;
     case 'conductor.transport.reconnect': {
       let line = `conductor.transport.reconnect status=${escapeTerminalControlCharacters(event.status)} agentId=${event.agentId}`;

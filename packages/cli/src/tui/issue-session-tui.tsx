@@ -317,6 +317,7 @@ function sortWorkerEntries(
 export function WorkerStatusPane({
   workers,
   dispatchHold,
+  conductorStatus,
   height,
   terminalColumns,
   issueUrl,
@@ -324,11 +325,17 @@ export function WorkerStatusPane({
 }: {
   workers: TuiViewSnapshot['displayState']['workers'];
   dispatchHold?: TuiViewSnapshot['displayState']['dispatchHold'];
+  conductorStatus?: TuiViewSnapshot['conductorStatus'];
   height?: number;
   terminalColumns?: number;
   issueUrl?: string;
   issueLinkMode?: IssueLinkMode;
 }) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
   const entries = sortWorkerEntries(Object.entries(workers));
   const paneHeight = height ?? computeWorkerPaneHeight(entries.length);
   const statusLineWidth = usePaneContentWidth(terminalColumns ?? process.stdout.columns ?? 80);
@@ -354,7 +361,9 @@ export function WorkerStatusPane({
         <Text dimColor>(待機中)</Text>
       ) : (
         entries.map(([name, worker]) => (
-          <Text key={name}>{fitWorkerStatusLine(name, worker, statusLineWidth)}</Text>
+          <Text key={name}>{name === 'conductor' && conductorStatus
+            ? `${truncateWorkerStatusLine(`conductor: ${stripWorkerAnsiSequences(conductorStatus.text)}`, Math.max(1, statusLineWidth - ` (${Math.max(0, Math.floor((now - conductorStatus.since) / 1000))}s)`.length))} (${Math.max(0, Math.floor((now - conductorStatus.since) / 1000))}s)`
+            : fitWorkerStatusLine(name, worker, statusLineWidth)}</Text>
         ))
       )}
     </TitledBorderPane>
@@ -1000,6 +1009,7 @@ export function IssueSessionTui({
           <WorkerStatusPane
             workers={snapshot.displayState.workers}
             dispatchHold={snapshot.displayState.dispatchHold}
+            conductorStatus={snapshot.conductorStatus}
             height={paneHeights.workerPaneHeight}
             terminalColumns={terminalColumns}
             issueUrl={issueUrl}

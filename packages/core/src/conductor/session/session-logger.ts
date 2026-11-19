@@ -77,6 +77,7 @@ export class SessionLogger {
       case 'operator.queue.changed':
       case 'operator.dispatched':
       case 'conductor.inbound':
+      case 'conductor.output_phase':
       case 'conductor.compaction':
       case 'conductor.retry':
       case 'conductor.send.started':

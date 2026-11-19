@@ -197,6 +197,8 @@ question がないときの pane / stream の Operator input は、通常時・p
 
 `pane` では Workers / Orchestration / Operator input を固定表示し、未回答の open question があるときだけ Open questions ペインをその上に追加します。Orchestration はアプリ内の windowing と `PgUp` / `PgDn` / `End` で操作します。`PgUp` 中に新着 activity log が追記された場合は、表示行数の差分を detached offset に反映して同じログ行を維持します。`End` で最新へ追従します。
 
+conductor の状態行は通知を受けて処理中・tool 実行・Pi の compaction / retry と経過秒数を表示します。compaction / retry の失敗は活動ログにも残ります。状態は通知に基づいて更新します。
+
 Workers ペインの高さは内容駆動です。conductor と登録 worker の各状態行、または worker 未登録時の待機表示に合わせて高さを取り、端末内では Open questions・Operator input と Orchestration の最低高さを保てる範囲が上限になります。短い端末や worker 数が多い場合、枠に収まらない状態行はクリップされます。Workers ペイン内のスクロールは行いません。
 
 活動ログは投稿本文の明示的な改行と段落間の空行を表示行として保ち、端末幅に合わせて各行を折り返します。複数行の投稿ではラベルを独立行に置き、本文を次の行から表示します。これは pane と stream の両方に適用されます。pane は可視行数を超えた過去ログをスクロールで確認でき、stream は端末 scrollback に追記します。

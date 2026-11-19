@@ -302,6 +302,7 @@ export interface HarnessWarningEvent {
 
 /** harness / TUI / snapshot 向けの時系列テレメトリイベント。 */
 export type SessionLogEvent =
+  | { type: 'conductor.output_phase'; phase: 'thinking' | 'writing' }
   | { type: 'conductor.compaction'; event: ConductorCompactionEvent }
   | { type: 'conductor.retry'; event: ConductorRetryEvent }
   | HarnessWorktreeEvent

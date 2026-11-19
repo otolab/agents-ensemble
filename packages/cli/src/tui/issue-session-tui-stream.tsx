@@ -734,6 +734,7 @@ export function IssueSessionTuiStream({
           <WorkerStatusPane
             workers={snapshot.displayState.workers}
             dispatchHold={snapshot.displayState.dispatchHold}
+            conductorStatus={snapshot.conductorStatus}
             height={streamPaneHeights.workerPaneHeight}
             terminalColumns={terminalColumns}
             issueUrl={issueUrl}

@@ -15,7 +15,37 @@ export function createTuiTelemetrySink(
   viewModel: TuiViewModel,
   options: TuiTelemetrySinkOptions = {},
 ): SessionLogSink {
+  let baseStatus = '待機中';
+  let compactionStatus: string | undefined;
+  let retryStatus: string | undefined;
   return (event) => {
+    if (event.type === 'conductor.send.started') baseStatus = '処理中';
+    if (event.type === 'conductor.output_phase') baseStatus = event.phase;
+    if (event.type === 'conductor.send.progress') baseStatus = `calling ${event.tool}`;
+    if (event.type === 'conductor.send') {
+      baseStatus = '待機中';
+      compactionStatus = undefined;
+      retryStatus = undefined;
+    }
+    if (event.type === 'conductor.compaction') {
+      if (event.event.type === 'start') compactionStatus = `compacting (${event.event.reason})`;
+      else compactionStatus = event.event.outcome === 'failed' ? 'compaction failed' : undefined;
+    }
+    if (event.type === 'conductor.retry') {
+      const retry = event.event;
+      if (retry.type === 'auto_retry_start' || retry.type === 'summarization_retry_scheduled') {
+        retryStatus = `retrying ${retry.attempt}/${retry.maxAttempts}`;
+      } else if (retry.type === 'auto_retry_end') {
+        retryStatus = retry.success ? undefined : 'retry failed';
+      } else if (retry.type === 'summarization_retry_attempt_start') {
+        if (!retryStatus) retryStatus = 'retrying';
+      } else {
+        retryStatus = undefined;
+      }
+    }
+    if (event.type === 'conductor.send.started' || event.type === 'conductor.send.progress' || event.type === 'conductor.output_phase' || event.type === 'conductor.send' || event.type === 'conductor.compaction' || event.type === 'conductor.retry') {
+      viewModel.setConductorStatus(retryStatus ?? compactionStatus ?? baseStatus);
+    }
     const harnessBody = formatHarnessLogBody(event, {
       verbose: options.verbose,
     });
