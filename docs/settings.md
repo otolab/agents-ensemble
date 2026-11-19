@@ -77,7 +77,7 @@ worker spawn 時の ACP preset 解決（[ADR 0019](adr/0019-worker-acp-cli-prese
 CLI --default-acp-* > ENSEMBLE_DEFAULT_ACP_CLI > config acp.defaultPreset > cursor
 ```
 
-`claude` / `codex` / `pi` preset は core に同梱された adapter を使い、同名の PATH コマンドにはフォールバックしません。同梱 adapter が欠けている場合は依存関係を再インストールしてください（Claude / Codex は optional dependency）。Cursor は PATH 上の `agent` を使います。Pi の BYO runtime は同梱 adapter に加えて PATH 上の `pi` CLI を必要とします。
+`claude` / `codex` / `pi` preset は core に同梱された adapter を使い、同名の PATH コマンドにはフォールバックしません。解決できない場合は失敗した段階と原因をエラーに表示します。依存関係が欠けている場合は再インストールしてください（Claude / Codex は optional dependency）。Cursor は PATH 上の `agent` を使います。Pi の BYO runtime は同梱 adapter に加えて PATH 上の `pi` CLI を必要とします。
 
 PATH 上の adapter を明示して使う場合は、例えば `--default-acp-command codex-acp` を指定します。これは custom preset として扱われ、built-in preset のモデル注入や認証などの設定は引き継ぎません。
 

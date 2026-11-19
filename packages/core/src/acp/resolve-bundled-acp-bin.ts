@@ -13,7 +13,9 @@ import {
 export function resolveBundledAcpBin(
   preset: Exclude<BuiltinAcpPresetId, 'cursor'>,
   fromModuleUrl: string | URL = import.meta.url,
+  onFailure?: (reason: string) => void,
 ): string | undefined {
+  let stage = 'core package の探索';
   try {
     const require = createRequire(fromModuleUrl);
     const { packageName, binName } = ACP_PRESET_ADAPTER_PACKAGES[preset];
@@ -42,24 +44,28 @@ export function resolveBundledAcpBin(
         existsSync(join(packageDirectory, 'package.json')),
       );
     if (!corePackageDirectory) {
-      return undefined;
+      throw new Error('@agents-ensemble/core の package root が見つかりません');
     }
+    stage = `adapter package ${packageName} の解決（起点: ${corePackageDirectory}）`;
     const packageJsonPath = require.resolve(`${packageName}/package.json`, {
       paths: [corePackageDirectory],
     });
     const packageDirectory = dirname(packageJsonPath);
+    stage = `adapter manifest ${packageJsonPath} の読み取り`;
     const pkg = require(packageJsonPath) as {
       bin?: string | Record<string, string>;
     };
     const binRelative =
       typeof pkg.bin === 'string' ? pkg.bin : pkg.bin?.[binName];
-    if (!binRelative) {
-      return undefined;
+    if (typeof binRelative !== 'string' || !binRelative) {
+      throw new Error(`bin 定義に ${binName} がありません`);
     }
     const binPath = join(packageDirectory, binRelative);
+    stage = `adapter bin ${binPath} の実行可能性の確認`;
     accessSync(binPath, constants.X_OK);
     return binPath;
-  } catch {
+  } catch (error) {
+    onFailure?.(`${stage}: ${error instanceof Error ? error.message : String(error)}`);
     return undefined;
   }
 }
@@ -89,10 +95,11 @@ export function resolveAcpBinFromPath(binName: string): string | undefined {
 export function resolveAcpBin(
   preset: BuiltinAcpPresetId,
   fromModuleUrl: string | URL = import.meta.url,
+  onFailure?: (reason: string) => void,
 ): string | undefined {
   if (preset === 'cursor') {
     return resolveAcpBinFromPath(ACP_PRESET_BIN_NAMES.cursor);
   }
 
-  return resolveBundledAcpBin(preset, fromModuleUrl);
+  return resolveBundledAcpBin(preset, fromModuleUrl, onFailure);
 }

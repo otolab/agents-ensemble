@@ -38,7 +38,7 @@ export function formatAcpPresetInstallHint(preset: AcpPresetId): string {
     case 'pi': {
       const { packageName, binName } = ACP_PRESET_ADAPTER_PACKAGES[preset];
       return (
-        `[acp] ${preset} preset: core 同梱 ACP adapter \`${binName}\`（${packageName}）を解決できません。package の欠落、bin 定義または実行権限を確認してください。\n` +
+        `[acp] ${preset} preset: core 同梱 ACP adapter \`${binName}\`（${packageName}）を解決できません。\n` +
         '  開発環境では `pnpm install`、npm インストールでは ensemble の再インストールを試してください（optional dependency を含む）。\n' +
         `  PATH 上の adapter を使う場合は \`--default-acp-command ${binName}\` を明示してください。`
       );
@@ -100,10 +100,15 @@ function validateBuiltinPreset(
     return;
   }
 
-  const bundled = resolveBundledAcpBin(preset, moduleUrl);
+  let reason: string | undefined;
+  const bundled = resolveBundledAcpBin(preset, moduleUrl, (detail) => {
+    reason = detail;
+  });
 
   if (!bundled) {
-    throw new AcpPresetPrerequisiteError(formatAcpPresetInstallHint(preset));
+    throw new AcpPresetPrerequisiteError(
+      `${formatAcpPresetInstallHint(preset)}${reason ? `\n  原因: ${reason}` : ''}`,
+    );
   }
 
   const externalCli = ACP_PRESET_EXTERNAL_CLI[preset];
@@ -163,9 +168,16 @@ export function resolveAcpSpawnExecutable(
     };
   }
 
-  const resolved = resolveAcpBin(spawn.preset, options?.fromModuleUrl ?? import.meta.url);
+  let reason: string | undefined;
+  const resolved = resolveAcpBin(
+    spawn.preset, options?.fromModuleUrl ?? import.meta.url, (detail) => {
+      reason = detail;
+    },
+  );
   if (!resolved) {
-    throw new AcpPresetPrerequisiteError(formatAcpPresetInstallHint(spawn.preset));
+    throw new AcpPresetPrerequisiteError(
+      `${formatAcpPresetInstallHint(spawn.preset)}${reason ? `\n  原因: ${reason}` : ''}`,
+    );
   }
 
   return {
