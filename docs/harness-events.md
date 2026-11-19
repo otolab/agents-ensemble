@@ -198,8 +198,8 @@ open question・エスカレーション・CLI 通知。stderr の prefix は従
 | `session.worktree.notice` | `--worktree in-repo` 開始時 | `[worktree] 特別モード: ...` | なし |
 | `session.continue` | `--continue` で SessionResumeStore から再開時 | `[continue] resuming session: conductorAgentId=...` | なし |
 | `session.post_loop_wait` | 自律的な連続処理が不要になり、TTY post-loop のイベント待機を開始したとき | （post-loop 待機メッセージ） | なし |
-| `session.operator_exit` | オペレータが `/exit` / `exit` を入力した直後（[#170](https://github.com/otolab/agents-ensemble/issues/170)） | （終了フィードバックメッセージ） | なし |
-| `session.operator_close` | オペレータが `/close` / `close` を入力した直後（[#458](https://github.com/otolab/agents-ensemble/issues/458)） | （保存して閉じるフィードバックメッセージ） | なし |
+| `session.operator_exit` | オペレータが `/exit` を入力した直後（[#170](https://github.com/otolab/agents-ensemble/issues/170)） | （終了フィードバックメッセージ） | なし |
+| `session.operator_close` | オペレータが `/close` を入力した直後（[#458](https://github.com/otolab/agents-ensemble/issues/458)） | （保存して閉じるフィードバックメッセージ） | なし |
 | `conductor.dispatch_hold` | `set_dispatch_hold` の ON/OFF、および held trigger（`permission.pending` を含み、`permission.stall` を除く）件数の更新（#265） | `dispatch hold enabled` / `released (flushed N events)` | TUI Workers ペインのタイトルを更新。解除後に残った held trigger も件数表示を維持 |
 
 CLI 整形: `createObservationSink()`（`packages/cli/src/session-sinks.ts`）。
@@ -382,7 +382,7 @@ attach handshake 中に届いた追加指示は queue に積む。まだ cancel 
 | type | 発火タイミング | conductor への見出し（例） | 備考 |
 |------|----------------|---------------------------|------|
 | `operator.message` | オペレータが `submit` / TTY / operator-agent UDS | （プレーンテキスト） | `delivery` は省略時 `next`。`idle` は active worker と送信可能な自律イベントが落ち着くまで選択を保留。max-turns 後も送信可能 |
-| `operator.reconnect` | オペレータが `/reconnect` / `reconnect` を入力 | **なし** | Driver が `close` → `resume(sameId)` を実行。conductor へ送らず、worker / worktree / プロセスには触れない |
+| `operator.reconnect` | オペレータが `/reconnect` を入力 | **なし** | Driver が `close` → `resume(sameId)` を実行。conductor へ送らず、worker / worktree / プロセスには触れない |
 | `worker.completed` | worker 1 ラウンド完了 | `## worker ラウンド完了` | `result.source` で harness / conductor を区別（見出しは同型） |
 | `worker.failed` | worker 失敗 | `## worker 失敗` | attach / init prompt / instruction いずれも |
 | `worker.session.recovered` | 保存済み ACP thread を復元できず、新 session の bootstrap が成功したとき | `## worker session 復旧` | bootstrap 成功後に新 ID の保存を試みてから通知する。flush failure でも通知を続ける。worker 名・kind・理由（`session_load_failed` / `prompt_history_unreadable`）を伝え、同じ worker の完了 / 失敗イベントと同じ dispatch 束に載る |

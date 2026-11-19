@@ -4444,6 +4444,34 @@ describe('runConductorSession resume / shutdown', () => {
     ]);
   });
 
+  it('treats targeted command-looking input as answers before command and delivery parsing', async () => {
+    const agentId = 'resume-targeted-commands';
+    const answers = ['close', 'exit', 'reconnect', '/close', '/exit', '/reconnect', '/idle keep'];
+    const questions = answers.map((_, index) => ({
+      id: `inq-${index}`, question: 'Answer?', responseType: 'text' as const,
+      source: 'conductor' as const, status: 'open' as const, askedAt: index + 1,
+    }));
+    await saveSessionResumeStore(sessionResumeStorePath({ repoRoot, conductorAgentId: agentId }), {
+      version: SESSION_RESUME_STORE_VERSION, conductorAgentId: agentId,
+      issueUrl: TEST_ISSUE.url, repoRoot, profile: { workers: [] },
+      openQuestions: questions, sequence: questions.length, workers: {}, updatedAt: 0,
+    });
+    mockSend.mockResolvedValue({ runId: 'run', status: 'finished', result: 'done' });
+    await runConductorSession({
+      issueUrl: TEST_ISSUE.url, repoRoot, profile: { workers: [] }, resumeAgentId: agentId,
+      maxTurns: 5, permissionPipeline: new PermissionPipeline({}),
+      registerProcessSignalHandlers: false, waitForOperatorExit: false,
+      bindOperatorInput: (api) => {
+        answers.forEach((answer, index) => {
+          expect(api.submit(answer, { targetOpenQuestionId: `inq-${index}` })).toBe(true);
+        });
+        expect(api.getContext().queuedMessages).toEqual(answers.map((answer, index) =>
+          expect.objectContaining({ delivery: 'next', openQuestionAnswer: true, answerPreview: `inq-${index}: ${answer}` }),
+        ));
+      },
+    });
+  });
+
   it('keeps targeted answers at next and preserves general message delivery and interrupt cancellation', async () => {
     const agentId = 'resume-delivery-regression';
     const questions = ['inq-1', 'inq-2'].map((id, index) => ({
@@ -7517,7 +7545,7 @@ describe('runConductorSession resume / shutdown', () => {
     await vi.waitFor(() => expect(mockSend).toHaveBeenCalledTimes(2));
     await vi.waitFor(() => expect(onPostLoopWait).toHaveBeenCalledTimes(2));
 
-    operatorApi!.submit('exit');
+    operatorApi!.submit('/exit');
     const result = await sessionPromise;
 
     expect(result.stopReason).toBe('completed');

@@ -24,9 +24,7 @@ describe('operator command catalog', () => {
     for (const command of OPERATOR_COMMANDS) {
       expect(isOperatorCommand(command.name, command.id)).toBe(true);
       for (const alias of command.aliases) {
-        expect(isOperatorCommand(` ${alias.toUpperCase()} `, command.id)).toBe(
-          true,
-        );
+        expect(isOperatorCommand(` ${alias.toUpperCase()} `, command.id)).toBe(true);
       }
       expect(isOperatorCommand(`${command.name} extra`, command.id)).toBe(false);
     }
