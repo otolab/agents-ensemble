@@ -2310,7 +2310,7 @@ export function createRegisterSessionWatchTool(
   return {
     name: 'register_session_watch',
     description:
-      'Add a saved Issue session to the operator watch pool. Reports new open questions, open-to-answered transitions, and disappearance from the observed question list. Each report identifies whether it came from live harness UDS or saved SessionResumeStore/YAML.',
+      'Register a persistent manual watch for a saved Issue session, independently of live automatic discovery and the repository-watch limit. Reports new open questions, open-to-answered transitions, and disappearance from the observed question list. Each report identifies whether it came from live harness UDS or saved SessionResumeStore/YAML.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -2350,7 +2350,7 @@ export function createUnregisterSessionWatchTool(
 ): ConductorTool {
   return {
     name: 'unregister_session_watch',
-    description: 'Remove an Issue session from the operator watch pool.',
+    description: 'Remove the saved session watch registration. If it belongs to a repository watch, suppress its repository-driven automatic re-registration. removed is false when no saved registration exists, including a live-discovery-only watch. Independent live automatic discovery is not disabled: a live watch may remain active or resume on a later scan, even when removed is true. Do not report that all monitoring has stopped based on this result alone; inspect the session watch status.',
     inputSchema: {
       type: 'object',
       properties: { conductorAgentId: { type: 'string' } },
@@ -2374,7 +2374,7 @@ export function createRegisterRepositoryWatchTool(
   return {
     name: 'register_repository_watch',
     description:
-      'Enable a profile-scoped watch for one exact GitHub owner/repo. A profile can register up to 20 repositories; registering a new repository beyond that limit fails, while registering an existing repository updates its settings. This repository registration limit is separate from the automatic live polling limit of 20 runs per profile. Existing saved runs become the baseline and are eligible for automatic watch; later runs are discovered on the repository scan interval. Registration and first-observed times survive operator-agent restarts. Manual session watches remain available beyond the automatic run limit.',
+      'Enable a profile-scoped watch for one exact GitHub owner/repo. A profile can register up to 20 repositories; registering a new repository beyond that limit fails, while registering an existing repository updates its settings. Separately, repository-driven automatic session watches are limited to 20 runs per profile; independent live automatic discovery and manual session watches are outside that limit. Existing saved runs become the baseline and are eligible for automatic watch; later runs are discovered on the repository scan interval. Registration and first-observed times survive operator-agent restarts.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -2392,7 +2392,7 @@ export function createRegisterRepositoryWatchTool(
           type: 'integer',
           minimum: MIN_POLL_INTERVAL_MS,
           maximum: MAX_POLL_INTERVAL_MS,
-          description: 'Automatic live observation interval (default 10000).',
+          description: 'Repository-driven session watch polling interval in milliseconds (default 10000).',
         },
         debounceMs: {
           type: 'integer',
@@ -2429,7 +2429,7 @@ export function createUnregisterRepositoryWatchTool(
   return {
     name: 'unregister_repository_watch',
     description:
-      'Stop repository scans and remove only its automatic session watches. Explicit manual session watches stay active, and first-observed history is retained for future registration.',
+      'Remove the repository watch registration, stopping its scans and repository-managed session watches. Explicit manual watches and independent live automatic discovery are unaffected; a live watch may remain active or resume, even when removed is true. Do not report that all monitoring has stopped based on this result alone; inspect the session watch status. First-observed history is retained for future registration.',
     inputSchema: {
       type: 'object',
       properties: {

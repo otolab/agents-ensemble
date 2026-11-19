@@ -34,6 +34,7 @@ import {
   createRegisterRepositoryWatchTool,
   createRegisterSessionWatchTool,
   createUnregisterRepositoryWatchTool,
+  createUnregisterSessionWatchTool,
   operatorWatchStatePath,
 } from './operator-watch-pool.js';
 import { createListOperatorSessionsTool } from './list-operator-sessions-tool.js';
@@ -1727,6 +1728,40 @@ describe('operator watch pool', () => {
       }
     } finally {
       pool.close();
+    }
+  });
+
+  it('reports unregister results without implying that live automatic discovery stops', async () => {
+    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-auto-unregister-'));
+    const server = await startOpenQuestionControlServer({
+      listOpenQuestions: () => [],
+      observeSession: async () => ({ sequence: 1, openQuestions: [] }),
+      answerOpenQuestion: async () => { throw new Error('unused'); },
+    });
+    await writeResumeStore('live', 1, server.socketPath);
+    const pool = await createOperatorWatchPool({ repoRoot, dispatchQueue: createOperatorDispatchQueue() });
+    try {
+      const sessionTool = createUnregisterSessionWatchTool(pool);
+      const repositoryTool = createUnregisterRepositoryWatchTool(pool);
+      const registerRepositoryTool = createRegisterRepositoryWatchTool(pool);
+      expect(sessionTool.description).toContain('live automatic discovery is not disabled');
+      expect(repositoryTool.description).toContain('independent live automatic discovery are unaffected');
+      expect(registerRepositoryTool.description).toContain('repository-driven automatic session watches are limited to 20');
+      expect(registerRepositoryTool.description).toContain('independent live automatic discovery and manual session watches are outside that limit');
+      await pool.scanAutoSessionsOnce();
+      expect((await sessionTool.execute({ conductorAgentId: 'live' })).structuredContent).toMatchObject({ removed: false });
+      expect(pool.getSessionTrackingInfo('live', DEFAULT_ISSUE_URL)).toMatchObject({ watchEnabled: true, watchSource: 'live_auto' });
+      await pool.register('live');
+      expect((await sessionTool.execute({ conductorAgentId: 'live' })).structuredContent).toMatchObject({ removed: true });
+      await pool.scanAutoSessionsOnce();
+      expect(pool.getSessionTrackingInfo('live', DEFAULT_ISSUE_URL)).toMatchObject({ watchEnabled: true, watchSource: 'live_auto' });
+      await registerRepositoryTool.execute({ githubRepo: 'example/repo' });
+      expect((await repositoryTool.execute({ githubRepo: 'example/repo' })).structuredContent).toMatchObject({ removed: true });
+      await pool.scanAutoSessionsOnce();
+      expect(pool.getSessionTrackingInfo('live', DEFAULT_ISSUE_URL)).toMatchObject({ watchEnabled: true, watchSource: 'live_auto' });
+    } finally {
+      pool.close();
+      await server.close();
     }
   });
 
