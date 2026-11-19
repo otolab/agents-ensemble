@@ -2377,6 +2377,78 @@ describe('runOperatorAgent', () => {
     }
   });
 
+  it.each([
+    ['send', false], ['send', true], ['ack retry', false], ['ack retry', true],
+  ])('retains a later request during %s (focus: %s)', async (phase, focus) => {
+    const peer = await createOperatorWatchPool({
+      repoRoot, userEnsembleRoot: join(repoRoot, '.ensemble'), profile: 'smoke',
+      dispatchQueue: createOperatorDispatchQueue(),
+    });
+    const addReport = async (text: string) => peer.enqueueIdleCandidate!({
+      conductorAgentId: 'conductor-one', text, kind: 'idle_phase',
+      fingerprint: text, eligibleAt: Date.now(),
+    });
+    await addReport('first requested report');
+    const input = createInteractiveInput();
+    const output = createOutput();
+    const prompts: string[] = [];
+    let options: ConductorAgentCreateOptions | undefined;
+    let lock: DatabaseSync | undefined;
+    const request = async () => {
+      const result = await options!.customTools!.request_session_reports!.execute({ conductorAgentId: 'conductor-one' });
+      expect(result.structuredContent).toMatchObject({ accepted: true });
+    };
+    const agent = createFakeAgent({
+      send: async (prompt) => {
+        prompts.push(prompt);
+        if (prompts.length === 1) {
+          if (focus) await options!.customTools!.set_session_focus!.execute({ conductorAgentId: 'conductor-one' });
+          await request();
+        } else if (prompts.length === 2) {
+          await addReport('later requested report');
+          await vi.waitFor(async () => {
+            const result = await options!.customTools!.list_pending_reports!.execute({});
+            expect(result.structuredContent).toMatchObject({ sessions: [{ conductorAgentId: 'conductor-one', count: 1 }] });
+          }, { timeout: 6_000 });
+          if (phase === 'send') await request();
+          else {
+            lock = new DatabaseSync(join(repoRoot, '.ensemble', 'operator-agents', 'smoke', 'watch', 'watch-state-lock.sqlite'));
+            lock.exec('BEGIN IMMEDIATE');
+          }
+        }
+        return { runId: 'overlapping-request', status: 'finished', result: 'done' };
+      },
+    });
+    const run = runOperatorAgent({ repoRoot, newSession: true }, {
+      stdin: input, stdout: output,
+      agentFactory: { create: async (value) => { options = value; return agent; }, resume: async () => agent },
+    });
+    try {
+      await vi.waitFor(() => expect(output.capturedText()).toContain('user>'));
+      input.write('request first report\n');
+      if (phase === 'ack retry') {
+        await vi.waitFor(() => expect(output.capturedText()).toContain('ack だけを再試行'), { timeout: 10_000 });
+        await request();
+        lock!.exec('ROLLBACK');
+        lock!.close();
+        lock = undefined;
+      }
+      await vi.waitFor(() => expect(prompts).toHaveLength(3), { timeout: 10_000 });
+      expect(prompts[1]).toContain('first requested report');
+      expect(prompts[1]).not.toContain('later requested report');
+      expect(prompts[2]).toContain('later requested report');
+      await vi.waitFor(async () => {
+        const state = JSON.parse(await readFile(baseWatchStatePath(repoRoot), 'utf8')) as { pendingReports: unknown[] };
+        expect(state.pendingReports).toHaveLength(0);
+      });
+    } finally {
+      if (lock) { lock.exec('ROLLBACK'); lock.close(); }
+      peer.close();
+      input.end();
+      await run;
+    }
+  }, 20_000);
+
   it('replays a cancelled explicitly requested batch after restart with the same payload', async () => {
     const setupPool = await createOperatorWatchPool({
       repoRoot,

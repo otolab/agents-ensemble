@@ -111,6 +111,42 @@ describe('operator dispatch batching', () => {
     expect(queue.selectBatch({ continuationConsumed: false })?.events).toHaveLength(1);
   });
 
+  it('keeps a later requested report eligible after the earlier frozen retry is acknowledged', () => {
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_000);
+    try {
+      const queue = createOperatorDispatchQueue({
+        ...DEFAULT_OPERATOR_DISPATCH_SCHEDULING, pushThreshold: 10,
+        reportWeights: { session_state: 1, open_question: 10, conductor_message: 5, idle_candidate: 1 },
+      });
+      const state = { continuationConsumed: false };
+      queue.setFocus('one');
+      const add = (reportId: string) => queue.enqueueReport({
+        type: 'report', reportType: 'session_state', reportId,
+        conductorAgentId: 'one', issueUrl: 'https://github.com/example/repo/issues/1', text: reportId,
+      }, 0);
+      add('first');
+      expect(queue.requestReports('one')).toBe(true);
+      const first = queue.selectBatch(state)!;
+      expect(queue.commitBatch(first)).toBe(true);
+      add('later');
+      expect(queue.requestReports('one')).toBe(true);
+      queue.requeue(first.events[0]!, 5_000);
+      now.mockReturnValue(6_000);
+      const retry = queue.selectBatch(state)!;
+      expect(retry.events.map((event) => event.type === 'report' && event.reportId)).toEqual(['first']);
+      expect(queue.commitBatch(retry)).toBe(true);
+      queue.completeReportRequest(retry.events);
+      const later = queue.selectBatch(state)!;
+      expect(later.events.map((event) => event.type === 'report' && event.reportId)).toEqual(['later']);
+      expect(queue.commitBatch(later)).toBe(true);
+      queue.completeReportRequest(later.events);
+      add('unrequested');
+      expect(queue.selectBatch(state)).toBeUndefined();
+    } finally {
+      now.mockRestore();
+    }
+  });
+
   it('keeps a requested retry eligible during focus until acknowledgement', () => {
     const now = vi.spyOn(Date, 'now').mockReturnValue(1_000);
     try {
@@ -131,7 +167,7 @@ describe('operator dispatch batching', () => {
       expect(queue.selectBatch({ continuationConsumed: false })).toBeUndefined();
       now.mockReturnValue(6_000);
       expect(queue.selectBatch({ continuationConsumed: false })?.batchId).toBe(first.batchId);
-      queue.completeReportRequest('one');
+      queue.completeReportRequest(first.events);
       expect(queue.selectBatch({ continuationConsumed: false })).toBeUndefined();
     } finally {
       now.mockRestore();

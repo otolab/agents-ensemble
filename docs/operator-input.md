@@ -157,7 +157,7 @@ operator-agent の応答が `finished` / `completed` で返り、次の user 入
 
 focus は既定で off です。TTY では `/focus <conductorAgentId>` で対象を選び、`/focus` で現在の対象を確認し、`/focus-off` で解除できます。`set_session_focus` tool でも設定・解除できます。focus 中は対象内外を問わず、Open Question を含む report の自動配送を停止します。明示的な配送要求は利用できます。TTY の user input が先に処理される契約は維持されます。
 
-`list_pending_reports` は、この process の queue にある session ごとの report 件数を返します。`request_session_reports` に `conductorAgentId` を指定すると、その session の batch の通常配送を要求します。tool の応答は受付結果であり、配送完了ではありません。手動 hold と会話 hold は解除せず、両方が解除されてから配送します。要求は process 内で保持し、再起動時は失われますが、未 ack report は保存されるため再要求できます。commit 後の失敗時は凍結済み batch を同じ ID と内容で再試行し、ack 保存失敗時は ack だけを再試行します。結果不明や ack 保存前の停止後には同じ report が再送され得ます。
+`list_pending_reports` は、この process の queue にある session ごとの report 件数を返します。`request_session_reports` に `conductorAgentId` を指定すると、要求時点でこの process の queue にある、その session の未配送 report の通常配送を要求します。先行 batch の送信中や ack 再試行中に後着 report を要求した場合も、先行 batch の完了では後着 report の要求は解除されません。tool の応答は受付結果であり、配送完了ではありません。手動 hold と会話 hold は解除せず、両方が解除されてから配送します。要求は process 内で保持し、再起動時は失われますが、未 ack report は保存されるため再要求できます。commit 後の失敗時は凍結済み batch を同じ ID と内容で再試行し、ack 保存失敗時は ack だけを再試行します。結果不明や ack 保存前の停止後には同じ report が再送され得ます。
 
 focus は「今、認知リソースを割いて解決する対象」を示す短期の操作です。focus 対象との対話ターンを終え、その session が Open Question など人間応答待ちに入るときは、focus を手動で切り替えるか解除してください。live Open Question を観測しただけでは自動解除しません。また、一般的な worker wait や長時間処理を推測して自動解除することもありません。
 

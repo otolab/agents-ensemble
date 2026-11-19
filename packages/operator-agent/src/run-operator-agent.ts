@@ -1438,7 +1438,7 @@ async function runTtyConversation(options: {
           );
         }
         if (batch.sourceKey.startsWith('session:')) {
-          options.dispatchQueue.completeReportRequest(batch.sourceKey.slice('session:'.length));
+          options.dispatchQueue.completeReportRequest(batch.events);
         }
       } else {
         const retryReadyAt = Date.now() + 5_000;

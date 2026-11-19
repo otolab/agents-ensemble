@@ -107,7 +107,7 @@ export interface OperatorDispatchQueue {
   setFocus(conductorAgentId?: string, now?: number): string | undefined;
   noteOperatorInput(now?: number): void;
   requestReports(conductorAgentId: string): boolean;
-  completeReportRequest(conductorAgentId: string): void;
+  completeReportRequest(events: readonly OperatorDispatchEvent[]): void;
   listPendingReports(): Array<{ conductorAgentId: string; count: number }>;
   selectBatch(
     state: OperatorDispatchState,
@@ -492,7 +492,9 @@ export function createOperatorDispatchQueue(
   const readyHeads = new WeakSet<OperatorDispatchEvent>();
   const inFlightReportIds = new Set<string>();
   const retryReadyAtById = new Map<string, number>();
-  const requestedReports = new Set<string>();
+  const requestedReports = new Map<string, Set<string>>();
+  const requestKey = (event: Extract<OperatorDispatchEvent, { type: 'report' }>) =>
+    event.reportId ? `id:${event.reportId}` : `arrival:${event.arrival}`;
   let conversationHold = false;
   let reportHold = false;
   let focusSessionId: string | undefined;
@@ -786,6 +788,13 @@ export function createOperatorDispatchQueue(
       }
       pending.sort(compareDispatchEvents);
       held.sort(compareDispatchEvents);
+      for (const [id, requested] of requestedReports) {
+        for (const key of requested) {
+          if (key.startsWith('id:') && !desired.has(key.slice(3)) &&
+              !inFlightReportIds.has(key.slice(3))) requested.delete(key);
+        }
+        if (requested.size === 0) requestedReports.delete(id);
+      }
       for (const reportId of retryReadyAtById.keys()) {
         if (!desired.has(reportId) && !inFlightReportIds.has(reportId)) {
           retryReadyAtById.delete(reportId);
@@ -826,6 +835,10 @@ export function createOperatorDispatchQueue(
       changed =
         pending.length !== pendingBefore ||
         held.length !== heldBefore;
+      for (const [id, requested] of requestedReports) {
+        for (const reportId of ids) requested.delete(`id:${reportId}`);
+        if (requested.size === 0) requestedReports.delete(id);
+      }
       for (const reportId of ids) {
         if (inFlightReportIds.delete(reportId)) changed = true;
         if (retryReadyAtById.delete(reportId)) changed = true;
@@ -900,14 +913,25 @@ export function createOperatorDispatchQueue(
     },
     requestReports(conductorAgentId) {
       const id = conductorAgentId.trim();
-      if (!id || ![...pending, ...held].some((event) =>
-        event.type === 'report' && event.conductorAgentId === id)) return false;
-      requestedReports.add(id);
+      const reports = [...pending, ...held].filter(
+        (event): event is Extract<OperatorDispatchEvent, { type: 'report' }> =>
+          event.type === 'report' && event.conductorAgentId === id,
+      );
+      if (!id || reports.length === 0) return false;
+      const requested = requestedReports.get(id) ?? new Set<string>();
+      for (const report of reports) requested.add(requestKey(report));
+      requestedReports.set(id, requested);
       notify();
       return true;
     },
-    completeReportRequest(conductorAgentId) {
-      requestedReports.delete(conductorAgentId);
+    completeReportRequest(events) {
+      for (const event of events) {
+        if (event.type !== 'report') continue;
+        const requested = requestedReports.get(event.conductorAgentId);
+        if (!requested) continue;
+        requested.delete(requestKey(event));
+        if (requested.size === 0) requestedReports.delete(event.conductorAgentId);
+      }
     },
     listPendingReports() {
       const counts = new Map<string, number>();
