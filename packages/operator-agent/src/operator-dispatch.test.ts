@@ -740,6 +740,24 @@ describe('operator dispatch batching', () => {
     }
   });
 
+  it('keeps a retry deadline that passes between selection and wakeup calculation', () => {
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_000);
+    try {
+      const queue = createOperatorDispatchQueue();
+      queue.enqueueReport({
+        type: 'report', reportType: 'open_question', reportId: 'retry',
+        conductorAgentId: 'one', issueUrl: 'https://github.com/example/repo/issues/1',
+        text: 'retry', frozenBatchId: 'frozen', frozenPayload: 'retry', retryReadyAt: 1_001,
+      }, 0);
+      expect(queue.selectBatch({ continuationConsumed: false }, 1_000)).toBeUndefined();
+      now.mockReturnValue(1_001);
+      expect(queue.nextReadyAt(1_000)).toBe(1_001);
+      expect(queue.selectBatch({ continuationConsumed: false }, 1_001)?.events).toHaveLength(1);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
   it('requeues an unconfirmed report with its stable report id', () => {
     const queue = createOperatorDispatchQueue();
     queue.enqueueReport(

@@ -1190,9 +1190,12 @@ async function runTtyConversation(options: {
       ) {
         return exitContinuity;
       }
-      const batch = options.dispatchQueue.selectBatch(dispatchState);
+      // Use the same clock reading for selection and the next deadline. A
+      // deadline crossing between those operations must still wake this loop.
+      const selectionTime = Date.now();
+      const batch = options.dispatchQueue.selectBatch(dispatchState, selectionTime);
       if (!batch) {
-        const readyAt = options.dispatchQueue.nextReadyAt();
+        const readyAt = options.dispatchQueue.nextReadyAt(selectionTime);
         const waitMs =
           readyAt === undefined
             ? undefined

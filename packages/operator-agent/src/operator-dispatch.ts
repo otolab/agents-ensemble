@@ -117,7 +117,7 @@ export interface OperatorDispatchQueue {
   commitBatch(batch: OperatorDispatchBatch, finalize?: () => void): boolean;
   rollbackBatchCommit(batch: OperatorDispatchBatch): void;
   takeBatch(state: OperatorDispatchState, now?: number): OperatorDispatchBatch | undefined;
-  nextReadyAt(): number | undefined;
+  nextReadyAt(now?: number): number | undefined;
   waitForChange(timeoutMs?: number): Promise<void>;
   wake(): void;
   readonly heldEventCount: number;
@@ -1060,10 +1060,9 @@ export function createOperatorDispatchQueue(
       this.commitBatch(batch);
       return batch;
     },
-    nextReadyAt() {
+    nextReadyAt(now = Date.now()) {
       let nextUserReadyAt: number | undefined;
       const nextCandidateTimes: number[] = [];
-      const now = Date.now();
       clearExpiredFocus(now);
       if (focusSessionId && focusLastInputAt !== undefined) {
         nextCandidateTimes.push(

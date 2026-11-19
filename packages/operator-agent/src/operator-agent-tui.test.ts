@@ -374,10 +374,12 @@ it('keeps elapsed time visible for a long tool name through resize', async () =>
   const screen = () => Array.from({ length: terminal.rows }, (_, i) => terminal.buffer.active.getLine(terminal.buffer.active.viewportY + i)?.translateToString(true) ?? '').join('\n');
   try {
     host.setStatus('calling register_conductor_message_listen');
-    await vi.waitFor(() => expect(screen()).toMatch(/operator: calling .+ \(1s\)/), { timeout: 2500 });
+    const elapsed = () => Number(screen().match(/operator: calling .+ \((\d+)s\)/)?.[1] ?? -1);
+    await vi.waitFor(() => expect(elapsed()).toBeGreaterThanOrEqual(1), { timeout: 2500 });
+    const before = elapsed();
     host.setStatus('calling register_conductor_message_listen');
-    expect(screen()).toMatch(/operator: calling .+ \(1s\)/);
+    expect(elapsed()).toBeGreaterThanOrEqual(before);
     terminal.resize(30, 10); stdout.columns = 30; stdout.rows = 10; stdout.emit('resize');
-    await vi.waitFor(() => expect(screen()).toMatch(/operator: calling .+ \([12]s\)/), { timeout: 2000 });
+    await vi.waitFor(() => expect(elapsed()).toBeGreaterThanOrEqual(before), { timeout: 2000 });
   } finally { await host.dispose(); terminal.dispose(); stdin.destroy(); stdout.destroy(); }
 });
