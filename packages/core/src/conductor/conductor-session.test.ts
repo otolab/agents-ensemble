@@ -1,3 +1,4 @@
+import { conductorFailureLogPath } from '../session/conductor-failure-log.js';
 import { access, mkdir, mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -2447,6 +2448,24 @@ describe('runConductorSession resume / shutdown', () => {
       permissionPipeline: new PermissionPipeline({}),
       registerProcessSignalHandlers: false, waitForOperatorExit: false,
     });
+    const failureLog = await readFile(conductorFailureLogPath({ repoRoot, issueUrl: TEST_ISSUE.url, conductorAgentId: 'agent-test' }), 'utf8');
+    expect(failureLog).toContain('compaction_failed');
+    expect(failureLog).toContain('retry_failed');
+    expect(failureLog).not.toContain('errorMessage');
+    mockResume.mockImplementationOnce(async (_id, options: ConductorAgentCreateOptions) => {
+      options.onCompactionEvent?.({ type: 'end', reason: 'threshold', outcome: 'failed', errorMessage: 'second-secret' });
+      return { agentId: 'agent-test', send: mockSend, close: mockClose, getUsage: vi.fn().mockResolvedValue({}) };
+    });
+    await runConductorSession({
+      issueUrl: TEST_ISSUE.url, repoRoot, resumeAgentId: 'agent-test',
+      profile: { conductor: { backend: 'pi' }, workers: [] },
+      permissionPipeline: new PermissionPipeline({}),
+      registerProcessSignalHandlers: false, waitForOperatorExit: false,
+      bindOperatorInput: (api) => { api.submit('/exit'); },
+    });
+    const resumedLog = await readFile(conductorFailureLogPath({ repoRoot, issueUrl: TEST_ISSUE.url, conductorAgentId: 'agent-test' }), 'utf8');
+    expect(resumedLog.split('\n').filter(Boolean)).toHaveLength(3);
+    expect(resumedLog).not.toContain('second-secret');
     expect(events.filter((event) => event.type === 'conductor.compaction' || event.type === 'conductor.retry')).toEqual([
       { type: 'conductor.compaction', event: { type: 'start', reason: 'overflow' } },
       { type: 'conductor.compaction', event: { type: 'end', reason: 'overflow', outcome: 'failed', errorMessage: 'failed' } },

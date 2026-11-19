@@ -1,3 +1,4 @@
+import { conductorFailureLogPath, createConductorFailureLog } from '../session/conductor-failure-log.js';
 import { stat } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
 import { isAbsolute, resolve as resolvePath } from 'node:path';
@@ -482,6 +483,10 @@ async function runConductorSessionWithStartupGuard(
     });
   });
   attachLegacySessionCallbacks(sessionLogger, options);
+  const conductorFailureLog = createConductorFailureLog(() => {
+    sessionLogger.emit({ type: 'harness.warning', message: 'conductor の失敗ログを保存できません。詳細は活動ログを確認してください。' });
+  });
+
   const expiredHistory = await pruneExpiredToolCallSnapshotHistoryFiles(
     { repoRoot: options.repoRoot, issueUrl: options.issueUrl },
   );
@@ -1489,10 +1494,14 @@ async function runConductorSessionWithStartupGuard(
           onContextCompaction: () =>
             sessionUsageTracker.recordContextCompaction(),
           onCompactionEvent: (event) => {
-            sessionLogger.emit({ type: 'conductor.compaction', event });
+            const logEvent = { type: 'conductor.compaction' as const, event };
+            conductorFailureLog.emit(logEvent);
+            sessionLogger.emit(logEvent);
           },
           onRetryEvent: (event) => {
-            sessionLogger.emit({ type: 'conductor.retry', event });
+            const logEvent = { type: 'conductor.retry' as const, event };
+            conductorFailureLog.emit(logEvent);
+            sessionLogger.emit(logEvent);
           },
         }
       : {}),
@@ -1516,6 +1525,7 @@ async function runConductorSessionWithStartupGuard(
         )
       : await conductorAgentFactory.create(conductorOptions);
   } catch (error) {
+    conductorFailureLog.abandon();
     if (isConductorAgentFactoryCleanupIncomplete(error)) {
       startupCleanup.recordCleanupFailure(error);
     }
@@ -1526,6 +1536,14 @@ async function runConductorSessionWithStartupGuard(
       forResume: Boolean(options.resumeAgentId),
     });
   });
+  try {
+    conductorFailureLog.setPath(conductorFailureLogPath({
+      repoRoot: options.repoRoot, issueUrl: options.issueUrl, conductorAgentId: conductorAgent.agentId,
+    }));
+  } catch {
+    conductorFailureLog.abandon();
+    sessionLogger.emit({ type: 'harness.warning', message: 'conductor の失敗ログの保存先を決定できません。' });
+  }
   // Factories may not be abortable while pending. Register the returned agent
   // before checking shutdown so a late success is still closed by the guard.
   shutdownSignal.throwIfAborted();

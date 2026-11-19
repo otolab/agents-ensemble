@@ -1,3 +1,4 @@
+import { conductorFailureLogPath } from './conductor-failure-log.js';
 import { createHash } from 'node:crypto';
 import { constants } from 'node:fs';
 import {
@@ -326,6 +327,17 @@ async function writeSessionBundle(input: {
     sources,
     warnings,
   });
+  const failureLogPath = conductorFailureLogPath({ repoRoot, issueUrl: resumeStore.issueUrl, conductorAgentId });
+  const failureLogExists = await lstat(failureLogPath).then(() => true, (error: NodeJS.ErrnoException) => {
+    if (error.code === 'ENOENT') return false;
+    return true;
+  });
+  if (failureLogExists) {
+    await copyRawSource({ id: 'harness.conductorFailures', sourcePath: failureLogPath,
+      bundlePath: 'harness/conductor-failures.jsonl', outputDirectory, files, sources, warnings });
+  } else {
+    sources.push({ id: 'harness.conductorFailures', status: 'unavailable', sourcePaths: [failureLogPath], bundlePaths: [], reason: '失敗ログはまだありません。' });
+  }
   await exportToolCallHistory({
     repoRoot,
     conductorAgentId,

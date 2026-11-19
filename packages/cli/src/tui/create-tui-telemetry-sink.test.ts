@@ -3,6 +3,11 @@ import { createTuiTelemetrySink } from './create-tui-telemetry-sink.js';
 import { createTuiViewModel } from './tui-view-model.js';
 
 describe('createTuiTelemetrySink', () => {
+  it('shows persistence warnings in the activity log', () => {
+    const model = createTuiViewModel();
+    createTuiTelemetrySink(model)({ type: 'harness.warning', message: 'conductor の失敗ログを保存できません。' });
+    expect(model.getSnapshot().activityLog).toContainEqual({ label: 'harness', text: 'warning: conductor の失敗ログを保存できません。' });
+  });
   it('tracks overlapping conductor compaction and retry notifications', () => {
     const model = createTuiViewModel();
     const sink = createTuiTelemetrySink(model);

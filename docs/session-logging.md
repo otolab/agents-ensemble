@@ -106,6 +106,10 @@ Builtin Pi worker の session map と transcript は、POSIX では専用 parent
 
 Pi conductor の compaction / retry 通知は SessionLogger に流し、失敗を `[harness]` の活動ログに表示します。TTY 活動ログ自体はファイルに保存されません。
 
+compaction の失敗と retry の開始・最終失敗は、TTY / 非 TTY を問わず `~/.ensemble/sessions/github.com/<owner>/<repo>/<conductorAgentId>/conductor-failures.jsonl` に追記します（`ENSEMBLE_USER_ROOT` が設定されていればその配下）。各行は時刻、固定のイベント種別、既知の reason / source、検証済みの試行回数だけを持ちます。未知の reason は `unknown`、不正な回数は `null` にし、エラー本文は保存しません。このためファイルだけでは provider の具体的なエラー原因を復元できません。詳細が必要な場合は活動ログを確認し、共有前に機密情報を取り除いてください。
+
+同じ session の resume は同じファイルに追記し、自動削除はしません。不要になったらこのファイルを削除できます。失敗通知がなければファイルは作成されません。POSIX では session directory を `0700`、ファイルを `0600` にします。Windows では Node の mode によって owner-only ACL を保証できないため、保存先の ACL を利用者が制限してください。書き込みに失敗すると一度だけ `[harness]` に警告し、その process では以後の保存を停止します。`ensemble session export` は存在するログを `harness/conductor-failures.jsonl` として bundle に含めます。
+
 TTY + Ink 時は harness / observation イベントを **stderr に書かず**、`createTuiTelemetrySink` 経由で Ink の活動ログに `[harness]` / `[observation]` ラベル付きで追記する。operator / conductor の**成功応答**は DisplaySink → Ink backend が `[operator]` / `[conductor]` として同じ活動ログへ追記する。`conductor.send` の error は conductor 活動ログへ追記せず、harness 活動ログだけに障害として追記する。既定の `stream` レイアウトでは `<Static>` と端末 scrollback を使い、`tui.layout: pane` または `ENSEMBLE_TUI_LAYOUT=pane` で Orchestration ペイン内の windowing に戻せる。stream の活動ログは端末表示用で、SessionResumeStore や活動ログファイルには永続化しない。scrollback 閲覧中に新着ログで末尾へ戻る場合があり、通常の幅変更では既追記行は再折り返しされない（詳細は [operator-input.md](operator-input.md) と [ADR 0015](adr/0015-cli-tui-library.md)）。
 
 `ensemble operator-agent` の会話 TTY も同じチャネルの読み方を使う。対話は `user>` / `operator>`、監視・dispatch の状態や障害は `[harness]`、起動・終了・再接続などの運用通知は `[observation]` として stdout に表示する。監視報告 hold の有効状態・理由・保留件数は入力欄上の `harness:` 状態行で更新し、活動ログには追記しない。失敗や警告は従来どおり `[harness]` に残す。会話画面は Ink TUI で、追記型の活動ログを画面上部に表示し、複数行対応の入力欄を下端に固定する。ログ更新中も下書きとカーソルを保ち、応答中も入力を受け付ける。これは SessionLogger の sink ではなく、operator-agent 専用の表示経路である。
@@ -248,7 +252,7 @@ worker 履歴も保存された本文をそのまま返します。text / JSON �
 
 `ensemble session timeline` は SessionResumeStore と最大100件の conductor provider history を読みます。任意の `--summary <path>` は `ensemble issue --summary-format json` で保存した SessionSummary JSON、`--harness-log <path>` は保存済み stderr log を追加します。log reader は `conductor.send` と `conductor.transport.reconnect` の行を認識します。Pi の `sendCount` は harness process ごとにリセットされ、resume 前後で再利用されます。そのため、対象 SessionSummary の `startedAt` より後、`startedAt + durationMs` より前に完了した provider history だけを send 番号で照合します。開始・終了時刻ちょうどの履歴は隣接 run と区別できないため相関せず、別枠に表示します。相関前に、SessionLogger の生成側契約（開始が `Date.now()`、`durationMs` が終了時の `Date.now() - startedAt`）と整合するか検査します。相関に必要なミリ秒精度を保つため、開始と導出した終了時刻が整数 Unix epoch ms として表せ、`durationMs` が非負の安全な整数である場合だけ有効です。契約や精度に合わない値は理由を示して `unavailable` とし、provider history を send 番号で結び付けません。Cursor も共通の send 番号を持たないため別表示します。
 
-通常の SessionLogEvent 履歴は永続化されません。summary / log が未指定・読取不能・不正な JSON / schema・保存 session との不一致なら source 状態と理由を示し、reconnect を補って表示しません。Pi の provider history reader が返すのは成功した inbound / response pair です。対応する pair がない表示は gap の存在を示すだけで、raw transcript に未対応 entry があるかや欠落の原因は証明しません。captured log に run ID や時刻はないため、summary と同じ process の stderr を指定してください。reconnect 行には provider history と共有する event ID や時刻がなく、send 行に対する配置はファイル内の行順だけを示します。
+上記の conductor 失敗ログを除き、通常の SessionLogEvent 履歴は永続化されません。summary / log が未指定・読取不能・不正な JSON / schema・保存 session との不一致なら source 状態と理由を示し、reconnect を補って表示しません。Pi の provider history reader が返すのは成功した inbound / response pair です。対応する pair がない表示は gap の存在を示すだけで、raw transcript に未対応 entry があるかや欠落の原因は証明しません。captured log に run ID や時刻はないため、summary と同じ process の stderr を指定してください。reconnect 行には provider history と共有する event ID や時刻がなく、send 行に対する配置はファイル内の行順だけを示します。
 
 SessionSummary と provider history の時刻だけでは run / process を一意に識別できません。時間相関は同じ session の process が重ならず、実行中にシステム時計が大きく変わらない前提ですが、この条件を CLI は検証できません。特に前向きの時計変更は妥当な時刻範囲に見える duration を作ることがあり、単調時計や run ID の記録がない現状では判別できません。その可能性がある調査では、send 番号の時間相関を同一 run の証明として扱わないでください。
 
