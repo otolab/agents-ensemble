@@ -6,7 +6,7 @@
 
 ## インストール
 
-Node.js 22.13.0 以上を用意し、npm または pnpm でインストールします。
+Node.js 22.19.0 以上を用意し、npm または pnpm でインストールします。Pi 依存の要件に合わせて最低バージョンを引き上げたため、22.13〜22.18 を使用している場合は Node.js を更新してください。
 
 ```bash
 npm install -g @agents-ensemble/cli
@@ -217,6 +217,8 @@ session list は user store 内の全 canonical GitHub slug group を既定 scop
 選択 profile の workspace 直下に `AGENTS.md` を置くと、起動時に `prompt.instructions` に続けて読み込みます。実行中の編集は次回起動・resume 時に反映されます。読み込みエラーは起動を失敗させます。Pi と Cursor の resume 時の違いや読み込み条件は [operator-agent 専用設定](../config.md#operator-agent-専用設定) を参照してください。
 
 会話 record は repository や profile に結び付けず、`operatorAgentId` ごとに `~/.ensemble/operator-agents/conversations/<operatorAgentId>/conversation.json` へ保存します。起動時は `--resume <operatorAgentId>` で指定でき、保存会話が一件なら自動再開、複数なら TTY で選択します。`--new` は別の会話を作り、既存 record を消しません。Pi transcript も会話 ID ごとに同じ directory の `pi-sessions/` に保存します。起動 cwd が変わっただけでは再開を拒否しません。再現できない context / resource は通知した上で選択中設定による再開を試し、backend が復元できない場合は失敗します。その場合も既存 record は保持します。`/exit` は現在の record だけを削除し、Pi transcript を削除しません。
+
+Pi の古いバージョンで tool call が省略され、その結果だけが残った会話は、更新後も自動修復されません。再開後の発話で `No tool call found for function call output` が繰り返される場合は、operator-agent を終了して `ensemble operator-agent --new` で新しい会話を始めてください。元の会話は保持されますが、新しい会話には履歴が引き継がれません。必要な情報は別途引き継いでください。
 
 #### profile workspace のファイル操作
 

@@ -262,7 +262,7 @@ sum(cacheReadTokens) / sum(inputTokens + cacheReadTokens)
 | `cost.chargedCents` | `number` | Cursor `AgentUsage.cost.chargedCents`（割引・Cursor Token Fee 込み） | 同上 | 同上 |
 | `runs[].cost` | `UsageCost?` | run 単位（`getUsage({ runId })`） | `get_usage` | 省略 |
 
-Pi backend の `AssistantMessage.usage.cost` は `pi-ai` v1.2.0 の `calculateCost` が `model.cost` の token 単価と usage から算出する値で、provider の請求記録ではない（[Pi v1.2.0 `calculateCost`](https://github.com/earendil-works/pi/blob/v1.2.0/packages/ai/src/models.ts#L1119-L1137)）。この値は `ConductorAgent.getUsage()` / `enrichSessionUsageWithCost` に渡さず、`sessionUsage.cost`・`get_session_usage`・TTY に載せない。コスト欄は実課金を報告する backend 値がある場合だけ表示する。
+Pi の `AssistantMessage.usage.cost` には `calculateCost` が `model.cost` の token 単価と usage から算出した推定値が含まれる場合がある。Pi 1.5.2 は provider が報告した合計を区別する `totalFromProvider` も持つが、ensemble は Pi の cost を `ConductorAgent.getUsage()` / `enrichSessionUsageWithCost` に渡さず、`sessionUsage.cost`・`get_session_usage`・TTY に載せない（[Pi v1.5.2 `calculateCost`](https://github.com/earendil-works/pi/blob/v1.5.2/packages/ai/src/models.ts)）。コスト欄は実課金を報告する backend 値がある場合だけ表示する。
 
 worker cost は **表示しない（Issue #469 の方針 A）**。ACP の `PromptResult.usage` は token counts のみで、現行の worker usage record に model ID が無い。Pi の `models.json` にモデル単価を設定できる場合も、それを任意の ACP worker の provider / model に安全に対応付けられないため、単価を当てはめた推定は行わない。`sessionUsage.cost.scope` は常に `conductor-only` で、JSON / YAML 利用者にも cost が conductor 分だけであることを伝える。TTY も取得できた conductor 実課金を worker 分未算出と併記し、セッション全体の金額とは呼ばない。worker failure で usage round が残らない場合も同じ scope を保つ。
 
@@ -276,7 +276,7 @@ worker cost は **表示しない（Issue #469 の方針 A）**。ACP の `Promp
 
 TTY の `コンテキスト圧縮: N 回` は、**組み込み Pi conductor で harness が観測した成功 compaction の件数**。`0` は「このカウンターが成功した Pi `compaction_end` を 1 件も受け取らなかった」という意味で、圧縮の試行が無かったことや、失敗・中断を含め圧縮イベントが一切起きなかったことの証明ではない。
 
-Pi v1.2.0 の `AgentSessionEvent.compaction_end` は成功時に `result` を含み、失敗時は `result: undefined`、中断時は `aborted: true` を通知する（[event type](https://github.com/earendil-works/pi/blob/v1.2.0/packages/coding-agent/src/core/agent-session.ts#L207-L214)、[manual compaction](https://github.com/earendil-works/pi/blob/v1.2.0/packages/coding-agent/src/core/agent-session.ts#L2713-L2735)、[auto compaction](https://github.com/earendil-works/pi/blob/v1.2.0/packages/coding-agent/src/core/agent-session.ts#L3017-L3047)）。組み込み Pi backend は `result` があり、`aborted` でなく、`errorMessage` も無い `compaction_end` を受け取るたびにカウンターを 1 増やす。
+Pi v1.5.2 の `AgentSessionEvent.compaction_end` は成功時に `result` を含み、失敗時は `result: undefined`、中断時は `aborted: true` を通知する（[event type](https://github.com/earendil-works/pi/blob/v1.5.2/packages/coding-agent/src/core/agent-session.ts)、[manual compaction](https://github.com/earendil-works/pi/blob/v1.5.2/packages/coding-agent/src/core/agent-session.ts)、[auto compaction](https://github.com/earendil-works/pi/blob/v1.5.2/packages/coding-agent/src/core/agent-session.ts)）。組み込み Pi backend は `result` があり、`aborted` でなく、`errorMessage` も無い `compaction_end` を受け取るたびにカウンターを 1 増やす。
 
 **この件数に含めないもの**
 

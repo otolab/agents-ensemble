@@ -39,10 +39,10 @@
   },
   "dependencies": {
     "@cursor/sdk": "1.0.27",
-    "@earendil-works/pi-agent-core": "1.2.0",
-    "@earendil-works/pi-ai": "1.2.0",
-    "@earendil-works/pi-codemode": "1.2.0",
-    "@earendil-works/pi-coding-agent": "1.2.0",
+    "@earendil-works/pi-agent-core": "1.5.2",
+    "@earendil-works/pi-ai": "1.5.2",
+    "@earendil-works/pi-codemode": "1.5.2",
+    "@earendil-works/pi-coding-agent": "1.5.2",
     "@modular-prompt/core": "0.3.0",
     "js-yaml": "4.1.0",
     "pi-acp": "0.0.33",
@@ -63,6 +63,6 @@
     "registry": "https://registry.npmjs.org/"
   },
   "engines": {
-    "node": ">=22.0.0"
+    "node": ">=22.19.0"
   }
 }
