@@ -335,3 +335,25 @@ it('finishes shutdown while resize continues and retains the final activity', as
     terminal.dispose(); stdin.destroy(); stdout.destroy();
   }
 });
+
+it('updates the status without accumulating it and keeps input responsive', async () => {
+  const terminal = new Terminal({ cols: 50, rows: 12, allowProposedApi: true, convertEol: true });
+  const stdin = Object.assign(new PassThrough(), { isTTY: true, setRawMode: vi.fn(), ref: vi.fn(), unref: vi.fn() });
+  const stdout = Object.assign(new PassThrough(), { isTTY: true, columns: 50, rows: 12 });
+  stdout.on('data', (chunk: Buffer) => terminal.write(chunk));
+  const submit = vi.fn();
+  const host = createOperatorAgentTuiHost({ stdin, stdout, colorEnabled: false, onSubmit: submit, onInterrupt: vi.fn() });
+  const lines = () => Array.from({ length: terminal.buffer.active.length }, (_, i) => terminal.buffer.active.getLine(i)?.translateToString(true) ?? '').join('\n');
+  try {
+    await vi.waitFor(() => expect(lines()).toContain('待機中'));
+    stdin.write('draft');
+    for (const status of ['thinking', 'calling tool', 'writing', '待機中']) {
+      host.setStatus(status);
+      await vi.waitFor(() => expect(lines()).toContain(`operator: ${status}`));
+    }
+    expect(lines()).not.toContain('operator: thinking');
+    expect(lines()).not.toContain('operator: calling tool');
+    stdin.write('\r');
+    await vi.waitFor(() => expect(submit).toHaveBeenCalledWith('draft'));
+  } finally { await host.dispose(); terminal.dispose(); stdin.destroy(); stdout.destroy(); }
+});

@@ -211,6 +211,7 @@ export async function sendConductorWithReconnect(
 ): Promise<ConductorSendResult> {
   const sendCallbacks: ConductorSendCallbacks = {
     onToolCallStarted: options.onToolCallStarted,
+    onOutputPhase: options.onOutputPhase,
     history: options.history,
   };
   const result = await handle.conductor.send(message, sendCallbacks);

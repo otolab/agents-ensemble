@@ -615,6 +615,11 @@ export class PiConductorAgent implements ConductorAgent {
     }
 
     if (event.type === 'message_update') {
+      if (event.assistantMessageEvent.type === 'thinking_start') {
+        activeSend?.callbacks?.onOutputPhase?.('thinking');
+      } else if (event.assistantMessageEvent.type === 'text_start') {
+        activeSend?.callbacks?.onOutputPhase?.('writing');
+      }
       if (event.assistantMessageEvent.type === 'text_delta') {
         this.onStreamText?.(event.assistantMessageEvent.delta);
       }

@@ -1013,6 +1013,7 @@ async function runTtyConversation(options: {
         const failureClass =
           options.dispatchLifecycle.lastFailure ?? 'none';
         let reconnectReported = false;
+        tui.setStatus('reconnecting');
         try {
           await reconnectConductorAgent(options.agentHandle, {
             conductorAgentFactory: options.agentHandle.factory,
@@ -1062,6 +1063,7 @@ async function runTtyConversation(options: {
             );
           }
         }
+        tui.setStatus('待機中');
         continue;
       }
       if (!options.dispatchLifecycle.canDispatch) {
@@ -1164,6 +1166,7 @@ async function runTtyConversation(options: {
         options.backend === 'cursor' && !cursorBootstrapComplete
           ? `${options.systemPrompt}\n\n## User message\n\n${batch.payload ?? formatOperatorDispatchBatch(batch.events)}`
           : batch.payload ?? formatOperatorDispatchBatch(batch.events);
+      tui.setStatus('処理中');
       writeChannelLine('harness', 'operator: 処理中');
       const nextSendCount = sendCount + 1;
       let toolCallStarted = false;
@@ -1178,7 +1181,9 @@ async function runTtyConversation(options: {
               conductorAgentFactory: options.agentHandle.factory,
               conductorOptions: options.agentHandle.agentOptions,
               signal: sendSuppression.signal,
+              onOutputPhase: (phase) => tui.setStatus(phase),
               onToolCallStarted: ({ tool }) => {
+                tui.setStatus(`calling ${formatOperatorToolName(tool)}`);
                 toolCallStarted = true;
                 writeChannelLine(
                   'harness',
@@ -1186,6 +1191,7 @@ async function runTtyConversation(options: {
                 );
               },
               onAuthReconnectAttempt: ({ agentId, source }) => {
+                tui.setStatus('reconnecting');
                 writeChannelLine(
                   'harness',
                   `[auth] conductor reconnect attempt agentId=${agentId} source=${source ?? 'automatic'}`,
@@ -1204,6 +1210,7 @@ async function runTtyConversation(options: {
                 );
               },
               onTransportReconnectAttempt: ({ agentId, source }) => {
+                tui.setStatus('reconnecting');
                 writeChannelLine(
                   'harness',
                   `[transport] conductor reconnect attempt agentId=${agentId} source=${source ?? 'automatic'}`,
@@ -1234,6 +1241,7 @@ async function runTtyConversation(options: {
           stopping.then(() => undefined),
         ]);
       } finally {
+        tui.setStatus('待機中');
         agentSendInFlight = false;
         idleCandidateMonitor.notifyActivityChanged();
       }

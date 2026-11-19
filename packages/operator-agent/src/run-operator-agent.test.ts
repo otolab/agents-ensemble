@@ -1092,8 +1092,10 @@ describe('runOperatorAgent', () => {
     let finishSend:
       | ((result: Awaited<ReturnType<ConductorAgent['send']>>) => void)
       | undefined;
+    let reportPhase: ((phase: 'thinking' | 'writing') => void) | undefined;
     const fakeAgent = createFakeAgent({
       send: async (_prompt, callbacks) => {
+        reportPhase = callbacks?.onOutputPhase;
         callbacks?.onToolCallStarted?.({
           runId: 'run-1',
           tool: 'list_operator_sessions',
@@ -1132,6 +1134,11 @@ describe('runOperatorAgent', () => {
       pendingTranscript.indexOf('operator: calling list_operator_sessions'),
     );
     expect(pendingTranscript).not.toContain('operator>\n');
+    expect(pendingTranscript).toContain('operator: calling list_operator_sessions');
+    reportPhase?.('thinking');
+    await vi.waitFor(() => expect(output.capturedText()).toContain('operator: thinking'));
+    reportPhase?.('writing');
+    await vi.waitFor(() => expect(output.capturedText()).toContain('operator: writing'));
 
     finishSend!({
       runId: 'run-1',

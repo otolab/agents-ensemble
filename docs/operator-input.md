@@ -135,6 +135,8 @@ operator-agent は Issue TUI と別の会話 runtime です。`~/.ensemble/opera
 
 TTY では各 `agent.send` の開始時に `[harness] operator: 処理中` を表示し、backend から tool 開始 callback が届いた場合は `[harness] operator: calling <tool>` を追加します。thinking / reasoning 本文や tool 引数は表示しません。`NO_COLOR` が有効な場合も活動表示は残し、色だけを抑制します。operator-agent は stdin と stdout の TTY を必要とするため、非 TTY では起動せず、活動表示も行いません。
 
+入力欄の直上には operator-agent 自身の状態と、その状態に入ってからの経過秒数を表示します。状態行はその場で更新され、活動ログには追加されません。send 中はまず「処理中」、Pi の thinking / 本文出力の開始通知で `thinking` / `writing`、tool 開始通知で `calling <tool>`、再接続中は `reconnecting`、処理終了後は「待機中」と表示します。Cursor は thinking と本文出力の開始を観測できないため、tool 開始までは「処理中」と表示します。状態は通知に基づき、通知のない期間を推測しません。既存の send 開始・tool 開始の活動ログは履歴として残します。`NO_COLOR` でも文字で状態を確認できます。
+
 会話画面は Ink のシンプルな TUI です。会話と活動ログは上側に順に追記され、端末のスクロールバックからも確認できます。入力欄は画面下端に固定されます。入力中や operator-agent の応答中にログが増えても、下書きとカーソル位置は保たれます。端末サイズを変えると画面と端末のスクロールバックを消去し、この会話の活動ログを順に再描画して入力欄を下端に戻します。operator-agent 起動前の端末履歴は復元されません。終了時には raw mode とカーソル表示を復元します。終了時にサイズ変更が続く場合は最大1秒待ち、収束しなければ最後に取得したサイズで画面とスクロールバックを消去し、保持した会話・活動ログを順に再描画して端末を復元します。その後もサイズが変わると最終画面が折り返されることがあります。
 
 入力欄では `ensemble issue` と同じ textarea のキー操作を使います。`Enter` で送信し、`Shift+Enter` で改行を挿入します。複数行を貼り付けた場合は一つの下書きとして挿入され、貼り付けだけでは送信されません。送信本文の途中にある改行はそのまま agent に渡します。共通の編集キーは [TTY 入力ショートカット](cli-text-input-keybindings.md)を参照してください。
