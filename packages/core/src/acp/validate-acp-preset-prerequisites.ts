@@ -33,32 +33,14 @@ export function formatAcpPresetInstallHint(preset: AcpPresetId): string {
         '[acp] cursor preset: Cursor Agent CLI (`agent`) が PATH にありません。\n' +
         '  https://cursor.com/docs/cli を参照してインストールし、`agent login` を実行してください。'
       );
-    case 'claude': {
-      const { packageName, binName } = ACP_PRESET_ADAPTER_PACKAGES.claude;
-      return (
-        `[acp] claude preset: ACP adapter \`${binName}\` が見つかりません。\n` +
-        '  開発: リポジトリルートで `pnpm install`（optional 再試行）\n' +
-        `  利用者: \`npm i -g ${packageName}\`\n` +
-        `  または PATH 上に \`${binName}\` を配置してください。\n` +
-        '  Claude Code の認証: 先に `claude` / Claude Code でログインしてください（ensemble は ACP authenticate を skip し CLI セッションを利用）。'
-      );
-    }
-    case 'codex': {
-      const { packageName, binName } = ACP_PRESET_ADAPTER_PACKAGES.codex;
-      return (
-        `[acp] codex preset: ACP adapter \`${binName}\` が見つかりません。\n` +
-        '  開発: リポジトリルートで `pnpm install`（optional 再試行）\n' +
-        `  利用者: \`npm i -g ${packageName}\`\n` +
-        `  または PATH 上に \`${binName}\` を配置してください。\n` +
-        '  Codex の認証: `~/.codex` 等の runtime 設定（`model_provider` / `[model_providers.*.auth]`）を整えてください（ensemble は既定で ACP authenticate を skip し移譲 — ADR 0028）。'
-      );
-    }
+    case 'claude':
+    case 'codex':
     case 'pi': {
-      const { packageName, binName } = ACP_PRESET_ADAPTER_PACKAGES.pi;
+      const { packageName, binName } = ACP_PRESET_ADAPTER_PACKAGES[preset];
       return (
-        `[acp] pi preset: ACP adapter \`${binName}\` が見つかりません。\n` +
-        `  \`@agents-ensemble/core\` の依存を再インストールするか、\`npm i -g ${packageName}\` を実行してください。\n` +
-        `  PATH 上の \`${binName}\` も fallback として使えます。`
+        `[acp] ${preset} preset: core 同梱 ACP adapter \`${binName}\`（${packageName}）を解決できません。package の欠落、bin 定義または実行権限を確認してください。\n` +
+        '  開発環境では `pnpm install`、npm インストールでは ensemble の再インストールを試してください（optional dependency を含む）。\n' +
+        `  PATH 上の adapter を使う場合は \`--default-acp-command ${binName}\` を明示してください。`
       );
     }
     case 'custom':
@@ -119,9 +101,8 @@ function validateBuiltinPreset(
   }
 
   const bundled = resolveBundledAcpBin(preset, moduleUrl);
-  const fromPath = resolveAcpBinFromPath(ACP_PRESET_BIN_NAMES[preset]);
 
-  if (!bundled && !fromPath) {
+  if (!bundled) {
     throw new AcpPresetPrerequisiteError(formatAcpPresetInstallHint(preset));
   }
 
@@ -133,7 +114,7 @@ function validateBuiltinPreset(
   }
 }
 
-/** spawn 前に preset 前提（同梱または PATH adapter / 外部 CLI）を検証する。 */
+/** spawn 前に preset 前提（同梱 adapter / 外部 CLI）を検証する。 */
 export function validateAcpPresetPrerequisites(
   spawn: ResolvedAcpSpawn,
   options?: { fromModuleUrl?: string | URL },
