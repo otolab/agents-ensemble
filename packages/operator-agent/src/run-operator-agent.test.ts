@@ -1106,6 +1106,12 @@ describe('runOperatorAgent', () => {
       input.write('hello\r');
       await vi.waitFor(() => expect(callbacks).toBeDefined());
       await status('処理中');
+      callbacks!.onOutputPhase?.('writing');
+      await status('writing');
+      callbacks!.onOutputPhase?.('thinking');
+      await status('thinking');
+      callbacks!.onOutputPhase?.('writing');
+      await status('writing');
       callbacks!.onOutputPhase?.('thinking');
       await status('thinking');
       callbacks!.onToolCallStarted?.({ runId: 'run', tool: 'same', callId: 'a' });
@@ -1402,6 +1408,7 @@ describe('runOperatorAgent', () => {
       input.write('\u0003');
       await run;
       callbacks?.onOutputPhase?.('writing');
+      await new Promise<void>((resolve) => terminal.write('', resolve));
       const screen = Array.from({ length: terminal.rows }, (_, i) => terminal.buffer.active.getLine(terminal.buffer.active.viewportY + i)?.translateToString(true) ?? '').join('\n');
       expect(screen).toContain('operator: 待機中');
       expect(screen).not.toContain('operator: writing');

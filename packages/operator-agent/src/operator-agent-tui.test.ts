@@ -364,3 +364,20 @@ it('updates the status without accumulating it and keeps input responsive', asyn
     await vi.waitFor(() => expect(submit).toHaveBeenCalledWith('draft'));
   } finally { await host.dispose(); terminal.dispose(); stdin.destroy(); stdout.destroy(); }
 });
+
+it('keeps elapsed time visible for a long tool name through resize', async () => {
+  const terminal = new Terminal({ cols: 40, rows: 12, allowProposedApi: true, convertEol: true });
+  const stdin = Object.assign(new PassThrough(), { isTTY: true, setRawMode: vi.fn(), ref: vi.fn(), unref: vi.fn() });
+  const stdout = Object.assign(new PassThrough(), { isTTY: true, columns: 40, rows: 12 });
+  stdout.on('data', (chunk: Buffer) => terminal.write(chunk));
+  const host = createOperatorAgentTuiHost({ stdin, stdout, colorEnabled: false, onSubmit: vi.fn(), onInterrupt: vi.fn() });
+  const screen = () => Array.from({ length: terminal.rows }, (_, i) => terminal.buffer.active.getLine(terminal.buffer.active.viewportY + i)?.translateToString(true) ?? '').join('\n');
+  try {
+    host.setStatus('calling register_conductor_message_listen');
+    await vi.waitFor(() => expect(screen()).toMatch(/operator: calling .+ \(1s\)/), { timeout: 2500 });
+    host.setStatus('calling register_conductor_message_listen');
+    expect(screen()).toMatch(/operator: calling .+ \(1s\)/);
+    terminal.resize(30, 10); stdout.columns = 30; stdout.rows = 10; stdout.emit('resize');
+    await vi.waitFor(() => expect(screen()).toMatch(/operator: calling .+ \([12]s\)/), { timeout: 2000 });
+  } finally { await host.dispose(); terminal.dispose(); stdin.destroy(); stdout.destroy(); }
+});

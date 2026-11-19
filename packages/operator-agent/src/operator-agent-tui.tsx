@@ -138,8 +138,9 @@ class OperatorAgentTuiModel {
     this.update({ inputEnabled });
   }
 
-  setStatus(status: string, since = Date.now()): void {
-    this.update({ status, statusSince: since });
+  setStatus(status: string, since?: number): void {
+    if (since === undefined && this.snapshot.status === status) return;
+    this.update({ status, statusSince: since ?? Date.now() });
   }
 
   private append(entry: NewActivityEntry): void {
@@ -275,7 +276,12 @@ function OperatorAgentTui({
         flexDirection="column"
         overflowY="hidden"
       >
-        <Text wrap="truncate">operator: {snapshot.status} ({Math.max(0, Math.floor((now - snapshot.statusSince) / 1000))}s)</Text>
+        <Box width={snapshot.columns}>
+          <Box flexShrink={1}>
+            <Text wrap="truncate">operator: {snapshot.status}</Text>
+          </Box>
+          <Text> ({Math.max(0, Math.floor((now - snapshot.statusSince) / 1000))}s)</Text>
+        </Box>
         <Box
           width={snapshot.columns}
           borderStyle="round"

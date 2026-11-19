@@ -363,6 +363,7 @@ describe('PiConductorAgent', () => {
     };
     fakeSession.prompt.mockImplementation(async () => {
       sessionListener?.({ type: 'message_update', message: finalMessage, assistantMessageEvent: { type: 'thinking_start' } });
+      sessionListener?.({ type: 'message_update', message: finalMessage, assistantMessageEvent: { type: 'thinking_delta', delta: 'private reasoning' } });
       sessionListener?.({
         type: 'tool_execution_start',
         toolName: 'prompt_worker',
@@ -370,6 +371,7 @@ describe('PiConductorAgent', () => {
       });
       sessionListener?.({ type: 'tool_execution_end', toolName: 'prompt_worker', toolCallId: 'call-1', result: { content: [] }, isError: false });
       sessionListener?.({ type: 'message_update', message: finalMessage, assistantMessageEvent: { type: 'text_start' } });
+      sessionListener?.({ type: 'message_update', message: finalMessage, assistantMessageEvent: { type: 'thinking_start' } });
       sessionListener?.({
         type: 'message_update',
         message: finalMessage,
@@ -409,7 +411,7 @@ describe('PiConductorAgent', () => {
     // the send/event contract is asserted through the tool callback and result.
     const result = await conductor.send('kickoff', { onToolCallStarted, onToolCallCompleted, onOutputPhase });
     expect(onToolCallCompleted).toHaveBeenCalledWith({ runId: result.runId, tool: 'prompt_worker', callId: 'call-1' });
-    expect(onOutputPhase.mock.calls).toEqual([['thinking'], ['writing']]);
+    expect(onOutputPhase.mock.calls).toEqual([['thinking'], ['thinking'], ['writing'], ['thinking'], ['writing']]);
     expect(fakeSession.prompt).toHaveBeenCalledWith('kickoff', {
       expandPromptTemplates: false,
       source: 'rpc',
