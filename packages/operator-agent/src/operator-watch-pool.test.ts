@@ -3,6 +3,7 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  realpath,
   rm,
   stat,
   utimes,
@@ -39,6 +40,8 @@ import {
 } from './operator-watch-pool.js';
 import { createListOperatorSessionsTool } from './list-operator-sessions-tool.js';
 import { createSendOperatorMessageTool } from './open-question-control-tools.js';
+import { withOperatorWorkspaceLock } from './operator-workspace-lock.js';
+import { retryOperatorWatchAcknowledgement } from './operator-watch-ack.js';
 
 const DEFAULT_ISSUE_URL = 'https://github.com/example/repo/issues/1';
 
@@ -3971,7 +3974,7 @@ describe('operator watch pool', () => {
         retriedContenderCount,
       }).toEqual({
         contenderOutcome: expect.stringMatching(
-          /^failed:Could not acquire operator watch state profile lock/u,
+          /^failed:Could not acquire operator (?:workspace|watch state profile) lock/u,
         ),
         sessionTwoCursorBeforeOwnerResumed: 1,
         pendingSessionsBeforeOwnerResumed: [],
@@ -4400,6 +4403,62 @@ describe('operator watch pool', () => {
       pool.close();
     }
   });
+
+  it('recovers timer polling and report delivery after workspace lock timeouts', async () => {
+    repoRoot = await mkdtemp(join(tmpdir(), 'watch-workspace-timeout-'));
+    await writeResumeStore('timeout-session', 1);
+    const errors: string[] = [];
+    const queue = createOperatorDispatchQueue();
+    const pool = await createOperatorWatchPool({
+      repoRoot, dispatchQueue: queue, onError: (message) => errors.push(message),
+    });
+    let release!: () => void;
+    let held: Promise<void> | undefined;
+    try {
+      await pool.register('timeout-session', { pollIntervalMs: 250, debounceMs: 0 });
+      const reportId = await pool.enqueueIdleCandidate!({
+        conductorAgentId: 'timeout-session', text: 'pending report',
+        kind: 'idle_phase', fingerprint: 'timeout-test', eligibleAt: Date.now(),
+      });
+      const batch = queue.selectBatch({ continuationConsumed: false }, Date.now())!;
+      expect(batch.events).toEqual(expect.arrayContaining([
+        expect.objectContaining({ reportId }),
+      ]));
+      const workspace = await realpath(join(homeRoot, '.ensemble', 'operator-agents', 'default'));
+      let entered!: () => void;
+      const acquired = new Promise<void>((resolve) => { entered = resolve; });
+      const barrier = new Promise<void>((resolve) => { release = resolve; });
+      held = withOperatorWorkspaceLock(workspace, async () => { entered(); await barrier; });
+      await acquired;
+      await vi.waitFor(() => expect(errors.some((message) =>
+        message.includes('Failed to poll watched session timeout-session'))).toBe(true),
+      { timeout: 5000 });
+      await expect(pool.commitBatch(batch)).rejects.toThrow('Could not acquire operator workspace lock');
+      release();
+      await held;
+      held = undefined;
+      await vi.waitFor(() => expect(pool.getLiveStatus('timeout-session')).toBeDefined(), { timeout: 5000 });
+      const retry = queue.selectBatch({ continuationConsumed: false }, Date.now())!;
+      expect(retry.events).toEqual(expect.arrayContaining([expect.objectContaining({ reportId })]));
+      expect(await pool.commitBatch(retry)).toBe(true);
+
+      let enteredAck!: () => void;
+      const ackAcquired = new Promise<void>((resolve) => { enteredAck = resolve; });
+      const ackBarrier = new Promise<void>((resolve) => { release = resolve; });
+      held = withOperatorWorkspaceLock(workspace, async () => { enteredAck(); await ackBarrier; });
+      await ackAcquired;
+      const result = await retryOperatorWatchAcknowledgement(
+        () => pool.acknowledge(retry.events),
+        async () => { release(); await held; held = undefined; return false; },
+      );
+      expect(result).toMatchObject({ status: 'acknowledged', attempts: 2, retries: 1 });
+      const persisted = JSON.parse(await readFile(currentWatchStatePath(repoRoot), 'utf8')) as { pendingReports: unknown[] };
+      expect(persisted.pendingReports).toEqual([]);
+    } finally {
+      if (held) { release(); await held; }
+      pool.close();
+    }
+  }, 15000);
 
   it('registers and removes watches through bounded tools', async () => {
     repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-watch-tools-'));

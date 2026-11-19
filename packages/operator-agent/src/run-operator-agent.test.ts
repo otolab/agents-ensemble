@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { DatabaseSync } from 'node:sqlite';
 import { dirname, join } from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -32,6 +32,7 @@ import {
   retryOperatorWatchAcknowledgement,
 } from './operator-watch-ack.js';
 import { createOperatorDispatchQueue } from './operator-dispatch.js';
+import { withOperatorWorkspaceLock } from './operator-workspace-lock.js';
 import {
   createOperatorWatchPool,
   operatorWatchStatePath,
@@ -1061,9 +1062,10 @@ describe('runOperatorAgent', () => {
     expect(toolDescription('read_operator_workspace_file')).toContain('TOCTOU');
     expect(toolDescription('read_operator_workspace_file')).toContain('without secret redaction');
     expect(toolDescription('move_operator_workspace_file')).toContain('get_operator_workspace_move_status');
-    expect(toolDescription('move_operator_workspace_file')).toContain('singleton');
+    expect(toolDescription('move_operator_workspace_file')).toContain('operator-workspace-maintain');
     expect(toolDescription('write_operator_workspace_file')).toContain('AGENTS.md can be edited');
-    expect(toolDescription('get_operator_workspace_move_status')).toContain('preserve');
+    expect(toolDescription('get_operator_workspace_move_status')).toContain('operator-workspace-maintain');
+    expect(toolDescription('get_operator_workspace_move_status')).toContain('Never remove the journal directly');
     expect(agentOptions?.customTools).not.toHaveProperty('prompt_worker');
     expect(
       Object.keys(agentOptions?.customTools ?? {}).filter(
@@ -2643,13 +2645,16 @@ describe('runOperatorAgent', () => {
     );
 
     try {
-      await expect(run).rejects.toThrow(
-        /Could not acquire operator watch state profile lock/u,
-      );
+      await vi.waitFor(() => expect(normalizeTtyText(output.capturedText()))
+        .toContain('監視報告の送信準備は lock の競合で待機中'), { timeout: 6_000 });
+      expect(send).not.toHaveBeenCalled();
+      input.write('/exit\n');
+      await run;
     } finally {
       stateLock?.exec('ROLLBACK');
       stateLock?.close();
       input.end();
+      await run.catch(() => {});
     }
 
     expect(send).not.toHaveBeenCalled();
@@ -2666,6 +2671,248 @@ describe('runOperatorAgent', () => {
     expect(persisted.pendingReports[0]).not.toHaveProperty('frozenBatchId');
     expect(persisted.pendingReports[0]).not.toHaveProperty('frozenPayload');
   });
+
+  it.each([
+    ['commit', 'exit'], ['commit', 'eof'], ['commit', 'interrupt'],
+    ['retry', 'exit'], ['retry', 'eof'], ['retry', 'interrupt'],
+  ] as const)('stops after %s lock acquisition races with %s', async (phase, stopKind) => {
+    const previousExitCode = process.exitCode;
+    let snapshot: SessionObservationSnapshot = { sequence: 1, openQuestions: [] };
+    const server = await startOpenQuestionControlServer({
+      listOpenQuestions: () => [],
+      observeSession: async () => snapshot,
+      answerOpenQuestion: async () => { throw new Error('unused'); },
+    });
+    closeServers.push(() => server.close());
+    const resumePath = canonicalBaseResumeStorePath(repoRoot);
+    const resume = JSON.parse(await readFile(resumePath, 'utf8')) as Record<string, unknown>;
+    await writeFile(resumePath, JSON.stringify({ ...resume, harnessSocketPath: server.socketPath }));
+    const setup = await createOperatorWatchPool({
+      repoRoot, userEnsembleRoot: join(repoRoot, '.ensemble'), profile: 'smoke',
+      dispatchQueue: createOperatorDispatchQueue(),
+    });
+    try {
+      await setup.register('conductor-one', { pollIntervalMs: 60_000, debounceMs: 0 });
+      await setup.pollOnce('conductor-one');
+      snapshot = { sequence: 2, openQuestions: [{
+        id: 'inq-stop-race', question: 'Preserve this report?', responseType: 'yes_no',
+        source: 'conductor', status: 'open', askedAt: 10,
+      }] };
+      expect(await setup.pollOnce('conductor-one')).toBe(1);
+    } finally { setup.close(); }
+    const statePath = baseWatchStatePath(repoRoot);
+    const initial = JSON.parse(await readFile(statePath, 'utf8')) as {
+      pendingReports: Array<{ reportId: string }>;
+    };
+    const reportId = initial.pendingReports[0]!.reportId;
+    const workspace = await realpath(join(repoRoot, '.ensemble', 'operator-agents', 'smoke'));
+    let release!: () => void;
+    let held: Promise<void> | undefined;
+    let sawContention = false;
+    let spy: ReturnType<typeof vi.spyOn> | undefined;
+    const hold = async () => {
+      let entered!: () => void;
+      const acquired = new Promise<void>((resolve) => { entered = resolve; });
+      const barrier = new Promise<void>((resolve) => { release = resolve; });
+      held = withOperatorWorkspaceLock(workspace, async () => { entered(); await barrier; });
+      await acquired;
+      const original = DatabaseSync.prototype.exec;
+      spy = vi.spyOn(DatabaseSync.prototype, 'exec').mockImplementation(function (this: DatabaseSync, sql: string) {
+        try { return original.call(this, sql); }
+        catch (error) {
+          if (sql === 'BEGIN IMMEDIATE' && error instanceof Error && /locked|busy/iu.test(error.message)) sawContention = true;
+          throw error;
+        }
+      });
+    };
+    const send = vi.fn(async (_prompt: string) => {
+      if (phase === 'retry') await hold();
+      return { runId: 'stop-race', status: 'cancelled' as const, result: 'cancelled' };
+    });
+    const input = createInteractiveInput();
+    input.isTTY = true;
+    const output = createOutput();
+    const run = runOperatorAgent({ repoRoot, newSession: true }, {
+      stdin: input, stdout: output, autoDiscoverSessions: false,
+      agentFactory: {
+        create: async () => { if (phase === 'commit') await hold(); return createFakeAgent({ send }); },
+        resume: async () => { throw new Error('unused'); },
+      },
+    });
+    try {
+      await vi.waitFor(() => expect(sawContention).toBe(true), { timeout: 8_000, interval: 5 });
+      spy?.mockRestore();
+      spy = undefined;
+      if (stopKind === 'exit') {
+        input.write('/exit\n');
+        await vi.waitFor(() => expect(normalizeTtyText(output.capturedText())).toContain('session ended.'), { timeout: 500 });
+      } else if (stopKind === 'eof') {
+        const ended = new Promise<void>((resolve) => input.once('end', resolve));
+        input.end();
+        await ended;
+      } else {
+        process.emit('SIGINT');
+      }
+      release();
+      await held; held = undefined;
+      await run;
+      expect(send).toHaveBeenCalledTimes(phase === 'commit' ? 0 : 1);
+      const saved = JSON.parse(await readFile(statePath, 'utf8')) as {
+        pendingReports: Array<{ reportId: string; frozenBatchId?: string; retryReadyAt?: number }>;
+      };
+      expect(saved.pendingReports).toEqual([expect.objectContaining({ reportId, frozenBatchId: expect.any(String) })]);
+      if (phase === 'retry') expect(saved.pendingReports[0]!.retryReadyAt).toEqual(expect.any(Number));
+      process.exitCode = previousExitCode;
+      const retryInput = createInteractiveInput();
+      retryInput.isTTY = true;
+      const retryOutput = createOutput();
+      const retrySend = vi.fn(async (_prompt: string) => ({
+        runId: 'restart-stop-race', status: 'finished' as const, result: 'done',
+      }));
+      const retryRun = runOperatorAgent({ repoRoot, newSession: true }, {
+        stdin: retryInput, stdout: retryOutput, autoDiscoverSessions: false,
+        agentFactory: {
+          create: async () => createFakeAgent({ send: retrySend }),
+          resume: async () => { throw new Error('unused'); },
+        },
+      });
+      try {
+        await vi.waitFor(async () => {
+          expect(retrySend).toHaveBeenCalledTimes(1);
+          const state = JSON.parse(await readFile(statePath, 'utf8')) as { pendingReports: unknown[] };
+          expect(state.pendingReports).toEqual([]);
+        }, { timeout: 10_000 });
+        expect(retrySend.mock.calls[0]?.[0]).toContain('Preserve this report?');
+        retryInput.write('/exit\n');
+        await retryRun;
+      } finally {
+        retryInput.end();
+        await retryRun.catch(() => {});
+      }
+    } finally {
+      spy?.mockRestore();
+      if (held) { release(); await held; }
+      input.end();
+      process.exitCode = previousExitCode;
+      await run.catch(() => {});
+    }
+  }, 20_000);
+
+  it.each([false, true])('keeps pending reports through lock contention (restart=%s)', async (restart) => {
+    let snapshot: SessionObservationSnapshot = { sequence: 1, openQuestions: [] };
+    const server = await startOpenQuestionControlServer({
+      listOpenQuestions: () => [],
+      observeSession: async () => snapshot,
+      answerOpenQuestion: async () => { throw new Error('unused'); },
+    });
+    closeServers.push(() => server.close());
+    const resumePath = canonicalBaseResumeStorePath(repoRoot);
+    const resume = JSON.parse(await readFile(resumePath, 'utf8')) as Record<string, unknown>;
+    await writeFile(resumePath, JSON.stringify({ ...resume, harnessSocketPath: server.socketPath }));
+    const setup = await createOperatorWatchPool({
+      repoRoot, userEnsembleRoot: join(repoRoot, '.ensemble'), profile: 'smoke',
+      dispatchQueue: createOperatorDispatchQueue(),
+    });
+    try {
+      await setup.register('conductor-one', { pollIntervalMs: 60_000, debounceMs: 0 });
+      await setup.pollOnce('conductor-one');
+      snapshot = { sequence: 2, openQuestions: [{
+        id: 'inq-lock-retry', question: 'Retry after contention?', responseType: 'yes_no',
+        source: 'conductor', status: 'open', askedAt: 10,
+      }] };
+      expect(await setup.pollOnce('conductor-one')).toBe(1);
+    } finally { setup.close(); }
+    const statePath = baseWatchStatePath(repoRoot);
+    const initial = JSON.parse(await readFile(statePath, 'utf8')) as {
+      pendingReports: Array<{ reportId: string }>;
+    };
+    const reportId = initial.pendingReports[0]!.reportId;
+    const workspace = await realpath(join(repoRoot, '.ensemble', 'operator-agents', 'smoke'));
+    let release!: () => void;
+    let held: Promise<void> | undefined;
+    const hold = async () => {
+      let entered!: () => void;
+      const acquired = new Promise<void>((resolve) => { entered = resolve; });
+      const barrier = new Promise<void>((resolve) => { release = resolve; });
+      held = withOperatorWorkspaceLock(workspace, async () => { entered(); await barrier; });
+      await acquired;
+    };
+    const send = vi.fn(async () => {
+      if (send.mock.calls.length === 1) {
+        await hold();
+        return { runId: 'failed-report', status: 'cancelled' as const, result: 'cancelled' };
+      }
+      return { runId: 'retried-report', status: 'finished' as const, result: 'done' };
+    });
+    const input = createInteractiveInput();
+    input.isTTY = true;
+    const output = createOutput();
+    const run = runOperatorAgent({ repoRoot, newSession: true }, {
+      stdin: input, stdout: output, autoDiscoverSessions: false,
+      agentFactory: {
+        create: async () => { await hold(); return createFakeAgent({ send }); },
+        resume: async () => { throw new Error('unused'); },
+      },
+    });
+    try {
+      await vi.waitFor(() => expect(normalizeTtyText(output.capturedText()))
+        .toContain('監視報告の送信準備は lock の競合で待機中'), { timeout: 10_000 });
+      expect(send).not.toHaveBeenCalled();
+      release(); await held; held = undefined;
+      await vi.waitFor(() => expect(normalizeTtyText(output.capturedText()))
+        .toContain('監視報告の再送時刻の保存は lock の競合で待機中'), { timeout: 10_000 });
+      expect(send).toHaveBeenCalledTimes(1);
+      const frozen = JSON.parse(await readFile(statePath, 'utf8')) as {
+        pendingReports: Array<{ reportId: string; frozenBatchId?: string }>;
+      };
+      expect(frozen.pendingReports).toEqual([expect.objectContaining({ reportId, frozenBatchId: expect.any(String) })]);
+      if (restart) {
+        input.write('/exit\n');
+        await run;
+      }
+      release(); await held; held = undefined;
+      if (restart) {
+        const retryInput = createInteractiveInput();
+        retryInput.isTTY = true;
+        const retryOutput = createOutput();
+        const retrySend = vi.fn(async (_prompt: string) => ({
+          runId: 'restart-report', status: 'finished' as const, result: 'done',
+        }));
+        const retryRun = runOperatorAgent({ repoRoot }, {
+          stdin: retryInput, stdout: retryOutput, autoDiscoverSessions: false,
+          agentFactory: {
+            create: async () => createFakeAgent({ send: retrySend }),
+            resume: async () => createFakeAgent({ send: retrySend }),
+          },
+        });
+        try {
+          await vi.waitFor(async () => {
+            expect(retrySend).toHaveBeenCalledTimes(1);
+            const state = JSON.parse(await readFile(statePath, 'utf8')) as { pendingReports: unknown[] };
+            expect(state.pendingReports).toEqual([]);
+          }, { timeout: 15_000 });
+          expect(retrySend.mock.calls[0]?.[0]).toContain('Retry after contention?');
+          retryInput.write('/exit\n');
+          await retryRun;
+        } finally {
+          retryInput.end();
+          await retryRun.catch(() => {});
+        }
+        return;
+      }
+      await vi.waitFor(async () => {
+        expect(send).toHaveBeenCalledTimes(2);
+        const state = JSON.parse(await readFile(statePath, 'utf8')) as { pendingReports: unknown[] };
+        expect(state.pendingReports).toEqual([]);
+      }, { timeout: 15_000 });
+      input.write('/exit\n');
+      await run;
+    } finally {
+      if (held) { release(); await held; }
+      input.end();
+      await run.catch(() => {});
+    }
+  }, 40_000);
 
   it('retries a completed report acknowledgement in the same runner without resending the turn', async () => {
     let liveSnapshot: SessionObservationSnapshot = {

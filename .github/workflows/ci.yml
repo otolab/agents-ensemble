@@ -28,6 +28,30 @@ jobs:
       - name: Verify builtin Pi storage ACLs
         run: pnpm --filter @agents-ensemble/core exec vitest run src/acp/pi-session-map.test.ts
 
+  windows-operator-workspace:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run build
+      - name: Install ConPTY test dependency
+        run: >-
+          python -m pip install --only-binary=:all: pywinpty==3.1.2
+      - name: Test workspace maintenance through Windows ConPTY
+        run: python packages/cli/test/fixtures/workspace-maintenance-conpty.py (Get-Command node).Source packages/cli/dist/index.js
+      - name: Test workspace locking and maintenance
+        run: |
+          pnpm --filter @agents-ensemble/operator-agent exec vitest run --config vitest.workspace.config.ts src/operator-workspace-lock.test.ts src/operator-workspace-maintenance.test.ts
+          pnpm --filter @agents-ensemble/operator-agent exec vitest run --config vitest.workspace.config.ts src/operator-workspace-tools.test.ts -t "creates parent directories|serializes competing moves in one instance|fails closed on an unreadable move record|bounds watch lock waits|takes the workspace lock before waiting|serializes moves from separate processes"
+
   build-and-test:
     runs-on: ubuntu-latest
     steps:

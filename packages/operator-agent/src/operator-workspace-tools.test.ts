@@ -333,6 +333,8 @@ describe('operator profile workspace file tools', () => {
     await expect(tools[READ_OPERATOR_WORKSPACE_FILE_TOOL]!.execute({ path: 'source' })).rejects.toThrow(/manual inspection/u);
     const status = await tools[GET_OPERATOR_WORKSPACE_MOVE_STATUS_TOOL]!.execute({});
     expect(status.structuredContent).toMatchObject({ status: 'inspection_required', source: 'source', destination: 'dest' });
+    expect(String(status.structuredContent?.guidance)).toContain('operator-workspace-maintain');
+    expect(String(status.structuredContent?.guidance).toLowerCase()).toContain('do not remove the journal directly');
   });
 
   it('copies across filesystems and preserves the source if copying fails', async () => {
@@ -398,6 +400,8 @@ describe('operator profile workspace file tools', () => {
     await writeFile(join(canonical, '..', `.ensemble-workspace-move-${hash}.json`), '{');
     const status = await tools[GET_OPERATOR_WORKSPACE_MOVE_STATUS_TOOL]!.execute({});
     expect(status.structuredContent?.status).toBe('journal_unreadable');
+    expect(String(status.structuredContent?.guidance)).toContain('operator-workspace-maintain');
+    expect(String(status.structuredContent?.guidance).toLowerCase()).toContain('do not remove the journal directly');
     for (const [name, args] of [
       [READ_OPERATOR_WORKSPACE_FILE_TOOL, { path: 'source' }],
       [WRITE_OPERATOR_WORKSPACE_FILE_TOOL, { path: 'source', content: 'changed' }],
@@ -538,9 +542,17 @@ describe('operator profile workspace file tools', () => {
       const child = spawn(process.execPath, ['--input-type=module', '-e', script, canonical, stage], { stdio: ['ignore', 'pipe', 'pipe'] });
       try {
         await once(child.stdout, 'data');
+        let statusReturned = false;
+        const pendingStatus = tools[GET_OPERATOR_WORKSPACE_MOVE_STATUS_TOOL]!.execute({}).then((result) => {
+          statusReturned = true;
+          return result;
+        });
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        expect(statusReturned).toBe(false);
+        const exited = once(child, 'exit');
         child.kill('SIGKILL');
-        await once(child, 'exit');
-        const status = await tools[GET_OPERATOR_WORKSPACE_MOVE_STATUS_TOOL]!.execute({});
+        await exited;
+        const status = await pendingStatus;
         if (stage === 'journal_open' || stage === 'journal_partial') {
           expect(status.structuredContent?.status).toBe('journal_unreadable');
           await expect(readFile(join(workspace, 'source'), 'utf8')).resolves.toBe('SOURCE');
@@ -559,6 +571,92 @@ describe('operator profile workspace file tools', () => {
       } finally { child.kill('SIGKILL'); }
     }, 15000,
   );
+
+  it('serializes moves from separate processes before checking the destination', async () => {
+    const { spawn } = await import('node:child_process');
+    const { once } = await import('node:events');
+    const canonical = await realpath(workspace);
+    await writeFile(join(workspace, 'first'), 'FIRST');
+    await writeFile(join(workspace, 'second'), 'SECOND');
+    const moduleUrl = new URL('../dist/operator-workspace-tools.js', import.meta.url).href;
+    const script = `
+      import { createOperatorWorkspaceFileTools } from ${JSON.stringify(moduleUrl)};
+      import { rename, cp, rm } from 'node:fs/promises';
+      const fake = { rename: async (...args) => { console.log('ready'); await new Promise(resolve => process.stdin.once('data', resolve)); return rename(...args); }, cp, rm };
+      await createOperatorWorkspaceFileTools(process.argv[1], fake).move_operator_workspace_file.execute({ source: 'first', destination: 'dest' });
+    `;
+    const child = spawn(process.execPath, ['--input-type=module', '-e', script, canonical], { stdio: ['pipe', 'pipe', 'pipe'] });
+    try {
+      await once(child.stdout, 'data');
+      let finished = false;
+      const second = tools[MOVE_OPERATOR_WORKSPACE_FILE_TOOL]!.execute({ source: 'second', destination: 'dest' }).then(
+        () => { finished = true; return 'success'; },
+        () => { finished = true; return 'rejected'; },
+      );
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(finished).toBe(false);
+      const exit = once(child, 'exit');
+      child.stdin.end('continue');
+      expect((await exit)[0]).toBe(0);
+      expect(await second).toBe('rejected');
+      expect(await readFile(join(workspace, 'dest'), 'utf8')).toBe('FIRST');
+      expect(await readFile(join(workspace, 'second'), 'utf8')).toBe('SECOND');
+    } finally { child.kill('SIGKILL'); }
+  }, 15000);
+
+  it('takes the workspace lock before waiting for the watch lock and then releases both', async () => {
+    const { createOperatorWatchPool } = await import('./operator-watch-pool.js');
+    const { createOperatorDispatchQueue } = await import('./operator-dispatch.js');
+    const { createHash } = await import('node:crypto');
+    const { DatabaseSync } = await import('node:sqlite');
+    const canonical = await realpath(workspace);
+    const pool = await createOperatorWatchPool({ userEnsembleRoot: root, profile: 'work', dispatchQueue: createOperatorDispatchQueue(), autoDiscoverSessions: false });
+    const watchDb = new DatabaseSync(join(workspace, 'watch', 'watch-state-lock.sqlite'));
+    const lockFile = join(canonical, '..', `.ensemble-workspace-lock-${createHash('sha256').update(canonical).digest('hex')}.sqlite`);
+    const probe = new DatabaseSync(lockFile);
+    let held = false;
+    try {
+      await writeFile(join(workspace, 'note'), 'safe');
+      watchDb.exec('BEGIN IMMEDIATE'); held = true;
+      const updating = pool.registerRepository('example/repo', { scanIntervalMs: 60000, pollIntervalMs: 60000 });
+      let locked = false;
+      for (let i = 0; i < 100 && !locked; i += 1) {
+        try { probe.exec('BEGIN IMMEDIATE'); probe.exec('ROLLBACK'); }
+        catch (error) { if (!/locked|busy/iu.test(String(error))) throw error; locked = true; }
+        if (!locked) await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      expect(locked).toBe(true);
+      let readFinished = false;
+      const read = tools[READ_OPERATOR_WORKSPACE_FILE_TOOL]!.execute({ path: 'note' }).then((value) => { readFinished = true; return value; });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(readFinished).toBe(false);
+      watchDb.exec('ROLLBACK'); held = false;
+      await updating;
+      expect((await read).structuredContent?.content).toBe('safe');
+    } finally {
+      if (held) watchDb.exec('ROLLBACK');
+      watchDb.close(); probe.close(); pool.close();
+    }
+  }, 15000);
+
+  it('bounds watch lock waits and permits retry after the workspace lock is released', async () => {
+    const { createOperatorWatchPool } = await import('./operator-watch-pool.js');
+    const { createOperatorDispatchQueue } = await import('./operator-dispatch.js');
+    const { withOperatorWorkspaceLock } = await import('./operator-workspace-lock.js');
+    const pool = await createOperatorWatchPool({ userEnsembleRoot: root, profile: 'work', dispatchQueue: createOperatorDispatchQueue(), autoDiscoverSessions: false });
+    let release!: () => void;
+    let entered!: () => void;
+    const barrier = new Promise<void>((resolve) => { release = resolve; });
+    const held = new Promise<void>((resolve) => { entered = resolve; });
+    const lock = withOperatorWorkspaceLock(await realpath(workspace), async () => { entered(); await barrier; });
+    try {
+      await held;
+      await expect(pool.registerRepository('example/repo', { scanIntervalMs: 60000, pollIntervalMs: 60000 })).rejects.toThrow(/Could not acquire operator workspace lock/u);
+      release();
+      await lock;
+      await expect(pool.registerRepository('example/repo', { scanIntervalMs: 60000, pollIntervalMs: 60000 })).resolves.toBeDefined();
+    } finally { release(); await lock; pool.close(); }
+  }, 15000);
 
   it('preserves real watch pool updates while rejecting a move of its state', async () => {
     const { createOperatorWatchPool } = await import('./operator-watch-pool.js');

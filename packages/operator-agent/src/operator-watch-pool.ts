@@ -1,3 +1,4 @@
+import { OperatorLockTimeoutError, withOperatorWorkspaceLock } from './operator-workspace-lock.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import {
@@ -3628,6 +3629,19 @@ async function withWatchStateLock<T>(
   profile: string,
   operation: (nextArrivalOrder: (minimumExisting?: number) => number) => Promise<T>,
 ): Promise<T> {
+  const workspace = join(root, 'operator-agents', profile);
+  await mkdir(workspace, { recursive: true, mode: 0o700 });
+  const canonicalWorkspace = await realpath(workspace);
+  return withOperatorWorkspaceLock(canonicalWorkspace, () =>
+    withWatchStateLockInsideWorkspace(root, profile, operation),
+  );
+}
+
+async function withWatchStateLockInsideWorkspace<T>(
+  root: string,
+  profile: string,
+  operation: (nextArrivalOrder: (minimumExisting?: number) => number) => Promise<T>,
+): Promise<T> {
   const directory = join(root, 'operator-agents', profile, 'watch');
   await mkdir(directory, { recursive: true, mode: 0o700 });
   await chmod(directory, 0o700);
@@ -3661,7 +3675,7 @@ async function withWatchStateLock<T>(
       }
     }
     if (!transactionStarted) {
-      throw new Error(
+      throw new OperatorLockTimeoutError(
         `Could not acquire operator watch state profile lock after ${WATCH_STATE_LOCK_RETRIES} attempts.`,
         { cause: lastLockError },
       );
