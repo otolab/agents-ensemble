@@ -2,6 +2,8 @@ import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promis
 import { DatabaseSync } from 'node:sqlite';
 import { dirname, join } from 'node:path';
 import { PassThrough } from 'node:stream';
+import xterm from '@xterm/headless';
+import { PiConductorAgent } from '../../core/src/conductor/pi-conductor-agent.js';
 import { tmpdir } from 'node:os';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -1086,6 +1088,214 @@ describe('runOperatorAgent', () => {
     ).resolves.toEqual([]);
   });
 
+  it('renders interleaved Pi session events through the real adapter', async () => {
+    const input = createInteractiveInput();
+    const output = createOutput();
+    const terminal = new xterm.Terminal({ cols: 80, rows: 24, allowProposedApi: true, convertEol: true });
+    output.on('data', (chunk: Buffer) => terminal.write(chunk));
+    let listener: ((event: unknown) => void) | undefined;
+    let finishPrompt!: () => void;
+    let promptStarted!: () => void;
+    const started = new Promise<void>((resolve) => { promptStarted = resolve; });
+    const promptGate = new Promise<void>((resolve) => { finishPrompt = resolve; });
+    const session = {
+      subscribe: (callback: (event: unknown) => void) => { listener = callback; return () => { listener = undefined; }; },
+      prompt: async () => { promptStarted(); await promptGate; },
+      state: { messages: [] },
+      abort: async () => {},
+      dispose: () => {},
+    };
+    const agent = new PiConductorAgent(
+      session as never, {} as never, {} as never, {} as never, { value: '' },
+      'pi-test', 'model-test', {} as never, { enabled: false } as never,
+      {} as never, false, false,
+    );
+    const run = runOperatorAgent({ repoRoot }, { stdin: input, stdout: output, agentFactory: {
+      create: async () => agent, resume: async () => agent,
+    } });
+    const screen = () => Array.from({ length: terminal.rows }, (_, i) => terminal.buffer.active.getLine(terminal.buffer.active.viewportY + i)?.translateToString(true) ?? '').join('\n');
+    const status = async (text: string) => vi.waitFor(() => expect(screen()).toContain(`operator: ${text}`));
+    const message = { role: 'assistant', content: [] };
+    const emit = (type: string, delta?: string) => listener?.({ type: 'message_update', message, assistantMessageEvent: { type, delta } });
+    try {
+      await status('待機中');
+      input.write('hello\r');
+      await started;
+      await status('処理中');
+      emit('text_start');
+      await status('writing');
+      emit('thinking_start');
+      await status('thinking');
+      emit('text_delta', 'private response fragment');
+      await status('writing');
+      emit('thinking_delta', 'private reasoning fragment');
+      await status('thinking');
+      listener?.({ type: 'tool_execution_start', toolName: 'inspect', toolCallId: 'call-1' });
+      await status('calling inspect');
+      input.write('draft');
+      await vi.waitFor(() => expect(screen()).toContain('draft'));
+      listener?.({ type: 'tool_execution_end', toolName: 'inspect', toolCallId: 'call-1', result: { content: [] }, isError: false });
+      await status('処理中');
+      emit('text_delta', 'another private fragment');
+      await status('writing');
+      expect(screen()).not.toContain('private reasoning fragment');
+      expect(screen()).not.toContain('private response fragment');
+      finishPrompt();
+      await status('待機中');
+      input.write('\u0015/exit\r');
+      await run;
+    } finally {
+      finishPrompt();
+      input.end();
+      await run.catch(() => {});
+      terminal.dispose();
+    }
+  });
+
+  it('shows observed phases and overlapping tool calls in the current frame', async () => {
+    const input = createInteractiveInput();
+    const output = createOutput();
+    const terminal = new xterm.Terminal({ cols: 80, rows: 24, allowProposedApi: true, convertEol: true });
+    output.on('data', (chunk: Buffer) => terminal.write(chunk));
+    let callbacks: Parameters<ConductorAgent['send']>[1];
+    let finish!: (result: Awaited<ReturnType<ConductorAgent['send']>>) => void;
+    const agent = createFakeAgent({ send: async (_prompt, cb) => {
+      callbacks = cb;
+      return await new Promise((resolve) => { finish = resolve; });
+    } });
+    const run = runOperatorAgent({ repoRoot }, { stdin: input, stdout: output, agentFactory: { create: async () => agent, resume: async () => agent } });
+    const lines = () => Array.from({ length: terminal.buffer.active.length }, (_, i) => terminal.buffer.active.getLine(i)?.translateToString(true) ?? '');
+    const screen = () => lines().slice(terminal.buffer.active.viewportY, terminal.buffer.active.viewportY + terminal.rows).join('\n');
+    const status = async (text: string) => vi.waitFor(() => expect(screen()).toContain(`operator: ${text}`));
+    try {
+      await status('待機中');
+      input.write('hello\r');
+      await vi.waitFor(() => expect(callbacks).toBeDefined());
+      await status('処理中');
+      callbacks!.onOutputPhase?.('writing');
+      await status('writing');
+      callbacks!.onOutputPhase?.('thinking');
+      await status('thinking');
+      callbacks!.onOutputPhase?.('writing');
+      await status('writing');
+      callbacks!.onOutputPhase?.('thinking');
+      await status('thinking');
+      callbacks!.onToolCallStarted?.({ runId: 'run', tool: 'same', callId: 'a' });
+      await status('calling same (0s)');
+      await vi.waitFor(() => expect(screen()).toContain('calling same (1s)'), { timeout: 2500 });
+      callbacks!.onToolCallStarted?.({ runId: 'run', tool: 'same', callId: 'b' });
+      await status('calling same (0s)');
+      callbacks!.onOutputPhase?.('writing');
+      expect(screen()).not.toContain('operator: writing');
+      callbacks!.onToolCallStarted?.({ runId: 'run', tool: 'other', callId: 'c' });
+      await status('calling other (0s)');
+      callbacks!.onToolCallCompleted?.({ runId: 'run', tool: 'same', callId: 'b' });
+      expect(screen()).toContain('calling other');
+      callbacks!.onToolCallCompleted?.({ runId: 'run', tool: 'other', callId: 'c' });
+      await vi.waitFor(() => expect(screen()).toMatch(/calling same \([1-9]/));
+      callbacks!.onToolCallCompleted?.({ runId: 'run', tool: 'same', callId: 'a' });
+      await status('処理中');
+      callbacks!.onOutputPhase?.('writing');
+      await status('writing');
+      input.write('next');
+      await vi.waitFor(() => expect(screen()).toContain('next'));
+      finish({ runId: 'run', status: 'completed', result: 'done' });
+      await status('待機中');
+      expect(lines().join('\n')).not.toContain('operator: thinking');
+      expect(lines().join('\n')).not.toMatch(/operator: calling same \(\d+s\)/g);
+      input.write('\u0015/exit\r');
+      await run;
+      expect(lines().join('\n')).not.toMatch(/operator: calling same \(\d+s\)/g);
+    } finally {
+      input.end();
+      terminal.dispose();
+    }
+  });
+
+  it('shows current status through automatic recovery, rejected send and manual reconnect failure', async () => {
+    const input = createInteractiveInput();
+    const output = createOutput();
+    const terminal = new xterm.Terminal({ cols: 80, rows: 24, allowProposedApi: true, convertEol: true });
+    output.on('data', (chunk: Buffer) => terminal.write(chunk));
+    let resolveAutomatic!: () => void;
+    let rejectManual!: () => void;
+    const automatic = new Promise<void>((resolve) => { resolveAutomatic = resolve; });
+    const manual = new Promise<void>((resolve) => { rejectManual = resolve; });
+    const initial = createFakeAgent({ send: async () => ({ runId: 'a', status: 'error', error: { code: 'auth', message: 'authentication failed' } }) });
+    const resumed = createFakeAgent({ send: async () => { throw new Error('failed'); } });
+    let resumes = 0;
+    const run = runOperatorAgent({ repoRoot }, { stdin: input, stdout: output, agentFactory: {
+      create: async () => initial,
+      resume: async () => { resumes++; if (resumes === 1) { await automatic; return resumed; } if (resumes === 2) { await manual; throw new Error('failed'); } return resumed; },
+    } });
+    const screen = () => Array.from({ length: terminal.rows }, (_, i) => terminal.buffer.active.getLine(terminal.buffer.active.viewportY + i)?.translateToString(true) ?? '').join('\n');
+    const status = async (text: string) => vi.waitFor(() => expect(screen()).toContain(`operator: ${text}`));
+    try {
+      await status('待機中');
+      input.write('hello\r');
+      await status('reconnecting');
+      resolveAutomatic();
+      await status('待機中');
+      input.write('/recovery continue\r');
+      input.write('again\r');
+      await vi.waitFor(() => expect(output.capturedText()).toContain('status=send_rejected'));
+      await status('待機中');
+      input.write('/reconnect\r');
+      await status('reconnecting');
+      rejectManual();
+      await vi.waitFor(() => expect(output.capturedText()).toContain('conductor の再接続に失敗しました。'));
+      await status('待機中');
+      input.write('/reconnect\r');
+      await vi.waitFor(() => expect(resumes).toBe(3));
+      await vi.waitFor(() => expect(output.capturedText()).toContain('conductor に再接続しました。'));
+      await status('待機中');
+      input.write('/exit\r');
+      await run;
+    } finally { resolveAutomatic(); rejectManual(); input.end(); terminal.dispose(); }
+  });
+
+  it('renders Pi compaction and retry notifications without blocking input', async () => {
+    const input = createInteractiveInput();
+    const output = createOutput();
+    const terminal = new xterm.Terminal({ cols: 80, rows: 24, allowProposedApi: true, convertEol: true });
+    output.on('data', (chunk: Buffer) => terminal.write(chunk));
+    let options: ConductorAgentCreateOptions | undefined;
+    let finish!: (result: Awaited<ReturnType<ConductorAgent['send']>>) => void;
+    const agent = createFakeAgent({ send: async () => await new Promise((resolve) => { finish = resolve; }) });
+    const run = runOperatorAgent({ repoRoot, backend: 'pi' }, { stdin: input, stdout: output, agentFactory: {
+      create: async (value) => { options = value; return agent; }, resume: async () => agent,
+    } });
+    const screen = () => Array.from({ length: terminal.rows }, (_, i) => terminal.buffer.active.getLine(terminal.buffer.active.viewportY + i)?.translateToString(true) ?? '').join('\n');
+    const status = async (text: string) => vi.waitFor(() => expect(screen()).toContain(`operator: ${text}`));
+    try {
+      await status('待機中');
+      input.write('hello\r');
+      await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
+      options!.onCompactionEvent!({ type: 'start', reason: 'threshold' });
+      await status('compacting');
+      options!.onRetryEvent!({ type: 'summarization_retry_scheduled', attempt: 1, maxAttempts: 3, delayMs: 10, errorMessage: 'failed' });
+      await status('retrying (1/3)');
+      input.write('draft');
+      await vi.waitFor(() => expect(screen()).toContain('draft'));
+      options!.onRetryEvent!({ type: 'summarization_retry_finished' });
+      await status('compacting');
+      options!.onCompactionEvent!({ type: 'end', reason: 'threshold', outcome: 'failed', errorMessage: 'failed' });
+      await status('処理中');
+      options!.onRetryEvent!({ type: 'summarization_retry_attempt_start', source: 'compaction' });
+      await status('retrying');
+      options!.onRetryEvent!({ type: 'summarization_retry_finished' });
+      await status('処理中');
+      options!.onRetryEvent!({ type: 'auto_retry_start', attempt: 2, maxAttempts: 3, delayMs: 10, errorMessage: 'failed' });
+      await status('retrying (2/3)');
+      options!.onRetryEvent!({ type: 'auto_retry_end', success: false, attempt: 2, finalError: 'failed' });
+      await status('処理中');
+      finish({ runId: 'one', status: 'completed', result: 'done' });
+      await status('待機中');
+      input.write('\u0015/exit\r');
+      await run;
+    } finally { input.end(); terminal.dispose(); }
+  });
+
   it('shows compaction outcomes while a send and next input continue', async () => {
     const input = createInteractiveInput();
     input.isTTY = true;
@@ -1137,8 +1347,12 @@ describe('runOperatorAgent', () => {
     let finishSend:
       | ((result: Awaited<ReturnType<ConductorAgent['send']>>) => void)
       | undefined;
+    let reportPhase: ((phase: 'thinking' | 'writing') => void) | undefined;
+    let completeTool: (() => void) | undefined;
     const fakeAgent = createFakeAgent({
       send: async (_prompt, callbacks) => {
+        reportPhase = callbacks?.onOutputPhase;
+        completeTool = () => callbacks?.onToolCallCompleted?.({ runId: 'run-1', tool: 'list_operator_sessions', callId: 'call-1' });
         callbacks?.onToolCallStarted?.({
           runId: 'run-1',
           tool: 'list_operator_sessions',
@@ -1177,6 +1391,12 @@ describe('runOperatorAgent', () => {
       pendingTranscript.indexOf('operator: calling list_operator_sessions'),
     );
     expect(pendingTranscript).not.toContain('operator>\n');
+    expect(pendingTranscript).toContain('operator: calling list_operator_sessions');
+    completeTool?.();
+    reportPhase?.('thinking');
+    await vi.waitFor(() => expect(output.capturedText()).toContain('operator: thinking'));
+    reportPhase?.('writing');
+    await vi.waitFor(() => expect(output.capturedText()).toContain('operator: writing'));
 
     finishSend!({
       runId: 'run-1',
@@ -1301,12 +1521,17 @@ describe('runOperatorAgent', () => {
     const previousSigintListeners = process.listenerCount('SIGINT');
     const input = createInteractiveInput();
     const output = createOutput();
+    const terminal = new xterm.Terminal({ cols: 80, rows: 24, allowProposedApi: true, convertEol: true });
+    output.on('data', (chunk: Buffer) => terminal.write(chunk));
+    let callbacks: Parameters<ConductorAgent['send']>[1];
     let sendStarted!: () => void;
     const started = new Promise<void>((resolve) => {
       sendStarted = resolve;
     });
     const agent = createFakeAgent({
-      send: async () => {
+      send: async (_prompt, cb) => {
+        callbacks = cb;
+        callbacks?.onOutputPhase?.('thinking');
         sendStarted();
         return await new Promise<Awaited<ReturnType<ConductorAgent['send']>>>(
           () => {},
@@ -1331,8 +1556,14 @@ describe('runOperatorAgent', () => {
       input.write('start send');
       input.write('\r');
       await started;
+      await vi.waitFor(() => expect(output.capturedText()).toContain('operator: thinking'));
       input.write('\u0003');
       await run;
+      callbacks?.onOutputPhase?.('writing');
+      await new Promise<void>((resolve) => terminal.write('', resolve));
+      const screen = Array.from({ length: terminal.rows }, (_, i) => terminal.buffer.active.getLine(terminal.buffer.active.viewportY + i)?.translateToString(true) ?? '').join('\n');
+      expect(screen).toContain('operator: 待機中');
+      expect(screen).not.toContain('operator: writing');
 
       expect(process.exitCode).toBe(130);
       expect(close).toHaveBeenCalledOnce();
@@ -1343,6 +1574,7 @@ describe('runOperatorAgent', () => {
     } finally {
       process.exitCode = previousExitCode;
       input.end();
+      terminal.dispose();
       await run.catch(() => {});
     }
   });
@@ -3268,6 +3500,7 @@ describe('runOperatorAgent', () => {
     expect(output).toContain(
       '明示的に /reconnect するまで conductor への送信を停止します。',
     );
+    expect(output).toContain('operator: 待機中');
     expect(output).not.toContain(rawError);
     expect(stderr.capturedText()).not.toContain(rawError);
   });
@@ -3383,9 +3616,11 @@ describe('runOperatorAgent', () => {
       createFakeAgent({ send: async () => ({ runId: '', status: 'completed' }) }),
       createFakeAgent({ send: async () => ({ runId: '', status: 'completed' }) }),
     ];
+    let finishReconnect!: () => void;
+    const reconnectGate = new Promise<void>((resolve) => { finishReconnect = resolve; });
     const resume = vi
       .fn()
-      .mockResolvedValueOnce(resumedAgents[0])
+      .mockImplementationOnce(async () => { await reconnectGate; return resumedAgents[0]; })
       .mockRejectedValueOnce(new Error('resume unavailable'));
     let createdOptions: ConductorAgentCreateOptions | undefined;
 
@@ -3409,6 +3644,9 @@ describe('runOperatorAgent', () => {
     );
     stdin.write('/reconnect\n');
     await vi.waitFor(() => expect(resume).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(stdout.capturedText()).toContain('operator: reconnecting'));
+    finishReconnect();
+    await vi.waitFor(() => expect(stdout.capturedText()).toContain('conductor に再接続しました。'));
     stdin.write('reconnect\n');
     await vi.waitFor(() => expect(resume).toHaveBeenCalledTimes(2));
     stdin.write('/exit\n');

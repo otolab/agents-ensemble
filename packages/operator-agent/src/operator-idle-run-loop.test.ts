@@ -15,6 +15,7 @@ import type {
 } from '@agents-ensemble/core/operator-runtime';
 import { runOperatorAgent } from './run-operator-agent.js';
 import { operatorWatchStatePath } from './operator-watch-pool.js';
+import type { OperatorAgentTuiHost } from './operator-agent-tui.js';
 
 const tuiHarness = vi.hoisted(() => ({
   onSubmit: undefined as ((message: string) => void) | undefined,
@@ -34,8 +35,9 @@ vi.mock('./operator-agent-tui.js', () => ({
       appendUserMessage: () => {},
       appendOperatorResponse: () => {},
       setInputEnabled: () => {},
+      setStatus: () => {},
       dispose: async () => {},
-    };
+    } satisfies OperatorAgentTuiHost;
   },
 }));
 

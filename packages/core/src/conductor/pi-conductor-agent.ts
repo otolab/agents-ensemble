@@ -649,7 +649,21 @@ export class PiConductorAgent implements ConductorAgent {
       return;
     }
 
+    if (event.type === 'tool_execution_end') {
+      activeSend?.callbacks?.onToolCallCompleted?.({
+        runId: activeSend.runId,
+        tool: event.toolName,
+        callId: event.toolCallId,
+      });
+      return;
+    }
+
     if (event.type === 'message_update') {
+      if (event.assistantMessageEvent.type === 'thinking_start' || event.assistantMessageEvent.type === 'thinking_delta') {
+        activeSend?.callbacks?.onOutputPhase?.('thinking');
+      } else if (event.assistantMessageEvent.type === 'text_start' || event.assistantMessageEvent.type === 'text_delta') {
+        activeSend?.callbacks?.onOutputPhase?.('writing');
+      }
       if (event.assistantMessageEvent.type === 'text_delta') {
         this.onStreamText?.(event.assistantMessageEvent.delta);
       }

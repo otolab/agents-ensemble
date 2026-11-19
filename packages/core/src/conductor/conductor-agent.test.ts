@@ -260,8 +260,9 @@ describe('CursorSdkConductorAgent.send', () => {
     }
   });
 
-  it('forwards tool-call-started to callbacks', async () => {
+  it('forwards tool start and completion to callbacks', async () => {
     const onToolCallStarted = vi.fn();
+    const onToolCallCompleted = vi.fn();
     mockCreate.mockResolvedValue({
       agentId: 'agent-1',
       send: mockSend,
@@ -275,6 +276,9 @@ describe('CursorSdkConductorAgent.send', () => {
             callId: 'call-1',
             toolCall: { type: 'shell', args: { command: 'ls' } },
           },
+        });
+        options?.onDelta?.({
+          update: { type: 'tool-call-completed', callId: 'call-1', toolCall: { type: 'shell', args: { command: 'ls' } } },
         });
         return {
           status: 'finished',
@@ -294,7 +298,8 @@ describe('CursorSdkConductorAgent.send', () => {
     });
 
     try {
-      await conductor.send('hello', { onToolCallStarted });
+      await conductor.send('hello', { onToolCallStarted, onToolCallCompleted });
+      expect(onToolCallCompleted).toHaveBeenCalledWith({ runId: 'run-1', tool: 'shell', callId: 'call-1' });
 
       expect(onToolCallStarted).toHaveBeenCalledWith({
         runId: 'run-1',

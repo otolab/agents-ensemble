@@ -2,6 +2,7 @@ import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
+import xterm from '@xterm/headless';
 import { afterEach, expect, it, vi } from 'vitest';
 import type { AgentSessionEvent } from '../../core/node_modules/@earendil-works/pi-coding-agent/dist/index.js';
 
@@ -197,7 +198,9 @@ it('delivers Pi SDK compaction events to operator activity while queued input pr
   const output = new PassThrough() as PassThrough & OperatorAgentOutput;
   output.isTTY = true; output.columns = 120; output.rows = 24;
   let transcript = '';
-  output.on('data', (chunk) => { transcript += String(chunk); });
+  const terminal = new xterm.Terminal({ cols: 120, rows: 24, allowProposedApi: true, convertEol: true });
+  output.on('data', (chunk) => { transcript += String(chunk); terminal.write(chunk); });
+  const screen = () => Array.from({ length: terminal.rows }, (_, i) => terminal.buffer.active.getLine(terminal.buffer.active.viewportY + i)?.translateToString(true) ?? '').join('\n');
   const type = async (text: string) => {
     for (const key of text) {
       input.write(key);
@@ -213,6 +216,11 @@ it('delivers Pi SDK compaction events to operator activity while queued input pr
     await type('first\r');
     await vi.waitFor(() => expect(prompts).toHaveLength(1));
     listener({ type: 'compaction_start', reason: 'threshold' });
+    await vi.waitFor(() => expect(screen()).toContain('operator: compacting'));
+    listener({ type: 'summarization_retry_scheduled', attempt: 1, maxAttempts: 2, delayMs: 10, errorMessage: 'synthetic retry' });
+    await vi.waitFor(() => expect(screen()).toContain('operator: retrying (1/2)'));
+    listener({ type: 'summarization_retry_finished' });
+    await vi.waitFor(() => expect(screen()).toContain('operator: compacting'));
     listener({ type: 'compaction_end', reason: 'threshold', aborted: false, willRetry: false, result: {
       summary: 'summary', firstKeptEntryId: 'entry', tokensBefore: 200,
       estimatedTokensAfter: 80, usage: {}, details: '',
@@ -236,6 +244,6 @@ it('delivers Pi SDK compaction events to operator activity while queued input pr
     releaseFirst();
     await type('/exit\r');
     await run;
-    input.destroy(); output.destroy();
+    terminal.dispose(); input.destroy(); output.destroy();
   }
 }, 15_000);

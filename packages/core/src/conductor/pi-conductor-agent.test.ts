@@ -362,11 +362,16 @@ describe('PiConductorAgent', () => {
       },
     };
     fakeSession.prompt.mockImplementation(async () => {
+      sessionListener?.({ type: 'message_update', message: finalMessage, assistantMessageEvent: { type: 'thinking_start' } });
+      sessionListener?.({ type: 'message_update', message: finalMessage, assistantMessageEvent: { type: 'thinking_delta', delta: 'private reasoning' } });
       sessionListener?.({
         type: 'tool_execution_start',
         toolName: 'prompt_worker',
         toolCallId: 'call-1',
       });
+      sessionListener?.({ type: 'tool_execution_end', toolName: 'prompt_worker', toolCallId: 'call-1', result: { content: [] }, isError: false });
+      sessionListener?.({ type: 'message_update', message: finalMessage, assistantMessageEvent: { type: 'text_start' } });
+      sessionListener?.({ type: 'message_update', message: finalMessage, assistantMessageEvent: { type: 'thinking_start' } });
       sessionListener?.({
         type: 'message_update',
         message: finalMessage,
@@ -399,10 +404,14 @@ describe('PiConductorAgent', () => {
     });
 
     const onToolCallStarted = vi.fn();
+    const onOutputPhase = vi.fn();
+    const onToolCallCompleted = vi.fn();
     const onStreamText = vi.fn();
     // The factory is created above, so this instance has no stream callback;
     // the send/event contract is asserted through the tool callback and result.
-    const result = await conductor.send('kickoff', { onToolCallStarted });
+    const result = await conductor.send('kickoff', { onToolCallStarted, onToolCallCompleted, onOutputPhase });
+    expect(onToolCallCompleted).toHaveBeenCalledWith({ runId: result.runId, tool: 'prompt_worker', callId: 'call-1' });
+    expect(onOutputPhase.mock.calls).toEqual([['thinking'], ['thinking'], ['writing'], ['thinking'], ['writing']]);
     expect(fakeSession.prompt).toHaveBeenCalledWith('kickoff', {
       expandPromptTemplates: false,
       source: 'rpc',

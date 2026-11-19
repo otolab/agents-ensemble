@@ -87,6 +87,12 @@ export class CursorSdkConductorAgent implements ConductorAgent {
               tool: formatConductorToolName(update.toolCall),
               callId: update.callId,
             });
+          } else if (update.type === 'tool-call-completed') {
+            callbacks?.onToolCallCompleted?.({
+              runId: pendingRunId.value,
+              tool: formatConductorToolName(update.toolCall),
+              callId: update.callId,
+            });
           }
         },
       });

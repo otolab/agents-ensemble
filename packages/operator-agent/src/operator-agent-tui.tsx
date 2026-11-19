@@ -29,6 +29,7 @@ export interface OperatorAgentTuiHost {
   appendUserMessage: (message: string) => void;
   appendOperatorResponse: (response: string) => void;
   setInputEnabled: (enabled: boolean) => void;
+  setStatus: (status: string, since?: number) => void;
   dispose: () => Promise<void>;
 }
 
@@ -68,6 +69,8 @@ interface TuiSnapshot {
   readonly rows: number;
   readonly inputEnabled: boolean;
   readonly replayGeneration: number;
+  readonly status: string;
+  readonly statusSince: number;
 }
 
 class OperatorAgentTuiModel {
@@ -86,6 +89,8 @@ class OperatorAgentTuiModel {
       rows,
       inputEnabled: true,
       replayGeneration: 0,
+      status: '待機中',
+      statusSince: Date.now(),
     };
   }
 
@@ -133,6 +138,11 @@ class OperatorAgentTuiModel {
     this.update({ inputEnabled });
   }
 
+  setStatus(status: string, since?: number): void {
+    if (since === undefined && this.snapshot.status === status) return;
+    this.update({ status, statusSince: since ?? Date.now() });
+  }
+
   private append(entry: NewActivityEntry): void {
     this.update({
       entries: [
@@ -171,6 +181,12 @@ function OperatorAgentTui({
   );
   const colorEnabled = model.colorsEnabled();
   const [draft, setDraft] = React.useState('');
+  const [now, setNow] = React.useState(Date.now());
+  React.useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    timer.unref?.();
+    return () => clearInterval(timer);
+  }, []);
   const [cursorPosition, setCursorPosition] = React.useState<[number, number]>([
     0,
     0,
@@ -189,7 +205,7 @@ function OperatorAgentTui({
   );
   const maxInputDisplayLines = Math.max(
     1,
-    Math.min(MAX_INPUT_DISPLAY_LINES, liveFrameRows - 3),
+    Math.min(MAX_INPUT_DISPLAY_LINES, liveFrameRows - 4),
   );
   const handleSubmit = useCallback(
     (value: string) => {
@@ -221,7 +237,7 @@ function OperatorAgentTui({
         ]}
       >
         {(entry) => entry.type === 'padding' ? (
-          <Text key="resize-padding">{'\n'.repeat(Math.max(0, snapshot.rows - 3))}</Text>
+          <Text key="resize-padding">{'\n'.repeat(Math.max(0, snapshot.rows - 4))}</Text>
         ) : (
           <Box
             key={`operator-agent-log-${entry.id}`}
@@ -260,6 +276,12 @@ function OperatorAgentTui({
         flexDirection="column"
         overflowY="hidden"
       >
+        <Box width={snapshot.columns}>
+          <Box flexShrink={1}>
+            <Text wrap="truncate">operator: {snapshot.status}</Text>
+          </Box>
+          <Text> ({Math.max(0, Math.floor((now - snapshot.statusSince) / 1000))}s)</Text>
+        </Box>
         <Box
           width={snapshot.columns}
           borderStyle="round"
@@ -275,7 +297,7 @@ function OperatorAgentTui({
               linePrefix={promptPrefix}
               viewportLines={maxInputDisplayLines}
               initialLineCount={1}
-              cursorStart={snapshot.inputEnabled ? { x: 2, y: 1 } : undefined}
+              cursorStart={snapshot.inputEnabled ? { x: 2, y: 2 } : undefined}
               cursorPosition={cursorPosition}
               onCursorChange={setCursorPosition}
             />
@@ -311,7 +333,7 @@ export function createOperatorAgentTuiHost(
   );
   // Move the initial compact frame to the bottom; subsequent Static output
   // scrolls the terminal naturally and remains visible above the input.
-  options.stdout.write('\n'.repeat(Math.max(0, size.rows - 3)));
+  options.stdout.write('\n'.repeat(Math.max(0, size.rows - 4)));
   const frame = (
     <OperatorAgentTui
       model={model}
@@ -366,6 +388,7 @@ export function createOperatorAgentTuiHost(
     appendOperatorResponse: (response) =>
       model.appendDialogue('operator', response),
     setInputEnabled: (enabled) => model.setInputEnabled(enabled),
+    setStatus: (status, since) => model.setStatus(status, since),
     dispose: async () => {
       disposing = true;
       if (resizeTimer) {
