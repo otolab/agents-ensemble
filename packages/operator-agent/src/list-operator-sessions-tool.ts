@@ -93,7 +93,7 @@ interface OperatorSessionSummary {
   watch: {
     repositoryEnabled: boolean;
     enabled: boolean;
-    source: 'manual' | 'repository_auto' | null;
+    source: 'manual' | 'repository_auto' | 'live_auto' | null;
     reason: OperatorSessionTrackingInfo['watchReason'];
     pollIntervalMs: number | null;
   };

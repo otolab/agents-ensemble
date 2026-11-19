@@ -33,6 +33,11 @@ export interface OperatorAgentMcpConfig {
 
 export interface OperatorAgentSchedulingConfig {
   batchMaxWaitMs?: number;
+  pushThreshold?: number;
+  sessionStateWeight?: number;
+  openQuestionWeight?: number;
+  conductorMessageWeight?: number;
+  idleCandidateWeight?: number;
   idlePhaseThresholdMs?: number;
   staleRunningThresholdMs?: number;
   idleAgingMs?: number;
@@ -42,6 +47,11 @@ export interface OperatorAgentSchedulingConfig {
 
 export const DEFAULT_OPERATOR_AGENT_SCHEDULING = {
   batchMaxWaitMs: 30_000,
+  pushThreshold: 10,
+  sessionStateWeight: 1,
+  openQuestionWeight: 10,
+  conductorMessageWeight: 5,
+  idleCandidateWeight: 1,
   idlePhaseThresholdMs: 30 * 60_000,
   staleRunningThresholdMs: 60 * 60_000,
   idleAgingMs: 5 * 60_000,
@@ -51,6 +61,11 @@ export const DEFAULT_OPERATOR_AGENT_SCHEDULING = {
 
 const SCHEDULING_RANGES = {
   batchMaxWaitMs: [10_000, 120_000],
+  pushThreshold: [1, 10_000],
+  sessionStateWeight: [0, 10_000],
+  openQuestionWeight: [0, 10_000],
+  conductorMessageWeight: [0, 10_000],
+  idleCandidateWeight: [0, 10_000],
   idlePhaseThresholdMs: [10 * 60_000, 120 * 60_000],
   staleRunningThresholdMs: [30 * 60_000, 240 * 60_000],
   idleAgingMs: [60_000, 30 * 60_000],
@@ -262,7 +277,7 @@ function parseScheduling(
       raw > maximum
     ) {
       throw new Error(
-        `Invalid ${source}.${key}: expected an integer from ${minimum} to ${maximum} milliseconds.`,
+        `Invalid ${source}.${key}: expected an integer from ${minimum} to ${maximum}${key.endsWith('Ms') ? ' milliseconds' : ''}.`,
       );
     }
     scheduling[key] = raw;

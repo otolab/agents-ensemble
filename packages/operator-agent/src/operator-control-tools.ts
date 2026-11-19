@@ -4,6 +4,36 @@ import {
 } from '@agents-ensemble/core/operator-runtime';
 import type { OperatorDispatchQueue } from './operator-dispatch.js';
 
+export function createListPendingReportsTool(queue: OperatorDispatchQueue): ConductorTool {
+  return {
+    name: 'list_pending_reports',
+    description: 'List locally pending report counts by session, including held reports.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    execute: async () => toolResult({ sessions: queue.listPendingReports() }),
+  };
+}
+
+export function createRequestSessionReportsTool(
+  queue: OperatorDispatchQueue,
+): ConductorTool {
+  return {
+    name: 'request_session_reports',
+    description: 'Request normal delivery of the pending batch for one session. The response confirms the request, not delivery. Existing report holds still apply.',
+    inputSchema: {
+      type: 'object',
+      properties: { conductorAgentId: { type: 'string' } },
+      required: ['conductorAgentId'],
+      additionalProperties: false,
+    },
+    execute: async (args) => {
+      if (typeof args.conductorAgentId !== 'string' || !args.conductorAgentId.trim()) {
+        throw new Error('conductorAgentId must be a non-empty string.');
+      }
+      return toolResult({ accepted: queue.requestReports(args.conductorAgentId) });
+    },
+  };
+}
+
 export function createSetReportHoldTool(
   queue: OperatorDispatchQueue,
 ): ConductorTool {
@@ -63,7 +93,7 @@ export function createSetSessionFocusTool(
   return {
     name: 'set_session_focus',
     description:
-      'Set the session whose reports receive focus priority, or omit conductorAgentId to turn focus off. Focus defaults to off. While on, all reports from the focused session precede reports from other sessions, so an Open Question outside focus can wait. The operator should switch or clear focus when work changes and manually clear it when the focused session enters a human-response wait; the default 10-minute sliding timeout since operator/user input is a failsafe and is configurable from 3–30 minutes with common.scheduling.focusInactivityTimeoutMs or profiles.<name>.scheduling.focusInactivityTimeoutMs. Only operator/user input received by operator-agent resets the timeout; invoking this tool or receiving automatic reports does not.',
+      'Set the focused session, or omit conductorAgentId to turn focus off. Focus defaults to off. While on, automatic delivery of all reports, including Open Questions, is paused. Explicit session report requests remain available and existing holds still apply. The default 10-minute sliding timeout since operator/user input is a failsafe, configurable from 3–30 minutes using common.scheduling.focusInactivityTimeoutMs or the profile setting. Only operator/user input received by operator-agent resets the timeout.',
     inputSchema: {
       type: 'object',
       properties: { conductorAgentId: { type: 'string' } },

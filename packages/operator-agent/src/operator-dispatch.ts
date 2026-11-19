@@ -55,6 +55,8 @@ export interface OperatorDispatchScheduling {
   batchMaxWaitMs: number;
   idleAgingMs: number;
   focusInactivityTimeoutMs: number;
+  pushThreshold?: number;
+  reportWeights?: Record<Extract<OperatorDispatchEvent, { type: 'report' }>['reportType'], number>;
 }
 
 export const DEFAULT_OPERATOR_DISPATCH_SCHEDULING: OperatorDispatchScheduling = {
@@ -104,6 +106,9 @@ export interface OperatorDispatchQueue {
   setHold(hold: boolean): { heldEventCount: number; releasedEventCount: number };
   setFocus(conductorAgentId?: string, now?: number): string | undefined;
   noteOperatorInput(now?: number): void;
+  requestReports(conductorAgentId: string): boolean;
+  completeReportRequest(events: readonly OperatorDispatchEvent[]): void;
+  listPendingReports(): Array<{ conductorAgentId: string; count: number }>;
   selectBatch(
     state: OperatorDispatchState,
     now?: number,
@@ -112,7 +117,7 @@ export interface OperatorDispatchQueue {
   commitBatch(batch: OperatorDispatchBatch, finalize?: () => void): boolean;
   rollbackBatchCommit(batch: OperatorDispatchBatch): void;
   takeBatch(state: OperatorDispatchState, now?: number): OperatorDispatchBatch | undefined;
-  nextReadyAt(): number | undefined;
+  nextReadyAt(now?: number): number | undefined;
   waitForChange(timeoutMs?: number): Promise<void>;
   wake(): void;
   readonly heldEventCount: number;
@@ -487,6 +492,9 @@ export function createOperatorDispatchQueue(
   const readyHeads = new WeakSet<OperatorDispatchEvent>();
   const inFlightReportIds = new Set<string>();
   const retryReadyAtById = new Map<string, number>();
+  const requestedReports = new Map<string, Set<string>>();
+  const requestKey = (event: Extract<OperatorDispatchEvent, { type: 'report' }>) =>
+    event.reportId ? `id:${event.reportId}` : `arrival:${event.arrival}`;
   let conversationHold = false;
   let reportHold = false;
   let focusSessionId: string | undefined;
@@ -514,6 +522,48 @@ export function createOperatorDispatchQueue(
   const orderReports = (
     reports: Extract<OperatorDispatchEvent, { type: 'report' }>[],
   ) => reports.sort(compareDispatchEvents);
+  const eligibleReports = (now: number): OperatorDispatchEvent[] => {
+    if (scheduling.pushThreshold === undefined || !scheduling.reportWeights) return pending;
+    const groups = new Map<string, Extract<OperatorDispatchEvent, { type: 'report' }>[]>();
+    for (const event of pending) {
+      if (event.type !== 'report') continue;
+      const group = groups.get(event.conductorAgentId) ?? [];
+      group.push(event);
+      groups.set(event.conductorAgentId, group);
+    }
+    const eligible = new Set<string>();
+    for (const [id, reports] of groups) {
+      orderReports(reports);
+      const first = reports[0]!;
+      if (requestedReports.has(id)) {
+        if (!first.frozenBatchId) readyHeads.add(first);
+        eligible.add(id);
+        continue;
+      }
+      if (focusSessionId) continue;
+      if (first.frozenBatchId) {
+        eligible.add(id);
+        continue;
+      }
+      let weight = 0;
+      let reachedAt: number | undefined;
+      for (const report of reports) {
+        if (report.frozenBatchId) break;
+        weight += scheduling.reportWeights?.[report.reportType] ?? 0;
+        if (weight >= scheduling.pushThreshold) {
+          reachedAt = report.firstQueuedAt ?? now;
+          break;
+        }
+      }
+      if (reachedAt === undefined) continue;
+      const quietAt = Math.max(...reports.map((report) => report.readyAt));
+      if (Math.min(quietAt, reachedAt + scheduling.batchMaxWaitMs) <= now) {
+        readyHeads.add(first);
+        eligible.add(id);
+      }
+    }
+    return pending.filter((event) => event.type === 'user' || eligible.has(event.conductorAgentId));
+  };
   const latchReadyBeforeUpdate = (sourceKeys: Set<string>, now: number) => {
     for (const sourceKey of sourceKeys) {
       const reports = orderReports(
@@ -738,6 +788,13 @@ export function createOperatorDispatchQueue(
       }
       pending.sort(compareDispatchEvents);
       held.sort(compareDispatchEvents);
+      for (const [id, requested] of requestedReports) {
+        for (const key of requested) {
+          if (key.startsWith('id:') && !desired.has(key.slice(3)) &&
+              !inFlightReportIds.has(key.slice(3))) requested.delete(key);
+        }
+        if (requested.size === 0) requestedReports.delete(id);
+      }
       for (const reportId of retryReadyAtById.keys()) {
         if (!desired.has(reportId) && !inFlightReportIds.has(reportId)) {
           retryReadyAtById.delete(reportId);
@@ -778,6 +835,10 @@ export function createOperatorDispatchQueue(
       changed =
         pending.length !== pendingBefore ||
         held.length !== heldBefore;
+      for (const [id, requested] of requestedReports) {
+        for (const reportId of ids) requested.delete(`id:${reportId}`);
+        if (requested.size === 0) requestedReports.delete(id);
+      }
       for (const reportId of ids) {
         if (inFlightReportIds.delete(reportId)) changed = true;
         if (retryReadyAtById.delete(reportId)) changed = true;
@@ -850,10 +911,41 @@ export function createOperatorDispatchQueue(
       focusLastInputAt = now;
       notify();
     },
+    requestReports(conductorAgentId) {
+      const id = conductorAgentId.trim();
+      const reports = [...pending, ...held].filter(
+        (event): event is Extract<OperatorDispatchEvent, { type: 'report' }> =>
+          event.type === 'report' && event.conductorAgentId === id,
+      );
+      if (!id || reports.length === 0) return false;
+      const requested = requestedReports.get(id) ?? new Set<string>();
+      for (const report of reports) requested.add(requestKey(report));
+      requestedReports.set(id, requested);
+      notify();
+      return true;
+    },
+    completeReportRequest(events) {
+      for (const event of events) {
+        if (event.type !== 'report') continue;
+        const requested = requestedReports.get(event.conductorAgentId);
+        if (!requested) continue;
+        requested.delete(requestKey(event));
+        if (requested.size === 0) requestedReports.delete(event.conductorAgentId);
+      }
+    },
+    listPendingReports() {
+      const counts = new Map<string, number>();
+      for (const event of [...pending, ...held]) {
+        if (event.type === 'report') {
+          counts.set(event.conductorAgentId, (counts.get(event.conductorAgentId) ?? 0) + 1);
+        }
+      }
+      return [...counts].map(([conductorAgentId, count]) => ({ conductorAgentId, count }));
+    },
     selectBatch(state, now = Date.now()) {
       clearExpiredFocus(now);
       const selected = selectOperatorDispatchBatch(
-        pending,
+        eligibleReports(now),
         { ...state, focusSessionId },
         now,
         CONDUCTOR_RECOVERY_INPUT_BYTE_LIMIT,
@@ -866,7 +958,7 @@ export function createOperatorDispatchQueue(
     isBatchCurrent(batch, state) {
       clearExpiredFocus(Date.now());
       const selected = selectOperatorDispatchBatch(
-        pending,
+        eligibleReports(Date.now()),
         { ...state, focusSessionId },
         Date.now(),
         CONDUCTOR_RECOVERY_INPUT_BYTE_LIMIT,
@@ -968,10 +1060,9 @@ export function createOperatorDispatchQueue(
       this.commitBatch(batch);
       return batch;
     },
-    nextReadyAt() {
+    nextReadyAt(now = Date.now()) {
       let nextUserReadyAt: number | undefined;
       const nextCandidateTimes: number[] = [];
-      const now = Date.now();
       clearExpiredFocus(now);
       if (focusSessionId && focusLastInputAt !== undefined) {
         nextCandidateTimes.push(
@@ -1003,6 +1094,31 @@ export function createOperatorDispatchQueue(
           ? reports.filter((event) => event.frozenBatchId === frozenBatchId)
           : reports.filter((event) => !event.frozenBatchId);
         if (batch.length === 0) continue;
+        if (scheduling.pushThreshold !== undefined && scheduling.reportWeights && !frozenBatchId) {
+          if (focusSessionId && !requestedReports.has(first.conductorAgentId)) continue;
+          if (requestedReports.has(first.conductorAgentId)) {
+            nextCandidateTimes.push(now);
+            continue;
+          }
+          let weight = 0;
+          let reachedAt: number | undefined;
+          for (const event of batch) {
+            weight += scheduling.reportWeights?.[event.reportType] ?? 0;
+            if (weight >= scheduling.pushThreshold) {
+              reachedAt = event.firstQueuedAt ?? now;
+              break;
+            }
+          }
+          if (reachedAt !== undefined) {
+            nextCandidateTimes.push(Math.min(
+              Math.max(...batch.map((event) => event.readyAt)),
+              reachedAt + scheduling.batchMaxWaitMs,
+            ));
+          }
+          continue;
+        }
+        if (scheduling.pushThreshold !== undefined && scheduling.reportWeights && focusSessionId &&
+            !requestedReports.has(first.conductorAgentId)) continue;
         const readyAt = frozenBatchId
           ? Math.max(
               ...batch.map((event) =>

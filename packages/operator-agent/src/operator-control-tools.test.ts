@@ -93,7 +93,7 @@ describe('operator control tools', () => {
 
     await tool.execute({ conductorAgentId: 'session-17' });
     expect(queue.focusSessionId).toBe('session-17');
-    expect(tool.description).toContain('Open Question outside focus can wait');
+    expect(tool.description).toContain('including Open Questions, is paused');
     expect(tool.description).toContain('failsafe');
     expect(tool.description).toContain(
       'common.scheduling.focusInactivityTimeoutMs',
