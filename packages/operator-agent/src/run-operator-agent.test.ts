@@ -2758,9 +2758,10 @@ describe('runOperatorAgent', () => {
       await run;
       expect(send).toHaveBeenCalledTimes(phase === 'commit' ? 0 : 1);
       const saved = JSON.parse(await readFile(statePath, 'utf8')) as {
-        pendingReports: Array<{ reportId: string; frozenBatchId?: string }>;
+        pendingReports: Array<{ reportId: string; frozenBatchId?: string; retryReadyAt?: number }>;
       };
       expect(saved.pendingReports).toEqual([expect.objectContaining({ reportId, frozenBatchId: expect.any(String) })]);
+      if (phase === 'retry') expect(saved.pendingReports[0]!.retryReadyAt).toEqual(expect.any(Number));
       process.exitCode = previousExitCode;
       const retryInput = createInteractiveInput();
       retryInput.isTTY = true;
