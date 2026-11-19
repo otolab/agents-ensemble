@@ -743,14 +743,28 @@ describe('operator dispatch batching', () => {
   it('keeps a retry deadline that passes between selection and wakeup calculation', () => {
     const now = vi.spyOn(Date, 'now').mockReturnValue(1_000);
     try {
-      const queue = createOperatorDispatchQueue();
-      queue.enqueueReport({
-        type: 'report', reportType: 'open_question', reportId: 'retry',
-        conductorAgentId: 'one', issueUrl: 'https://github.com/example/repo/issues/1',
-        text: 'retry', frozenBatchId: 'frozen', frozenPayload: 'retry', retryReadyAt: 1_001,
-      }, 0);
+      const queue = createOperatorDispatchQueue({
+        ...DEFAULT_OPERATOR_DISPATCH_SCHEDULING,
+        pushThreshold: 10,
+        reportWeights: { session_state: 1, open_question: 10, conductor_message: 5, idle_candidate: 1 },
+      });
+      const persisted = [{
+        event: {
+          type: 'report' as const, reportType: 'open_question' as const, reportId: 'retry',
+          conductorAgentId: 'one', issueUrl: 'https://github.com/example/repo/issues/1',
+          text: 'retry', frozenBatchId: 'frozen', frozenPayload: 'retry', retryReadyAt: 1_001,
+        },
+        readyAt: 1_001,
+      }];
+      queue.reconcileReports!(persisted);
       expect(queue.selectBatch({ continuationConsumed: false }, 1_000)).toBeUndefined();
       now.mockReturnValue(1_001);
+      // The former call sampled time again and discarded the expired deadline.
+      expect(queue.nextReadyAt()).toBeUndefined();
+      const notified = vi.fn();
+      queue.subscribe(notified);
+      queue.reconcileReports!(persisted);
+      expect(notified).not.toHaveBeenCalled();
       expect(queue.nextReadyAt(1_000)).toBe(1_001);
       expect(queue.selectBatch({ continuationConsumed: false }, 1_001)?.events).toHaveLength(1);
     } finally {
