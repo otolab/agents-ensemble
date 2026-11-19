@@ -357,6 +357,34 @@ describe('createIssueSessionTuiHost', () => {
     host.dispose();
   });
 
+  it('forwards targeted recovery answers but handles untargeted recovery locally', () => {
+    const host = createIssueSessionTuiHost();
+    const submit = vi.fn(() => true);
+    const continueAfterRecoveryForAttempt = vi.fn(() => true);
+    const dispose = host.bindOperatorInput({
+      submit,
+      getContext: () => ({
+        conductorTurn: 1, autonomousTurns: 0, maxTurns: null, openQuestions: [],
+      }),
+      recoveryAttentionAttemptId: () => '12',
+      continueAfterRecoveryForAttempt,
+    });
+    const element = mockRender.mock.calls[0]?.[0] as {
+      props: { onSubmit: (text: string, options?: { targetOpenQuestionId?: string }) => void };
+    };
+
+    element.props.onSubmit('/recovery continue', { targetOpenQuestionId: 'inq-1' });
+    expect(submit).toHaveBeenCalledWith('/recovery continue', { targetOpenQuestionId: 'inq-1' });
+    expect(continueAfterRecoveryForAttempt).not.toHaveBeenCalled();
+
+    element.props.onSubmit('/recovery continue');
+    expect(continueAfterRecoveryForAttempt).toHaveBeenCalledWith('12');
+    expect(submit).toHaveBeenCalledTimes(1);
+
+    dispose?.();
+    host.dispose();
+  });
+
   it('shows a recovery snapshot only in the local inspection view and clears it before a new instruction', () => {
     const stdinIsTty = Object.getOwnPropertyDescriptor(process.stdin, 'isTTY');
     const stdoutIsTty = Object.getOwnPropertyDescriptor(process.stdout, 'isTTY');
