@@ -42,7 +42,7 @@ jobs:
       - name: Test workspace locking and maintenance
         run: |
           pnpm --filter @agents-ensemble/operator-agent exec vitest run --config vitest.workspace.config.ts src/operator-workspace-lock.test.ts src/operator-workspace-maintenance.test.ts
-          pnpm --filter @agents-ensemble/operator-agent exec vitest run --config vitest.workspace.config.ts src/operator-workspace-tools.test.ts -t "creates parent directories|serializes competing moves in one instance|fails closed on an unreadable move record|bounds watch lock waits|serializes moves from separate processes"
+          pnpm --filter @agents-ensemble/operator-agent exec vitest run --config vitest.workspace.config.ts src/operator-workspace-tools.test.ts -t "creates parent directories|serializes competing moves in one instance|fails closed on an unreadable move record|bounds watch lock waits|takes the workspace lock before waiting|serializes moves from separate processes"
 
   build-and-test:
     runs-on: ubuntu-latest

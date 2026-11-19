@@ -604,6 +604,41 @@ describe('operator profile workspace file tools', () => {
     } finally { child.kill('SIGKILL'); }
   }, 15000);
 
+  it('takes the workspace lock before waiting for the watch lock and then releases both', async () => {
+    const { createOperatorWatchPool } = await import('./operator-watch-pool.js');
+    const { createOperatorDispatchQueue } = await import('./operator-dispatch.js');
+    const { createHash } = await import('node:crypto');
+    const { DatabaseSync } = await import('node:sqlite');
+    const canonical = await realpath(workspace);
+    const pool = await createOperatorWatchPool({ userEnsembleRoot: root, profile: 'work', dispatchQueue: createOperatorDispatchQueue(), autoDiscoverSessions: false });
+    const watchDb = new DatabaseSync(join(workspace, 'watch', 'watch-state-lock.sqlite'));
+    const lockFile = join(canonical, '..', `.ensemble-workspace-lock-${createHash('sha256').update(canonical).digest('hex')}.sqlite`);
+    const probe = new DatabaseSync(lockFile);
+    let held = false;
+    try {
+      await writeFile(join(workspace, 'note'), 'safe');
+      watchDb.exec('BEGIN IMMEDIATE'); held = true;
+      const updating = pool.registerRepository('example/repo', { scanIntervalMs: 60000, pollIntervalMs: 60000 });
+      let locked = false;
+      for (let i = 0; i < 100 && !locked; i += 1) {
+        try { probe.exec('BEGIN IMMEDIATE'); probe.exec('ROLLBACK'); }
+        catch (error) { if (!/locked|busy/iu.test(String(error))) throw error; locked = true; }
+        if (!locked) await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      expect(locked).toBe(true);
+      let readFinished = false;
+      const read = tools[READ_OPERATOR_WORKSPACE_FILE_TOOL]!.execute({ path: 'note' }).then((value) => { readFinished = true; return value; });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(readFinished).toBe(false);
+      watchDb.exec('ROLLBACK'); held = false;
+      await updating;
+      expect((await read).structuredContent?.content).toBe('safe');
+    } finally {
+      if (held) watchDb.exec('ROLLBACK');
+      watchDb.close(); probe.close(); pool.close();
+    }
+  }, 15000);
+
   it('bounds watch lock waits and permits retry after the workspace lock is released', async () => {
     const { createOperatorWatchPool } = await import('./operator-watch-pool.js');
     const { createOperatorDispatchQueue } = await import('./operator-dispatch.js');
