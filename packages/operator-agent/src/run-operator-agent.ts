@@ -881,7 +881,7 @@ async function runTtyConversation(options: {
   options.piActivity.listener = (notification) => {
     if (sendSuppression.signal.aborted) return;
     const event = notification.value;
-    if (event.type === 'start' || event.type === 'auto_retry_start' || event.type === 'summarization_retry_scheduled') {
+    if (event.type === 'start' || event.type === 'auto_retry_start' || event.type === 'summarization_retry_scheduled' || (event.type === 'summarization_retry_attempt_start' && !summaryRetry)) {
       if (baseStatus !== 'reconnecting') {
         baseStatus = agentSendInFlight ? '処理中' : '待機中';
         baseStatusSince = Date.now();
