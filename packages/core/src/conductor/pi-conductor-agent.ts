@@ -332,6 +332,8 @@ export class PiConductorAgent implements ConductorAgent {
     private readonly piPromptResources: boolean,
     private readonly onStreamText?: (text: string) => void,
     private readonly onContextCompaction?: () => void,
+    private readonly onRetryEvent?: ConductorAgentCreateOptions['onRetryEvent'],
+    private readonly onCompactionEvent?: ConductorAgentCreateOptions['onCompactionEvent'],
   ) {
     this.unsubscribe = this.session.subscribe((event) => this.handleEvent(event));
   }
@@ -595,6 +597,24 @@ export class PiConductorAgent implements ConductorAgent {
       sanitizePiAssistantMessageInPlace(event.message);
     }
 
+    if (event.type === 'compaction_start' || event.type === 'compaction_end') {
+      // Observers must not interfere with the Pi session or its send lifecycle.
+      try {
+        if (event.type === 'compaction_start') {
+          this.onCompactionEvent?.({ type: 'start', reason: event.reason });
+        } else {
+          this.onCompactionEvent?.({
+            type: 'end', reason: event.reason,
+            outcome: event.aborted ? 'aborted' : event.errorMessage != null || event.result == null ? 'failed' : 'success',
+            ...(event.result ? { tokensBefore: event.result.tokensBefore } : {}),
+            ...(event.errorMessage != null ? { errorMessage: event.errorMessage } : {}),
+          });
+        }
+      } catch {
+        // Observational callbacks cannot stop compaction or dispatch.
+      }
+    }
+
     if (
       event.type === 'compaction_end' &&
       event.result != null &&
@@ -602,6 +622,21 @@ export class PiConductorAgent implements ConductorAgent {
       event.errorMessage == null
     ) {
       this.onContextCompaction?.();
+      return;
+    }
+
+    if (
+      event.type === 'auto_retry_start' || event.type === 'auto_retry_end' ||
+      event.type === 'summarization_retry_scheduled' ||
+      event.type === 'summarization_retry_attempt_start' ||
+      event.type === 'summarization_retry_finished'
+    ) {
+      // Retry notifications are observational and must not disrupt the session.
+      try {
+        this.onRetryEvent?.(event);
+      } catch {
+        // Ignore observer failures.
+      }
       return;
     }
 
@@ -1138,6 +1173,8 @@ async function createPiConductorSession(
       piPromptResources,
       options.onStreamText,
       options.onContextCompaction,
+      options.onRetryEvent,
+      options.onCompactionEvent,
     );
   } catch (error) {
     if (!session) throw error;

@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   startOpenQuestionControlServer,
+  PiConductorAgent,
   resolveEnsemblePaths,
   type SessionObservationSnapshot,
 } from '@agents-ensemble/core';
@@ -1253,6 +1254,92 @@ describe('runOperatorAgent', () => {
     } finally { resolveAutomatic(); rejectManual(); input.end(); terminal.dispose(); }
   });
 
+  it('renders Pi compaction and retry notifications without blocking input', async () => {
+    const input = createInteractiveInput();
+    const output = createOutput();
+    const terminal = new xterm.Terminal({ cols: 80, rows: 24, allowProposedApi: true, convertEol: true });
+    output.on('data', (chunk: Buffer) => terminal.write(chunk));
+    let options: ConductorAgentCreateOptions | undefined;
+    let finish!: (result: Awaited<ReturnType<ConductorAgent['send']>>) => void;
+    const agent = createFakeAgent({ send: async () => await new Promise((resolve) => { finish = resolve; }) });
+    const run = runOperatorAgent({ repoRoot, backend: 'pi' }, { stdin: input, stdout: output, agentFactory: {
+      create: async (value) => { options = value; return agent; }, resume: async () => agent,
+    } });
+    const screen = () => Array.from({ length: terminal.rows }, (_, i) => terminal.buffer.active.getLine(terminal.buffer.active.viewportY + i)?.translateToString(true) ?? '').join('\n');
+    const status = async (text: string) => vi.waitFor(() => expect(screen()).toContain(`operator: ${text}`));
+    try {
+      await status('待機中');
+      input.write('hello\r');
+      await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
+      options!.onCompactionEvent!({ type: 'start', reason: 'threshold' });
+      await status('compacting');
+      options!.onRetryEvent!({ type: 'summarization_retry_scheduled', attempt: 1, maxAttempts: 3, delayMs: 10, errorMessage: 'failed' });
+      await status('retrying (1/3)');
+      input.write('draft');
+      await vi.waitFor(() => expect(screen()).toContain('draft'));
+      options!.onRetryEvent!({ type: 'summarization_retry_finished' });
+      await status('compacting');
+      options!.onCompactionEvent!({ type: 'end', reason: 'threshold', outcome: 'failed', errorMessage: 'failed' });
+      await status('処理中');
+      options!.onRetryEvent!({ type: 'summarization_retry_attempt_start', source: 'compaction' });
+      await status('retrying');
+      options!.onRetryEvent!({ type: 'summarization_retry_finished' });
+      await status('処理中');
+      options!.onRetryEvent!({ type: 'auto_retry_start', attempt: 2, maxAttempts: 3, delayMs: 10, errorMessage: 'failed' });
+      await status('retrying (2/3)');
+      options!.onRetryEvent!({ type: 'auto_retry_end', success: false, attempt: 2, finalError: 'failed' });
+      await status('処理中');
+      finish({ runId: 'one', status: 'completed', result: 'done' });
+      await status('待機中');
+      input.write('\u0015/exit\r');
+      await run;
+    } finally { input.end(); terminal.dispose(); }
+  });
+
+  it('shows compaction outcomes while a send and next input continue', async () => {
+    const input = createInteractiveInput();
+    input.isTTY = true;
+    const output = createOutput();
+    let options: ConductorAgentCreateOptions | undefined;
+    let finishFirst: ((result: Awaited<ReturnType<ConductorAgent['send']>>) => void) | undefined;
+    const prompts: string[] = [];
+    const fakeAgent = createFakeAgent({
+      send: async (prompt) => {
+        prompts.push(prompt);
+        if (prompts.length === 1) return await new Promise((resolve) => { finishFirst = resolve; });
+        return { runId: 'second', status: 'completed', result: 'second done' };
+      },
+    });
+    const run = runOperatorAgent({ repoRoot, backend: 'pi' }, {
+      stdin: input, stdout: output,
+      agentFactory: {
+        create: async (value) => { options = value; return fakeAgent; },
+        resume: async (id, value) => { options = value; return fakeAgent; },
+      },
+    });
+    input.write('first\n');
+    await vi.waitFor(() => expect(finishFirst).toBeTypeOf('function'));
+    const emit = options!.onCompactionEvent!;
+    emit({ type: 'start', reason: 'threshold' });
+    emit({ type: 'end', reason: 'threshold', outcome: 'success', tokensBefore: 200 });
+    emit({ type: 'start', reason: 'manual' });
+    emit({ type: 'end', reason: 'manual', outcome: 'failed', errorMessage: 'failure detail' });
+    emit({ type: 'start', reason: 'overflow' });
+    emit({ type: 'end', reason: 'overflow', outcome: 'aborted' });
+    input.write('second\n');
+    finishFirst!({ runId: 'first', status: 'completed', result: 'first done' });
+    await vi.waitFor(() => expect(prompts).toHaveLength(2));
+    await vi.waitFor(() => expect(output.capturedText()).toContain('second done'));
+    const transcript = output.capturedText();
+    expect(transcript).toContain('compaction 開始（自動）');
+    expect(transcript).toContain('compaction 成功（このプロセスで 1 回、圧縮前 200 tokens）');
+    expect(transcript).toContain('compaction 失敗: failure detail');
+    expect(transcript).toContain('compaction 中断');
+    input.write('/exit\n');
+    input.end();
+    await run;
+  });
+
   it('shows send and tool activity while preserving the TTY prompt', async () => {
     const input = createInteractiveInput();
     input.isTTY = true;
@@ -1751,27 +1838,21 @@ describe('runOperatorAgent', () => {
       reportTurnStarted = resolve;
     });
     const sentPrompts: string[] = [];
-    const fakeAgent = createFakeAgent({
-      send: async (prompt) => {
-        sentPrompts.push(prompt);
-        if (sentPrompts.length === 1) {
-          await agentOptions!.customTools!.register_session_watch!.execute({
-            conductorAgentId: 'conductor-one',
-            pollIntervalMs: 250,
-            debounceMs: 0,
-          });
-          userTurnStarted();
-          await userTurnGate;
-        } else {
-          reportTurnStarted();
-        }
-        return {
-          runId: `run-${sentPrompts.length}`,
-          status: 'completed',
-          result: 'done',
-        };
-      },
-    });
+    let pi: ReturnType<typeof createScriptedPiAgent>;
+    const runPrompt = async (emit: (event: any) => void, prompt: string) => {
+      sentPrompts.push(prompt);
+      if (sentPrompts.length === 1) {
+        await agentOptions!.customTools!.register_session_watch!.execute({
+          conductorAgentId: 'conductor-one', pollIntervalMs: 250, debounceMs: 0,
+        });
+        userTurnStarted();
+        await userTurnGate;
+        emit({ type: 'auto_retry_end', success: true, attempt: 1 });
+      } else {
+        reportTurnStarted();
+      }
+      return { text: 'done' };
+    };
     const run = runOperatorAgent(
       { repoRoot },
       {
@@ -1780,9 +1861,10 @@ describe('runOperatorAgent', () => {
         agentFactory: {
           create: async (options) => {
             agentOptions = options;
-            return fakeAgent;
+            pi = createScriptedPiAgent(options, runPrompt);
+            return pi.agent;
           },
-          resume: async () => fakeAgent,
+          resume: async (_id, options) => createScriptedPiAgent(options, runPrompt).agent,
         },
       },
     );
@@ -1835,11 +1917,18 @@ describe('runOperatorAgent', () => {
         });
       });
 
+      // The event enters through Pi's session listener while the report is held.
+      // This is the same session that will finish the user send and receive the report.
+      pi.emit({ type: 'auto_retry_start', attempt: 1, maxAttempts: 2, delayMs: 10, errorMessage: 'timeout' });
+      await vi.waitFor(() => expect(output.capturedText()).toContain('[pi retry] attempt 1/2'));
+      pi.emit({ type: 'compaction_start', reason: 'threshold' });
+      pi.emit({ type: 'compaction_end', reason: 'threshold', result: { tokensBefore: 100 }, aborted: false, willRetry: false });
       expect(sentPrompts).toHaveLength(1);
       expect(sentPrompts[0]).toBe('summarize the live update');
 
       finishUserTurn();
       await reportStarted;
+      await vi.waitFor(() => expect(pi.results[0]).toMatchObject({ status: 'finished', result: 'done' }));
       expect(sentPrompts).toHaveLength(2);
       expect(sentPrompts[1]).toContain(
         'Should the operator review this live report?',
@@ -3416,6 +3505,97 @@ describe('runOperatorAgent', () => {
     expect(stderr.capturedText()).not.toContain(rawError);
   });
 
+  it('routes Pi retry events through send and queues reconnect until success', async () => {
+    const stdin = createInteractiveInput();
+    const stdout = createOutput();
+    let finish!: () => void;
+    const pending = new Promise<void>((resolve) => { finish = resolve; });
+    let pi!: ReturnType<typeof createScriptedPiAgent>;
+    const resume = vi.fn(async (_id: string, options: ConductorAgentCreateOptions) =>
+      createScriptedPiAgent(options, async () => ({ text: 'resumed' })).agent,
+    );
+    const run = runOperatorAgent({ repoRoot }, { stdin, stdout, agentFactory: {
+      create: async (options) => {
+        pi = createScriptedPiAgent(options, async (emit) => {
+          emit({ type: 'auto_retry_start', attempt: 1, maxAttempts: 3, delayMs: 20, errorMessage: 'overloaded' });
+          emit({ type: 'compaction_start', reason: 'threshold' });
+          emit({ type: 'summarization_retry_scheduled', attempt: 1, maxAttempts: 2, delayMs: 10, errorMessage: 'timeout' });
+          emit({ type: 'summarization_retry_attempt_start', source: 'compaction', reason: 'threshold' });
+          emit({ type: 'summarization_retry_finished' });
+          emit({ type: 'compaction_end', reason: 'threshold', result: { tokensBefore: 200 }, aborted: false, willRetry: false });
+          await pending;
+          emit({ type: 'auto_retry_end', success: true, attempt: 1 });
+          return { text: 'done' };
+        });
+        return pi.agent;
+      }, resume,
+    } });
+    try {
+      await vi.waitFor(() => expect(stdout.capturedText()).toContain('(pi) ready'));
+      stdin.write('hello\n');
+      await vi.waitFor(() => expect(stdout.capturedText()).toContain('[pi retry] attempt 1/3 in 20ms error=overloaded'));
+      stdin.write('/reconnect\n');
+      await vi.waitFor(() => expect(stdout.capturedText()).toContain('user> /reconnect'));
+      expect(resume).not.toHaveBeenCalled();
+      finish();
+      await vi.waitFor(() => expect(resume).toHaveBeenCalledOnce());
+      expect(pi.results).toMatchObject([{ status: 'finished', result: 'done' }]);
+      expect(stdout.capturedText()).toContain('[pi retry] succeeded');
+      expect(stdout.capturedText()).toContain('[pi summarization retry] attempt 1/2 in 10ms error=timeout');
+      expect(normalizeTtyText(stdout.capturedText())).toContain('[pi summarization retry] attempt started source=compaction reason=threshold');
+      expect(stdout.capturedText()).toContain('[pi summarization retry] finished');
+      const transcript = normalizeTtyText(stdout.capturedText());
+      const compactionStart = transcript.indexOf('compaction 開始（自動）');
+      const retryStart = transcript.indexOf('[pi summarization retry] attempt 1/2');
+      const retryEnd = transcript.indexOf('[pi summarization retry] finished');
+      const compactionEnd = transcript.indexOf('compaction 成功（このプロセスで 1 回、圧縮前 200 tokens）');
+      expect(compactionStart).toBeGreaterThanOrEqual(0);
+      expect(retryStart).toBeGreaterThan(compactionStart);
+      expect(retryEnd).toBeGreaterThan(retryStart);
+      expect(compactionEnd).toBeGreaterThan(retryEnd);
+    } finally {
+      finish();
+      stdin.write('/exit\n');
+      await run;
+    }
+  });
+
+  it('routes Pi retry exhaustion through send failure, reconnect and recovery', async () => {
+    const stdin = createInteractiveInput();
+    const stdout = createOutput();
+    let pi!: ReturnType<typeof createScriptedPiAgent>;
+    let recovered!: ReturnType<typeof createScriptedPiAgent>;
+    const resume = vi.fn(async (_id: string, options: ConductorAgentCreateOptions) => {
+      recovered = createScriptedPiAgent(options, async () => ({ text: 'followup complete' }));
+      return recovered.agent;
+    });
+    const run = runOperatorAgent({ repoRoot }, { stdin, stdout, agentFactory: {
+      create: async (options) => {
+        pi = createScriptedPiAgent(options, async (emit) => {
+          emit({ type: 'auto_retry_start', attempt: 1, maxAttempts: 1, delayMs: 10, errorMessage: 'connection reset' });
+          emit({ type: 'auto_retry_end', success: false, attempt: 1, finalError: 'connection reset by peer' });
+          return { error: 'connection reset by peer' };
+        });
+        return pi.agent;
+      }, resume,
+    } });
+    try {
+      await vi.waitFor(() => expect(stdout.capturedText()).toContain('(pi) ready'));
+      stdin.write('first request\n');
+      await vi.waitFor(() => expect(normalizeTtyText(stdout.capturedText())).toContain('operator send が未完了'));
+      expect(pi.results).toMatchObject([{ status: 'error', error: { message: 'connection reset by peer' } }]);
+      expect(stdout.capturedText()).toContain('[pi retry] failed attempt=1 error=connection reset by peer');
+      expect(stdout.capturedText()).toContain('[transport] conductor reconnect');
+      expect(resume).toHaveBeenCalledOnce();
+      stdin.write('followup\n');
+      stdin.write('/recovery continue\n');
+      await vi.waitFor(() => expect(recovered.results).toMatchObject([{ status: 'finished', result: 'followup complete' }]));
+    } finally {
+      stdin.write('/exit\n');
+      await run;
+    }
+  });
+
   it('intercepts reconnect commands and reports each resume result without sending them', async () => {
     await writeOperatorSettings(repoRoot, 'pi', undefined, {
       profile: ['reconnect-server'],
@@ -3531,7 +3711,10 @@ describe('runOperatorAgent', () => {
           'API key auth failed for provider litellm: Failed to resolve API key for provider "litellm" from shell command: cached-auth.mjs',
       },
     };
+    let retryOptions: ConductorAgentCreateOptions;
     const firstSend = vi.fn(async (message: string) => {
+      retryOptions.onRetryEvent?.({ type: 'auto_retry_start', attempt: 1, maxAttempts: 1, delayMs: 10, errorMessage: 'auth failed' });
+      retryOptions.onRetryEvent?.({ type: 'auto_retry_end', success: false, attempt: 1, finalError: 'auth failed' });
       expect(message).toContain(prompt);
       return authFailure;
     });
@@ -3561,7 +3744,7 @@ describe('runOperatorAgent', () => {
         stdout,
         stderr,
         agentFactory: {
-          create: async () => createFakeAgent({ send: firstSend }),
+          create: async (options) => { retryOptions = options; return createFakeAgent({ send: firstSend }); },
           resume,
         },
       },
@@ -3572,6 +3755,8 @@ describe('runOperatorAgent', () => {
     );
     stdin.write(`${prompt}\n`);
     await vi.waitFor(() => expect(stderr.capturedText()).toContain('[auth] Pi 認証エラー'));
+    expect(stdout.capturedText()).toContain('[pi retry] failed');
+    expect(stdout.capturedText()).toContain('[auth] conductor reconnect');
     expect(firstSend).toHaveBeenCalledOnce();
     expect(automaticRetrySend).not.toHaveBeenCalled();
     expect(resume).toHaveBeenCalledOnce();
@@ -4168,6 +4353,48 @@ function createOutput(
   output.columns = 80;
   output.rows = 24;
   return output;
+}
+
+// Exercise the real Pi conductor event and send handling with a deterministic
+// AgentSession boundary; no provider or network is needed.
+function createScriptedPiAgent(
+  options: ConductorAgentCreateOptions,
+  prompt: (emit: (event: any) => void, text: string) => Promise<{ error?: string; text?: string }>,
+) {
+  let listener: (event: any) => void = () => {};
+  const messages: any[] = [];
+  const branch: any[] = [];
+  const results: Awaited<ReturnType<ConductorAgent['send']>>[] = [];
+  const session = {
+    state: { messages },
+    sessionManager: { getBranch: () => branch, appendCustomEntry: () => {} },
+    subscribe: (next: typeof listener) => { listener = next; return () => {}; },
+    prompt: async (text: string) => {
+      const outcome = await prompt((event) => listener(event), text);
+      const message = {
+        role: 'assistant', content: outcome.text ? [{ type: 'text', text: outcome.text }] : [],
+        stopReason: outcome.error ? 'error' : 'stop', errorMessage: outcome.error,
+        model: 'smoke-model', usage: { input: 1, output: 1, totalTokens: 2, cacheRead: 0, cacheWrite: 0 },
+      };
+      messages.push(message);
+      branch.push({ type: 'message', id: 'user', message: { role: 'user', content: text } });
+      branch.push({ type: 'message', id: 'assistant', message });
+      listener({ type: 'agent_end', messages: [message] });
+    },
+    abort: async () => {}, dispose: () => {},
+  };
+  const agent = new PiConductorAgent(
+    session as never, {} as never, {} as never, {} as never, { value: '' },
+    'operator-agent-id', 'smoke-model', {}, { enabled: false }, { active: false },
+    false, false, undefined, undefined, options.onRetryEvent, options.onCompactionEvent,
+  );
+  const send = agent.send.bind(agent);
+  agent.send = async (...args) => {
+    const result = await send(...args);
+    results.push(result);
+    return result;
+  };
+  return { agent, results, emit: (event: any) => listener(event) };
 }
 
 function createFakeAgent(overrides: {

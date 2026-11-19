@@ -8,6 +8,17 @@ export interface ConductorPiResourceOptions {
   projectDir?: string;
 }
 
+/** Pi retry lifecycle events. Summarization completion does not report an outcome. */
+export type ConductorRetryEvent =
+  | { type: 'auto_retry_start'; attempt: number; maxAttempts: number; delayMs: number; errorMessage: string }
+  | { type: 'auto_retry_end'; success: boolean; attempt: number; finalError?: string }
+  | { type: 'summarization_retry_scheduled'; attempt: number; maxAttempts: number; delayMs: number; errorMessage: string }
+  | { type: 'summarization_retry_attempt_start'; source: 'branchSummary' | 'compaction'; reason?: 'manual' | 'threshold' | 'overflow' }
+  | { type: 'summarization_retry_finished' };
+export type ConductorCompactionEvent =
+  | { type: 'start'; reason: 'manual' | 'threshold' | 'overflow' }
+  | { type: 'end'; reason: 'manual' | 'threshold' | 'overflow'; outcome: 'success' | 'failed' | 'aborted'; tokensBefore?: number; errorMessage?: string };
+
 /** Backend-neutral options used when creating or resuming a conductor. */
 export interface ConductorAgentCreateOptions {
   cwd: string;
@@ -36,6 +47,10 @@ export interface ConductorAgentCreateOptions {
   operatorPiMcpMode?: 'direct';
   /** Pi backend only: called when `compaction_end` reports a successful compaction. */
   onContextCompaction?: () => void;
+  /** Pi backend only: provider and summarization retry lifecycle. */
+  onRetryEvent?: (event: ConductorRetryEvent) => void;
+  /** Pi backend only: observational compaction lifecycle notifications. */
+  onCompactionEvent?: (event: ConductorCompactionEvent) => void;
   apiKey?: string;
   /**
    * Resolved model override. `default` selects the backend default; omission

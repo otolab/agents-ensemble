@@ -162,6 +162,14 @@ interface OperatorTtyChannels {
   observation(detail: string, options?: { color?: string }): void;
 }
 
+type OperatorPiActivityEvent =
+  | { kind: 'compaction'; value: Parameters<NonNullable<ConductorAgentCreateOptions['onCompactionEvent']>>[0] }
+  | { kind: 'retry'; value: Parameters<NonNullable<ConductorAgentCreateOptions['onRetryEvent']>>[0] };
+
+interface OperatorPiActivity {
+  listener?: (event: OperatorPiActivityEvent) => void;
+}
+
 interface OperatorTtyLogEntry {
   channel: 'harness' | 'observation';
   detail: string;
@@ -303,7 +311,9 @@ export async function runOperatorAgent(
       ttyChannels.harness(`watch warning: ${message}`),
   });
 
-  const agentOptions = {
+  const piActivity: OperatorPiActivity = {};
+  let compactionCount = 0;
+  const agentOptions: ConductorAgentCreateOptions = {
     cwd: runtime.workspace,
     systemPrompt: runtime.systemPrompt,
     modelId: runtime.modelId,
@@ -318,6 +328,26 @@ export async function runOperatorAgent(
       : {}),
     ...(runtime.backend === 'pi'
       ? {
+          onRetryEvent: (event: Parameters<NonNullable<ConductorAgentCreateOptions['onRetryEvent']>>[0]) => {
+            piActivity.listener?.({ kind: 'retry', value: event });
+            switch (event.type) {
+              case 'auto_retry_start':
+                ttyChannels.harness(`[pi retry] attempt ${event.attempt}/${event.maxAttempts} in ${event.delayMs}ms error=${escapeTerminalControlCharacters(event.errorMessage)}`);
+                break;
+              case 'auto_retry_end':
+                ttyChannels.harness(`[pi retry] ${event.success ? 'succeeded' : 'failed'} attempt=${event.attempt}${event.finalError ? ` error=${escapeTerminalControlCharacters(event.finalError)}` : ''}`);
+                break;
+              case 'summarization_retry_scheduled':
+                ttyChannels.harness(`[pi summarization retry] attempt ${event.attempt}/${event.maxAttempts} in ${event.delayMs}ms error=${escapeTerminalControlCharacters(event.errorMessage)}`);
+                break;
+              case 'summarization_retry_attempt_start':
+                ttyChannels.harness(`[pi summarization retry] attempt started source=${event.source}${event.reason ? ` reason=${event.reason}` : ''}`);
+                break;
+              case 'summarization_retry_finished':
+                ttyChannels.harness('[pi summarization retry] finished');
+                break;
+            }
+          },
           pi: runtime.piResourceRoots,
           sessionDir: operatorPiSessionDirectory(
             runtime.userEnsembleRoot,
@@ -326,6 +356,22 @@ export async function runOperatorAgent(
           piSkills: runtime.profile.pi?.skills !== false,
           piExtensions: false,
           operatorPiMcpMode: 'direct' as const,
+          onCompactionEvent: (event) => {
+            piActivity.listener?.({ kind: 'compaction', value: event });
+            const reason = { manual: '手動', threshold: '自動', overflow: 'context 超過' }[event.reason];
+            if (event.type === 'start') {
+              ttyChannels.harness(`operator: compaction 開始（${reason}）`);
+            } else if (event.outcome === 'success') {
+              compactionCount += 1;
+              const tokens = event.tokensBefore === undefined ? '' : `、圧縮前 ${event.tokensBefore} tokens`;
+              ttyChannels.harness(`operator: compaction 成功（このプロセスで ${compactionCount} 回${tokens}）`);
+            } else if (event.outcome === 'aborted') {
+              ttyChannels.harness('operator: compaction 中断');
+            } else {
+              const error = escapeTerminalControlCharacters(event.errorMessage ?? '詳細不明');
+              ttyChannels.harness(`operator: compaction 失敗: ${error}`);
+            }
+          },
         }
       : {}),
     customTools: {
@@ -442,6 +488,7 @@ export async function runOperatorAgent(
       stdout,
       stderr,
       ttyLogRouter,
+      piActivity,
       dispatchQueue,
       watchPool,
       recoveryInbox,
@@ -774,6 +821,7 @@ async function runTtyConversation(options: {
   stdout: OperatorAgentOutput;
   stderr: OperatorAgentOutput;
   ttyLogRouter: OperatorTtyLogRouter;
+  piActivity: OperatorPiActivity;
   dispatchQueue: ReturnType<typeof createOperatorDispatchQueue>;
   watchPool: OperatorWatchPool;
   recoveryInbox: ConductorRecoveryInbox;
@@ -813,6 +861,45 @@ async function runTtyConversation(options: {
     onSubmit: (message) => handleInput(message),
     onInterrupt: () => requestStop(130),
   });
+  let baseStatus = '待機中';
+  let baseStatusSince = Date.now();
+  let compactionSince: number | undefined;
+  let autoRetry: { label: string; since: number } | undefined;
+  let summaryRetry: { label: string; since: number } | undefined;
+  const renderStatus = () => {
+    if (baseStatus === 'reconnecting') tui.setStatus(baseStatus, baseStatusSince);
+    else if (autoRetry) tui.setStatus(autoRetry.label, autoRetry.since);
+    else if (summaryRetry) tui.setStatus(summaryRetry.label, summaryRetry.since);
+    else if (compactionSince !== undefined) tui.setStatus('compacting', compactionSince);
+    else tui.setStatus(baseStatus, baseStatusSince);
+  };
+  const setStatus = (status: string, since?: number) => {
+    if (since !== undefined || status !== baseStatus) baseStatusSince = since ?? Date.now();
+    baseStatus = status;
+    renderStatus();
+  };
+  options.piActivity.listener = (notification) => {
+    if (sendSuppression.signal.aborted) return;
+    const event = notification.value;
+    if (event.type === 'start' || event.type === 'auto_retry_start' || event.type === 'summarization_retry_scheduled') {
+      if (baseStatus !== 'reconnecting') {
+        baseStatus = agentSendInFlight ? '処理中' : '待機中';
+        baseStatusSince = Date.now();
+      }
+    }
+    if (notification.kind === 'compaction') {
+      if (event.type === 'start') compactionSince = Date.now();
+      else compactionSince = undefined;
+    } else if (event.type === 'auto_retry_start') {
+      autoRetry = { label: `retrying (${event.attempt}/${event.maxAttempts})`, since: Date.now() };
+    } else if (event.type === 'auto_retry_end') autoRetry = undefined;
+    else if (event.type === 'summarization_retry_scheduled') {
+      summaryRetry = { label: `retrying (${event.attempt}/${event.maxAttempts})`, since: Date.now() };
+    } else if (event.type === 'summarization_retry_attempt_start' && !summaryRetry) {
+      summaryRetry = { label: 'retrying', since: Date.now() };
+    } else if (event.type === 'summarization_retry_finished') summaryRetry = undefined;
+    renderStatus();
+  };
   const unsubscribeTtyLogRouter = options.ttyLogRouter.attach((entry) => {
     tui.appendChannel(entry.channel, entry.detail, entry.options);
   });
@@ -1013,7 +1100,7 @@ async function runTtyConversation(options: {
         const failureClass =
           options.dispatchLifecycle.lastFailure ?? 'none';
         let reconnectReported = false;
-        tui.setStatus('reconnecting');
+        setStatus('reconnecting');
         try {
           await reconnectConductorAgent(options.agentHandle, {
             conductorAgentFactory: options.agentHandle.factory,
@@ -1063,7 +1150,10 @@ async function runTtyConversation(options: {
             );
           }
         }
-        tui.setStatus('待機中');
+        compactionSince = undefined;
+        autoRetry = undefined;
+        summaryRetry = undefined;
+        setStatus('待機中');
         continue;
       }
       if (!options.dispatchLifecycle.canDispatch) {
@@ -1166,7 +1256,7 @@ async function runTtyConversation(options: {
         options.backend === 'cursor' && !cursorBootstrapComplete
           ? `${options.systemPrompt}\n\n## User message\n\n${batch.payload ?? formatOperatorDispatchBatch(batch.events)}`
           : batch.payload ?? formatOperatorDispatchBatch(batch.events);
-      tui.setStatus('処理中');
+      setStatus('処理中');
       writeChannelLine('harness', 'operator: 処理中');
       const nextSendCount = sendCount + 1;
       let toolCallStarted = false;
@@ -1174,8 +1264,8 @@ async function runTtyConversation(options: {
       const activeTools = new Map<string, { tool: string; since: number }>();
       const showActiveTool = () => {
         const active = Array.from(activeTools.values()).at(-1);
-        if (active) tui.setStatus(`calling ${active.tool}`, active.since);
-        else tui.setStatus('処理中');
+        if (active) setStatus(`calling ${active.tool}`, active.since);
+        else setStatus('処理中');
       };
       automaticReconnectResult.current = undefined;
       let result: ConductorSendResult | undefined;
@@ -1189,7 +1279,7 @@ async function runTtyConversation(options: {
               conductorOptions: options.agentHandle.agentOptions,
               signal: sendSuppression.signal,
               onOutputPhase: (phase) => {
-                if (acceptingActivity && activeTools.size === 0) tui.setStatus(phase);
+                if (acceptingActivity && activeTools.size === 0) setStatus(phase);
               },
               onToolCallStarted: ({ tool, callId }) => {
                 if (!acceptingActivity) return;
@@ -1210,7 +1300,7 @@ async function runTtyConversation(options: {
               },
               onAuthReconnectAttempt: ({ agentId, source }) => {
                 acceptingActivity = false;
-                tui.setStatus('reconnecting');
+                setStatus('reconnecting');
                 writeChannelLine(
                   'harness',
                   `[auth] conductor reconnect attempt agentId=${agentId} source=${source ?? 'automatic'}`,
@@ -1230,7 +1320,7 @@ async function runTtyConversation(options: {
               },
               onTransportReconnectAttempt: ({ agentId, source }) => {
                 acceptingActivity = false;
-                tui.setStatus('reconnecting');
+                setStatus('reconnecting');
                 writeChannelLine(
                   'harness',
                   `[transport] conductor reconnect attempt agentId=${agentId} source=${source ?? 'automatic'}`,
@@ -1262,7 +1352,10 @@ async function runTtyConversation(options: {
         ]);
       } finally {
         acceptingActivity = false;
-        tui.setStatus('待機中');
+        compactionSince = undefined;
+        autoRetry = undefined;
+        summaryRetry = undefined;
+        setStatus('待機中');
         agentSendInFlight = false;
         idleCandidateMonitor.notifyActivityChanged();
       }
@@ -1409,6 +1502,7 @@ async function runTtyConversation(options: {
       }
     }
   } finally {
+    options.piActivity.listener = undefined;
     options.stdin.off('end', handleInputEnd);
     process.off('SIGINT', handleInterrupt);
     process.off('SIGTERM', handleTermination);

@@ -734,14 +734,41 @@ describe('PiConductorAgent', () => {
     },
   );
 
+  it('forwards Pi retry lifecycle events without changing send state', async () => {
+    const onRetryEvent = vi.fn();
+    const conductor = await createPiAgent({ cwd, pi: { agentDir }, modelId: 'anthropic/model-1', systemPrompt: 'system', onRetryEvent });
+    const events = [
+      { type: 'auto_retry_start', attempt: 1, maxAttempts: 3, delayMs: 2000, errorMessage: 'overloaded' },
+      { type: 'auto_retry_end', success: true, attempt: 1 },
+      { type: 'auto_retry_end', success: false, attempt: 3, finalError: 'failed' },
+      { type: 'summarization_retry_scheduled', attempt: 1, maxAttempts: 3, delayMs: 1000, errorMessage: 'timeout' },
+      { type: 'summarization_retry_attempt_start', source: 'compaction', reason: 'threshold' },
+      { type: 'summarization_retry_finished' },
+    ] as const;
+    for (const event of events) sessionListener?.(event);
+    expect(onRetryEvent.mock.calls.map(([event]) => event)).toEqual(events);
+    await conductor.close();
+  });
+
+  it('isolates retry observer failures from Pi event delivery', async () => {
+    const conductor = await createPiAgent({
+      cwd, pi: { agentDir }, modelId: 'anthropic/model-1', systemPrompt: 'system',
+      onRetryEvent: () => { throw new Error('observer failed'); },
+    });
+    expect(() => sessionListener?.({ type: 'auto_retry_end', success: true, attempt: 1 })).not.toThrow();
+    await conductor.close();
+  });
+
   it('counts only successful compaction_end events and ignores missing, failed, or aborted results', async () => {
     const onContextCompaction = vi.fn();
+    const onCompactionEvent = vi.fn();
     const conductor = await createPiAgent({
       cwd,
       pi: { agentDir },
       modelId: 'anthropic/model-1',
       systemPrompt: 'system',
       onContextCompaction,
+      onCompactionEvent,
     });
 
     // Persisted compaction entries are not the normal success notification.
@@ -752,6 +779,7 @@ describe('PiConductorAgent', () => {
     // No event means there is nothing to count.
     expect(onContextCompaction).not.toHaveBeenCalled();
 
+    sessionListener?.({ type: 'compaction_start', reason: 'threshold' });
     sessionListener?.({
       type: 'compaction_end',
       reason: 'threshold',
@@ -760,6 +788,7 @@ describe('PiConductorAgent', () => {
       willRetry: false,
       errorMessage: 'Auto-compaction failed',
     });
+    sessionListener?.({ type: 'compaction_start', reason: 'manual' });
     sessionListener?.({
       type: 'compaction_end',
       reason: 'manual',
@@ -769,6 +798,7 @@ describe('PiConductorAgent', () => {
     });
     expect(onContextCompaction).not.toHaveBeenCalled();
 
+    sessionListener?.({ type: 'compaction_start', reason: 'overflow' });
     sessionListener?.({
       type: 'compaction_end',
       reason: 'overflow',
@@ -784,6 +814,14 @@ describe('PiConductorAgent', () => {
       willRetry: true,
     });
     expect(onContextCompaction).toHaveBeenCalledOnce();
+    expect(onCompactionEvent.mock.calls.map(([event]) => event)).toEqual([
+      { type: 'start', reason: 'threshold' },
+      { type: 'end', reason: 'threshold', outcome: 'failed', errorMessage: 'Auto-compaction failed' },
+      { type: 'start', reason: 'manual' },
+      { type: 'end', reason: 'manual', outcome: 'aborted' },
+      { type: 'start', reason: 'overflow' },
+      { type: 'end', reason: 'overflow', outcome: 'success', tokensBefore: 200 },
+    ]);
     await conductor.close();
   });
 
