@@ -3,6 +3,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { dirname, join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import xterm from '@xterm/headless';
+import { PiConductorAgent } from '../../core/src/conductor/pi-conductor-agent.js';
 import { tmpdir } from 'node:os';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -1084,6 +1085,70 @@ describe('runOperatorAgent', () => {
     await expect(
       listOperatorAgentStates(join(repoRoot, '.ensemble')),
     ).resolves.toEqual([]);
+  });
+
+  it('renders interleaved Pi session events through the real adapter', async () => {
+    const input = createInteractiveInput();
+    const output = createOutput();
+    const terminal = new xterm.Terminal({ cols: 80, rows: 24, allowProposedApi: true, convertEol: true });
+    output.on('data', (chunk: Buffer) => terminal.write(chunk));
+    let listener: ((event: unknown) => void) | undefined;
+    let finishPrompt!: () => void;
+    let promptStarted!: () => void;
+    const started = new Promise<void>((resolve) => { promptStarted = resolve; });
+    const promptGate = new Promise<void>((resolve) => { finishPrompt = resolve; });
+    const session = {
+      subscribe: (callback: (event: unknown) => void) => { listener = callback; return () => { listener = undefined; }; },
+      prompt: async () => { promptStarted(); await promptGate; },
+      state: { messages: [] },
+      abort: async () => {},
+      dispose: () => {},
+    };
+    const agent = new PiConductorAgent(
+      session as never, {} as never, {} as never, {} as never, { value: '' },
+      'pi-test', 'model-test', {} as never, { enabled: false } as never,
+      {} as never, false, false,
+    );
+    const run = runOperatorAgent({ repoRoot }, { stdin: input, stdout: output, agentFactory: {
+      create: async () => agent, resume: async () => agent,
+    } });
+    const screen = () => Array.from({ length: terminal.rows }, (_, i) => terminal.buffer.active.getLine(terminal.buffer.active.viewportY + i)?.translateToString(true) ?? '').join('\n');
+    const status = async (text: string) => vi.waitFor(() => expect(screen()).toContain(`operator: ${text}`));
+    const message = { role: 'assistant', content: [] };
+    const emit = (type: string, delta?: string) => listener?.({ type: 'message_update', message, assistantMessageEvent: { type, delta } });
+    try {
+      await status('待機中');
+      input.write('hello\r');
+      await started;
+      await status('処理中');
+      emit('text_start');
+      await status('writing');
+      emit('thinking_start');
+      await status('thinking');
+      emit('text_delta', 'private response fragment');
+      await status('writing');
+      emit('thinking_delta', 'private reasoning fragment');
+      await status('thinking');
+      listener?.({ type: 'tool_execution_start', toolName: 'inspect', toolCallId: 'call-1' });
+      await status('calling inspect');
+      input.write('draft');
+      await vi.waitFor(() => expect(screen()).toContain('draft'));
+      listener?.({ type: 'tool_execution_end', toolName: 'inspect', toolCallId: 'call-1', result: { content: [] }, isError: false });
+      await status('処理中');
+      emit('text_delta', 'another private fragment');
+      await status('writing');
+      expect(screen()).not.toContain('private reasoning fragment');
+      expect(screen()).not.toContain('private response fragment');
+      finishPrompt();
+      await status('待機中');
+      input.write('\u0015/exit\r');
+      await run;
+    } finally {
+      finishPrompt();
+      input.end();
+      await run.catch(() => {});
+      terminal.dispose();
+    }
   });
 
   it('shows observed phases and overlapping tool calls in the current frame', async () => {
