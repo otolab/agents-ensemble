@@ -280,7 +280,7 @@ ensemble session timeline <conductorAgentId> \
 
 `export` は読み取り専用で、`--output <dir>` に新しい bundle directory を作ります。既存の出力先は上書きせず、エラーにします。`manifest.json` は session ID・Issue URL・`repoRoot`・`conductorCwd`・backend・worker / preset・ensemble / CLI version を記録し、入力ごとの状態、bundle 内相対 path、byte size、SHA-256 を一覧します。manifest 自体は自己参照を避けるため hash 一覧から除外します。
 
-bundle には SessionResumeStore の raw JSON、ハーネスの `session-state.yaml` / `open-questions.yaml`、各 worker の全文 reader 結果 JSON（`messages` の 100 件制限なし）を収録します。worker JSON には元 transcript の絶対 path も含まれます。Pi conductor は canonical slug の Pi transcript だけを探して raw JSONL をコピーします。Cursor conductor は SDK から取得できた run metadata と conversation snapshot を `conductor/cursor-runs.json` に収録します。`--include-tool-calls` を指定すると `.tool-calls` もコピーし、`--summary <path>` / `--harness-log <path>` を指定すると、それぞれの入力を bundle に含めます。これらの相対 path は CLI を実行した directory 基準です。
+bundle には SessionResumeStore の raw JSON、ハーネスの `session-state.yaml` / `open-questions.yaml`、各 worker の全文 reader 結果 JSON（`messages` の 100 件制限なし）を収録します。worker JSON には元 transcript の絶対 path も含まれます。conductor の失敗ログがあれば `harness/conductor-failures.jsonl` として含めます。Pi conductor は canonical slug の Pi transcript だけを探して raw JSONL をコピーします。Cursor conductor は SDK から取得できた run metadata と conversation snapshot を `conductor/cursor-runs.json` に収録します。`--include-tool-calls` を指定すると `.tool-calls` もコピーし、`--summary <path>` / `--harness-log <path>` を指定すると、それぞれの入力を bundle に含めます。これらの相対 path は CLI を実行した directory 基準です。
 
 export した summary は `inputs/session-summary.json` に置かれ、上の例のように `timeline --summary` へ渡せます。timeline は summary file を bundle から読みますが、SessionResumeStore と provider history は実行環境から別途読み取ります。bundle だけを渡して timeline を完全にオフライン再生する機能ではありません。
 

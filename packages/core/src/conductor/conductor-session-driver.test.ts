@@ -3489,7 +3489,7 @@ describe('runConductorSessionDriver', () => {
     expect(result.stopReason).toBe('completed');
   });
 
-  it('emits started → progress → completed in order', async () => {
+  it('emits started → phase → progress → completed in order', async () => {
     const send = vi
       .fn()
       .mockResolvedValueOnce({
@@ -3498,6 +3498,7 @@ describe('runConductorSessionDriver', () => {
         result: 'working',
       })
       .mockImplementationOnce(async (_message, callbacks) => {
+        callbacks?.onOutputPhase?.('thinking');
         callbacks?.onToolCallStarted?.({
           runId: 'run-2',
           tool: 'shell',
@@ -3522,6 +3523,9 @@ describe('runConductorSessionDriver', () => {
       onSendProgress: () => {
         lifecycle.push('progress');
       },
+      onOutputPhase: (phase) => {
+        lifecycle.push(phase);
+      },
       onSendComplete: () => {
         lifecycle.push('completed');
       },
@@ -3542,6 +3546,7 @@ describe('runConductorSessionDriver', () => {
       'completed',
       'after-initial-started',
       'started',
+      'thinking',
       'progress',
       'completed',
     ]);

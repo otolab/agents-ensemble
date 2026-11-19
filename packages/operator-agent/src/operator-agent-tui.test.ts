@@ -347,6 +347,11 @@ it('updates the status without accumulating it and keeps input responsive', asyn
   try {
     await vi.waitFor(() => expect(lines()).toContain('待機中'));
     stdin.write('draft');
+    host.setHarnessStatus('監視報告: 保留 1 件');
+    await vi.waitFor(() => expect(lines()).toContain('harness: 監視報告: 保留 1 件'));
+    host.setHarnessStatus('監視報告: 解除 0 件');
+    await vi.waitFor(() => expect(lines()).toContain('harness: 監視報告: 解除 0 件'));
+    expect(lines()).not.toContain('harness: 監視報告: 保留 1 件');
     for (const status of ['thinking', 'calling tool', 'writing', '待機中']) {
       host.setStatus(status);
       await vi.waitFor(() => expect(lines()).toContain(`operator: ${status}`));

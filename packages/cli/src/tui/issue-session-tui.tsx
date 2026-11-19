@@ -317,6 +317,7 @@ function sortWorkerEntries(
 export function WorkerStatusPane({
   workers,
   dispatchHold,
+  conductorStatus,
   height,
   terminalColumns,
   issueUrl,
@@ -324,12 +325,21 @@ export function WorkerStatusPane({
 }: {
   workers: TuiViewSnapshot['displayState']['workers'];
   dispatchHold?: TuiViewSnapshot['displayState']['dispatchHold'];
+  conductorStatus?: TuiViewSnapshot['conductorStatus'];
   height?: number;
   terminalColumns?: number;
   issueUrl?: string;
   issueLinkMode?: IssueLinkMode;
 }) {
-  const entries = sortWorkerEntries(Object.entries(workers));
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+  const visibleWorkers = conductorStatus && !workers.conductor
+    ? { ...workers, conductor: { kind: 'conductor', status: 'idle' as const } }
+    : workers;
+  const entries = sortWorkerEntries(Object.entries(visibleWorkers));
   const paneHeight = height ?? computeWorkerPaneHeight(entries.length);
   const statusLineWidth = usePaneContentWidth(terminalColumns ?? process.stdout.columns ?? 80);
   const issueTitleRight = issueUrl ? formatIssueLabel(issueUrl) : undefined;
@@ -354,7 +364,9 @@ export function WorkerStatusPane({
         <Text dimColor>(待機中)</Text>
       ) : (
         entries.map(([name, worker]) => (
-          <Text key={name}>{fitWorkerStatusLine(name, worker, statusLineWidth)}</Text>
+          <Text key={name}>{name === 'conductor' && conductorStatus
+            ? `${truncateWorkerStatusLine(`conductor: ${stripWorkerAnsiSequences(conductorStatus.text)}`, Math.max(1, statusLineWidth - ` (${Math.max(0, Math.floor((now - conductorStatus.since) / 1000))}s)`.length))} (${Math.max(0, Math.floor((now - conductorStatus.since) / 1000))}s)`
+            : fitWorkerStatusLine(name, worker, statusLineWidth)}</Text>
         ))
       )}
     </TitledBorderPane>
@@ -557,7 +569,7 @@ export function IssueSessionTui({
   const openQuestionsPaneHeight =
     operatorInputDisplay.mode === 'withQuestions' ? openQuestionsLayout.paneHeight : 0;
   const workerPaneHeight = computeWorkerPaneHeight(
-    Object.keys(snapshot.displayState.workers).length,
+    Object.keys(snapshot.displayState.workers).length + (snapshot.conductorStatus && !snapshot.displayState.workers.conductor ? 1 : 0),
   );
   const queuedMessages = snapshot.operatorContext?.queuedMessages ?? [];
   const desiredQueueRows = queuedMessages.length === 0 ? 0 :
@@ -1000,6 +1012,7 @@ export function IssueSessionTui({
           <WorkerStatusPane
             workers={snapshot.displayState.workers}
             dispatchHold={snapshot.displayState.dispatchHold}
+            conductorStatus={snapshot.conductorStatus}
             height={paneHeights.workerPaneHeight}
             terminalColumns={terminalColumns}
             issueUrl={issueUrl}

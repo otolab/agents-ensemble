@@ -1,3 +1,4 @@
+import { conductorFailureLogPath } from './conductor-failure-log.js';
 import {
   copyFile,
   mkdir,
@@ -109,6 +110,8 @@ describe('exportSessionBundle', () => {
     await writeCodexWorkerRollout(101);
     await writeFile(summaryPath, '{"lastError":{"message":"SUMMARY_RAW"}}\n');
     await writeFile(harnessLogPath, '[harness] raw stderr\n');
+    const failureLogPath = conductorFailureLogPath({ repoRoot, issueUrl: ISSUE_URL, conductorAgentId: SESSION_ID });
+    await writeFile(failureLogPath, '{\"type\":\"compaction_failed\"}\n');
     const toolCallsPath = paths.canonicalToolCallHistoryPath(
       ISSUE_URL,
       SESSION_ID,
@@ -130,7 +133,7 @@ describe('exportSessionBundle', () => {
     });
 
     expect(result.status).toBe('complete');
-    expect(result.fileCount).toBe(8);
+    expect(result.fileCount).toBe(9);
     expect(result.warnings).toEqual([]);
     expect(result.manifest).toMatchObject({
       schemaVersion: 1,
@@ -216,6 +219,7 @@ describe('exportSessionBundle', () => {
         'harness/open-questions.yaml',
         paths.canonicalOpenQuestionsPath(ISSUE_URL, SESSION_ID),
       ],
+      ['harness/conductor-failures.jsonl', failureLogPath],
       ['harness/session.tool-calls', toolCallsPath],
       ['inputs/session-summary.json', summaryPath],
       ['inputs/harness.log', harnessLogPath],

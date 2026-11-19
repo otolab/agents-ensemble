@@ -135,6 +135,7 @@ export interface ConductorSessionDriverOptions {
   onWorkerFailuresUnconfirmed?: (attemptId: string, events: SessionEvent[]) => void;
   onSendStarted?: (info: ConductorSendStartedInfo) => void;
   onSendProgress?: (info: ConductorSendProgressInfo) => void;
+  onOutputPhase?: (phase: 'thinking' | 'writing') => void;
   onSendComplete: (info: ConductorSendCompleteInfo) => void;
   onDispatchBatchSettled?: (input: {
     events: SessionEvent[];
@@ -473,6 +474,7 @@ export async function runConductorSessionDriver(
       resetOutboundDispatchesThisSend: options.resetOutboundDispatchesThisSend,
       getOutboundDispatchesThisSend: options.getOutboundDispatchesThisSend,
       onSendStarted: options.onSendStarted,
+      onOutputPhase: options.onOutputPhase,
       onSendProgress: (info) => {
         initialToolCallStarted = true;
         options.onSendProgress?.(info);
@@ -809,6 +811,7 @@ export async function runConductorSessionDriver(
       resetOutboundDispatchesThisSend: options.resetOutboundDispatchesThisSend,
       getOutboundDispatchesThisSend: options.getOutboundDispatchesThisSend,
       onSendStarted: options.onSendStarted,
+      onOutputPhase: options.onOutputPhase,
       onSendProgress: (info) => {
         dispatchHadToolCalls = true;
         options.onSendProgress?.(info);
@@ -920,6 +923,7 @@ function runEventConductorSend(input: {
   getOutboundDispatchesThisSend?: () => number;
   onSendStarted?: (info: ConductorSendStartedInfo) => void;
   onSendProgress?: (info: ConductorSendProgressInfo) => void;
+  onOutputPhase?: (phase: 'thinking' | 'writing') => void;
   onSendComplete: (info: ConductorSendCompleteInfo) => void;
 }): Promise<ConductorSendResult> {
   const workersBefore = input.workerDispatches.length;
@@ -943,6 +947,7 @@ function runEventConductorSend(input: {
         sendCount: nextSendCount,
         ...(input.dispatchSource ? { dispatchSource: input.dispatchSource } : {}),
       },
+      onOutputPhase: input.onOutputPhase,
       onToolCallStarted: (info) => {
         input.onSendProgress?.({
           sendCount: nextSendCount,

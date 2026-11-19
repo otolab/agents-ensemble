@@ -1,3 +1,4 @@
+import type { ConductorCompactionEvent, ConductorRetryEvent } from '../../conductor-agent.js';
 import type { EscalationRecord } from '../../../escalation/human-inquiry.js';
 import type { OpenQuestion } from '../../../escalation/open-question.js';
 import type { WorkerHarnessState } from '../../../runtime/worker-status.js';
@@ -301,6 +302,9 @@ export interface HarnessWarningEvent {
 
 /** harness / TUI / snapshot 向けの時系列テレメトリイベント。 */
 export type SessionLogEvent =
+  | { type: 'conductor.output_phase'; phase: 'thinking' | 'writing' }
+  | { type: 'conductor.compaction'; event: ConductorCompactionEvent }
+  | { type: 'conductor.retry'; event: ConductorRetryEvent }
   | HarnessWorktreeEvent
   | HarnessWorktreeRemovedEvent
   | HarnessWorktreeRemoveSkippedEvent

@@ -1,3 +1,5 @@
+import type { SessionLogEvent } from './session-log-event.js';
+
 /** harness-events.md §2.1–2.3 / worktree ライフサイクル。 */
 export const HARNESS_TELEMETRY_EVENT_TYPES = [
   'harness.worktree',
@@ -17,6 +19,9 @@ export const HARNESS_TELEMETRY_EVENT_TYPES = [
   'conductor.inbound',
   'conductor.send.started',
   'conductor.send.progress',
+  'conductor.output_phase',
+  'conductor.compaction',
+  'conductor.retry',
   'conductor.send',
   'conductor.outbound',
   'harness.worker.bootstrap',
@@ -60,6 +65,12 @@ export const ALL_SESSION_LOG_EVENT_TYPES = [
 ] as const;
 
 export type SessionLogEventType = (typeof ALL_SESSION_LOG_EVENT_TYPES)[number];
+
+// Fail the production type-check if either the union or the public list drifts.
+type AssertTrue<T extends true> = T;
+type _SessionLogEventTypesAreComplete = AssertTrue<
+  [Exclude<SessionLogEvent['type'], SessionLogEventType>, Exclude<SessionLogEventType, SessionLogEvent['type']>] extends [never, never] ? true : false
+>;
 
 /** harness-events.md §3 の conductor dispatch イベント。 */
 export const SESSION_EVENT_TYPES = [

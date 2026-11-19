@@ -973,11 +973,12 @@ async function runTtyConversation(options: {
       }
     }
   };
+  tui.setHarnessStatus(shownHoldStatus);
   const unsubscribeHoldChanges = options.dispatchQueue.subscribe(() => {
     const nextStatus = formatReportHoldStatus(options.dispatchQueue);
     if (nextStatus === shownHoldStatus) return;
     shownHoldStatus = nextStatus;
-    writeChannelLine('harness', nextStatus);
+    tui.setHarnessStatus(nextStatus);
   });
   const wakeDispatch = () => options.dispatchQueue.wake();
   const unsubscribeLifecycle = options.dispatchLifecycle.subscribe(wakeDispatch);

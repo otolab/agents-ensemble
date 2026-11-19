@@ -4,6 +4,8 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+packageExtensionsChecksum: sha256-qIuDwpVz0OqWQhwp2heRuiIkNYW+tK+wcNooDxQI6Oc=
+
 importers:
 
   .:
@@ -68,7 +70,7 @@ importers:
         version: 19.2.2
       ink-testing-library:
         specifier: 4.0.0
-        version: 4.0.0(@types/react@19.2.2)
+        version: 4.0.0(@types/react@19.2.2)(ink@7.1.1(@types/react@19.2.2)(react@19.2.0))
       js-yaml:
         specifier: 4.1.0
         version: 4.1.0
@@ -1548,6 +1550,7 @@ packages:
     engines: {node: '>=18'}
     peerDependencies:
       '@types/react': '>=18.0.0'
+      ink: '*'
     peerDependenciesMeta:
       '@types/react':
         optional: true
@@ -3942,7 +3945,9 @@ snapshots:
   inherits@2.0.4:
     optional: true
 
-  ink-testing-library@4.0.0(@types/react@19.2.2):
+  ink-testing-library@4.0.0(@types/react@19.2.2)(ink@7.1.1(@types/react@19.2.2)(react@19.2.0)):
+    dependencies:
+      ink: 7.1.1(@types/react@19.2.2)(react@19.2.0)
     optionalDependencies:
       '@types/react': 19.2.2
 

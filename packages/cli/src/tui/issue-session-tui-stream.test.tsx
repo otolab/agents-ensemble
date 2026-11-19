@@ -10,6 +10,8 @@ import { cleanup, render } from 'ink-testing-library';
 import type { OpenQuestion } from '@agents-ensemble/core';
 import { IssueSessionTuiStream } from './issue-session-tui-stream.js';
 import { createTuiViewModel } from './tui-view-model.js';
+import { createTuiTelemetrySink } from './create-tui-telemetry-sink.js';
+import { SessionLogger } from '@agents-ensemble/core';
 import { extractTuiPaneFrameStats } from './orchestration-pane-frame.js';
 import { flushInkStdin, INK_TEST_KEYS } from './ink-test-keys.js';
 import { OPERATOR_INPUT_PROMPT } from './tui-layout-constants.js';
@@ -78,6 +80,23 @@ const LONG_QUESTION_CONTEXT = Array.from(
 ).join('\n');
 
 describe('IssueSessionTuiStream', () => {
+  it('shows factory notifications and their elapsed time before the first send', () => {
+    const clock = vi.spyOn(Date, 'now');
+    try {
+      const model = createTuiViewModel();
+      const logger = new SessionLogger({ issueUrl: 'https://github.com/o/r/issues/1', repoRoot: '/tmp' });
+      logger.subscribe(createTuiTelemetrySink(model));
+      clock.mockReturnValue(1000);
+      logger.emit({ type: 'conductor.compaction', event: { type: 'start', reason: 'overflow' } });
+      clock.mockReturnValue(2000);
+      logger.emit({ type: 'conductor.retry', event: { type: 'auto_retry_start', attempt: 1, maxAttempts: 3, delayMs: 10, errorMessage: 'e' } });
+      clock.mockReturnValue(6000);
+      logger.emit({ type: 'conductor.retry', event: { type: 'auto_retry_end', success: true, attempt: 1 } });
+      const { lastFrame, unmount } = render(<IssueSessionTuiStream viewModel={model} onSubmit={() => {}} />);
+      expect(lastFrame()).toContain('conductor: compacting (overflow) (5s)');
+      unmount();
+    } finally { clock.mockRestore(); }
+  });
   beforeEach(() => {
     Object.defineProperty(process.stdout, 'rows', {
       configurable: true,

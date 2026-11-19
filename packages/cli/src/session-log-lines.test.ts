@@ -8,6 +8,11 @@ import {
 } from './session-log-lines.js';
 
 describe('session-log-lines', () => {
+  it('logs Pi compaction and retry failures', () => {
+    expect(formatHarnessLogBody({ type: 'conductor.compaction', event: { type: 'end', reason: 'overflow', outcome: 'failed', errorMessage: 'failed' } })).toContain('compaction failed');
+    expect(formatHarnessLogBody({ type: 'conductor.retry', event: { type: 'auto_retry_end', success: false, attempt: 2, finalError: 'failed' } })).toContain('retry failed');
+    expect(formatHarnessLogBody({ type: 'conductor.compaction', event: { type: 'start', reason: 'overflow' } })).toBeUndefined();
+  });
   it('includes operator delivery mode in verbose session log rows', () => {
     expect(
       formatHarnessLogBody(
