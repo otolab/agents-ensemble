@@ -60,9 +60,35 @@ describe('createTuiTelemetrySink', () => {
     sink({ type: 'conductor.retry', event: { type: 'summarization_retry_scheduled', attempt: 1, maxAttempts: 3, delayMs: 1, errorMessage: 'e' } });
     sink({ type: 'conductor.retry', event: { type: 'auto_retry_start', attempt: 1, maxAttempts: 2, delayMs: 1, errorMessage: 'e' } });
     sink({ type: 'conductor.retry', event: { type: 'auto_retry_end', success: false, attempt: 1, finalError: 'e' } });
+    expect(model.getSnapshot().conductorStatus?.text).toBe('retrying 1/3');
     sink({ type: 'conductor.retry', event: { type: 'summarization_retry_finished' } });
     expect(model.getSnapshot().conductorStatus?.text).toBe('retry failed');
     expect(model.getSnapshot().activityLog.some((entry) => entry.text.includes('retry failed'))).toBe(true);
+  });
+
+  it.each(['retry-first', 'compaction-first'] as const)('shows active work and the latest failure in completion order: %s', (order) => {
+    const model = createTuiViewModel();
+    const sink = createTuiTelemetrySink(model);
+    sink({ type: 'conductor.compaction', event: { type: 'start', reason: 'overflow' } });
+    sink({ type: 'conductor.retry', event: { type: 'summarization_retry_scheduled', attempt: 1, maxAttempts: 3, delayMs: 1, errorMessage: 'e' } });
+    sink({ type: 'conductor.retry', event: { type: 'auto_retry_start', attempt: 1, maxAttempts: 2, delayMs: 1, errorMessage: 'e' } });
+    sink({ type: 'conductor.retry', event: { type: 'auto_retry_end', success: false, attempt: 1, finalError: 'e' } });
+    expect(model.getSnapshot().conductorStatus?.text).toBe('retrying 1/3');
+    const finishRetry = () => sink({ type: 'conductor.retry', event: { type: 'summarization_retry_finished' } });
+    const failCompaction = () => sink({ type: 'conductor.compaction', event: { type: 'end', reason: 'overflow', outcome: 'failed' } });
+    if (order === 'retry-first') {
+      finishRetry();
+      expect(model.getSnapshot().conductorStatus?.text).toBe('compacting (overflow)');
+      failCompaction();
+    } else {
+      failCompaction();
+      expect(model.getSnapshot().conductorStatus?.text).toBe('retrying 1/3');
+      finishRetry();
+    }
+    expect(model.getSnapshot().conductorStatus?.text).toBe('compaction failed');
+    const logs = model.getSnapshot().activityLog.map((entry) => entry.text).join('\n');
+    expect(logs).toContain('retry failed');
+    expect(logs).toContain('compaction failed');
   });
 
   it('separates harness from observation entries in the activity log', () => {

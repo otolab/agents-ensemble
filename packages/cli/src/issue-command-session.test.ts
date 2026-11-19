@@ -255,12 +255,18 @@ describe('executeIssueCommand with the core session', () => {
     const factory = {
       create: vi.fn(async (options: import('../../core/src/conductor/conductor-agent.js').ConductorAgentCreateOptions) => {
         options.onCompactionEvent?.({ type: 'start', reason: 'overflow' });
+        options.onRetryEvent?.({ type: 'summarization_retry_scheduled', attempt: 1, maxAttempts: 3, delayMs: 1, errorMessage: 'private-token' });
         options.onRetryEvent?.({ type: 'auto_retry_start', attempt: 1, maxAttempts: 2, delayMs: 1, errorMessage: 'private-token' });
         expect(model.getSnapshot().conductorStatus?.text).toBe('retrying 1/2');
-        options.onRetryEvent?.({ type: 'auto_retry_end', success: true, attempt: 1 });
-        expect(model.getSnapshot().conductorStatus?.text).toBe('compacting (overflow)');
+        options.onRetryEvent?.({ type: 'auto_retry_end', success: false, attempt: 1, finalError: 'private-token' });
+        expect(model.getSnapshot().conductorStatus?.text).toBe('retrying 1/3');
         options.onCompactionEvent?.({ type: 'end', reason: 'overflow', outcome: 'failed', errorMessage: 'private-token' });
+        expect(model.getSnapshot().conductorStatus?.text).toBe('retrying 1/3');
+        options.onRetryEvent?.({ type: 'summarization_retry_finished' });
         expect(model.getSnapshot().conductorStatus?.text).toBe('compaction failed');
+        const activity = model.getSnapshot().activityLog.map((entry) => entry.text).join('\n');
+        expect(activity).toContain('retry failed');
+        expect(activity).toContain('compaction failed');
         return { agentId: 'agent-test', send: mockSend, close: mockClose, getUsage: vi.fn().mockResolvedValue({}) };
       }),
       resume: vi.fn(),
@@ -279,6 +285,7 @@ describe('executeIssueCommand with the core session', () => {
     const saved = await readFile(path, 'utf8');
     expect(saved).toContain('compaction_failed');
     expect(saved).toContain('retry_scheduled');
+    expect(saved).toContain('retry_failed');
     expect(saved).not.toContain('private-token');
   });
 
