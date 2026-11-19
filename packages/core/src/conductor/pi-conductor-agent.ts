@@ -333,6 +333,7 @@ export class PiConductorAgent implements ConductorAgent {
     private readonly onStreamText?: (text: string) => void,
     private readonly onContextCompaction?: () => void,
     private readonly onRetryEvent?: ConductorAgentCreateOptions['onRetryEvent'],
+    private readonly onCompactionEvent?: ConductorAgentCreateOptions['onCompactionEvent'],
   ) {
     this.unsubscribe = this.session.subscribe((event) => this.handleEvent(event));
   }
@@ -594,6 +595,24 @@ export class PiConductorAgent implements ConductorAgent {
       // Pi transcript. Mutating this message keeps the event and persisted entry
       // safe if a failure came from a nonstandard Pi stream path.
       sanitizePiAssistantMessageInPlace(event.message);
+    }
+
+    if (event.type === 'compaction_start' || event.type === 'compaction_end') {
+      // Observers must not interfere with the Pi session or its send lifecycle.
+      try {
+        if (event.type === 'compaction_start') {
+          this.onCompactionEvent?.({ type: 'start', reason: event.reason });
+        } else {
+          this.onCompactionEvent?.({
+            type: 'end', reason: event.reason,
+            outcome: event.aborted ? 'aborted' : event.errorMessage != null || event.result == null ? 'failed' : 'success',
+            ...(event.result ? { tokensBefore: event.result.tokensBefore } : {}),
+            ...(event.errorMessage != null ? { errorMessage: event.errorMessage } : {}),
+          });
+        }
+      } catch {
+        // Observational callbacks cannot stop compaction or dispatch.
+      }
     }
 
     if (
@@ -1141,6 +1160,7 @@ async function createPiConductorSession(
       options.onStreamText,
       options.onContextCompaction,
       options.onRetryEvent,
+      options.onCompactionEvent,
     );
   } catch (error) {
     if (!session) throw error;

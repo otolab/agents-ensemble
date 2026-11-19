@@ -1086,6 +1086,50 @@ describe('runOperatorAgent', () => {
     ).resolves.toEqual([]);
   });
 
+  it('shows compaction outcomes while a send and next input continue', async () => {
+    const input = createInteractiveInput();
+    input.isTTY = true;
+    const output = createOutput();
+    let options: ConductorAgentCreateOptions | undefined;
+    let finishFirst: ((result: Awaited<ReturnType<ConductorAgent['send']>>) => void) | undefined;
+    const prompts: string[] = [];
+    const fakeAgent = createFakeAgent({
+      send: async (prompt) => {
+        prompts.push(prompt);
+        if (prompts.length === 1) return await new Promise((resolve) => { finishFirst = resolve; });
+        return { runId: 'second', status: 'completed', result: 'second done' };
+      },
+    });
+    const run = runOperatorAgent({ repoRoot, backend: 'pi' }, {
+      stdin: input, stdout: output,
+      agentFactory: {
+        create: async (value) => { options = value; return fakeAgent; },
+        resume: async (id, value) => { options = value; return fakeAgent; },
+      },
+    });
+    input.write('first\n');
+    await vi.waitFor(() => expect(finishFirst).toBeTypeOf('function'));
+    const emit = options!.onCompactionEvent!;
+    emit({ type: 'start', reason: 'threshold' });
+    emit({ type: 'end', reason: 'threshold', outcome: 'success', tokensBefore: 200 });
+    emit({ type: 'start', reason: 'manual' });
+    emit({ type: 'end', reason: 'manual', outcome: 'failed', errorMessage: 'failure detail' });
+    emit({ type: 'start', reason: 'overflow' });
+    emit({ type: 'end', reason: 'overflow', outcome: 'aborted' });
+    input.write('second\n');
+    finishFirst!({ runId: 'first', status: 'completed', result: 'first done' });
+    await vi.waitFor(() => expect(prompts).toHaveLength(2));
+    await vi.waitFor(() => expect(output.capturedText()).toContain('second done'));
+    const transcript = output.capturedText();
+    expect(transcript).toContain('compaction 開始（自動）');
+    expect(transcript).toContain('compaction 成功（このプロセスで 1 回、圧縮前 200 tokens）');
+    expect(transcript).toContain('compaction 失敗: failure detail');
+    expect(transcript).toContain('compaction 中断');
+    input.write('/exit\n');
+    input.end();
+    await run;
+  });
+
   it('shows send and tool activity while preserving the TTY prompt', async () => {
     const input = createInteractiveInput();
     input.isTTY = true;
@@ -1645,6 +1689,8 @@ describe('runOperatorAgent', () => {
       // This is the same session that will finish the user send and receive the report.
       pi.emit({ type: 'auto_retry_start', attempt: 1, maxAttempts: 2, delayMs: 10, errorMessage: 'timeout' });
       await vi.waitFor(() => expect(output.capturedText()).toContain('[pi retry] attempt 1/2'));
+      pi.emit({ type: 'compaction_start', reason: 'threshold' });
+      pi.emit({ type: 'compaction_end', reason: 'threshold', result: { tokensBefore: 100 }, aborted: false, willRetry: false });
       expect(sentPrompts).toHaveLength(1);
       expect(sentPrompts[0]).toBe('summarize the live update');
 
@@ -3239,9 +3285,11 @@ describe('runOperatorAgent', () => {
       create: async (options) => {
         pi = createScriptedPiAgent(options, async (emit) => {
           emit({ type: 'auto_retry_start', attempt: 1, maxAttempts: 3, delayMs: 20, errorMessage: 'overloaded' });
+          emit({ type: 'compaction_start', reason: 'threshold' });
           emit({ type: 'summarization_retry_scheduled', attempt: 1, maxAttempts: 2, delayMs: 10, errorMessage: 'timeout' });
           emit({ type: 'summarization_retry_attempt_start', source: 'compaction', reason: 'threshold' });
           emit({ type: 'summarization_retry_finished' });
+          emit({ type: 'compaction_end', reason: 'threshold', result: { tokensBefore: 200 }, aborted: false, willRetry: false });
           await pending;
           emit({ type: 'auto_retry_end', success: true, attempt: 1 });
           return { text: 'done' };
@@ -3263,6 +3311,15 @@ describe('runOperatorAgent', () => {
       expect(stdout.capturedText()).toContain('[pi summarization retry] attempt 1/2 in 10ms error=timeout');
       expect(normalizeTtyText(stdout.capturedText())).toContain('[pi summarization retry] attempt started source=compaction reason=threshold');
       expect(stdout.capturedText()).toContain('[pi summarization retry] finished');
+      const transcript = normalizeTtyText(stdout.capturedText());
+      const compactionStart = transcript.indexOf('compaction 開始（自動）');
+      const retryStart = transcript.indexOf('[pi summarization retry] attempt 1/2');
+      const retryEnd = transcript.indexOf('[pi summarization retry] finished');
+      const compactionEnd = transcript.indexOf('compaction 成功（このプロセスで 1 回、圧縮前 200 tokens）');
+      expect(compactionStart).toBeGreaterThanOrEqual(0);
+      expect(retryStart).toBeGreaterThan(compactionStart);
+      expect(retryEnd).toBeGreaterThan(retryStart);
+      expect(compactionEnd).toBeGreaterThan(retryEnd);
     } finally {
       finish();
       stdin.write('/exit\n');
@@ -4091,7 +4148,7 @@ function createScriptedPiAgent(
   const agent = new PiConductorAgent(
     session as never, {} as never, {} as never, {} as never, { value: '' },
     'operator-agent-id', 'smoke-model', {}, { enabled: false }, { active: false },
-    false, false, undefined, undefined, options.onRetryEvent,
+    false, false, undefined, undefined, options.onRetryEvent, options.onCompactionEvent,
   );
   const send = agent.send.bind(agent);
   agent.send = async (...args) => {

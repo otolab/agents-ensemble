@@ -752,12 +752,14 @@ describe('PiConductorAgent', () => {
 
   it('counts only successful compaction_end events and ignores missing, failed, or aborted results', async () => {
     const onContextCompaction = vi.fn();
+    const onCompactionEvent = vi.fn();
     const conductor = await createPiAgent({
       cwd,
       pi: { agentDir },
       modelId: 'anthropic/model-1',
       systemPrompt: 'system',
       onContextCompaction,
+      onCompactionEvent,
     });
 
     // Persisted compaction entries are not the normal success notification.
@@ -768,6 +770,7 @@ describe('PiConductorAgent', () => {
     // No event means there is nothing to count.
     expect(onContextCompaction).not.toHaveBeenCalled();
 
+    sessionListener?.({ type: 'compaction_start', reason: 'threshold' });
     sessionListener?.({
       type: 'compaction_end',
       reason: 'threshold',
@@ -776,6 +779,7 @@ describe('PiConductorAgent', () => {
       willRetry: false,
       errorMessage: 'Auto-compaction failed',
     });
+    sessionListener?.({ type: 'compaction_start', reason: 'manual' });
     sessionListener?.({
       type: 'compaction_end',
       reason: 'manual',
@@ -785,6 +789,7 @@ describe('PiConductorAgent', () => {
     });
     expect(onContextCompaction).not.toHaveBeenCalled();
 
+    sessionListener?.({ type: 'compaction_start', reason: 'overflow' });
     sessionListener?.({
       type: 'compaction_end',
       reason: 'overflow',
@@ -800,6 +805,14 @@ describe('PiConductorAgent', () => {
       willRetry: true,
     });
     expect(onContextCompaction).toHaveBeenCalledOnce();
+    expect(onCompactionEvent.mock.calls.map(([event]) => event)).toEqual([
+      { type: 'start', reason: 'threshold' },
+      { type: 'end', reason: 'threshold', outcome: 'failed', errorMessage: 'Auto-compaction failed' },
+      { type: 'start', reason: 'manual' },
+      { type: 'end', reason: 'manual', outcome: 'aborted' },
+      { type: 'start', reason: 'overflow' },
+      { type: 'end', reason: 'overflow', outcome: 'success', tokensBefore: 200 },
+    ]);
     await conductor.close();
   });
 
