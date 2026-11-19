@@ -353,13 +353,17 @@ it('updates the status without accumulating it and keeps input responsive', asyn
     }
     expect(lines()).not.toContain('operator: thinking');
     expect(lines()).not.toContain('operator: calling tool');
-    host.setStatus('thinking');
-    await vi.waitFor(() => expect(lines()).toContain('thinking (1s)'), { timeout: 2500 });
+    host.setStatus('thinking', Date.now() - 60_000);
+    await vi.waitFor(() => expect(lines()).toMatch(/thinking \([1-9]\d*s\)/));
+    const thinkingElapsed = Number(lines().match(/thinking \((\d+)s\)/)![1]);
     terminal.resize(40, 10); stdout.columns = 40; stdout.rows = 10; stdout.emit('resize');
     await new Promise((resolve) => setTimeout(resolve, 300));
     host.setStatus('待機中');
-    await vi.waitFor(() => expect(lines()).toContain('待機中 (0s)'));
-    expect(lines()).not.toContain('thinking (1s)');
+    await vi.waitFor(() => {
+      const elapsed = Number(lines().match(/待機中 \((\d+)s\)/)?.[1] ?? Infinity);
+      expect(elapsed).toBeLessThan(thinkingElapsed);
+    });
+    expect(lines()).not.toMatch(/thinking \(\d+s\)/);
     stdin.write('\r');
     await vi.waitFor(() => expect(submit).toHaveBeenCalledWith('draft'));
   } finally { await host.dispose(); terminal.dispose(); stdin.destroy(); stdout.destroy(); }
@@ -373,9 +377,9 @@ it('keeps elapsed time visible for a long tool name through resize', async () =>
   const host = createOperatorAgentTuiHost({ stdin, stdout, colorEnabled: false, onSubmit: vi.fn(), onInterrupt: vi.fn() });
   const screen = () => Array.from({ length: terminal.rows }, (_, i) => terminal.buffer.active.getLine(terminal.buffer.active.viewportY + i)?.translateToString(true) ?? '').join('\n');
   try {
-    host.setStatus('calling register_conductor_message_listen');
+    host.setStatus('calling register_conductor_message_listen', Date.now() - 2_000);
     const elapsed = () => Number(screen().match(/operator: calling .+ \((\d+)s\)/)?.[1] ?? -1);
-    await vi.waitFor(() => expect(elapsed()).toBeGreaterThanOrEqual(1), { timeout: 2500 });
+    await vi.waitFor(() => expect(elapsed()).toBeGreaterThanOrEqual(1));
     const before = elapsed();
     host.setStatus('calling register_conductor_message_listen');
     expect(elapsed()).toBeGreaterThanOrEqual(before);
