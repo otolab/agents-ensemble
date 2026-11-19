@@ -3971,7 +3971,7 @@ describe('operator watch pool', () => {
         retriedContenderCount,
       }).toEqual({
         contenderOutcome: expect.stringMatching(
-          /^failed:Could not acquire operator watch state profile lock/u,
+          /^failed:Could not acquire operator (?:workspace|watch state profile) lock/u,
         ),
         sessionTwoCursorBeforeOwnerResumed: 1,
         pendingSessionsBeforeOwnerResumed: [],

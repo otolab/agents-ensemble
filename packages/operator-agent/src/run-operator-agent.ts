@@ -34,6 +34,7 @@ import {
   type SessionResumeStoreDuplicateDiagnostic,
 } from '@agents-ensemble/core/operator-runtime';
 import { operatorBaseModule } from './operator-base-module.js';
+import { withOperatorWorkspaceLock } from './operator-workspace-lock.js';
 import {
   createOperatorDispatchQueue,
   formatOperatorDispatchBatch,
@@ -74,6 +75,8 @@ import {
 import { createListWorkerMessagesTool } from './worker-session-tools.js';
 import {
   createOperatorWorkspaceFileTools,
+  assertNoMoveJournal,
+  workspaceMoveJournalPath,
   resolveOperatorWorkspaceRoot,
 } from './operator-workspace-tools.js';
 import {
@@ -601,8 +604,13 @@ async function resolveOperatorRuntime(
         instructions: profile.prompt.instructions,
       })
     : operatorBaseModule;
-  const workspaceInstructions = await loadWorkspaceInstructions(
-    await resolveOperatorWorkspaceRoot(workspace),
+  const canonicalWorkspace = await resolveOperatorWorkspaceRoot(workspace);
+  const workspaceInstructions = await withOperatorWorkspaceLock(
+    canonicalWorkspace,
+    async () => {
+      await assertNoMoveJournal(workspaceMoveJournalPath(canonicalWorkspace));
+      return loadWorkspaceInstructions(canonicalWorkspace);
+    },
   );
   const basePrompt = renderCompiledPrompt(
     compile(

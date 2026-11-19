@@ -538,9 +538,17 @@ describe('operator profile workspace file tools', () => {
       const child = spawn(process.execPath, ['--input-type=module', '-e', script, canonical, stage], { stdio: ['ignore', 'pipe', 'pipe'] });
       try {
         await once(child.stdout, 'data');
+        let statusReturned = false;
+        const pendingStatus = tools[GET_OPERATOR_WORKSPACE_MOVE_STATUS_TOOL]!.execute({}).then((result) => {
+          statusReturned = true;
+          return result;
+        });
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        expect(statusReturned).toBe(false);
+        const exited = once(child, 'exit');
         child.kill('SIGKILL');
-        await once(child, 'exit');
-        const status = await tools[GET_OPERATOR_WORKSPACE_MOVE_STATUS_TOOL]!.execute({});
+        await exited;
+        const status = await pendingStatus;
         if (stage === 'journal_open' || stage === 'journal_partial') {
           expect(status.structuredContent?.status).toBe('journal_unreadable');
           await expect(readFile(join(workspace, 'source'), 'utf8')).resolves.toBe('SOURCE');
@@ -559,6 +567,38 @@ describe('operator profile workspace file tools', () => {
       } finally { child.kill('SIGKILL'); }
     }, 15000,
   );
+
+  it('serializes moves from separate processes before checking the destination', async () => {
+    const { spawn } = await import('node:child_process');
+    const { once } = await import('node:events');
+    const canonical = await realpath(workspace);
+    await writeFile(join(workspace, 'first'), 'FIRST');
+    await writeFile(join(workspace, 'second'), 'SECOND');
+    const moduleUrl = new URL('../dist/operator-workspace-tools.js', import.meta.url).href;
+    const script = `
+      import { createOperatorWorkspaceFileTools } from ${JSON.stringify(moduleUrl)};
+      import { rename, cp, rm } from 'node:fs/promises';
+      const fake = { rename: async (...args) => { console.log('ready'); await new Promise(resolve => process.stdin.once('data', resolve)); return rename(...args); }, cp, rm };
+      await createOperatorWorkspaceFileTools(process.argv[1], fake).move_operator_workspace_file.execute({ source: 'first', destination: 'dest' });
+    `;
+    const child = spawn(process.execPath, ['--input-type=module', '-e', script, canonical], { stdio: ['pipe', 'pipe', 'pipe'] });
+    try {
+      await once(child.stdout, 'data');
+      let finished = false;
+      const second = tools[MOVE_OPERATOR_WORKSPACE_FILE_TOOL]!.execute({ source: 'second', destination: 'dest' }).then(
+        () => { finished = true; return 'success'; },
+        () => { finished = true; return 'rejected'; },
+      );
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(finished).toBe(false);
+      const exit = once(child, 'exit');
+      child.stdin.end('continue');
+      expect((await exit)[0]).toBe(0);
+      expect(await second).toBe('rejected');
+      expect(await readFile(join(workspace, 'dest'), 'utf8')).toBe('FIRST');
+      expect(await readFile(join(workspace, 'second'), 'utf8')).toBe('SECOND');
+    } finally { child.kill('SIGKILL'); }
+  }, 15000);
 
   it('preserves real watch pool updates while rejecting a move of its state', async () => {
     const { createOperatorWatchPool } = await import('./operator-watch-pool.js');

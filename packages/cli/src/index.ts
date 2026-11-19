@@ -143,6 +143,26 @@ program
     }
   });
 
+program
+  .command('operator-workspace-maintain')
+  .description('Hold the workspace lock while inspecting an interrupted move')
+  .requiredOption('--profile <name>', 'Operator profile name')
+  .action(async (options: { profile: string }) => {
+    if (!process.stdin.isTTY || !process.stdout.isTTY) throw new Error('Workspace maintenance requires an interactive TTY.');
+    const { maintainOperatorWorkspace } = await import('@agents-ensemble/operator-agent');
+    const { createInterface } = await import('node:readline/promises');
+    await maintainOperatorWorkspace(options.profile, async (status, journal) => {
+      console.log(JSON.stringify(status, null, 2));
+      console.log(`Journal: ${journal}`);
+      console.log('Inspect and preserve all data using another terminal. Keep this command running.');
+      const prompt = createInterface({ input: process.stdin, output: process.stdout });
+      try {
+        const answer = await prompt.question('When preservation is complete, type COMPLETE to remove the journal; anything else leaves it in place: ');
+        return answer === 'COMPLETE';
+      } finally { prompt.close(); }
+    });
+  });
+
 const session = program
   .command('session')
   .description(

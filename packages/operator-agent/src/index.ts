@@ -1,3 +1,4 @@
+export { maintainOperatorWorkspace } from './operator-workspace-maintenance.js';
 export { runOperatorAgent } from './run-operator-agent.js';
 export type {
   OperatorAgentInput,

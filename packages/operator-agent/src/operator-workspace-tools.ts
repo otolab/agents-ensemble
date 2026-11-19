@@ -1,5 +1,6 @@
 import { constants as fsConstants } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
+import { withOperatorWorkspaceLock } from './operator-workspace-lock.js';
 import {
   lstat,
   cp,
@@ -322,10 +323,10 @@ export function createOperatorWorkspaceFileTools(
   for (const tool of Object.values(tools)) {
     const execute = tool.execute;
     tool.execute = (args) => {
-      const run = queue.then(async () => {
+      const run = queue.then(() => withOperatorWorkspaceLock(root, async () => {
         await assertNoMoveJournal(journalPath);
         return execute(args);
-      });
+      }));
       queue = run.catch(() => undefined);
       return run;
     };
@@ -335,10 +336,10 @@ export function createOperatorWorkspaceFileTools(
     description: 'Inspect a pending workspace move when workspace file tools are blocked. Tell the user to stop the agent, inspect and preserve source, destination, staging and the journal manually, and remove the journal only after preserving the data. A corrupt journal also requires manual inspection. No data is restored, selected, or deleted.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     execute: (args) => {
-      const run = queue.then(async () => {
+      const run = queue.then(() => withOperatorWorkspaceLock(root, async () => {
         assertOnlyInputProperties(args, []);
         return toolResult(await readMoveStatus(root, journalPath));
-      });
+      }));
       queue = run.catch(() => undefined);
       return run;
     },
@@ -356,20 +357,20 @@ function isWithin(parent: string, child: string): boolean {
   return path === '' || (path !== '..' && !path.startsWith(`..${sep}`) && !isAbsolute(path));
 }
 
-function workspaceMoveJournalPath(root: string): string {
+export function workspaceMoveJournalPath(root: string): string {
   const id = createHash('sha256').update(root).digest('hex');
   return join(dirname(root), `.ensemble-workspace-move-${id}.json`);
 }
 
-async function assertNoMoveJournal(path: string): Promise<void> {
+export async function assertNoMoveJournal(path: string): Promise<void> {
   try { await lstat(path); } catch (error) {
     if (isNodeError(error, 'ENOENT')) return;
     throw new WorkspaceError('Cannot check workspace move status. Inspect the move journal manually.');
   }
-  throw new WorkspaceError('A workspace move needs manual inspection. Use get_operator_workspace_move_status.');
+  throw new WorkspaceError('A workspace move needs manual inspection. Run ensemble operator-workspace-maintain --profile <name>.');
 }
 
-async function readMoveStatus(root: string, journalPath: string): Promise<Record<string, ConductorJsonValue>> {
+export async function readMoveStatus(root: string, journalPath: string): Promise<Record<string, ConductorJsonValue>> {
   try {
     const metadata = await lstat(journalPath);
     if (!metadata.isFile() || metadata.size > 16384) throw new Error();
