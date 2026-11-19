@@ -1,3 +1,4 @@
+import { isEnoentError as isEnoent } from './operator-utils.js';
 import type { Dirent } from 'node:fs';
 import { chmod, mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
@@ -246,12 +247,4 @@ function requireTimestamp(value: unknown, field: string, source: string): number
     throw new Error(`Invalid operator-agent ${field} at ${source}.`);
   }
   return value;
-}
-
-function isEnoent(error: unknown): boolean {
-  return (
-    error instanceof Error &&
-    'code' in error &&
-    (error as NodeJS.ErrnoException).code === 'ENOENT'
-  );
 }

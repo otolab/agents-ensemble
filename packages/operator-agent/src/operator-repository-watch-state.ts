@@ -1,3 +1,4 @@
+import { isEnoent, isRecord } from './operator-utils.js';
 import { randomUUID } from 'node:crypto';
 import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
@@ -257,18 +258,5 @@ function isStringArray(value: unknown): value is string[] {
   return (
     Array.isArray(value) &&
     value.every((item) => typeof item === 'string' && item.trim().length > 0)
-  );
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
-}
-
-function isEnoent(error: unknown): boolean {
-  return (
-    typeof error === 'object' &&
-    error !== null &&
-    'code' in error &&
-    (error as NodeJS.ErrnoException).code === 'ENOENT'
   );
 }

@@ -1,3 +1,4 @@
+import { isEnoentError as isEnoent } from './operator-utils.js';
 import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
@@ -452,12 +453,4 @@ function assertOnlyKeys(
   if (unexpected) {
     throw new Error(`Invalid ${source}: unknown key "${unexpected}".`);
   }
-}
-
-function isEnoent(error: unknown): boolean {
-  return (
-    error instanceof Error &&
-    'code' in error &&
-    (error as NodeJS.ErrnoException).code === 'ENOENT'
-  );
 }

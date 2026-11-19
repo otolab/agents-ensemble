@@ -1,3 +1,4 @@
+import { isEnoent, isRecord, jsonToolResult as toolResult } from './operator-utils.js';
 import { OperatorLockTimeoutError, withOperatorWorkspaceLock } from './operator-workspace-lock.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
@@ -40,7 +41,7 @@ import {
 } from '@agents-ensemble/core/operator-runtime';
 import {
   listOperatorWatchStatePaths,
-  operatorWatchStatePath as profileOperatorWatchStatePath,
+  operatorWatchStatePath,
 } from './operator-state-paths.js';
 import {
   normalizeRepositoryPattern,
@@ -270,13 +271,7 @@ export interface CreateOperatorWatchPoolOptions {
   onError?: (message: string) => void;
 }
 
-export function operatorWatchStatePath(
-  userEnsembleRoot: string,
-  profile: string,
-  issueUrl: string,
-): string {
-  return profileOperatorWatchStatePath(userEnsembleRoot, profile, issueUrl);
-}
+export { operatorWatchStatePath } from './operator-state-paths.js';
 
 export async function createOperatorWatchPool(
   options: CreateOperatorWatchPoolOptions,
@@ -302,7 +297,7 @@ export async function createOperatorWatchPool(
     if (matches.length !== 1) continue;
     const issueUrl = matches[0]!.resumeStore.issueUrl;
     try {
-      const targetPath = profileOperatorWatchStatePath(root, profile, issueUrl);
+      const targetPath = operatorWatchStatePath(root, profile, issueUrl);
       issueUrlById.set(id, issueUrl);
       pathById.set(id, targetPath);
     } catch {
@@ -666,7 +661,7 @@ export async function createOperatorWatchPool(
   ): { assigned: boolean; reason?: string } => {
     let targetPath: string;
     try {
-      targetPath = profileOperatorWatchStatePath(
+      targetPath = operatorWatchStatePath(
         root,
         profile,
         located.resumeStore.issueUrl,
@@ -3760,19 +3755,6 @@ function hash(value: unknown): string {
   return createHash('sha256').update(JSON.stringify(value)).digest('hex');
 }
 
-function toolResult(value: ConductorJsonValue): {
-  content: Array<{ type: 'text'; text: string }>;
-  structuredContent: Record<string, ConductorJsonValue>;
-} {
-  return {
-    content: [{ type: 'text', text: JSON.stringify(value, null, 2) }],
-    structuredContent:
-      typeof value === 'object' && value !== null && !Array.isArray(value)
-        ? value
-        : { value },
-  };
-}
-
 function parseBoundedInteger(
   value: number | undefined,
   fallback: number,
@@ -3810,9 +3792,6 @@ function requireNonEmptyString(value: string, name: string): string {
   return result;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
-}
 
 function isStringRecord(value: unknown): value is Record<string, string> {
   return (
@@ -3828,14 +3807,6 @@ async function firstExistingPath(paths: readonly string[]): Promise<string | und
   return undefined;
 }
 
-function isEnoent(error: unknown): boolean {
-  return (
-    typeof error === 'object' &&
-    error !== null &&
-    'code' in error &&
-    (error as NodeJS.ErrnoException).code === 'ENOENT'
-  );
-}
 
 function formatResumeStoreDuplicateDiagnostic(
   diagnostic: SessionResumeStoreDuplicateDiagnostic,

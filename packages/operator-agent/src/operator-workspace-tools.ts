@@ -1,3 +1,4 @@
+import { objectToolResult as toolResult } from './operator-utils.js';
 import { constants as fsConstants } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { withOperatorWorkspaceLock } from './operator-workspace-lock.js';
@@ -648,16 +649,4 @@ function isNodeError(
     'code' in error &&
     (error as NodeJS.ErrnoException).code === code
   );
-}
-
-function toolResult(
-  value: Record<string, ConductorJsonValue>,
-): {
-  content: Array<{ type: 'text'; text: string }>;
-  structuredContent: Record<string, ConductorJsonValue>;
-} {
-  return {
-    content: [{ type: 'text', text: JSON.stringify(value, null, 2) }],
-    structuredContent: value,
-  };
 }
