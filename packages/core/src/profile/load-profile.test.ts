@@ -722,6 +722,7 @@ describe('loadProfile', () => {
     expect(content).toContain('引き渡し情報');
     expect(content).toContain('作業の内容と流れ');
     expect(content).toMatch(/4 と 5 の境界/);
+    expect(content).toContain('フェーズ 2（実装・PR）・3（レビュー往復）・4（マージ可否）');
     expect(content).not.toContain('## 果たすこと');
     expect(content).not.toContain('## 引き渡し時の心得');
   });
