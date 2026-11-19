@@ -107,6 +107,7 @@ export interface ConductorSendCallbacks {
   /** Observable output phases; no reasoning content is exposed. */
   onOutputPhase?: (phase: 'thinking' | 'writing') => void;
   onToolCallStarted?: (info: ConductorToolCallStartedInfo) => void;
+  onToolCallCompleted?: (info: ConductorToolCallStartedInfo) => void;
   /** Harness metadata used by provider history projections; never sent to the model. */
   history?: {
     sendCount: number;

@@ -1170,6 +1170,13 @@ async function runTtyConversation(options: {
       writeChannelLine('harness', 'operator: 処理中');
       const nextSendCount = sendCount + 1;
       let toolCallStarted = false;
+      let acceptingActivity = true;
+      const activeTools = new Map<string, { tool: string; since: number }>();
+      const showActiveTool = () => {
+        const active = Array.from(activeTools.values()).at(-1);
+        if (active) tui.setStatus(`calling ${active.tool}`, active.since);
+        else tui.setStatus('処理中');
+      };
       automaticReconnectResult.current = undefined;
       let result: ConductorSendResult | undefined;
       try {
@@ -1181,16 +1188,28 @@ async function runTtyConversation(options: {
               conductorAgentFactory: options.agentHandle.factory,
               conductorOptions: options.agentHandle.agentOptions,
               signal: sendSuppression.signal,
-              onOutputPhase: (phase) => tui.setStatus(phase),
-              onToolCallStarted: ({ tool }) => {
-                tui.setStatus(`calling ${formatOperatorToolName(tool)}`);
+              onOutputPhase: (phase) => {
+                if (acceptingActivity && activeTools.size === 0) tui.setStatus(phase);
+              },
+              onToolCallStarted: ({ tool, callId }) => {
+                if (!acceptingActivity) return;
+                activeTools.delete(callId);
+                activeTools.set(callId, { tool: formatOperatorToolName(tool), since: Date.now() });
+                showActiveTool();
                 toolCallStarted = true;
                 writeChannelLine(
                   'harness',
                   `operator: calling ${formatOperatorToolName(tool)}`,
                 );
               },
+              onToolCallCompleted: ({ callId }) => {
+                if (!acceptingActivity || !activeTools.has(callId)) return;
+                const displayed = Array.from(activeTools.keys()).at(-1) === callId;
+                activeTools.delete(callId);
+                if (displayed) showActiveTool();
+              },
               onAuthReconnectAttempt: ({ agentId, source }) => {
+                acceptingActivity = false;
                 tui.setStatus('reconnecting');
                 writeChannelLine(
                   'harness',
@@ -1210,6 +1229,7 @@ async function runTtyConversation(options: {
                 );
               },
               onTransportReconnectAttempt: ({ agentId, source }) => {
+                acceptingActivity = false;
                 tui.setStatus('reconnecting');
                 writeChannelLine(
                   'harness',
@@ -1241,6 +1261,7 @@ async function runTtyConversation(options: {
           stopping.then(() => undefined),
         ]);
       } finally {
+        acceptingActivity = false;
         tui.setStatus('待機中');
         agentSendInFlight = false;
         idleCandidateMonitor.notifyActivityChanged();

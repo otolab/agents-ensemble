@@ -353,6 +353,13 @@ it('updates the status without accumulating it and keeps input responsive', asyn
     }
     expect(lines()).not.toContain('operator: thinking');
     expect(lines()).not.toContain('operator: calling tool');
+    host.setStatus('thinking');
+    await vi.waitFor(() => expect(lines()).toContain('thinking (1s)'), { timeout: 2500 });
+    terminal.resize(40, 10); stdout.columns = 40; stdout.rows = 10; stdout.emit('resize');
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    host.setStatus('待機中');
+    await vi.waitFor(() => expect(lines()).toContain('待機中 (0s)'));
+    expect(lines()).not.toContain('thinking (1s)');
     stdin.write('\r');
     await vi.waitFor(() => expect(submit).toHaveBeenCalledWith('draft'));
   } finally { await host.dispose(); terminal.dispose(); stdin.destroy(); stdout.destroy(); }

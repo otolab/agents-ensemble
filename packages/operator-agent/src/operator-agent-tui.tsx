@@ -29,7 +29,7 @@ export interface OperatorAgentTuiHost {
   appendUserMessage: (message: string) => void;
   appendOperatorResponse: (response: string) => void;
   setInputEnabled: (enabled: boolean) => void;
-  setStatus: (status: string) => void;
+  setStatus: (status: string, since?: number) => void;
   dispose: () => Promise<void>;
 }
 
@@ -138,8 +138,8 @@ class OperatorAgentTuiModel {
     this.update({ inputEnabled });
   }
 
-  setStatus(status: string): void {
-    if (this.snapshot.status !== status) this.update({ status, statusSince: Date.now() });
+  setStatus(status: string, since = Date.now()): void {
+    this.update({ status, statusSince: since });
   }
 
   private append(entry: NewActivityEntry): void {
@@ -382,7 +382,7 @@ export function createOperatorAgentTuiHost(
     appendOperatorResponse: (response) =>
       model.appendDialogue('operator', response),
     setInputEnabled: (enabled) => model.setInputEnabled(enabled),
-    setStatus: (status) => model.setStatus(status),
+    setStatus: (status, since) => model.setStatus(status, since),
     dispose: async () => {
       disposing = true;
       if (resizeTimer) {

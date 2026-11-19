@@ -614,6 +614,15 @@ export class PiConductorAgent implements ConductorAgent {
       return;
     }
 
+    if (event.type === 'tool_execution_end') {
+      activeSend?.callbacks?.onToolCallCompleted?.({
+        runId: activeSend.runId,
+        tool: event.toolName,
+        callId: event.toolCallId,
+      });
+      return;
+    }
+
     if (event.type === 'message_update') {
       if (event.assistantMessageEvent.type === 'thinking_start') {
         activeSend?.callbacks?.onOutputPhase?.('thinking');
