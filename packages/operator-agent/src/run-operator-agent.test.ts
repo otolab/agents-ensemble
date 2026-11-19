@@ -3263,8 +3263,11 @@ describe('runOperatorAgent', () => {
     }
   }, 30_000);
 
-  it('retains a cancelled watch report across restart and acknowledges it only after a completed retry', async () => {
+  it.each(['normal', 'missing-output', 'missing-ack', 'assertion'] as const)(
+    'retains a cancelled watch report across restart and acknowledges it only after a completed retry: %s', async (scenario) => {
+    let releaseInitialPoll!: () => void;
     const initialPollCompleted = new Promise<void>((resolve) => {
+      releaseInitialPoll = resolve;
       watchPollHarness.onCompleted = (id) => {
         if (id === 'conductor-one') resolve();
       };
@@ -3355,13 +3358,33 @@ describe('runOperatorAgent', () => {
       },
     );
 
-    await vi.waitFor(() =>
-      expect(firstOutput.capturedText()).toContain('user>'),
-    );
-    firstInput.write('watch this session\n');
-    await waitForOutput(firstOutput, 'send not completed (status=cancelled); watched reports retained for retry.');
-    firstInput.end();
-    await firstRun;
+    let firstFailure: unknown;
+    try {
+      await vi.waitFor(() =>
+        expect(firstOutput.capturedText()).toContain('user>'),
+      );
+      firstInput.write('watch this session\n');
+      await waitForOutput(
+        firstOutput,
+        scenario === 'missing-output' ? 'injected missing output' : 'send not completed (status=cancelled); watched reports retained for retry.',
+        scenario === 'missing-output' ? AbortSignal.timeout(100) : undefined,
+      );
+      firstInput.end();
+      await firstRun;
+    } catch (error) {
+      if (scenario !== 'missing-output') throw error;
+      firstFailure = error;
+    } finally {
+      releaseInitialPoll();
+      watchPollHarness.onCompleted = undefined;
+      firstInput.end();
+      await firstRun.catch(() => {});
+    }
+    if (scenario === 'missing-output') {
+      expect(firstFailure).toBeInstanceOf(Error);
+      expect(firstOutput.listenerCount('data')).toBe(1);
+      return;
+    }
 
     const afterCancelledSend = JSON.parse(
       await readFile(statePath, 'utf8'),
@@ -3407,15 +3430,32 @@ describe('runOperatorAgent', () => {
       },
     );
 
-    await retryAcknowledged;
-    expect(retryPrompts).toHaveLength(1);
-    expect(retryPrompts[0]).toContain('Should this report be retried?');
-    const saved = JSON.parse(await readFile(statePath, 'utf8')) as {
-      pendingReports: Array<{ reportId: string }>;
-    };
-    expect(saved.pendingReports).toHaveLength(0);
-    retryInput.write('/exit\n');
-    await retryRun;
+    let retryFailure: unknown;
+    try {
+      if (scenario === 'missing-ack') {
+        await waitForNotification(new Promise<void>(() => {}), 'retry acknowledgement', 100);
+      } else if (scenario === 'assertion') {
+        expect(false, 'injected retry assertion failure').toBe(true);
+      } else {
+        await waitForNotification(retryAcknowledged, 'retry acknowledgement', 8_000);
+      }
+      expect(retryPrompts).toHaveLength(1);
+      expect(retryPrompts[0]).toContain('Should this report be retried?');
+      const saved = JSON.parse(await readFile(statePath, 'utf8')) as {
+        pendingReports: Array<{ reportId: string }>;
+      };
+      expect(saved.pendingReports).toHaveLength(0);
+      retryInput.write('/exit\n');
+      await retryRun;
+    } catch (error) {
+      if (scenario === 'normal') throw error;
+      retryFailure = error;
+    } finally {
+      watchPollHarness.onAcknowledged = undefined;
+      retryInput.end();
+      await retryRun.catch(() => {});
+    }
+    if (scenario !== 'normal') expect(retryFailure).toBeInstanceOf(Error);
   }, 15_000);
 
   it('keeps the TTY transcript free of ANSI escapes when NO_COLOR is set', async () => {
@@ -4925,14 +4965,42 @@ function normalizeTtyText(text: string): string {
     .trim();
 }
 
-function waitForOutput(output: ReturnType<typeof createOutput>, text: string): Promise<void> {
-  return new Promise((resolve) => {
+async function waitForNotification(signal: Promise<void>, label: string, timeoutMs: number): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      signal,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} did not arrive`)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+function waitForOutput(
+  output: ReturnType<typeof createOutput>,
+  text: string,
+  signal: AbortSignal = AbortSignal.timeout(5_000),
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const cleanup = () => {
+      output.off('data', check);
+      signal.removeEventListener('abort', abort);
+    };
+    const abort = () => {
+      cleanup();
+      reject(new Error(`output did not contain: ${text}`));
+    };
     const check = () => {
       if (!normalizeTtyText(output.capturedText()).includes(text)) return;
-      output.off('data', check);
+      cleanup();
       resolve();
     };
     output.on('data', check);
+    signal.addEventListener('abort', abort, { once: true });
+    if (signal.aborted) return abort();
     check();
   });
 }

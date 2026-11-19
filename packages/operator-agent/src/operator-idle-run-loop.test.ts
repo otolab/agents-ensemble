@@ -17,6 +17,20 @@ import { runOperatorAgent } from './run-operator-agent.js';
 import { operatorWatchStatePath } from './operator-watch-pool.js';
 import type { OperatorAgentTuiHost } from './operator-agent-tui.js';
 
+async function waitForSignal<T>(signal: Promise<T>, label: string, timeoutMs = 2_000): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      signal,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} did not complete`)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 const tuiHarness = vi.hoisted(() => ({
   onSubmit: undefined as ((message: string) => void) | undefined,
   readyResolvers: [] as Array<(submit: (message: string) => void) => void>,
@@ -100,7 +114,7 @@ describe('operator idle candidate dispatch run loop', () => {
     vi.restoreAllMocks();
   });
 
-  it.each(['normal', 'late', 'inflight'] as const)(
+  it.each(['normal', 'late', 'inflight', 'cleanup'] as const)(
     'compares baseline and idle integration through runOperatorAgent: %s', async (scenario) => {
     repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-idle-run-loop-'));
     const userRoot = join(repoRoot, '.ensemble');
@@ -229,6 +243,7 @@ describe('operator idle candidate dispatch run loop', () => {
       modifiedAt: startAt - 50 * 60_000,
     });
 
+    const cleanupResults: Array<{ inputClosed: boolean; outputClosed: boolean }> = [];
     const runProfile = async (
       profile:
         | 'baseline'
@@ -238,9 +253,10 @@ describe('operator idle candidate dispatch run loop', () => {
         | 'integrated-inflight'
         | 'integrated-inflight-late'
         | 'integrated-inflight-fail',
+      fault?: 'missing-refresh' | 'assertion',
     ) => {
       tuiHarness.onSubmit = undefined;
-      const configProfile = `smoke-${profile}`;
+      const configProfile = `smoke-${profile}${fault ? `-${fault}` : ''}`;
       await writeFile(
         join(userRoot, 'operator-agents.config.yaml'),
         [
@@ -269,6 +285,7 @@ describe('operator idle candidate dispatch run loop', () => {
       failGateRefresh = profile.startsWith('baseline') || profile === 'integrated-inflight-fail';
       overlappingReads = 0;
       let gateRefreshBarrierReleased = false;
+      let stopping = false;
       let releaseGateRefresh!: () => void;
       let releaseQuestionPoll!: () => void;
       let signalRefreshStarted!: () => void;
@@ -291,7 +308,7 @@ describe('operator idle candidate dispatch run loop', () => {
         signalRefreshCompleted = resolve;
       });
       pollHarness.onRefreshStarted = (id) => {
-        if (gateReleased && id === 'conductor-idle') {
+        if (gateReleased && id === 'conductor-idle' && fault !== 'missing-refresh') {
           refreshStartedDuringPoll = questionPollActive;
           signalRefreshCalled();
         }
@@ -390,7 +407,7 @@ describe('operator idle candidate dispatch run loop', () => {
                 });
               }
               let cursorFound = false;
-              for (let attempt = 0; attempt < 800; attempt += 1) {
+              for (let attempt = 0; attempt < 800 && !stopping; attempt += 1) {
                 try {
                   const state = JSON.parse(
                     await readFile(statePath, 'utf8'),
@@ -410,6 +427,7 @@ describe('operator idle candidate dispatch run loop', () => {
                 }
                 await new Promise((resolve) => setTimeout(resolve, 10));
               }
+              if (stopping) return { runId: `${profile}-stopped`, status: 'cancelled', result: '' };
               expect(cursorFound).toBe(true);
               currentQuestion = {
                 id: `inq-run-loop-${profile}`,
@@ -421,7 +439,7 @@ describe('operator idle candidate dispatch run loop', () => {
               };
               observationSequence = 1;
               let questionFound = false;
-              for (let attempt = 0; attempt < 800; attempt += 1) {
+              for (let attempt = 0; attempt < 800 && !stopping; attempt += 1) {
                 try {
                   const state = JSON.parse(
                     await readFile(statePath, 'utf8'),
@@ -442,6 +460,7 @@ describe('operator idle candidate dispatch run loop', () => {
                 }
                 await new Promise((resolve) => setTimeout(resolve, 10));
               }
+              if (stopping) return { runId: `${profile}-stopped`, status: 'cancelled', result: '' };
               expect(questionFound).toBe(true);
               if (profile.startsWith('integrated-inflight')) {
                 blockNextQuestionObservation = true;
@@ -588,171 +607,192 @@ describe('operator idle candidate dispatch run loop', () => {
           autoDiscoverSessions: false,
         },
       );
-      submit = await ready;
-      vi.spyOn(Date, 'now').mockImplementation(() => fakeNow);
-      submit('watch the live session');
-      await Promise.race([questionQueued, sendError]);
-      // Do not open the gate until the poll that queued the OQ has finished.
-      await Promise.race([questionPollCompleted, sendError]);
+      try {
+        submit = await waitForSignal(Promise.race([
+          ready,
+          run.then(() => { throw new Error('runner stopped before TUI was ready'); }),
+        ]), 'TUI readiness');
+        vi.spyOn(Date, 'now').mockImplementation(() => fakeNow);
+        submit('watch the live session');
+        await waitForSignal(Promise.race([questionQueued, sendError]), 'question queue', 6_000);
+        // Do not open the gate until the poll that queued the OQ has finished.
+        await waitForSignal(Promise.race([questionPollCompleted, sendError]), 'question poll');
 
-      const heldState = JSON.parse(await readFile(statePath, 'utf8')) as {
-        pendingReports: Array<{
-          reportType: string;
-          firstQueuedAt: number;
-        }>;
-      };
-      expect(
-        heldState.pendingReports.filter(
-          (report) => report.reportType === 'open_question',
-        ),
-      ).toHaveLength(1);
-      expect(
-        heldState.pendingReports.filter(
-          (report) => report.reportType === 'idle_candidate',
-        ),
-      ).toEqual([]);
-      const questionArrivalAt = heldState.pendingReports.find(
-        (report) => report.reportType === 'open_question',
-      )!.firstQueuedAt;
-      if (profile.startsWith('integrated-inflight')) {
-        await Promise.race([
-          questionPollInFlight,
-          new Promise<never>((_resolve, reject) =>
-            setTimeout(
-              () => reject(new Error('same-session watch poll did not start')),
-              2_000,
-            ),
-          ),
-        ]);
-      }
-      fakeNow = startAt + 10_000;
-      gateReleased = true;
-      releaseUserSend();
-      if (profile.startsWith('integrated-inflight')) {
-        await Promise.race([refreshCalled, sendError]);
-        expect(refreshStartedDuringPoll).toBe(true);
-        expect(reportPrompts).toEqual([]);
-        fakeNow = startAt + 10_100;
-        releaseQuestionPoll();
-      } else {
-        await Promise.race([
-          gateRefreshStarted,
-          new Promise<never>((_resolve, reject) =>
-            setTimeout(
-              () => reject(new Error(`gate-clear refresh did not start for ${profile}`)),
-              2_000,
-            ),
-          ),
-        ]);
-      }
-      let reportPromptsWhileRefreshPending: string[] | undefined;
-      let refreshHeldState:
-        | { pendingReports: Array<{ reportType: string }> }
-        | undefined;
-      if (profile === 'integrated') {
-        // Regression guard: the old run loop froze and sent the ready OQ
-        // while this fresh observation was still pending, omitting the
-        // candidate that admission adds when the observation completes.
-        reportPromptsWhileRefreshPending = [...reportPrompts];
-        refreshHeldState = JSON.parse(
-          await readFile(statePath, 'utf8'),
-        ) as {
-          pendingReports: Array<{ reportType: string }>;
+        const heldState = JSON.parse(await readFile(statePath, 'utf8')) as {
+          pendingReports: Array<{
+            reportType: string;
+            firstQueuedAt: number;
+          }>;
         };
-      }
-      if (profile.endsWith('-late')) {
-        const questionOutcome = await Promise.race([
-          questionReportSent,
-          new Promise<'timeout'>((resolve) =>
-            setTimeout(() => resolve('timeout'), 3_000),
-          ),
-        ]);
-        if (questionOutcome === 'timeout') {
-          const state = await readFile(statePath, 'utf8');
-          gateRefreshBarrierReleased = true;
-          releaseGateRefresh();
-          tuiHarness.onSubmit?.('/exit');
-          await run;
-          throw new Error(
-            `OQ was not sent after the refresh cap; prompts=${JSON.stringify(reportPrompts)} state=${state}`,
-          );
-        }
-        if (profile === 'integrated-late' || profile === 'integrated-inflight-late') {
-          expect(overlappingReads).toBe(0);
-          expect(gateRefreshBarrierReleased).toBe(false);
-          const questionOnlyBatch = mixedBatchReports.find((batch) =>
-            batch.some((report) => report.reportType === 'open_question'),
-          )!;
-          expect(questionOnlyBatch.map((report) => report.reportType)).toEqual([
-            'open_question',
-          ]);
-        }
-        gateRefreshBarrierReleased = true;
-        releaseGateRefresh();
-      } else {
-        gateRefreshBarrierReleased = true;
-        releaseGateRefresh();
-      }
-      if (profile.startsWith('integrated-inflight')) {
-        await Promise.race([refreshCompleted, sendError]);
-        expect(overlappingReads).toBe(0);
-      }
-      const reportOutcome = await Promise.race([
-        (profile === 'integrated-late' || profile === 'integrated-inflight-late'
-          ? lateIdleReportSent
-          : profile === 'baseline-late'
-            ? questionReportSent
-            : reportSent
-        ).then(() => 'sent' as const),
-        new Promise<'timeout'>((resolve) =>
-          setTimeout(() => resolve('timeout'), 4_000),
-        ),
-      ]);
-      if (reportOutcome === 'timeout') {
-        const pendingState = await readFile(statePath, 'utf8');
-        tuiHarness.onSubmit?.('/exit');
-        await run;
-        throw new Error(
-          `report batch was not dispatched through runOperatorAgent; state=${pendingState}`,
-        );
-      }
-      await run;
-      if (profile === 'integrated') {
-        expect(reportPromptsWhileRefreshPending).toEqual([]);
         expect(
-          refreshHeldState!.pendingReports.filter(
+          heldState.pendingReports.filter(
             (report) => report.reportType === 'open_question',
           ),
         ).toHaveLength(1);
         expect(
-          refreshHeldState!.pendingReports.filter(
+          heldState.pendingReports.filter(
             (report) => report.reportType === 'idle_candidate',
           ),
         ).toEqual([]);
+        const questionArrivalAt = heldState.pendingReports.find(
+          (report) => report.reportType === 'open_question',
+        )!.firstQueuedAt;
+        if (profile.startsWith('integrated-inflight')) {
+          await Promise.race([
+            questionPollInFlight,
+            new Promise<never>((_resolve, reject) =>
+              setTimeout(
+                () => reject(new Error('same-session watch poll did not start')),
+                2_000,
+              ),
+            ),
+          ]);
+        }
+        fakeNow = startAt + 10_000;
+        gateReleased = true;
+        releaseUserSend();
+        if (profile.startsWith('integrated-inflight')) {
+          await waitForSignal(Promise.race([refreshCalled, sendError]), 'refresh start');
+          if (fault === 'assertion') expect(false, 'injected assertion failure').toBe(true);
+          expect(refreshStartedDuringPoll).toBe(true);
+          expect(reportPrompts).toEqual([]);
+          fakeNow = startAt + 10_100;
+          releaseQuestionPoll();
+        } else {
+          await Promise.race([
+            gateRefreshStarted,
+            new Promise<never>((_resolve, reject) =>
+              setTimeout(
+                () => reject(new Error(`gate-clear refresh did not start for ${profile}`)),
+                2_000,
+              ),
+            ),
+          ]);
+        }
+        let reportPromptsWhileRefreshPending: string[] | undefined;
+        let refreshHeldState:
+          | { pendingReports: Array<{ reportType: string }> }
+          | undefined;
+        if (profile === 'integrated') {
+          // Regression guard: the old run loop froze and sent the ready OQ
+          // while this fresh observation was still pending, omitting the
+          // candidate that admission adds when the observation completes.
+          reportPromptsWhileRefreshPending = [...reportPrompts];
+          refreshHeldState = JSON.parse(
+            await readFile(statePath, 'utf8'),
+          ) as {
+            pendingReports: Array<{ reportType: string }>;
+          };
+        }
+        if (profile.endsWith('-late')) {
+          const questionOutcome = await Promise.race([
+            questionReportSent,
+            new Promise<'timeout'>((resolve) =>
+              setTimeout(() => resolve('timeout'), 3_000),
+            ),
+          ]);
+          if (questionOutcome === 'timeout') {
+            const state = await readFile(statePath, 'utf8');
+            gateRefreshBarrierReleased = true;
+            releaseGateRefresh();
+            tuiHarness.onSubmit?.('/exit');
+            await run;
+            throw new Error(
+              `OQ was not sent after the refresh cap; prompts=${JSON.stringify(reportPrompts)} state=${state}`,
+            );
+          }
+          if (profile === 'integrated-late' || profile === 'integrated-inflight-late') {
+            expect(overlappingReads).toBe(0);
+            expect(gateRefreshBarrierReleased).toBe(false);
+            const questionOnlyBatch = mixedBatchReports.find((batch) =>
+              batch.some((report) => report.reportType === 'open_question'),
+            )!;
+            expect(questionOnlyBatch.map((report) => report.reportType)).toEqual([
+              'open_question',
+            ]);
+          }
+          gateRefreshBarrierReleased = true;
+          releaseGateRefresh();
+        } else {
+          gateRefreshBarrierReleased = true;
+          releaseGateRefresh();
+        }
+        if (profile.startsWith('integrated-inflight')) {
+          await waitForSignal(Promise.race([refreshCompleted, sendError]), 'refresh completion');
+          expect(overlappingReads).toBe(0);
+        }
+        const reportOutcome = await Promise.race([
+          (profile === 'integrated-late' || profile === 'integrated-inflight-late'
+            ? lateIdleReportSent
+            : profile === 'baseline-late'
+              ? questionReportSent
+              : reportSent
+          ).then(() => 'sent' as const),
+          new Promise<'timeout'>((resolve) =>
+            setTimeout(() => resolve('timeout'), 4_000),
+          ),
+        ]);
+        if (reportOutcome === 'timeout') {
+          const pendingState = await readFile(statePath, 'utf8');
+          tuiHarness.onSubmit?.('/exit');
+          await run;
+          throw new Error(
+            `report batch was not dispatched through runOperatorAgent; state=${pendingState}`,
+          );
+        }
+        await run;
+        if (profile === 'integrated') {
+          expect(reportPromptsWhileRefreshPending).toEqual([]);
+          expect(
+            refreshHeldState!.pendingReports.filter(
+              (report) => report.reportType === 'open_question',
+            ),
+          ).toHaveLength(1);
+          expect(
+            refreshHeldState!.pendingReports.filter(
+              (report) => report.reportType === 'idle_candidate',
+            ),
+          ).toEqual([]);
+        }
+        const persisted = JSON.parse(await readFile(statePath, 'utf8')) as {
+          pendingReports: unknown[];
+          idleCandidateFingerprints?: Record<string, Record<string, string>>;
+        };
+        const questionBatchIndex = mixedBatchReports.findIndex((batch) =>
+          batch.some((report) => report.reportType === 'open_question'),
+        );
+        const metrics = {
+          dispatchAttempts: sendTimes.length,
+          reportBatches: new Set(frozenBatchIds).size,
+          fakeAgentTurns: sendTimes.length,
+          openQuestionWaitMs:
+            sendTimes[questionBatchIndex + 1]! - questionArrivalAt,
+        };
+        return {
+          metrics,
+          prompt: reportPrompts[0]!,
+          mixedBatchReports,
+          persisted,
+        };
+      } finally {
+        stopping = true;
+        releaseQuestionPoll();
+        releaseGateRefresh();
+        signalQuestionPollStarted();
+        releaseUserSend();
+        tuiHarness.onSubmit?.('/exit');
+        input.end();
+        try {
+          await run;
+        } catch {
+          // Preserve the original failure while still releasing the fixture.
+        } finally {
+          input.destroy();
+          stdout.destroy();
+          if (fault) cleanupResults.push({ inputClosed: input.destroyed, outputClosed: stdout.destroyed });
+          vi.restoreAllMocks();
+        }
       }
-      const persisted = JSON.parse(await readFile(statePath, 'utf8')) as {
-        pendingReports: unknown[];
-        idleCandidateFingerprints?: Record<string, Record<string, string>>;
-      };
-      const questionBatchIndex = mixedBatchReports.findIndex((batch) =>
-        batch.some((report) => report.reportType === 'open_question'),
-      );
-      const metrics = {
-        dispatchAttempts: sendTimes.length,
-        reportBatches: new Set(frozenBatchIds).size,
-        fakeAgentTurns: sendTimes.length,
-        openQuestionWaitMs:
-          sendTimes[questionBatchIndex + 1]! - questionArrivalAt,
-      };
-      input.destroy();
-      stdout.destroy();
-      vi.restoreAllMocks();
-      return {
-        metrics,
-        prompt: reportPrompts[0]!,
-        mixedBatchReports,
-        persisted,
-      };
     };
 
     if (scenario === 'normal') {
@@ -879,7 +919,7 @@ describe('operator idle candidate dispatch run loop', () => {
       expect(
         lateQuestionBatch[0]!.frozenBatchId,
       ).not.toBe(lateCandidateBatches[0]![0]!.frozenBatchId);
-    } else {
+    } else if (scenario === 'inflight') {
       const integratedInflight = await runProfile('integrated-inflight');
       const integratedInflightLate = await runProfile('integrated-inflight-late');
       const integratedInflightFail = await runProfile('integrated-inflight-fail');
@@ -904,6 +944,17 @@ describe('operator idle candidate dispatch run loop', () => {
           (report) => report.reportType === 'open_question',
         ),
       ).toHaveLength(1);
+    } else {
+      await expect(runProfile('integrated-inflight', 'assertion'))
+        .rejects.toThrow('injected assertion failure');
+      await expect(runProfile('integrated-inflight', 'missing-refresh'))
+        .rejects.toThrow('refresh start did not complete');
+      expect(cleanupResults).toEqual([
+        { inputClosed: true, outputClosed: true },
+        { inputClosed: true, outputClosed: true },
+      ]);
+      for (const closeServer of closeServers) await closeServer();
+      closeServers = [];
     }
   });
 });
