@@ -1,4 +1,5 @@
 import { conductorFailureLogPath, createConductorFailureLog } from '../session/conductor-failure-log.js';
+import { resolveUserEnsembleRoot } from '../resolve-user-ensemble-root.js';
 import { stat } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
 import { isAbsolute, resolve as resolvePath } from 'node:path';
@@ -1539,7 +1540,7 @@ async function runConductorSessionWithStartupGuard(
   try {
     conductorFailureLog.setPath(conductorFailureLogPath({
       repoRoot: options.repoRoot, issueUrl: options.issueUrl, conductorAgentId: conductorAgent.agentId,
-    }));
+    }), resolveUserEnsembleRoot());
   } catch {
     conductorFailureLog.abandon();
     sessionLogger.emit({ type: 'harness.warning', message: 'conductor の失敗ログの保存先を決定できません。' });

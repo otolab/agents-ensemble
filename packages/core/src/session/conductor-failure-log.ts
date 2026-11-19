@@ -1,5 +1,5 @@
 import { constants, chmodSync, closeSync, fchmodSync, fstatSync, lstatSync, mkdirSync, openSync, writeSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import type { SessionLogEvent } from '../conductor/session/session-logger.js';
 import { sessionStateStorePath } from './session-state-store.js';
 
@@ -31,13 +31,29 @@ function recordFor(event: SessionLogEvent): object | undefined {
 
 export function createConductorFailureLog(warn: () => void) {
   let path: string | undefined;
+  let trustedRoot: string | undefined;
   let failed = false;
   const pending: object[] = [];
   const write = (record: object) => {
-    if (!path || failed) return;
+    if (!path || !trustedRoot || failed) return;
     try {
       const dir = dirname(path);
-      mkdirSync(dir, { recursive: true, mode: 0o700 });
+      const suffix = relative(trustedRoot, dir);
+      if (!suffix || suffix === '..' || suffix.startsWith(`..${sep}`) || isAbsolute(suffix)) throw new Error('unsafe path');
+      // The configured user root is trusted (and may itself be a symlink).
+      // Reject links below it before creating or touching the next component.
+      mkdirSync(trustedRoot, { recursive: true, mode: 0o700 });
+      let current = trustedRoot;
+      for (const component of suffix.split(sep)) {
+        current = join(current, component);
+        try {
+          mkdirSync(current, { mode: 0o700 });
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+        }
+        const entry = lstatSync(current);
+        if (!entry.isDirectory() || entry.isSymbolicLink()) throw new Error('unsafe directory');
+      }
       const directory = lstatSync(dir);
       if (!directory.isDirectory() || directory.isSymbolicLink()) throw new Error('unsafe directory');
       // Match the session-state store's owner-only directory and file modes on POSIX.
@@ -78,8 +94,9 @@ export function createConductorFailureLog(warn: () => void) {
       if (pending.length && !failed) { failed = true; warn(); }
       pending.length = 0;
     },
-    setPath(nextPath: string) {
-      path = nextPath;
+    setPath(nextPath: string, root: string) {
+      path = resolve(nextPath);
+      trustedRoot = resolve(root);
       for (const record of pending.splice(0)) write(record);
     },
   };

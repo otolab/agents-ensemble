@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
@@ -13,9 +13,9 @@ it('buffers startup failures, appends on resume, and excludes free text', async 
   const warn = vi.fn();
   const first = createConductorFailureLog(warn);
   first.emit({ type: 'conductor.compaction', event: { type: 'end', reason: 'secret' as 'overflow', outcome: 'failed', errorMessage: 'secret-token' } });
-  first.setPath(path);
+  first.setPath(path, root);
   const resumed = createConductorFailureLog(warn);
-  resumed.setPath(path);
+  resumed.setPath(path, root);
   resumed.emit({ type: 'conductor.retry', event: { type: 'auto_retry_start', attempt: 1, maxAttempts: 3, delayMs: 10, errorMessage: 'secret-token' } });
   resumed.emit({ type: 'conductor.retry', event: { type: 'auto_retry_end', success: false, attempt: 2, finalError: 'secret-token' } });
   const raw = await readFile(path, 'utf8');
@@ -39,7 +39,7 @@ it('warns once without exposing the error when writing fails', async () => {
   await writeFile(path, 'existing');
   const warn = vi.fn();
   const log = createConductorFailureLog(warn);
-  log.setPath(join(path, 'log'));
+  log.setPath(join(path, 'log'), root);
   const event = { type: 'conductor.compaction' as const, event: { type: 'end' as const, reason: 'overflow' as const, outcome: 'failed' as const } };
   log.emit(event);
   log.emit(event);
@@ -51,13 +51,50 @@ it('rejects symlink log files and unsafe IDs', async () => {
   root = await mkdtemp(join(tmpdir(), 'failure-log-'));
   const target = join(root, 'target');
   await writeFile(target, 'unchanged');
-  const path = join(root, 'log');
+  await mkdir(join(root, 'session'));
+  const path = join(root, 'session', 'log');
   await symlink(target, path);
   const warn = vi.fn();
   const log = createConductorFailureLog(warn);
-  log.setPath(path);
+  log.setPath(path, root);
   log.emit({ type: 'conductor.compaction', event: { type: 'end', reason: 'overflow', outcome: 'failed' } });
   expect(warn).toHaveBeenCalledOnce();
   expect(await readFile(target, 'utf8')).toBe('unchanged');
   expect(() => conductorFailureLogPath({ repoRoot: root, issueUrl: 'https://github.com/o/r/issues/1', conductorAgentId: '../outside' })).toThrow();
+});
+
+it.skipIf(process.platform === 'win32')('rejects a symlink in the parent hierarchy without touching its target', async () => {
+  root = await mkdtemp(join(tmpdir(), 'failure-log-'));
+  const trusted = join(root, 'trusted');
+  const target = join(root, 'target');
+  const targetSession = join(target, 'session');
+  await mkdir(trusted);
+  await mkdir(targetSession, { recursive: true });
+  const file = join(targetSession, 'conductor-failures.jsonl');
+  await writeFile(file, 'existing\n');
+  await chmod(targetSession, 0o755);
+  await chmod(file, 0o644);
+  await symlink(target, join(trusted, 'sessions'));
+  const warn = vi.fn();
+  const log = createConductorFailureLog(warn);
+  log.setPath(join(trusted, 'sessions', 'session', 'conductor-failures.jsonl'), trusted);
+  log.emit({ type: 'conductor.compaction', event: { type: 'end', reason: 'overflow', outcome: 'failed' } });
+  expect(warn).toHaveBeenCalledOnce();
+  expect(await readFile(file, 'utf8')).toBe('existing\n');
+  expect((await stat(targetSession)).mode & 0o777).toBe(0o755);
+  expect((await stat(file)).mode & 0o777).toBe(0o644);
+});
+
+it.skipIf(process.platform === 'win32')('permits a configured user root that is itself a symlink', async () => {
+  root = await mkdtemp(join(tmpdir(), 'failure-log-'));
+  const target = join(root, 'target');
+  const trusted = join(root, 'user-root');
+  await mkdir(target);
+  await symlink(target, trusted);
+  const warn = vi.fn();
+  const log = createConductorFailureLog(warn);
+  log.setPath(join(trusted, 'sessions', 'session', 'conductor-failures.jsonl'), trusted);
+  log.emit({ type: 'conductor.compaction', event: { type: 'end', reason: 'overflow', outcome: 'failed' } });
+  expect(warn).not.toHaveBeenCalled();
+  expect(await readFile(join(target, 'sessions', 'session', 'conductor-failures.jsonl'), 'utf8')).toContain('compaction_failed');
 });
