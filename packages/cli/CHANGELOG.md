@@ -1,5 +1,25 @@
 # @agents-ensemble/cli
 
+## 0.24.0
+
+### Minor Changes
+
+- 7525904: conductor の MCP server は `conductor.mcp.servers` で明示的に選択するようになりました。`mcp.json` に定義しただけでは起動しません。従来利用していた server は名前を設定してください。
+
+### Patch Changes
+
+- 325ccd0: Open question の回答をコマンドより優先し、Issue セッションの終了・再接続は slash 付きコマンドに限定します。slash なしの close / exit / reconnect は通常メッセージとして送られます。
+- Updated dependencies [68acfc0]
+- Updated dependencies [f960533]
+- Updated dependencies [7525904]
+- Updated dependencies [7828080]
+- Updated dependencies [75f3fb8]
+- Updated dependencies [027936d]
+- Updated dependencies [c4278cd]
+- Updated dependencies [325ccd0]
+  - @agents-ensemble/core@0.24.0
+  - @agents-ensemble/operator-agent@0.7.0
+
 ## 0.23.3
 
 ### Patch Changes

@@ -1,5 +1,18 @@
 # @agents-ensemble/core
 
+## 0.24.0
+
+### Minor Changes
+
+- 68acfc0: Pi operator-agent の compaction の開始と結果を活動ログに表示する。
+- 7525904: conductor の MCP server は `conductor.mcp.servers` で明示的に選択するようになりました。`mcp.json` に定義しただけでは起動しません。従来利用していた server は名前を設定してください。
+
+### Patch Changes
+
+- f960533: Show Pi provider and summarization retry activity in operator-agent.
+- 7828080: operator-agent の入力欄に現在の処理状態と経過時間を表示します。
+- 325ccd0: Open question の回答をコマンドより優先し、Issue セッションの終了・再接続は slash 付きコマンドに限定します。slash なしの close / exit / reconnect は通常メッセージとして送られます。
+
 ## 0.23.3
 
 ### Patch Changes
