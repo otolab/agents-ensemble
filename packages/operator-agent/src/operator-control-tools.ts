@@ -1,3 +1,4 @@
+import { objectToolResult as toolResult } from './operator-utils.js';
 import {
   type ConductorJsonValue,
   type ConductorTool,
@@ -116,15 +117,5 @@ export function createSetSessionFocusTool(
         focusSessionId: queue.focusSessionId ?? null,
       });
     },
-  };
-}
-
-function toolResult(value: Record<string, ConductorJsonValue>): {
-  content: Array<{ type: 'text'; text: string }>;
-  structuredContent: Record<string, ConductorJsonValue>;
-} {
-  return {
-    content: [{ type: 'text', text: JSON.stringify(value, null, 2) }],
-    structuredContent: value,
   };
 }

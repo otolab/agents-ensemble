@@ -1,3 +1,4 @@
+import { ANSI_RED } from './operator-utils.js';
 import { render, Box, Static, Text, useInput } from 'ink';
 import { TextArea, type TLinePrefixProps } from 'react-ink-textarea';
 import React, { useCallback, useSyncExternalStore } from 'react';
@@ -167,7 +168,6 @@ class OperatorAgentTuiModel {
   readonly colorsEnabled = (): boolean => this.colorEnabled;
 }
 
-const ANSI_RED = '\u001b[31m';
 const MAX_INPUT_DISPLAY_LINES = 6;
 const RESIZE_SETTLE_MS = 150;
 const SHUTDOWN_RESIZE_LIMIT_MS = 1_000;

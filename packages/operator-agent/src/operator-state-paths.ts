@@ -1,3 +1,4 @@
+import { isEnoentError as isEnoent } from './operator-utils.js';
 import type { Dirent } from 'node:fs';
 import { readdir } from 'node:fs/promises';
 import { join, relative } from 'node:path';
@@ -52,12 +53,4 @@ export async function listOperatorWatchStatePaths(
   };
   await visit(root);
   return paths.sort();
-}
-
-function isEnoent(error: unknown): boolean {
-  return (
-    error instanceof Error &&
-    'code' in error &&
-    (error as NodeJS.ErrnoException).code === 'ENOENT'
-  );
 }

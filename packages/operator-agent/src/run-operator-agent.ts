@@ -1,3 +1,4 @@
+import { ANSI_RED } from './operator-utils.js';
 import { createInterface } from 'node:readline';
 import { constants as fsConstants } from 'node:fs';
 import { lstat, mkdir, open } from 'node:fs/promises';
@@ -192,8 +193,6 @@ interface OperatorTtyLogRouter {
   attach: (sink: (entry: OperatorTtyLogEntry) => void) => () => void;
   drain: () => OperatorTtyLogEntry[];
 }
-
-const ANSI_RED = '\u001b[31m';
 
 /** Start an operator-role conversation on an interactive terminal. */
 export async function runOperatorAgent(
