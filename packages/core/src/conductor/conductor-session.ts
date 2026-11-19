@@ -1484,10 +1484,16 @@ async function runConductorSessionWithStartupGuard(
       : {}),
     ...(Object.keys(mcpServers).length > 0 ? { mcpServers } : {}),
     customTools: conductorToolRegistry.toRecord(),
-    ...(conductorBackend === 'pi' && options.conductorAgentFactory == null
+    ...(conductorBackend === 'pi'
       ? {
           onContextCompaction: () =>
             sessionUsageTracker.recordContextCompaction(),
+          onCompactionEvent: (event) => {
+            sessionLogger.emit({ type: 'conductor.compaction', event });
+          },
+          onRetryEvent: (event) => {
+            sessionLogger.emit({ type: 'conductor.retry', event });
+          },
         }
       : {}),
   };

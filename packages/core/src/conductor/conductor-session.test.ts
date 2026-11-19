@@ -2431,6 +2431,29 @@ describe('runConductorSession resume / shutdown', () => {
     expect(result.sessionUsage).not.toHaveProperty('compactionCount');
   });
 
+  it('forwards Pi compaction and retry notifications to SessionLogger', async () => {
+    const events: SessionLogEvent[] = [];
+    const sessionLogger = new SessionLogger({ issueUrl: TEST_ISSUE.url, repoRoot });
+    sessionLogger.subscribe((event) => events.push(event));
+    mockCreate.mockImplementationOnce(async (options: ConductorAgentCreateOptions) => {
+      options.onCompactionEvent?.({ type: 'start', reason: 'overflow' });
+      options.onCompactionEvent?.({ type: 'end', reason: 'overflow', outcome: 'failed', errorMessage: 'failed' });
+      options.onRetryEvent?.({ type: 'auto_retry_end', success: false, attempt: 2, finalError: 'failed' });
+      return { agentId: 'agent-test', send: mockSend, close: mockClose, getUsage: vi.fn().mockResolvedValue({}) };
+    });
+    await runConductorSession({
+      issueUrl: TEST_ISSUE.url, repoRoot, sessionLogger,
+      profile: { conductor: { backend: 'pi' }, workers: [] },
+      permissionPipeline: new PermissionPipeline({}),
+      registerProcessSignalHandlers: false, waitForOperatorExit: false,
+    });
+    expect(events.filter((event) => event.type === 'conductor.compaction' || event.type === 'conductor.retry')).toEqual([
+      { type: 'conductor.compaction', event: { type: 'start', reason: 'overflow' } },
+      { type: 'conductor.compaction', event: { type: 'end', reason: 'overflow', outcome: 'failed', errorMessage: 'failed' } },
+      { type: 'conductor.retry', event: { type: 'auto_retry_end', success: false, attempt: 2, finalError: 'failed' } },
+    ]);
+  });
+
   it('shares Pi tokens and successful compactions with get_session_usage while omitting estimated cost', async () => {
     let createOptions: ConductorAgentCreateOptions | undefined;
     mockCreate.mockImplementationOnce(async (options: ConductorAgentCreateOptions) => {
