@@ -403,6 +403,22 @@ export async function resolveMcpServers(
   return config.mcpServers;
 }
 
+/** Select conductor servers by name after merging the definition files. */
+export async function resolveConductorMcpServers(
+  repoRoot: string,
+  names: string[],
+  options: LoadMcpConfigOptions = {},
+): Promise<McpServerConfigMap> {
+  if (names.length === 0) return {};
+  const definitions = await resolveMcpServers(repoRoot, options);
+  return Object.fromEntries(names.map((name) => {
+    if (!Object.hasOwn(definitions, name)) {
+      throw new Error(`MCP server "${name}" is not defined in ${userMcpConfigPath(options)} or ${projectMcpConfigPath(repoRoot)}`);
+    }
+    return [name, definitions[name]];
+  }));
+}
+
 /**
  * Return a stable digest for the harness-resolved MCP server map.
  *

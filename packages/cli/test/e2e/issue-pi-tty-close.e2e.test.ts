@@ -333,6 +333,8 @@ describe('Pi conductor TTY /close process lifecycle', () => {
         join(repoRoot, '.ensemble', 'config.yaml'),
         [
           'conductor:',
+          '  mcp:',
+          '    servers: [ttyCloseFixture]',
           `  pi:\n    agentDir: ${JSON.stringify(agentDir)}`,
           `    projectDir: ${JSON.stringify(projectDir)}`,
           'github:',

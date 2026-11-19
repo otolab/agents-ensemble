@@ -92,7 +92,7 @@ ADR は**合意された設計判断の履歴**を残すもの。一度 `accepte
 | [0018](0018-team-profile-four-layer-resolution.md) | team-profile の 4 層配置と名前解決 | accepted |
 | [0019](0019-worker-acp-cli-presets.md) | Worker ACP CLI preset とデフォルト解決 | superseded in part → [0067](0067-pi-acp-upstream-package-wrapper.md)（Pi ACP の package / runtime 選択のみ） |
 | [0020](0020-ensemble-config-setting-resolution.md) | ensemble config.yaml の設定解決順（Phase 1） | accepted |
-| [0021](0021-conductor-mcp-config-resolution.md) | conductor MCP 設定の 2 層解決と inline 配線 | accepted |
+| [0021](0021-conductor-mcp-config-resolution.md) | conductor MCP 設定の 2 層解決と inline 配線 | superseded by 0084 |
 | [0022](0022-tui-resize-workaround.md) | TUI resize workaround と Ink 回帰監視 | superseded → [0024](0024-tui-shrink-coalesce.md) |
 | [0023](0023-tty-initial-message-post-loop.md) | TTY 初回メッセージの post-loop ライフサイクル | accepted |
 | [0024](0024-tui-shrink-coalesce.md) | TUI columns 縮小時の live frame coalesce | accepted |
@@ -155,6 +155,7 @@ ADR は**合意された設計判断の履歴**を残すもの。一度 `accepte
 | [0081](0081-operator-watch-pending-report-handoff.md) | operator-agent の pending report を稼働中 peer へ引き渡す | accepted |
 | [0082](0082-operator-watch-acknowledgement-retry.md) | operator-agent の watch report ack を send retry から分離 | accepted |
 | [0083](0083-operator-agent-session-report-scheduling.md) | operator-agent の session report 調停と利用機能の境界 | proposed |
+| [0084](0084-conductor-mcp-selection.md) | conductor MCP server の明示選択 | accepted |
 
 ## 追加するとき
 

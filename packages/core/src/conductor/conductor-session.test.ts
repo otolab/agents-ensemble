@@ -4335,12 +4335,7 @@ describe('runConductorSession resume / shutdown', () => {
         openQuestions: [],
         sequence: 0,
         workers: {},
-        mcpConfigDigest: computeMcpConfigDigest({
-          projectDocs: {
-            type: 'http',
-            url: 'https://example.test/mcp',
-          },
-        }),
+        mcpConfigDigest: computeMcpConfigDigest({}),
         updatedAt: 0,
       },
     );
@@ -4354,6 +4349,7 @@ describe('runConductorSession resume / shutdown', () => {
       issueUrl: TEST_ISSUE.url,
       repoRoot,
       profile: { workers: [] },
+      ensembleConfig: { ...DEFAULT_ENSEMBLE_CONFIG, conductor: { ...DEFAULT_ENSEMBLE_CONFIG.conductor, mcp: { servers: ['projectDocs'] } } },
       resumeAgentId: agentId,
       maxTurns: 5,
       permissionPipeline: new PermissionPipeline({}),
@@ -4374,6 +4370,10 @@ describe('runConductorSession resume / shutdown', () => {
       }),
     );
     expect(mockCreate).not.toHaveBeenCalled();
+    const updated = await loadSessionResumeStore(sessionResumeStorePath({ repoRoot, conductorAgentId: agentId }));
+    expect(updated?.mcpConfigDigest).toBe(computeMcpConfigDigest({
+      projectDocs: { type: 'http', url: 'https://example.test/mcp' },
+    }));
   });
 
   it('exposes restored open questions through the operator context on resume', async () => {
@@ -4544,6 +4544,28 @@ describe('runConductorSession resume / shutdown', () => {
     },
   );
 
+  it('starts without MCP when no selection exists and rejects an undefined selection', async () => {
+    const projectMcpRoot = join(repoRoot, '.agents');
+    await mkdir(projectMcpRoot, { recursive: true });
+    await writeFile(join(projectMcpRoot, 'mcp.json'), JSON.stringify({ mcpServers: { unused: { command: 'unused' } } }));
+    mockSend.mockResolvedValue({ runId: 'run-1', status: 'finished', result: 'done' });
+    const base = {
+      issueUrl: TEST_ISSUE.url, repoRoot, profile: { workers: [] }, maxTurns: 5,
+      permissionPipeline: new PermissionPipeline({}), registerProcessSignalHandlers: false,
+      waitForOperatorExit: false,
+    };
+    await runConductorSession(base);
+    expect(mockCreate.mock.calls.at(-1)?.[0]).not.toHaveProperty('mcpServers');
+    const store = await loadSessionResumeStore(sessionResumeStorePath({ repoRoot, conductorAgentId: 'agent-test' }));
+    expect(store?.mcpConfigDigest).toBe(computeMcpConfigDigest({}));
+    mockCreate.mockClear();
+    await expect(runConductorSession({ ...base, ensembleConfig: {
+      ...DEFAULT_ENSEMBLE_CONFIG,
+      conductor: { ...DEFAULT_ENSEMBLE_CONFIG.conductor, mcp: { servers: ['missing'] } },
+    } })).rejects.toThrow(/MCP server "missing".*mcp.json/);
+    expect(mockCreate).not.toHaveBeenCalled();
+  });
+
   it('passes project MCP configuration to the conductor options', async () => {
     const projectMcpRoot = join(repoRoot, '.agents');
     await mkdir(projectMcpRoot, { recursive: true });
@@ -4568,6 +4590,7 @@ describe('runConductorSession resume / shutdown', () => {
       issueUrl: TEST_ISSUE.url,
       repoRoot,
       profile: { workers: [] },
+      ensembleConfig: { ...DEFAULT_ENSEMBLE_CONFIG, conductor: { ...DEFAULT_ENSEMBLE_CONFIG.conductor, mcp: { servers: ['projectDocs'] } } },
       maxTurns: 5,
       permissionPipeline: new PermissionPipeline({}),
       registerProcessSignalHandlers: false,
@@ -6433,6 +6456,7 @@ describe('runConductorSession resume / shutdown', () => {
       issueUrl: TEST_ISSUE.url,
       repoRoot,
       profile: { workers: [] },
+      ensembleConfig: { ...DEFAULT_ENSEMBLE_CONFIG, conductor: { ...DEFAULT_ENSEMBLE_CONFIG.conductor, mcp: { servers: ['projectDocs'] } } },
       maxTurns: 5,
       permissionPipeline: new PermissionPipeline({}),
       sessionLogger,

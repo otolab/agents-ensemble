@@ -66,6 +66,13 @@ describe('deepMerge with arbitrary keys', () => {
 });
 
 describe('parseEnsembleConfig', () => {
+  it('validates conductor MCP server names', () => {
+    expect(parseEnsembleConfig({ conductor: { mcp: { servers: [] } } }).conductor?.mcp).toEqual({ servers: [] });
+    for (const servers of [null, 'server', [''], [1]]) {
+      expect(() => parseEnsembleConfig({ conductor: { mcp: { servers } } })).toThrow('conductor.mcp.servers');
+    }
+  });
+
   it('ignores unknown top-level keys', () => {
     expect(
       parseEnsembleConfig({
@@ -308,6 +315,15 @@ describe('loadEnsembleConfig', () => {
     await mkdir(root, { recursive: true });
     await writeFile(join(root, ENSEMBLE_CONFIG_FILE), body);
   }
+
+  it('replaces conductor MCP selections across user and project layers, including empty arrays', async () => {
+    await writeConfig(userEnsembleRoot, 'conductor:\n  mcp:\n    servers: [user, shared]\n');
+    await writeConfig(join(repoRoot, '.ensemble'), 'conductor:\n  mcp:\n    servers: [project]\n');
+    expect((await loadEnsembleConfig(repoRoot, { userEnsembleRoot })).conductor.mcp?.servers).toEqual(['project']);
+    await writeConfig(join(repoRoot, '.ensemble'), 'conductor:\n  mcp:\n    servers: []\n');
+    expect((await loadEnsembleConfig(repoRoot, { userEnsembleRoot })).conductor.mcp?.servers).toEqual([]);
+  });
+
 
   async function loadConfig() {
     return loadEnsembleConfig(repoRoot, {

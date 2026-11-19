@@ -17,7 +17,7 @@ import {
   fauxToolCall,
 } from '@earendil-works/pi-ai';
 import { PiConductorAgent, loadPiMcpConfig } from './pi-conductor-agent.js';
-import { resolveMcpServers } from '../mcp/load-mcp-config.js';
+import { resolveConductorMcpServers } from '../mcp/load-mcp-config.js';
 
 const { mockCursorCreate, mockCursorResume } = vi.hoisted(() => ({
   mockCursorCreate: vi.fn(),
@@ -60,7 +60,7 @@ describe('shared mcp.json backend path', () => {
       }),
     );
 
-    const mcpServers = await resolveMcpServers(cwd, {
+    const mcpServers = await resolveConductorMcpServers(cwd, ['representative'], {
       userEnsembleRoot: join(cwd, 'user-ensemble'),
     });
     const piConfig = loadPiMcpConfig(mcpServers);

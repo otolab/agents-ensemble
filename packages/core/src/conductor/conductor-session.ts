@@ -11,7 +11,7 @@ import { loadEnsembleConfig } from '../config/load-ensemble-config.js';
 import type { EnsembleConfig } from '../config/types.js';
 import {
   computeMcpConfigDigest,
-  resolveMcpServers,
+  resolveConductorMcpServers,
   type LoadMcpConfigOptions,
 } from '../mcp/load-mcp-config.js';
 import { createAnswerOpenQuestionTool } from '../escalation/answer-open-question-tool.js';
@@ -565,8 +565,9 @@ async function runConductorSessionWithStartupGuard(
   let cursorBootstrapRunId: string | undefined;
   const cursorBootstrapState: CursorBootstrapState | undefined =
     conductorBackend === 'cursor' ? { status: 'incomplete' } : undefined;
-  const mcpServers = await resolveMcpServers(
+  const mcpServers = await resolveConductorMcpServers(
     options.repoRoot,
+    ensembleConfig.conductor.mcp?.servers ?? [],
     options.mcpConfigOptions,
   );
   const mcpConfigDigest = computeMcpConfigDigest(mcpServers);
