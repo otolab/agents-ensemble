@@ -37,6 +37,7 @@ const tuiHarness = vi.hoisted(() => ({
 }));
 
 const pollHarness = vi.hoisted(() => ({
+  pending: new Set<Promise<unknown>>(),
   onCompleted: undefined as ((id: string, count: number) => void) | undefined,
   onRefreshStarted: undefined as ((id: string) => void) | undefined,
   onRefreshCompleted: undefined as ((id: string) => void) | undefined,
@@ -48,9 +49,17 @@ vi.mock('./operator-watch-pool.js', async (importOriginal) => {
     ...actual,
     createOperatorWatchPool: async (...args: Parameters<typeof actual.createOperatorWatchPool>) => {
       const pool = await actual.createOperatorWatchPool(...args);
+      const track = <T>(operation: Promise<T>): Promise<T> => {
+        pollHarness.pending.add(operation);
+        void operation.then(
+          () => pollHarness.pending.delete(operation),
+          () => pollHarness.pending.delete(operation),
+        );
+        return operation;
+      };
       const pollOnce = pool.pollOnce.bind(pool);
       const polling = new Set<string>();
-      pool.pollOnce = async (id) => {
+      pool.pollOnce = (id) => track((async () => {
         if (polling.has(id)) return pollOnce(id);
         polling.add(id);
         try {
@@ -60,10 +69,10 @@ vi.mock('./operator-watch-pool.js', async (importOriginal) => {
         } finally {
           polling.delete(id);
         }
-      };
+      })());
       if (pool.refreshIdleCandidateObservation) {
         const refresh = pool.refreshIdleCandidateObservation.bind(pool);
-        pool.refreshIdleCandidateObservation = async (id, ...args) => {
+        pool.refreshIdleCandidateObservation = (id, ...args) => track((async () => {
           const result = refresh(id, ...args);
           pollHarness.onRefreshStarted?.(id);
           try {
@@ -71,7 +80,7 @@ vi.mock('./operator-watch-pool.js', async (importOriginal) => {
           } finally {
             pollHarness.onRefreshCompleted?.(id);
           }
-        };
+        })());
       }
       return pool;
     },
@@ -783,9 +792,12 @@ describe('operator idle candidate dispatch run loop', () => {
         tuiHarness.onSubmit?.('/exit');
         input.end();
         try {
-          await run;
-        } catch {
-          // Preserve the original failure while still releasing the fixture.
+          await run.catch(() => {
+            // Preserve the original failure while still releasing the fixture.
+          });
+          while (pollHarness.pending.size > 0) {
+            await waitForSignal(Promise.allSettled([...pollHarness.pending]).then(() => {}), 'pending watch operations');
+          }
         } finally {
           input.destroy();
           stdout.destroy();
