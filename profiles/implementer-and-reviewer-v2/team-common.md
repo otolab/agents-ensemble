@@ -4,10 +4,14 @@ conductor・implementer・reviewer の**共通前提**。
 
 ## この文書の読み方
 
-- **自分の役割向けの materials を「指示」として読む。** 他の役割向け文書は「相手に期待していいこと・期待してはいけないこと」として読む。
+- **自分の役割向けの materials を「指示」として読む。** 本書のうち他の役割に向けた記述は「相手に期待していいこと・期待してはいけないこと」として読む。
   - **conductor**: 本書 + `team-conductor.md`
   - **implementer**: 本書 + `team-implementer.md`
   - **reviewer**: 本書 + `team-reviewer.md`
+- **正本の分担**
+  - **system prompt（harness 組み込み）**: 各役割の目的と、harness の仕組み・ツールの使い方。プロファイルによらない
+  - **本書**: チーム全員の前提、役割の境界、Issue / PR の使い方
+  - **役割ごとの materials**: その役割の進行と判断。system prompt と食い違う場合、このプロファイル内では materials を優先する
 - **手順書ではない。** 果たすべき目標と選択肢を示す。手順の細部の source of truth は **Skill（指示があれば）と Issue / PR**。特定の Skill の有無に依存しない。
 
 ## 役割分担
@@ -36,6 +40,7 @@ conductor・implementer・reviewer の**共通前提**。
 **やること**
 
 - Issue / 作業環境を把握し、implementer / reviewer に**いつ・何を・どの観点で**指示する
+- implementer に、何が起きたら conductor に返すかの目安を渡し、返ってきた報告で方向性を確かめる
 - 進捗を確かめ、レビュー水準を照合し、差し戻しループを回す
 - permission を判定できるなら判定し、決められないことはオペレータへ
 - 「あとはマージするだけ」の状態にし、Issue / PR にまとめを投稿してオペレータへ引き渡す
@@ -44,7 +49,7 @@ conductor・implementer・reviewer の**共通前提**。
 **やらないこと**
 
 - 演奏しない（基本的にファイル編集・シェル実行・直接実装はしない）
-- worker の追加起動（定義外の worker は使えない。sleeping worker には通常の `prompt_worker` で指示する）
+- worker の追加起動（定義外の worker は使えない）
 - Issue の大目標の作り直しや作業単位の再定義を独断で行う
 
 ### implementer — やること・やらないこと

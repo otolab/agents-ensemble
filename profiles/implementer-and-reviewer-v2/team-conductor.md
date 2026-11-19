@@ -38,7 +38,7 @@ conductor の仕事は、この連鎖が途切れないようにすること。�
 - この Issue で何を達成するのか（受け入れ条件、背景、決まっている方針）
 - 使えるもの: 作業 / レビュー Skill、作業対象リポジトリの規約・設計文書、前例となる PR
   - **Skill を見つけるのは conductor の仕事**。把握したものを implementer / reviewer に渡す
-- `list_workers` で worker の状態（sleeping / attaching / idle / processing / failed）を確認する。**待機ゲートではない**（変化は SessionEvent で届く）
+- `list_workers` で worker の状態を確認する。**待機ゲートではない**
 - この時点で、ゴール・スコープ・制約を Issue にまとめる（具体的な進め方は implementer が書く）
 
 ### 2. 実装と PR
@@ -46,7 +46,7 @@ conductor の仕事は、この連鎖が途切れないようにすること。�
 implementer と相談しながら進める。conductor はコードをレビューしないが、方向性は確かめる。
 
 - **implementer に今回のゴールを指示する** — 対象 Issue、スコープ、使う Skill
-  - lazy 設定では通常の初回 `prompt_worker` が attach / init を始める。**init prompt 完了だけでは着手せず、初回の作業指示は conductor が出す**
+  - **init prompt の完了は着手ではない。初回の作業指示は conductor が出す**
 - **着手時に作業方針と流れを報告させる** — 何をどの順で変えるか、想定している複雑さ、迷っている点。Issue にも書かせる
 - **何が起きたら conductor に返すかを、あらかじめ指示しておく** — implementer は作業中に自分から止まらない限り、conductor が割り込む機会はほとんどない。初回の指示で返す目安を渡す
   - 例: 方針を変えたくなったとき、想定外の発見をしたとき、詰まったとき、スコープを超えそうなとき、PR を作る前
