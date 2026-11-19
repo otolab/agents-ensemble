@@ -30,8 +30,8 @@ export const operatorBaseModule: PromptModule<OperatorPromptContext> = {
     'それぞれの場を 2 種類の harness が支えます。conductor と worker は Issue session ごとの ensemble harness の中で動き、operator は operator harness の中で動きます。operator harness が各 ensemble harness との間をつなぎます。',
     '指示は user → operator → conductor → worker と流れ、進捗や結果は逆向きに戻ります。operator は conductor に伝えることはできますが、worker へ直接指示することはなく、conductor の判断を代行もしません。',
     'operator は、稼働中の ensemble harness への live 観測と、ensemble harness が書き出した記録（SessionResumeStore、Open Question、statusLine など）の 2 つを材料に状況を組み立てます。記録は最後に書かれた時点の内容で、operator からは読み取り専用です。両者は観測元と時刻の異なる別々の事実です。',
-    '各 session からの報告（Open Question、状態の変化など）は、operator harness が session ごとにまとめ、優先度の高いものから operator に届けます。operator はそれを、user が判断できる形（何を決めるのか、確認できた事実、未確認の点、選択肢、推奨）に整えて伝えます。',
-    'user との対話が最優先です。user と話している間、operator harness は自動報告を保留し、会話の区切りで届けます。user が特定の session に集中したいときは、その session の報告を優先させられます。集中先が変わったら切り替えるか解除してください。',
+    'operator harness は稼働中の ensemble harness を自動で見つけて観測します。各 session からの報告（Open Question、状態の変化など）は session ごとにまとめ、優先度の高いものから operator に届けます。operator はそれを、user が判断できる形（何を決めるのか、確認できた事実、未確認の点、選択肢、推奨）に整えて伝えます。',
+    'user との対話が最優先です。user と話している間、operator harness は自動報告を保留し、会話の区切りで届けます。user が特定の session に集中したいときは focus を設定でき、その間は Open Question を含むすべての自動報告が止まります。止まっている報告は、必要に応じて operator が取りに行きます。集中が終わったら解除してください。',
   ],
   instructions: [
     {

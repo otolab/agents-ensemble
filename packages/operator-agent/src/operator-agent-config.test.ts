@@ -152,6 +152,11 @@ describe('operator-agent config', () => {
       ),
     ).toEqual({
       batchMaxWaitMs: 45_000,
+      pushThreshold: 10,
+      sessionStateWeight: 1,
+      openQuestionWeight: 10,
+      conductorMessageWeight: 5,
+      idleCandidateWeight: 1,
       idlePhaseThresholdMs: 30 * 60_000,
       staleRunningThresholdMs: 60 * 60_000,
       idleAgingMs: 7 * 60_000,

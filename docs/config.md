@@ -104,6 +104,11 @@ version: 1
 common:
   scheduling:
     batchMaxWaitMs: 30000
+    pushThreshold: 10
+    sessionStateWeight: 1
+    openQuestionWeight: 10
+    conductorMessageWeight: 5
+    idleCandidateWeight: 1
     idlePhaseThresholdMs: 1800000
     staleRunningThresholdMs: 3600000
     idleAgingMs: 300000
@@ -115,11 +120,13 @@ profiles:
       batchMaxWaitMs: 45000 # この profile だけ 45 秒にする
 ```
 
-値はすべて整数ミリ秒です。batch max-wait の default / 範囲、focus timeout の10分 default、idle aging の5分 default、idle-phase の30分 threshold、running の60分 threshold は operator が決めた試用条件です。batch max-wait 以外の範囲と `idleReevaluationIntervalMs` は、既決条件と既存 polling 間隔をもとにした実装者の調整可能な初期 trial range であり、operator が個別に選んだ値ではありません。
+時間の値は整数ミリ秒です。重みと閾値は単位のない整数です。batch max-wait の default / 範囲、focus timeout の10分 default、idle aging の5分 default、idle-phase の30分 threshold、running の60分 threshold は operator が決めた試用条件です。
 
 | 項目 | default / 許容範囲 | 意味と調整した場合の効果 |
 |------|--------------------|--------------------------|
-| `batchMaxWaitMs` | 30,000 / 10,000–120,000 ms | session batch を ready にする上限。短いと後着 report の quiet window を早く打ち切り通知を急ぎ、長いと集約機会が増える一方で待ちが延びる。既存 quiet deadline との早い方で ready にするが、send / dispatch の期限ではない。 |
+| `batchMaxWaitMs` | 30,000 / 10,000–120,000 ms | 重みの閾値到達後、quiet window と比較する待機上限。閾値未満の batch は経過時間だけでは自動配送されない。send / dispatch の期限ではない。 |
+| `pushThreshold` | 10 / 1–10,000 | 同一 session の batch を自動配送する累積重みの閾値。 |
+| `sessionStateWeight` / `openQuestionWeight` / `conductorMessageWeight` / `idleCandidateWeight` | 1 / 10 / 5 / 1、各 0–10,000 | report 種別ごとの重み。値を増やすと閾値に早く達する。 |
 | `idlePhaseThresholdMs` | 1,800,000 / 600,000–7,200,000 ms | `harnessPhase=idle` かつ最後の harness state update からの経過時間。`modifiedAt` は idle phase の開始時刻そのものではなく、直近の harness activity / phase transition 時刻。30 分 default は operator 決定。短いと候補が早まり、長いと通知頻度が下がる。 |
 | `staleRunningThresholdMs` | 3,600,000 / 1,800,000–14,400,000 ms | 現在 `running` の session で、最後の statusLine 報告からこの時間以上たった場合の確認候補。statusLine の時刻を最終 status update の proxy として使う。候補は異常・停止の判定ではない。 |
 | `idleAgingMs` | 300,000 / 60,000–1,800,000 ms | eligible な idle-only batch が通常 FIFO 帯へ昇格するまでの時間。短いと通常 report の後に早く選ばれ、長いと低 priority の期間が延びる。上位 priority、hold、停止を越える dispatch deadline ではない。 |
@@ -127,11 +134,11 @@ profiles:
 | `idleReevaluationIntervalMs` | 60,000 / 30,000–300,000 ms | idle candidate の再評価 cadence。短いと条件成立後の候補化が早まるが評価回数が増え、長いと評価負荷が減る一方で候補化が遅れる。gate 解除時の一回再評価とは別の時計。 |
 | gate-clear candidate refresh wait cap | 1,000 ms / 固定 | gate 解除後、fresh observation と candidate admission を待つ上限。全 watch session を順に調べる pass 全体で1秒。境界後に完了する通常 watch poll があれば再利用し、なければ candidate-only UDS read を行う。上限内に候補が scheduler に入れば OQ と同じ send にまとめられる。上限到達または refresh failure 後は ready OQ をそれ以上 refresh 待ちさせず、遅い candidate は後続 batch に残す。調整可能な設定ではない。 |
 
-共通 `batchMaxWaitMs` の契約（秒単位、30秒 default、10〜120秒の operator 承認済み範囲、quiet deadline との関係、調整効果）は [Issue #741](https://github.com/otolab/agents-ensemble/issues/741) に対応する設定です。#745 の候補 cadence や idle aging とは別の時計です。
+`batchMaxWaitMs` は閾値到達時から測ります。#745 の候補 cadence や idle aging とは別の時計です。
 
-idle candidate の評価時計、gate-clear refresh wait cap、`batchMaxWaitMs` は別です。`idleReevaluationIntervalMs` は watch pool の観測値から候補条件を再評価する間隔、`idlePhaseThresholdMs` / `staleRunningThresholdMs` は候補条件を満たすまでの時間です。gate-clear cap は OQ を fresh candidate observation と admission のために待たせる最長時間で、watch session 数にかかわらず一 pass に一度だけ適用します。gate clear 時点で freshness boundary を取り、後から完了する通常 poll があればその結果を再利用し、なければ candidate-only UDS read を行います。cap 後も進行中の refresh は続き、candidate は後から shared scheduler に admission され得ます。同一 send は保証されず、cap は end-to-end 配送期限でもありません。既存の通常 poll が profile state lock を保持している場合、refresh cap とは別に `commitBatch` の lock 待ちが OQ を遅らせることがあります。候補が共有 scheduler に durable に受け入れられた時点で `eligibleAt` が記録され、idle-only batch の5分 aging が始まります。`batchMaxWaitMs` は queued report の session batch を ready にする上限で、候補を作る時刻や実際の `agent.send` を保証しません。手動 report hold 中も idle aging は進みますが、hold 中は送信しません。
+idle candidate の評価時計、gate-clear refresh wait cap、`batchMaxWaitMs` は別です。`idleReevaluationIntervalMs` は watch pool の観測値から候補条件を再評価する間隔、`idlePhaseThresholdMs` / `staleRunningThresholdMs` は候補条件を満たすまでの時間です。gate-clear cap は OQ を fresh candidate observation と admission のために待たせる最長時間で、watch session 数にかかわらず一 pass に一度だけ適用します。gate clear 時点で freshness boundary を取り、後から完了する通常 poll があればその結果を再利用し、なければ candidate-only UDS read を行います。cap 後も進行中の refresh は続き、candidate は後から shared scheduler に admission され得ます。同一 send は保証されず、cap は end-to-end 配送期限でもありません。既存の通常 poll が profile state lock を保持している場合、refresh cap とは別に `commitBatch` の lock 待ちが OQ を遅らせることがあります。候補が共有 scheduler に durable に受け入れられた時点で `eligibleAt` が記録され、idle-only batch の5分 aging が始まります。`batchMaxWaitMs` は重みが閾値に達した session batch の ready 待機上限で、候補を作る時刻や実際の `agent.send` を保証しません。手動 report hold 中も idle aging は進みますが、hold 中は送信しません。
 
-候補の対象は選択中 profile で明示 watch されている session と repository auto-watch が選んだ最大20 run です。保存済み run 全体の一覧ではありません。現在の候補評価には一意な SessionResumeStore、reachable な live UDS observation、観測時点と矛盾しない保存 `harnessPhase` / `modifiedAt` が必要です。poll 時に phase state を再読込し、観測前後で phase / timestamp / lifecycle が変わっていた場合はその回を unknown として候補を作りません。live observation は watch ごとの polling 間隔の2倍以内（最低10秒以内）を fresh とします。UDS が到達不能、状態が stale / 欠落 / 矛盾、phase が terminal または不明の場合は安全側に候補を出しません。session の確認を網羅する仕組みではなく、登録範囲や auto-watch capacity によって候補対象外になる session があります。
+候補の対象は選択中 profile で自動発見または明示 watch された session です。現在の候補評価には一意な SessionResumeStore、reachable な live UDS observation、観測時点と矛盾しない保存 `harnessPhase` / `modifiedAt` が必要です。poll 時に phase state を再読込し、観測前後で phase / timestamp / lifecycle が変わっていた場合はその回を unknown として候補を作りません。live observation は watch ごとの polling 間隔の2倍以内（最低10秒以内）を fresh とします。UDS が到達不能、状態が stale / 欠落 / 矛盾、phase が terminal または不明の場合は安全側に候補を出しません。
 
 `harnessPhase=idle` は保存された harness phase であり、worker の完了・停止・作業未完了を示しません。idle candidate は「確認候補」として扱います。idle threshold は `harnessPhase=idle` と確認できた状態で `modifiedAt`（最後の harness activity / phase transition 時刻）から測ります。これは phase transition 専用時刻ではないため、別の harness state write があれば起点が新しくなることがあります。`running` candidate は live UDS observation で現在の保存 phase が `running` と確認でき、statusLine の `reportedAt` が stale-running threshold 以上前の場合に作ります。statusLine が現在の running phase より前の報告でも「最後の statusLine 報告」として扱います。worker progress heartbeat は取得できないため、通知には最後の statusLine と時刻を示し、worker progress の直接観測ではないことを明記します。実作業の進捗を statusLine に対応づける正確な signal mapping は未解決で、この機能では最終 status update の proxy としてのみ使います。statusLine 欠落や future timestamp は候補根拠として使いません。正常な長時間処理や user / worker の一般的な待ちを停滞と推定せず、live Open Question があることだけでは candidate を抑止しません。現行 observation に一般的な user-wait signal はなく、OQ は live question の有無だけを示します。
 
@@ -147,7 +154,7 @@ candidate は既存の session report queue / batch / hold / retry / ack 経路�
 
 [場面別の比較 test](../packages/operator-agent/src/operator-idle-candidate-scenarios.test.ts) は、同じ fake-clock timeline を baseline（idle candidate なし）と統合後（条件を満たす candidate を登録）で再生します。実 `OperatorDispatchQueue` と fake `agent.send` を使います。ここで dispatch は選択された user/report batch、report batch は distinct な frozen `batchId`、turn は fake `agent.send` 呼び出しです。失敗した send retry も turn proxy に数えます。重要通知の待ち時間は OQ の投入から、それを含む最初の成功 send までです。
 
-この場面表は `OperatorDispatchQueue` の実 `selectBatch` / `commitBatch` を直接呼ぶ synthetic harness で、`agent.send` は fake です。selector の規則を同じ fake-clock timeline で比較しますが、watch pool や run loop の非同期競合を再現するものではありません。実 `runOperatorAgent` を通す比較は別の [run-loop integration test](../packages/operator-agent/src/operator-idle-run-loop.test.ts) で行います。どちらも実 provider の待ち時間・turn 数を測るものではありません。
+この場面表は `OperatorDispatchQueue` の実 `selectBatch` / `commitBatch` を直接呼ぶ synthetic harness で、`agent.send` は fake です。selector の規則を同じ fake-clock timeline で比較しますが、watch pool や run loop の非同期競合を再現するものではありません。実 `runOperatorAgent` を通す比較は別の [run-loop integration test](../packages/operator-agent/src/operator-idle-run-loop.test.ts) で行います。後者は手動 watch の比較条件を保つため自動発見を無効にし、push 閾値を1に設定しています。どちらも実 provider の待ち時間・turn 数を測るものではありません。
 
 状態不変の行は実 watch pool も通します。同じ stale-running evidence を4回 UDS observation し、実 `enqueueIdleCandidate` の durable fingerprint gate が candidate を一度だけ受け付けることを確認します。OQ のみの baseline と統合後は、ともに1 dispatch / 1 report batch / 1 fake turn、OQ 待ち3,000 msです。
 

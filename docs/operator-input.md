@@ -14,7 +14,7 @@ ConductorSession の **View 層**契約。入力・表示はここに閉じ、�
 | **SessionDriver** | イベントキュー消費・max-turns 登録・`agent.send` | `conductor-session-driver.ts` |
 | **SessionView** | TTY Ink TUI / CLI 引数 / env からのオペレータ入力 | CLI `createIssueSessionTuiHost` / `bindAsyncOperatorInput` |
 
-データの正本: **イベントキュー**（`SessionEventQueue`）と **OpenQuestionRegistry**。通常の View 入力は `submit` で `operator.message` をキューへ積む。`/reconnect`、`/recovery`、`/close`、`/exit` は conductor へ送らない専用コマンドとして SessionView の binding で intercept する。TTY の pane / stream は、未回答 open question について `OperatorInputBindingApi.getContext().openQuestions`（Registry の `listOpen()` スナップショット）を表示状態の正本として使う。binding 前の初回描画だけは、イベント reducer の表示 state をフォールバックにする。
+データの正本: **イベントキュー**（`SessionEventQueue`）と **OpenQuestionRegistry**。質問を選択して送信した入力はコマンドや配信 prefix より優先して回答として扱う。slash なしの `close` / `exit` / `reconnect` は通常メッセージとして扱う。通常の View 入力は `submit` で `operator.message` をキューへ積む。`/reconnect`、`/recovery`、`/close`、`/exit` は conductor へ送らない専用コマンドとして SessionView の binding で intercept する。TTY の pane / stream は、未回答 open question について `OperatorInputBindingApi.getContext().openQuestions`（Registry の `listOpen()` スナップショット）を表示状態の正本として使う。binding 前の初回描画だけは、イベント reducer の表示 state をフォールバックにする。
 
 ## View 契約: `OperatorInputBinding`
 
@@ -61,11 +61,11 @@ type OperatorInputBinding = (
 
 - 空文字は無視（`false` を返す）
 - 受け付けたら `operator.message` をイベントキューへ enqueue（`true`）
-- `/reconnect` / `reconnect` は `operator.reconnect` をイベントキューへ enqueue し、conductor へは送らない（`true`）
+- `/reconnect` は `operator.reconnect` をイベントキューへ enqueue し、conductor へは送らない（`true`）
 - `/recovery ...` は binding 内で一覧・表示・削除を行い、`submit` や conductor dispatch には渡さない
 - `/recovery bootstrap` は旧 Cursor session の bootstrap 状態を表示し、`assume-complete` / `assume-incomplete` の判断を記録する。対話 TTY でのみ選択できる
-- `/close` / `close` は専用の終了 signal として扱い、イベントキューへは enqueue しない（`false`）。SessionResumeStore を flush して worker / conductor / GitHub monitor を停止し、worktree を残してプロセスを終了する
-- `/exit` / `exit` は専用の終了 signal として扱い、イベントキューへは enqueue しない（`false`）
+- `/close` は専用の終了 signal として扱い、イベントキューへは enqueue しない（`false`）。SessionResumeStore を flush して worker / conductor / GitHub monitor を停止し、worktree を残してプロセスを終了する
+- `/exit` は専用の終了 signal として扱い、イベントキューへは enqueue しない（`false`）
 - TTY の通常入力は配信モード prefix を付けられる。`/idle ...`、`/next ...`、`/interrupt ...` を本文先頭に置き、prefix 自体は conductor へ送らない。prefix なしは `next`
 - TTY（Ink TUI）では選択中の open question への回答として `submit` する（`targetOpenQuestionId` オプション）
 - 非 TTY では未回答 1 件のときはプレーンテキストをその open question への回答として解釈する
@@ -155,17 +155,19 @@ operator-agent の応答が `finished` / `completed` で返り、次の user 入
 
 ### operator-agent の session focus
 
-focus は既定で off です。TTY では `/focus <conductorAgentId>` で対象を選び、`/focus` で現在の対象を確認し、`/focus-off` で解除できます。`set_session_focus` tool でも設定・解除でき、`conductorAgentId` を指定すると対象を設定し、省略すると解除します。focus は選択対象の session report 全体を他 session より優先します。TTY の user input が先に処理される契約は維持されます。focus 外の Open Question は待つことがあるため、作業対象が変わったら focus を切り替えるか off に戻してください。
+focus は既定で off です。TTY では `/focus <conductorAgentId>` で対象を選び、`/focus` で現在の対象を確認し、`/focus-off` で解除できます。`set_session_focus` tool でも設定・解除でき、`conductorAgentId` を指定すると対象を設定し、省略すると解除します。focus 中は対象内外を問わず、Open Question を含む report の自動配送を停止します。明示的な配送要求は利用できます。TTY の user input が先に処理される契約は維持されます。
+
+`list_pending_reports` は、この process の queue にある session ごとの report 件数を返します。`request_session_reports` に `conductorAgentId` を指定すると、要求時点でこの process の queue にある、その session の未配送 report の通常配送を要求します。先行 batch の送信中や ack 再試行中に後着 report を要求した場合も、先行 batch の完了では後着 report の要求は解除されません。tool の応答は受付結果であり、配送完了ではありません。手動 hold と会話 hold は解除せず、両方が解除されてから配送します。要求は process 内で保持し、再起動時は失われますが、未 ack report は保存されるため再要求できます。commit 後の失敗時は凍結済み batch を同じ ID と内容で再試行し、ack 保存失敗時は ack だけを再試行します。結果不明や ack 保存前の停止後には同じ report が再送され得ます。
 
 focus は「今、認知リソースを割いて解決する対象」を示す短期の操作です。focus 対象との対話ターンを終え、その session が Open Question など人間応答待ちに入るときは、focus を手動で切り替えるか解除してください。live Open Question を観測しただけでは自動解除しません。また、一般的な worker wait や長時間処理を推測して自動解除することもありません。
 
 focus は最後の operator / user 入力から10分の sliding inactivity timeout を持ちます。TTYで `/focus` を入力したときなど、人間の入力を operator-agent が受け取るたびに時計が更新されます。`set_session_focus` のtool invocation、worker report、watch update などの自動イベントでは更新されません。この timeout は手動解除を忘れた場合の failsafe です。既定10分は調整可能で、初期設定範囲は3〜30分です。focus は再起動後 off になります。scheduler の値と profile override は [`operator-agents.config.yaml` の scheduler 設定](config.md#operator-agent-専用設定) を参照してください。
 
-同一 session の report は到着順を保ち、一つの batch / send にまとめます。Open Question は同一 session 内の先行 report を追い越しません。session 間では TTY input の後、focus 中なら focus session、focus が off なら Open Question を含む session、直前 session の一回限りの continuation、通常 FIFO の順で選びます。ready 化した batch は agent send の期限を保証せず、hold・停止・優先通知などで待つ場合があります。
+同一 session の report は到着順を保ち、一つの batch / send にまとめます。Open Question は同一 session 内の先行 report を追い越しません。focus が off のとき、session 間では TTY input、Open Question を含む session、直前 session の一回限りの continuation、通常 FIFO の順で選びます。focus 中の明示要求は focus session の選択優先を維持します。ready 化した batch は agent send の期限を保証せず、hold・停止・優先通知などで待つ場合があります。
 
 ### 稼働 session の idle 確認候補
 
-operator-agent は profile の session watch pool に登録された session のうち、live UDS に到達でき、保存 phase と観測時刻が整合するものを再評価します。対象は全保存 session ではなく、明示 watch と repository auto-watch の対象（最大20 run）です。終了・停止 phase、重複した SessionResumeStore、UDS 到達不能、観測の stale / 欠落 / 矛盾は候補にしません。live observation は watch の poll interval の2倍以内（最低10秒以内）のものを使います。poll の前後で保存 phase / `modifiedAt` / lifecycle を照合し、読み取り中の変化があればその回の状態は unknown として扱います。候補のために watch registration や polling は止めません。
+operator-agent は自動発見または明示 watch された session のうち、live UDS に到達でき、保存 phase と観測時刻が整合するものを再評価します。終了・停止 phase、重複した SessionResumeStore、UDS 到達不能、観測の stale / 欠落 / 矛盾は候補にしません。live observation は watch の poll interval の2倍以内（最低10秒以内）のものを使います。poll の前後で保存 phase / `modifiedAt` / lifecycle を照合し、読み取り中の変化があればその回の状態は unknown として扱います。
 
 保存された `harnessPhase=idle` と、最後の harness state update を示す `modifiedAt` が30分以上前の session は「確認候補」として report します。`modifiedAt` は phase transition 専用時刻ではなく、直近の harness activity / phase transition 時刻です。これは保存 phase の観測であり、worker の完了・停止・作業未完了を示しません。現在 `running` と確認でき、最後の statusLine 報告が60分以上前の session も「60分以上更新なし・要確認」として候補にします。worker progress heartbeat は取れないため、statusLine と `reportedAt` は最終 status update の proxy です。実作業の進捗と statusLine を対応づける正確な signal mapping は未解決で、statusLine は進捗そのものではありません。通知には最終報告時刻を含めますが、長時間の正常処理を異常・停滞と断定せず、statusLine 欠落時は候補を作りません。idle phase の30分、stale-running の60分は調整可能な初期 default です。値・範囲・trade-off は [scheduler 設定](config.md#operator-agent-専用設定)を参照してください。
 
@@ -349,7 +351,7 @@ URL が端末幅を超える場合も URL は省略せず、上枠の title / su
 
 ### `/reconnect` — conductor transport の手動再接続
 
-`/reconnect` または `reconnect`（大文字小文字無視・前後空白トリム）は、conductor に送らない control command です。通常は現在の agent を一度 `close` してから、同じ `agentId` で `resume` します。close が reject した場合、自動 reconnect はそこで止まります。手動 `/reconnect` は明示的な置き換え操作として `resume` を試み、close を再実行しません。cleanup の完了が確認できない場合はその旨を知らせます。コマンド自体は prompt を送りません。自動 reconnect または手動 reconnect が成功しても、失敗した prompt の再送や recovery report の conductor 送信は行いません。
+`/reconnect`（大文字小文字無視・前後空白トリム）は、conductor に送らない control command です。通常は現在の agent を一度 `close` してから、同じ `agentId` で `resume` します。close が reject した場合、自動 reconnect はそこで止まります。手動 `/reconnect` は明示的な置き換え操作として `resume` を試み、close を再実行しません。cleanup の完了が確認できない場合はその旨を知らせます。コマンド自体は prompt を送りません。自動 reconnect または手動 reconnect が成功しても、失敗した prompt の再送や recovery report の conductor 送信は行いません。
 
 send の結果が未確定になった後は、agent availability と operator confirmation を別々に扱います。agent が unavailable の場合は `/reconnect` が成功するまで通常 dispatch を止めます。resume に失敗した場合、次の `/reconnect` は旧 agent を再 close せず resume を再試行します。再接続できても後続 dispatch は自動再開せず、operator が現在の状態を確認して `/recovery continue` を実行する必要があります。reconnect 失敗後も既存 queue は保持し、旧 handle へ送信しません。
 
@@ -390,7 +392,7 @@ recovery snapshot 本文を新しい SessionLogEvent、終了 summary、SessionR
 
 ### `/close` — worktree を残してセッションを閉じる
 
-`/close` または `close`（大文字小文字無視・前後空白トリム）は、conductor に送らない一時終了コマンドです。入力直後に `session.operator_close` を emit し、force teardown で処理中 worker prompt を停止して未解決 permission を deny します。通常の attach 済み worker は、初回 prompt の完了前でも ACP session ID と cwd を runtime から snapshot します。ただし復旧 bootstrap 中の置換 session は未初期化なので snapshot から除外し、直前に保存した ID を保ちます。GitHub monitor を停止して最新 cursor と未配送 outbox を SessionResumeStore に flush した後、worker と conductor を force stop し、TUI を dispose してプロセスを終了します。正常に完了した `/close` は exit code 0 です。
+`/close`（大文字小文字無視・前後空白トリム）は、conductor に送らない一時終了コマンドです。入力直後に `session.operator_close` を emit し、force teardown で処理中 worker prompt を停止して未解決 permission を deny します。通常の attach 済み worker は、初回 prompt の完了前でも ACP session ID と cwd を runtime から snapshot します。ただし復旧 bootstrap 中の置換 session は未初期化なので snapshot から除外し、直前に保存した ID を保ちます。GitHub monitor を停止して最新 cursor と未配送 outbox を SessionResumeStore に flush した後、worker と conductor を force stop し、TUI を dispose してプロセスを終了します。正常に完了した `/close` は exit code 0 です。
 
 この flush に conductor send 中の batch、SessionDriver の状態、recovery candidate / report は含まれません。Ctrl+C / SIGINT も同じく event queue を保存しません（SessionResumeStore の flush は best effort）。再開後に失敗 batch や report は自動再生されないため、状態を確認して新しい operator message で未完了分を伝えてください。
 
@@ -404,6 +406,8 @@ SessionResumeStore には conductor agent ID、worker ACP session ID / cwd、pro
 
 `report_session_state` の最新 1 行は `~/.ensemble/sessions/github.com/<owner>/<repo>/{conductorAgentId}/session-state.yaml` に報告時刻とともに atomic rename で保存し、過去の報告も最大 50 件・ファイル全体 16 KiB まで保持します。`list_operator_sessions` と watch snapshot polling は canonical slug の保存値を読み、到達可能な harness では live 観測も使います。最新値のほか `statusLineHistory` を古い順に返します。異なる conductor agent ID は、同じ Issue の session でも別の状態として一覧に残ります。
 
+operator-agent は profile の include と `--repo-filter` の範囲にある保存 session を起動時と30秒ごとに走査します。socket path が記録された session に `session.observe` を試し、応答があれば watch します。接続不可なら自動 watch を停止し、後の走査で再接続します。timeout や未対応は未確認として、すでに接続している自動 watch を維持します。自動 watch は process 内で管理し、手動 watch や repository watch の登録状態を変更しません。
+
 SessionResumeStore は、conductor send / worker prompt の in-flight がある間 `harnessPhase: running`、両方が idle の状態を250ms保った後 `idle` を保存します。phase 開始は即時に flush し、idle だけ debounce します。`/close` は teardown 完了後に `close`、`/exit` は worktree cleanup 試行後に `exit`、SIGINT / SIGTERM は `abort` を最終 flush します。terminal phase は後続 flush で上書きしません。従来の `lifecycle` も移行期の読み取り互換のため書き続け、`closed` / `exited` / `interrupted` / `unknown` の値を保ちます。旧形式は `closed→close`、`exited→exit`、`interrupted→abort` と読み替えます。通常の非TTY終了は `harnessPhase` / `modifiedAt` を持たず、`lifecycle: unknown` として扱います。
 
 `modifiedAt` は harness が SessionResumeStore を保存するたび `updatedAt` と同じ時刻へ更新します。operator 向け statusLine の `reportedAt` は別の報告時刻です。`list_operator_sessions` は watch pool の直近10秒の観測を再利用し、それ以外の socket path 記録済み run に `session.observe` を行います。接続可能は作業中を意味しません。時間切れ・未対応の `unknown` は未確認を示し、停止中を意味しません。投影では `live.checkedAt < persisted.modifiedAt` の観測を保存phaseより古いものとして扱い、coherence 判定では `unknown` 相当にします。同じ時刻か新しい観測なら現在のphaseとの整合判定に使います。`running` / `idle` の到達不能がwatch上で30秒続くと `coherence: conflict` にし、それより短い場合やlive未観測・phaseより古い場合は `insufficient_data` とします。`close` / `abort` は `resume`、`exit` は `purge` の候補ですが、自動削除はしません。terminal phaseより新しい（または同時刻の）`reachable` 観測は conflict として扱います。
@@ -414,11 +418,11 @@ SessionResumeStore は、conductor send / worker prompt の in-flight がある�
 
 `list_operator_sessions` は保存済み run を1 run 1行で返し、`statusLine` / `reportedAt`、保存 phase、live connectivity と最終観測時刻をそれぞれ分けて示します。watch 観測は採用時に10秒以内か確認します。採用した質問・報告はその観測時刻とともに保持し、接続の `freshness` / `ageMs` は GitHub 情報の取得後、応答直前の `dataAsOf` で再評価します。その時点で10秒を超えた観測は `freshness: stale`、`connectivity: unknown` とし、`lastKnownConnectivity` に結果を残します。`liveConnectivity` filter も同じ判定を使います。観測自体がなければ `not_observed` です。保存済み phase は live probe に失敗しても別項目として残ります。
 
-既存 SessionResumeStore の `updatedAt` は作成時刻ではなく flush 時刻です。その値から新着 run を推測しません。新着順は repository watch が保存する `firstObservedAt`（初めて一覧で確認した時刻）を使い、記録がまだない legacy run は時刻不明として既知時刻の後に並べます。repository watch は operator-agent の `register_repository_watch` で有効化します。登録時に存在する run はその時点で baseline 化し、それ以降を scan interval（既定30秒、5〜300秒）で検出します。登録・初回観測時刻・停止抑制状態は `~/.ensemble/operator-agents/<profile>/watch/repository-watch-state.json` に保存され、再起動後の初回 scan で停止中に追加された run も補います。重複登録は設定を更新し、既存の観測時刻を上書きしません。`unregister_repository_watch` は scan と自動 session watch を止め、明示登録した個別 session watch は維持します。履歴は再登録に備えて残します。
+既存 SessionResumeStore の `updatedAt` は作成時刻ではなく flush 時刻です。その値から新着 run を推測しません。新着順は repository watch が保存する `firstObservedAt`（初めて一覧で確認した時刻）を使い、記録がまだない legacy run は時刻不明として既知時刻の後に並べます。repository watch は operator-agent の `register_repository_watch` で有効化します。登録時に存在する run はその時点で baseline 化し、それ以降を scan interval（既定30秒、5〜300秒）で検出します。登録・初回観測時刻・停止抑制状態は `~/.ensemble/operator-agents/<profile>/watch/repository-watch-state.json` に保存され、再起動後の初回 scan で停止中に追加された run も補います。重複登録は設定を更新し、既存の観測時刻を上書きしません。`unregister_repository_watch` は repository scan とその管理下の自動 session watch を止めます。明示登録した個別 session watch と別経路の live 自動発見は維持します。履歴は再登録に備えて残します。
 
 repository watch の登録数は選択中 profile あたり最大20 repository です。登録対象は `owner/repo` 形式の個別 repository で、profile の include 設定と起動時の `--repo-filter` の両方が許可範囲を決めます。21件目以降の新規登録は「At most 20 repositories can be watched in one profile.」というエラーで拒否され、登録済み watch はそのままです。同じ repository の再登録は枠を追加消費せず、上限到達後も scan / poll 設定を更新できます。`unregister_repository_watch` で登録を解除すると枠が空きます。登録と解除は profile の保存状態に反映され、再起動時も登録済み repository 数として上限に数えます。解除後も発見履歴は再登録時の新着判定用に保持します。
 
-この repository 登録数の上限とは別に、自動 live watch は選択中 profile 全体で最大20 run です。候補は初回観測が新しい順に選び直し、上限を外れた run は `watch.reason: auto_watch_capacity` として一覧に残します。`register_session_watch` で明示的に登録した run は自動 live watch の上限外で維持します。自動 watch の poll interval は既定10秒です。repository scan 失敗は `repositoryScan.status: stale` / `error: scan_failed` とし、最後に成功した時刻を保持します。初回観測時刻は作成時刻ではないため、watch が有効になる前に作成・保存された run 同士の正確な新旧は判定できません。
+この repository 登録数の上限とは別に、repository watch による自動 watch は選択中 profile 全体で最大20 run です。候補は初回観測が新しい順に選び直し、上限を外れた run は `watch.reason: auto_watch_capacity` として一覧に残します。live session の自動発見と明示 session watch はこの上限とは別です。repository watch の poll interval は既定10秒です。repository scan 失敗は `repositoryScan.status: stale` / `error: scan_failed` とし、最後に成功した時刻を保持します。初回観測時刻は作成時刻ではないため、watch が有効になる前に作成・保存された run 同士の正確な新旧は判定できません。
 
 `openQuestionObservation` は watch pool の直近 snapshot にある未回答（`status: open`）の Open Question 件数を返します。回答済みは数えません。前回の値がある場合は `previous` と `comparedAt`、増減を `delta` に示し、回答による件数の減少も反映します。`openQuestionCount` は一覧の live 優先の件数で、`openQuestions` / `openQuestionHistory` は保存された質問一覧・履歴です。このため両者の件数は異なり得ます。`openQuestionCountSource` / `openQuestionCountObservedAt` と `openQuestionHistorySource` で出典を確認してください。statusLine も live 優先で、`hasStatusLine` は選択された値を対象とします。従来の保存値のみの意味から変わっています。PR head / 個別 CI / review decision は GitHub API の結果です。GitHub API は1ページにつき最大5つの異なる Issue へ問い合わせ、成功結果を30秒 cache します。問い合わせ中に filter の結果が変化して別の Issue がページに入った場合、その Issue は `not_checked` / `page_changed_during_lookup` です。1 Issue では最大5件の PR、各 PR は最大20件の check context です。`pullRequests.status: none` は Issue と timeline を確認でき PR reference がなかった状態、`unavailable` は repository / Issue / timeline の欠損などで確認できなかった状態です。ほかの上限超過、認証・rate limit・timeout 等も `status` / `reason` / `refreshFailure` で明示し、古い成功結果を更新失敗時に使う場合は `stale` とします。
 
@@ -443,7 +447,7 @@ GitHub update は conductor send が `finished` で完了した後に限って o
 
 ### `/exit` の即時フィードバック（#170）
 
-`/exit` または `exit`（大文字小文字無視・前後空白トリム）を受け付けた直後、harness は `session.operator_exit` を **同期** emit する。
+`/exit`（大文字小文字無視・前後空白トリム）を受け付けた直後、harness は `session.operator_exit` を **同期** emit する。
 
 | 表示経路 | 内容 |
 |----------|------|
@@ -456,7 +460,7 @@ cleanup が dirty worktree のためスキップされた場合や、削除に�
 
 ### `/close` の即時フィードバック
 
-`/close` または `close` を受け付けた直後は `session.operator_close` を同期 emit します。TTY の活動ログには「セッションを保存して閉じています…」と表示し、入力欄を無効化します。teardown 後に終了 JSON を出し、worktree cleanup を行わず exit code 0 でプロセスを終了します。YAML / SessionResumeStore の flush failure は warning として扱い、`/close`・`/exit`・割り込み・通常終了など、どの終了経路でも終了を続けます。`/exit` の cleanup failure を warning のみ・exit 0 とする [#448](https://github.com/otolab/agents-ensemble/issues/448) の契約とは別の条件です。
+`/close` を受け付けた直後は `session.operator_close` を同期 emit します。TTY の活動ログには「セッションを保存して閉じています…」と表示し、入力欄を無効化します。teardown 後に終了 JSON を出し、worktree cleanup を行わず exit code 0 でプロセスを終了します。YAML / SessionResumeStore の flush failure は warning として扱い、`/close`・`/exit`・割り込み・通常終了など、どの終了経路でも終了を続けます。`/exit` の cleanup failure を warning のみ・exit 0 とする [#448](https://github.com/otolab/agents-ensemble/issues/448) の契約とは別の条件です。
 
 ### operator-agent からの remote close / exit
 

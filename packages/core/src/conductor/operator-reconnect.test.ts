@@ -2,9 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { isOperatorReconnectCommand } from './operator-reconnect.js';
 
 describe('isOperatorReconnectCommand', () => {
-  it('matches the reconnect command and its alias', () => {
+  it('matches the reconnect command without a slashless alias', () => {
     expect(isOperatorReconnectCommand('/reconnect')).toBe(true);
-    expect(isOperatorReconnectCommand('reconnect')).toBe(true);
+    expect(isOperatorReconnectCommand('reconnect')).toBe(false);
   });
 
   it('does not claim another operator command or partial input', () => {
