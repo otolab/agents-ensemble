@@ -77,6 +77,10 @@ worker spawn 時の ACP preset 解決（[ADR 0019](adr/0019-worker-acp-cli-prese
 CLI --default-acp-* > ENSEMBLE_DEFAULT_ACP_CLI > config acp.defaultPreset > cursor
 ```
 
+`claude` / `codex` / `pi` preset は core に同梱された adapter を使い、同名の PATH コマンドにはフォールバックしません。解決できない場合は失敗した段階と原因をエラーに表示します。依存関係が欠けている場合は再インストールしてください（Claude / Codex は optional dependency）。Cursor は PATH 上の `agent` を使います。Pi の BYO runtime は同梱 adapter に加えて PATH 上の `pi` CLI を必要とします。
+
+PATH 上の adapter を明示して使う場合は、例えば `--default-acp-command codex-acp` を指定します。これは custom preset として扱われ、built-in preset のモデル注入や認証などの設定は引き継ぎません。
+
 `acp.env` の正本は config（選択された user config → project の順に deep merge）。spawn env のマージ順: builtin preset 既定 → config `acp.env`。SessionResumeStore には env map の digest のみを保存します。新旧 config digest と ACP fingerprint は保存時設定の診断に使い、差だけで resume を拒否しません。環境変数の値は記録しません。詳細は [config.md § ACP spawn env](config.md#acp-spawn-envacpenv)。
 
 worker の `modelTag` は `acp.tags` と `acp.models` を経由して解決します。`high` / `default` / `low` / `lite` は built-in team が推奨する tier 名で、空文字や空白のみを含む任意の文字列も使えます。`lite` は default 相当のモデルに短めの reasoning を指定するなど throughput を優先する慣習で、Cursor ACP fast mode（`cursorFast`）とは別概念です。未登録の明示 tag（空文字・空白のみを含む）は warning を出して `default` mapping を試し、それも無ければ model を注入せず preset の既定に委ねます。worker が `modelTag` を省略した場合は暗黙の `default` から preset の既定へ warning なしで進みます。`modelTag: default` を明示して mapping がない場合は warning を出して preset の既定を使います。catalog は文字列 shorthand と、`reasoning` や Cursor 専用の `cursorFast` を指定できる構造化形式を併用できます。明示 tag の warning 条件は [ADR 0063](adr/0063-explicit-default-model-tag-warning.md)、空文字を含む tag の扱いは [ADR 0064](adr/0064-worker-model-tags-allow-empty-strings.md) を参照してください。

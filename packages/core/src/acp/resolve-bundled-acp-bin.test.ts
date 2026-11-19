@@ -1,10 +1,11 @@
-import { accessSync, constants, readFileSync } from 'node:fs';
+import { accessSync, constants, readFileSync, realpathSync } from 'node:fs';
 import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { delimiter, isAbsolute, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
+import { finalizeResolvedAcpSpawn, resolveAcpSpawnExecutable } from './validate-acp-preset-prerequisites.js';
 import { ACP_PRESET_ADAPTER_PACKAGES } from './acp-preset-bins.js';
 import * as bundledModule from './resolve-bundled-acp-bin.js';
 import {
@@ -61,7 +62,7 @@ const optionalPresets = [
 
 function canResolvePackage(packageName: string): boolean {
   try {
-    packageRequire.resolve(packageName);
+    packageRequire.resolve(`${packageName}/package.json`);
     return true;
   } catch {
     return false;
@@ -210,4 +211,107 @@ it('resolves an executable name from PATH to an absolute executable path', () =>
   expect(fromPath).toBeDefined();
   expect(isAbsolute(fromPath!)).toBe(true);
   accessSync(fromPath!, constants.X_OK);
+});
+
+
+describe('core package location and PATH isolation', () => {
+  for (const preset of ['claude', 'codex', 'pi'] as const) {
+    it(`resolves ${preset} from the executing core package before another installed core`, async () => {
+      const root = await mkdtemp(join(tmpdir(), 'acp-core-layout-'));
+      const core = join(root, 'packages', 'core');
+      const installedCore = join(root, 'node_modules', '@agents-ensemble', 'core');
+      const { packageName, binName } = ACP_PRESET_ADAPTER_PACKAGES[preset];
+      const addAdapter = async (base: string) => {
+        const dir = join(base, 'node_modules', ...packageName.split('/'));
+        await mkdir(dir, { recursive: true });
+        await writeFile(join(dir, 'package.json'), JSON.stringify({ name: packageName, bin: { [binName]: 'bin.js' } }));
+        await writeFile(join(dir, 'bin.js'), '#!/bin/sh\n');
+        await chmod(join(dir, 'bin.js'), 0o755);
+        return join(dir, 'bin.js');
+      };
+      try {
+        await mkdir(join(core, 'dist', 'acp'), { recursive: true });
+        await mkdir(installedCore, { recursive: true });
+        await writeFile(join(core, 'package.json'), JSON.stringify({ name: '@agents-ensemble/core' }));
+        await writeFile(join(installedCore, 'package.json'), JSON.stringify({ name: '@agents-ensemble/core' }));
+        const expected = await addAdapter(core);
+        await addAdapter(installedCore);
+        const url = pathToFileURL(join(core, 'dist', 'acp', 'entry.js'));
+        expect(resolveAcpBin(preset, url)).toBe(realpathSync(expected));
+        await rm(expected);
+        expect(resolveAcpBin(preset, url)).toBeUndefined();
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    });
+  }
+});
+
+it('resolves an adapter from an npm-installed core dependency', async () => {
+  const { fixtureRoot, coreDirectory, callerModuleUrl } = await createCorePackageFixture();
+  const { packageName, binName } = ACP_PRESET_ADAPTER_PACKAGES.codex;
+  const adapter = join(coreDirectory, 'node_modules', ...packageName.split('/'));
+  try {
+    await mkdir(adapter, { recursive: true });
+    await writeFile(join(adapter, 'package.json'), JSON.stringify({ bin: { [binName]: 'index.js' } }));
+    await writeFile(join(adapter, 'index.js'), '');
+    await chmod(join(adapter, 'index.js'), 0o755);
+    expect(resolveAcpBin('codex', callerModuleUrl)).toBe(realpathSync(join(adapter, 'index.js')));
+  } finally {
+    await rm(fixtureRoot, { recursive: true, force: true });
+  }
+});
+
+
+describe('bundled adapter failure diagnostics', () => {
+  it('reports the actual package resolution failure', async () => {
+    const { fixtureRoot, callerModuleUrl } = await createCorePackageFixture();
+    try {
+      expect(() => finalizeResolvedAcpSpawn(
+        { preset: 'claude', command: 'claude-agent-acp', args: [] },
+        { fromModuleUrl: callerModuleUrl },
+      )).toThrow(/adapter package @agentclientprotocol\/claude-agent-acp の解決[\s\S]*Cannot find module/);
+    } finally {
+      await rm(fixtureRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('reports a missing bin declaration', async () => {
+    const { fixtureRoot, coreDirectory, callerModuleUrl } = await createCorePackageFixture();
+    const { packageName, binName } = ACP_PRESET_ADAPTER_PACKAGES.codex;
+    const adapter = join(coreDirectory, 'node_modules', ...packageName.split('/'));
+    const spawn = { preset: 'codex' as const, command: binName, args: [] };
+    const options = { fromModuleUrl: callerModuleUrl };
+    try {
+      await mkdir(adapter, { recursive: true });
+      await writeFile(join(adapter, 'package.json'), JSON.stringify({ bin: {} }));
+      expect(() => finalizeResolvedAcpSpawn(spawn, options)).toThrow(/bin 定義に codex-acp がありません/);
+    } finally {
+      await rm(fixtureRoot, { recursive: true, force: true });
+    }
+  });
+
+  it.each(process.platform === 'win32' ? ['missing'] : ['missing', 'inaccessible'])(
+    'reports the bin file error (%s) at validation and executable resolution', async (failure) => {
+      const { fixtureRoot, coreDirectory, callerModuleUrl } = await createCorePackageFixture();
+      const { packageName, binName } = ACP_PRESET_ADAPTER_PACKAGES.codex;
+      const adapter = join(coreDirectory, 'node_modules', ...packageName.split('/'));
+      const bin = join(adapter, 'bin.js');
+      const spawn = { preset: 'codex' as const, command: binName, args: [] };
+      const options = { fromModuleUrl: callerModuleUrl };
+      try {
+        await mkdir(adapter, { recursive: true });
+        await writeFile(join(adapter, 'package.json'), JSON.stringify({ bin: { [binName]: 'bin.js' } }));
+        if (failure === 'inaccessible') {
+          await writeFile(bin, '');
+          await chmod(bin, 0o644);
+        }
+        const expected = failure === 'missing' ? /実行可能性の確認[\s\S]*ENOENT/ : /実行可能性の確認[\s\S]*EACCES/;
+        expect(() => finalizeResolvedAcpSpawn(spawn, options)).toThrow(expected);
+        expect(() => resolveAcpSpawnExecutable(spawn, options)).toThrow(expected);
+      } finally {
+        await rm(fixtureRoot, { recursive: true, force: true });
+      }
+    },
+  );
 });

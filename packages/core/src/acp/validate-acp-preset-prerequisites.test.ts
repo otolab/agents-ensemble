@@ -47,6 +47,21 @@ describe('validate-acp-preset-prerequisites', () => {
     ).toThrow(AcpPresetPrerequisiteError);
   });
 
+  it.each(['claude', 'codex', 'pi'] as const)(
+    'rejects missing bundled %s even when its bin is on PATH', (preset) => {
+      vi.spyOn(bundledModule, 'resolveBundledAcpBin').mockReturnValue(undefined);
+      vi.spyOn(bundledModule, 'resolveAcpBinFromPath').mockReturnValue('/usr/bin/adapter');
+      expect(() => finalizeResolvedAcpSpawn({ preset, command: preset, args: [] }))
+        .toThrow(/core 同梱 ACP adapter.*解決できません/);
+    },
+  );
+
+  it('resolves an explicitly selected custom command from PATH', () => {
+    vi.spyOn(bundledModule, 'resolveAcpBinFromPath').mockReturnValue('/usr/bin/codex-acp');
+    expect(finalizeResolvedAcpSpawn({ preset: 'custom', command: 'codex-acp', args: [] }).command)
+      .toBe('/usr/bin/codex-acp');
+  });
+
   it('throws when cursor preset lacks agent on PATH', () => {
     vi.spyOn(bundledModule, 'resolveAcpBinFromPath').mockReturnValue(undefined);
 

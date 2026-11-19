@@ -1,7 +1,8 @@
-import { accessSync, constants, existsSync } from 'node:fs';
+import { accessSync, constants, existsSync, readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { dirname, isAbsolute, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { BuiltinAcpPresetId } from './resolve-acp-spawn.js';
 import {
   ACP_PRESET_ADAPTER_PACKAGES,
@@ -12,12 +13,30 @@ import {
 export function resolveBundledAcpBin(
   preset: Exclude<BuiltinAcpPresetId, 'cursor'>,
   fromModuleUrl: string | URL = import.meta.url,
+  onFailure?: (reason: string) => void,
 ): string | undefined {
+  let stage = 'core package の探索';
   try {
     const require = createRequire(fromModuleUrl);
     const { packageName, binName } = ACP_PRESET_ADAPTER_PACKAGES[preset];
     const coreSearchPaths = require.resolve.paths('@agents-ensemble/core');
-    const corePackageDirectory = coreSearchPaths
+    let directory = dirname(fileURLToPath(fromModuleUrl));
+    let ownCoreDirectory: string | undefined;
+    while (true) {
+      const manifest = join(directory, 'package.json');
+      if (existsSync(manifest)) {
+        try {
+          if (JSON.parse(readFileSync(manifest, 'utf8')).name === '@agents-ensemble/core') {
+            ownCoreDirectory = directory;
+            break;
+          }
+        } catch { /* Keep searching for the core package. */ }
+      }
+      const parent = dirname(directory);
+      if (parent === directory) break;
+      directory = parent;
+    }
+    const corePackageDirectory = ownCoreDirectory ?? coreSearchPaths
       ?.map((nodeModulesPath) =>
         join(nodeModulesPath, '@agents-ensemble', 'core'),
       )
@@ -25,24 +44,28 @@ export function resolveBundledAcpBin(
         existsSync(join(packageDirectory, 'package.json')),
       );
     if (!corePackageDirectory) {
-      return undefined;
+      throw new Error('@agents-ensemble/core の package root が見つかりません');
     }
+    stage = `adapter package ${packageName} の解決（起点: ${corePackageDirectory}）`;
     const packageJsonPath = require.resolve(`${packageName}/package.json`, {
       paths: [corePackageDirectory],
     });
     const packageDirectory = dirname(packageJsonPath);
+    stage = `adapter manifest ${packageJsonPath} の読み取り`;
     const pkg = require(packageJsonPath) as {
       bin?: string | Record<string, string>;
     };
     const binRelative =
       typeof pkg.bin === 'string' ? pkg.bin : pkg.bin?.[binName];
-    if (!binRelative) {
-      return undefined;
+    if (typeof binRelative !== 'string' || !binRelative) {
+      throw new Error(`bin 定義に ${binName} がありません`);
     }
     const binPath = join(packageDirectory, binRelative);
+    stage = `adapter bin ${binPath} の実行可能性の確認`;
     accessSync(binPath, constants.X_OK);
     return binPath;
-  } catch {
+  } catch (error) {
+    onFailure?.(`${stage}: ${error instanceof Error ? error.message : String(error)}`);
     return undefined;
   }
 }
@@ -67,20 +90,16 @@ export function resolveAcpBinFromPath(binName: string): string | undefined {
 
 /**
  * built-in preset の ACP bin を解決する。
- * 順: core dependency の同梱 bin → PATH 上の同名 bin。
+ * cursor は PATH、それ以外は core dependency の同梱 bin。
  */
 export function resolveAcpBin(
   preset: BuiltinAcpPresetId,
   fromModuleUrl: string | URL = import.meta.url,
+  onFailure?: (reason: string) => void,
 ): string | undefined {
   if (preset === 'cursor') {
     return resolveAcpBinFromPath(ACP_PRESET_BIN_NAMES.cursor);
   }
 
-  const bundled = resolveBundledAcpBin(preset, fromModuleUrl);
-  if (bundled) {
-    return bundled;
-  }
-
-  return resolveAcpBinFromPath(ACP_PRESET_BIN_NAMES[preset]);
+  return resolveBundledAcpBin(preset, fromModuleUrl, onFailure);
 }

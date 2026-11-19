@@ -408,7 +408,9 @@ tui:
 
 ### Pi worker runtime
 
-Pi worker は `acp.pi.runtime` で実行環境を選びます。省略時と `byo` は従来の動作で、upstream `pi-acp@0.0.33`（core 同梱を優先し、なければ PATH 上の adapter）と PATH 上の `pi` CLI を使い、Pi の `~/.pi` 設定・認証・session map・transcript を読み書きします。既存の SessionResumeStore に runtime marker がない Pi session も BYO として読み、BYO の既定値や保存済み fingerprint は変えません。
+`claude` / `codex` / `pi` preset は core 同梱の adapter を使います。欠落時はエラーになり、PATH 上の同名コマンドには切り替わりません。別の adapter を使うには `--default-acp-command codex-acp` のように明示します。これは custom preset となり、built-in 固有のモデル注入や認証設定は適用されません。詳細は [ACP preset の解決](settings.md#パターン-c--acp-preset-解決)を参照してください。
+
+Pi worker は `acp.pi.runtime` で実行環境を選びます。省略時と `byo` は従来の動作で、upstream `pi-acp@0.0.33`（core 同梱の adapter）と PATH 上の `pi` CLI を使い、Pi の `~/.pi` 設定・認証・session map・transcript を読み書きします。既存の SessionResumeStore に runtime marker がない Pi session も BYO として読み、BYO の既定値や保存済み fingerprint は変えません。
 
 ```yaml
 acp:
