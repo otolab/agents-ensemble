@@ -55,6 +55,8 @@ export interface OperatorDispatchScheduling {
   batchMaxWaitMs: number;
   idleAgingMs: number;
   focusInactivityTimeoutMs: number;
+  pushThreshold?: number;
+  reportWeights?: Record<Extract<OperatorDispatchEvent, { type: 'report' }>['reportType'], number>;
 }
 
 export const DEFAULT_OPERATOR_DISPATCH_SCHEDULING: OperatorDispatchScheduling = {
@@ -104,6 +106,9 @@ export interface OperatorDispatchQueue {
   setHold(hold: boolean): { heldEventCount: number; releasedEventCount: number };
   setFocus(conductorAgentId?: string, now?: number): string | undefined;
   noteOperatorInput(now?: number): void;
+  requestReports(conductorAgentId: string): boolean;
+  completeReportRequest(conductorAgentId: string): void;
+  listPendingReports(): Array<{ conductorAgentId: string; count: number }>;
   selectBatch(
     state: OperatorDispatchState,
     now?: number,
@@ -487,6 +492,7 @@ export function createOperatorDispatchQueue(
   const readyHeads = new WeakSet<OperatorDispatchEvent>();
   const inFlightReportIds = new Set<string>();
   const retryReadyAtById = new Map<string, number>();
+  const requestedReports = new Set<string>();
   let conversationHold = false;
   let reportHold = false;
   let focusSessionId: string | undefined;
@@ -514,6 +520,48 @@ export function createOperatorDispatchQueue(
   const orderReports = (
     reports: Extract<OperatorDispatchEvent, { type: 'report' }>[],
   ) => reports.sort(compareDispatchEvents);
+  const eligibleReports = (now: number): OperatorDispatchEvent[] => {
+    if (scheduling.pushThreshold === undefined || !scheduling.reportWeights) return pending;
+    const groups = new Map<string, Extract<OperatorDispatchEvent, { type: 'report' }>[]>();
+    for (const event of pending) {
+      if (event.type !== 'report') continue;
+      const group = groups.get(event.conductorAgentId) ?? [];
+      group.push(event);
+      groups.set(event.conductorAgentId, group);
+    }
+    const eligible = new Set<string>();
+    for (const [id, reports] of groups) {
+      orderReports(reports);
+      const first = reports[0]!;
+      if (requestedReports.has(id)) {
+        if (!first.frozenBatchId) readyHeads.add(first);
+        eligible.add(id);
+        continue;
+      }
+      if (focusSessionId) continue;
+      if (first.frozenBatchId) {
+        eligible.add(id);
+        continue;
+      }
+      let weight = 0;
+      let reachedAt: number | undefined;
+      for (const report of reports) {
+        if (report.frozenBatchId) break;
+        weight += scheduling.reportWeights?.[report.reportType] ?? 0;
+        if (weight >= scheduling.pushThreshold) {
+          reachedAt = report.firstQueuedAt ?? now;
+          break;
+        }
+      }
+      if (reachedAt === undefined) continue;
+      const quietAt = Math.max(...reports.map((report) => report.readyAt));
+      if (Math.min(quietAt, reachedAt + scheduling.batchMaxWaitMs) <= now) {
+        readyHeads.add(first);
+        eligible.add(id);
+      }
+    }
+    return pending.filter((event) => event.type === 'user' || eligible.has(event.conductorAgentId));
+  };
   const latchReadyBeforeUpdate = (sourceKeys: Set<string>, now: number) => {
     for (const sourceKey of sourceKeys) {
       const reports = orderReports(
@@ -850,10 +898,30 @@ export function createOperatorDispatchQueue(
       focusLastInputAt = now;
       notify();
     },
+    requestReports(conductorAgentId) {
+      const id = conductorAgentId.trim();
+      if (!id || ![...pending, ...held].some((event) =>
+        event.type === 'report' && event.conductorAgentId === id)) return false;
+      requestedReports.add(id);
+      notify();
+      return true;
+    },
+    completeReportRequest(conductorAgentId) {
+      requestedReports.delete(conductorAgentId);
+    },
+    listPendingReports() {
+      const counts = new Map<string, number>();
+      for (const event of [...pending, ...held]) {
+        if (event.type === 'report') {
+          counts.set(event.conductorAgentId, (counts.get(event.conductorAgentId) ?? 0) + 1);
+        }
+      }
+      return [...counts].map(([conductorAgentId, count]) => ({ conductorAgentId, count }));
+    },
     selectBatch(state, now = Date.now()) {
       clearExpiredFocus(now);
       const selected = selectOperatorDispatchBatch(
-        pending,
+        eligibleReports(now),
         { ...state, focusSessionId },
         now,
         CONDUCTOR_RECOVERY_INPUT_BYTE_LIMIT,
@@ -866,7 +934,7 @@ export function createOperatorDispatchQueue(
     isBatchCurrent(batch, state) {
       clearExpiredFocus(Date.now());
       const selected = selectOperatorDispatchBatch(
-        pending,
+        eligibleReports(Date.now()),
         { ...state, focusSessionId },
         Date.now(),
         CONDUCTOR_RECOVERY_INPUT_BYTE_LIMIT,
@@ -1003,6 +1071,31 @@ export function createOperatorDispatchQueue(
           ? reports.filter((event) => event.frozenBatchId === frozenBatchId)
           : reports.filter((event) => !event.frozenBatchId);
         if (batch.length === 0) continue;
+        if (scheduling.pushThreshold !== undefined && scheduling.reportWeights && !frozenBatchId) {
+          if (focusSessionId && !requestedReports.has(first.conductorAgentId)) continue;
+          if (requestedReports.has(first.conductorAgentId)) {
+            nextCandidateTimes.push(now);
+            continue;
+          }
+          let weight = 0;
+          let reachedAt: number | undefined;
+          for (const event of batch) {
+            weight += scheduling.reportWeights?.[event.reportType] ?? 0;
+            if (weight >= scheduling.pushThreshold) {
+              reachedAt = event.firstQueuedAt ?? now;
+              break;
+            }
+          }
+          if (reachedAt !== undefined) {
+            nextCandidateTimes.push(Math.min(
+              Math.max(...batch.map((event) => event.readyAt)),
+              reachedAt + scheduling.batchMaxWaitMs,
+            ));
+          }
+          continue;
+        }
+        if (scheduling.pushThreshold !== undefined && scheduling.reportWeights && focusSessionId &&
+            !requestedReports.has(first.conductorAgentId)) continue;
         const readyAt = frozenBatchId
           ? Math.max(
               ...batch.map((event) =>

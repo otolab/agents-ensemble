@@ -147,7 +147,7 @@ export interface OperatorSessionTrackingInfo {
     error: 'scan_failed' | null;
   };
   watchEnabled: boolean;
-  watchSource: 'manual' | 'repository_auto' | null;
+  watchSource: 'manual' | 'repository_auto' | 'live_auto' | null;
   watchReason:
     | 'watching'
     | 'auto_watch_capacity'
@@ -250,6 +250,7 @@ export interface OperatorWatchPool {
     events: readonly OperatorDispatchEvent[],
     retryReadyAt: number,
   ): Promise<void>;
+  scanAutoSessionsOnce(): Promise<void>;
   close(): void;
 }
 
@@ -263,6 +264,7 @@ export interface CreateOperatorWatchPoolOptions {
   repoFilters?: readonly string[];
   /** @deprecated Test and internal compatibility for pre-Phase 3 callers. */
   repoRoot?: string;
+  autoDiscoverSessions?: boolean;
   dispatchQueue: OperatorDispatchQueue;
   onError?: (message: string) => void;
 }
@@ -437,6 +439,9 @@ export async function createOperatorWatchPool(
   };
   await withWatchStateLock(root, profile, () => refreshStateFromDisk());
   const timers = new Map<string, NodeJS.Timeout>();
+  const autoWatches = new Map<string, WatchConfig>();
+  let autoScanTimer: NodeJS.Timeout | undefined;
+  let autoScanInFlight = false;
   const repositoryTimers = new Map<string, NodeJS.Timeout>();
   const repositoryScansInFlight = new Set<string>();
   const polling = new Set<string>();
@@ -890,6 +895,9 @@ export async function createOperatorWatchPool(
     const active = new Map(
       pool.list().map((watch) => [watch.conductorAgentId, watch]),
     );
+    for (const [id, watch] of autoWatches) {
+      if (!active.has(id)) active.set(id, watch);
+    }
     for (const [id, timer] of timers) {
       if (!active.has(id)) {
         clearInterval(timer);
@@ -1318,7 +1326,13 @@ export async function createOperatorWatchPool(
       const repositoryConfig = repository
         ? repositoryState.watches[repository]
         : undefined;
-      const activeWatch = state.watches[conductorAgentId];
+      const configuredWatch = state.watches[conductorAgentId];
+      const activeWatch = configuredWatch ?? (
+        issueIdentity(issueUrl) !== undefined &&
+        issueIdentity(issueUrlById.get(conductorAgentId) ?? '') === issueIdentity(issueUrl)
+          ? autoWatches.get(conductorAgentId)
+          : undefined
+      );
       const isManual =
         repositoryConfig?.manualSessionIds.includes(conductorAgentId) ??
         false;
@@ -1343,7 +1357,9 @@ export async function createOperatorWatchPool(
       const watchSource: OperatorSessionTrackingInfo['watchSource'] =
         !activeWatch
           ? null
-          : isManual || !isManaged
+          : !configuredWatch
+            ? 'live_auto'
+            : isManual || !isManaged
             ? 'manual'
             : 'repository_auto';
       return {
@@ -1567,7 +1583,7 @@ export async function createOperatorWatchPool(
       return { ...status };
     },
     listIdleCandidateObservations() {
-      return Object.keys(state.watches)
+      return [...new Set([...Object.keys(state.watches), ...autoWatches.keys()])]
         .sort()
         .flatMap((id) => {
           const observation = idleCandidateObservations.get(id);
@@ -1579,7 +1595,7 @@ export async function createOperatorWatchPool(
       afterObservationVersion,
     ) {
       const id = requireNonEmptyString(conductorAgentId, 'conductorAgentId');
-      const watch = state.watches[id];
+      const watch = state.watches[id] ?? autoWatches.get(id);
       const assignedWatchStatePath = pathById.get(id);
       const assignedIssueUrl = issueUrlById.get(id);
       if (
@@ -1619,7 +1635,7 @@ export async function createOperatorWatchPool(
         await inFlightPoll;
         const refreshedObservation = idleCandidateObservations.get(id);
         if (
-          closed || !state.watches[id] ||
+          closed || !(state.watches[id] ?? autoWatches.get(id)) ||
           pathById.get(id) !== assignedWatchStatePath ||
           issueIdentity(issueUrlById.get(id) ?? '') !== issueIdentity(assignedIssueUrl)
         ) return false;
@@ -1676,7 +1692,7 @@ export async function createOperatorWatchPool(
             latestLocated.resumeStore.lifecycle ===
               located.resumeStore.lifecycle,
         );
-        const currentWatch = state.watches[id];
+        const currentWatch = state.watches[id] ?? autoWatches.get(id);
         if (
           closed ||
           !currentWatch ||
@@ -1736,7 +1752,7 @@ export async function createOperatorWatchPool(
       pollCompletions.set(id, pollCompletion);
       try {
         return await withStateLock(async (nextArrivalOrder) => {
-          const watch = state.watches[id];
+          const watch = state.watches[id] ?? autoWatches.get(id);
           if (!watch || closed) return 0;
           let located: LocatedSessionResumeStore | undefined;
           try {
@@ -2084,6 +2100,10 @@ export async function createOperatorWatchPool(
     async commitBatch(batch, dispatchState) {
       // User input and already frozen retries do not need a new manifest.
       if (batch.sourceKey === 'user' || batch.batchId) {
+        if (batch.batchId && dispatchState &&
+            !options.dispatchQueue.isBatchCurrent(batch, dispatchState)) {
+          return false;
+        }
         return options.dispatchQueue.commitBatch(batch);
       }
       let committed = false;
@@ -2165,8 +2185,78 @@ export async function createOperatorWatchPool(
         await persist();
       });
     },
+    async scanAutoSessionsOnce() {
+      if (closed || autoScanInFlight) return;
+      autoScanInFlight = true;
+      try {
+        const candidates = new Map<string, LocatedSessionResumeStore[]>();
+        let cursor: string | undefined;
+        do {
+          const page = await listUserLocatedSessionResumeStoresPage(
+            { limit: 500, ...(cursor ? { cursor } : {}) },
+            { userEnsembleRoot: root, onDuplicate: onResumeStoreDuplicate },
+          );
+          for (const located of page.sessions) {
+            const store = located.resumeStore;
+            const repository = repositoryForIssue(store.issueUrl);
+            if (!store.harnessSocketPath || !repository || !repositoryIsInActiveScope(repository)) continue;
+            const matches = candidates.get(store.conductorAgentId) ?? [];
+            matches.push(located);
+            candidates.set(store.conductorAgentId, matches);
+          }
+          cursor = page.nextCursor;
+        } while (cursor && !closed);
+        const entries = [...candidates].filter(([, matches]) => matches.length === 1);
+        const retained = new Set<string>();
+        for (let index = 0; index < entries.length && !closed; index += 8) {
+          await Promise.all(entries.slice(index, index + 8).map(async ([id, matches]) => {
+            const located = matches[0]!;
+            try {
+              await sendOpenQuestionControlRequest<SessionObservationSnapshot>(
+                located.resumeStore.harnessSocketPath!,
+                { method: OPEN_QUESTION_CONTROL_METHODS.observe },
+                { timeoutMs: 1_000 },
+              );
+              if (closed) return;
+              retained.add(id);
+              if (!autoWatches.has(id)) {
+                autoWatches.set(id, { conductorAgentId: id, pollIntervalMs: DEFAULT_POLL_INTERVAL_MS, debounceMs: 250 });
+              }
+            } catch (error) {
+              if (!(error instanceof OpenQuestionControlTransportError && error.reason === 'connection') &&
+                  autoWatches.has(id)) retained.add(id);
+            }
+          }));
+        }
+        if (closed) return;
+        for (const id of autoWatches.keys()) {
+          if (!retained.has(id)) {
+            autoWatches.delete(id);
+            if (!state.watches[id]) idleCandidateObservations.delete(id);
+          }
+        }
+        for (const [id, timer] of timers) {
+          if (!state.watches[id] && !autoWatches.has(id)) {
+            clearInterval(timer);
+            timers.delete(id);
+          }
+        }
+        for (const [id, watch] of autoWatches) {
+          if (!timers.has(id)) startTimer(state.watches[id] ?? watch);
+        }
+        await Promise.all([...retained].filter((id) => !state.watches[id]).map((id) =>
+          pool.pollOnce(id).catch((error: unknown) => {
+            options.onError?.(formatWatchPollError(id, error));
+            return 0;
+          })));
+      } finally {
+        autoScanInFlight = false;
+      }
+    },
     close() {
       closed = true;
+      if (autoScanTimer) clearInterval(autoScanTimer);
+      autoWatches.clear();
       for (const timer of timers.values()) clearInterval(timer);
       timers.clear();
       for (const timer of repositoryTimers.values()) clearInterval(timer);
@@ -2199,6 +2289,13 @@ export async function createOperatorWatchPool(
     startMessageTimer(listener);
   }
   syncRepositoryWatchTimers();
+  if (options.autoDiscoverSessions) {
+    const scan = () => void pool.scanAutoSessionsOnce().catch((error: unknown) =>
+      options.onError?.(`automatic session scan failed: ${error instanceof Error ? error.message : String(error)}`));
+    autoScanTimer = setInterval(scan, 30_000);
+    autoScanTimer.unref();
+    scan();
+  }
   void pool.scanRepositoriesOnce().catch((error: unknown) => {
     options.onError?.(
       `repository watch startup scan failed: ${error instanceof Error ? error.message : String(error)}`,

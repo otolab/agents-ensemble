@@ -1691,6 +1691,184 @@ describe('operator watch pool', () => {
     }
   });
 
+  it('discovers, disconnects, and reconnects live sessions without changing manual watches', async () => {
+    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-auto-watch-'));
+    const server = async () => startOpenQuestionControlServer({
+      listOpenQuestions: () => [],
+      observeSession: async () => ({ sequence: 1, openQuestions: [] }),
+      answerOpenQuestion: async () => { throw new Error('unused'); },
+    });
+    const first = await server();
+    await writeResumeStore('automatic', 1, first.socketPath);
+    await writeResumeStore('manual', 1);
+    const pool = await createOperatorWatchPool({ repoRoot, dispatchQueue: createOperatorDispatchQueue() });
+    try {
+      await pool.register('manual', { pollIntervalMs: 60_000 });
+      await pool.scanAutoSessionsOnce();
+      await pool.pollOnce('automatic');
+      expect(pool.getLiveStatus('automatic')?.connectivity).toBe('reachable');
+      expect(pool.getSessionTrackingInfo('automatic', DEFAULT_ISSUE_URL)).toMatchObject({
+        watchEnabled: true, watchSource: 'live_auto', watchReason: 'watching',
+      });
+      expect(pool.list().map((watch) => watch.conductorAgentId)).toEqual(['manual']);
+      await first.close();
+      await pool.scanAutoSessionsOnce();
+      expect(await pool.pollOnce('automatic')).toBe(0);
+      expect(pool.getSessionTrackingInfo('automatic', DEFAULT_ISSUE_URL).watchEnabled).toBe(false);
+      expect(pool.list().map((watch) => watch.conductorAgentId)).toEqual(['manual']);
+      const second = await server();
+      try {
+        await writeResumeStore('automatic', 2, second.socketPath);
+        await pool.scanAutoSessionsOnce();
+        await pool.pollOnce('automatic');
+        expect(pool.getLiveStatus('automatic')?.connectivity).toBe('reachable');
+      } finally {
+        await second.close();
+      }
+    } finally {
+      pool.close();
+    }
+  });
+
+  it('limits automatic discovery to the intersection of profile and repository filters', async () => {
+    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-auto-scope-'));
+    const liveServer = await startOpenQuestionControlServer({
+      listOpenQuestions: () => [],
+      observeSession: async () => ({ sequence: 1, openQuestions: [] }),
+      answerOpenQuestion: async () => { throw new Error('unused'); },
+    });
+    try {
+      await writeResumeStore('allowed', 1, liveServer.socketPath, 'https://github.com/example/repo/issues/1');
+      await writeResumeStore('excluded', 1, liveServer.socketPath, 'https://github.com/example/other/issues/2');
+      const pool = await createOperatorWatchPool({
+        repoRoot,
+        dispatchQueue: createOperatorDispatchQueue(),
+        profileIncludes: ['example/*'],
+        repoFilters: ['example/repo'],
+      });
+      try {
+        await pool.scanAutoSessionsOnce();
+        expect(pool.getLiveStatus('allowed')?.connectivity).toBe('reachable');
+        expect(pool.getLiveStatus('excluded')).toBeUndefined();
+        pool.close();
+        await pool.scanAutoSessionsOnce();
+        expect(pool.getLiveStatus('excluded')).toBeUndefined();
+      } finally {
+        pool.close();
+      }
+    } finally {
+      await liveServer.close();
+    }
+  });
+
+  it('does not attach a session when closed during an automatic probe', async () => {
+    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-auto-close-'));
+    let release!: () => void;
+    let observed!: () => void;
+    const observationStarted = new Promise<void>((resolve) => { observed = resolve; });
+    const blocked = new Promise<void>((resolve) => { release = resolve; });
+    const liveServer = await startOpenQuestionControlServer({
+      listOpenQuestions: () => [],
+      observeSession: async () => {
+        observed();
+        await blocked;
+        return { sequence: 1, openQuestions: [] };
+      },
+      answerOpenQuestion: async () => { throw new Error('unused'); },
+    });
+    await writeResumeStore('closing', 1, liveServer.socketPath);
+    const pool = await createOperatorWatchPool({ repoRoot, dispatchQueue: createOperatorDispatchQueue() });
+    try {
+      const scan = pool.scanAutoSessionsOnce();
+      await observationStarted;
+      pool.close();
+      release();
+      await scan;
+      expect(pool.getLiveStatus('closing')).toBeUndefined();
+      expect(pool.list()).toEqual([]);
+    } finally {
+      release();
+      pool.close();
+      await liveServer.close();
+    }
+  });
+
+  it('keeps manual ownership when automatic discovery disconnects the same session', async () => {
+    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-auto-manual-'));
+    let observations = 0;
+    const liveServer = await startOpenQuestionControlServer({
+      listOpenQuestions: () => [],
+      observeSession: async () => { observations += 1; return { sequence: 1, openQuestions: [] }; },
+      answerOpenQuestion: async () => { throw new Error('unused'); },
+    });
+    await writeResumeStore('shared', 1, liveServer.socketPath);
+    const pool = await createOperatorWatchPool({ repoRoot, dispatchQueue: createOperatorDispatchQueue() });
+    try {
+      await pool.register('shared', { pollIntervalMs: 60_000, debounceMs: 123 });
+      await pool.scanAutoSessionsOnce();
+      expect(pool.list()).toEqual([{ conductorAgentId: 'shared', pollIntervalMs: 60_000, debounceMs: 123 }]);
+      expect(observations).toBe(1);
+      await liveServer.close();
+      await pool.scanAutoSessionsOnce();
+      expect(pool.list()).toEqual([{ conductorAgentId: 'shared', pollIntervalMs: 60_000, debounceMs: 123 }]);
+    } finally {
+      pool.close();
+    }
+  });
+
+  it('does not automatically attach ambiguous conductor IDs across issues', async () => {
+    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-auto-ambiguous-'));
+    const liveServer = await startOpenQuestionControlServer({
+      listOpenQuestions: () => [],
+      observeSession: async () => ({ sequence: 1, openQuestions: [] }),
+      answerOpenQuestion: async () => { throw new Error('unused'); },
+    });
+    try {
+      await writeResumeStore('ambiguous', 1, liveServer.socketPath, 'https://github.com/example/repo/issues/1');
+      await writeResumeStore('ambiguous', 2, liveServer.socketPath, 'https://github.com/example/other/issues/2');
+      const pool = await createOperatorWatchPool({ repoRoot, dispatchQueue: createOperatorDispatchQueue() });
+      try {
+        await pool.scanAutoSessionsOnce();
+        expect(pool.getLiveStatus('ambiguous')).toBeUndefined();
+        expect(await pool.pollOnce('ambiguous')).toBe(0);
+      } finally {
+        pool.close();
+      }
+    } finally {
+      await liveServer.close();
+    }
+  });
+
+  it('retains an automatic watch when a later probe times out', async () => {
+    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-auto-timeout-'));
+    let wait = false;
+    let release!: () => void;
+    const blocked = new Promise<void>((resolve) => { release = resolve; });
+    const liveServer = await startOpenQuestionControlServer({
+      listOpenQuestions: () => [],
+      observeSession: async () => {
+        if (wait) await blocked;
+        return { sequence: 1, openQuestions: [] };
+      },
+      answerOpenQuestion: async () => { throw new Error('unused'); },
+    });
+    await writeResumeStore('slow', 1, liveServer.socketPath);
+    const pool = await createOperatorWatchPool({ repoRoot, dispatchQueue: createOperatorDispatchQueue() });
+    try {
+      await pool.scanAutoSessionsOnce();
+      expect(pool.getLiveStatus('slow')?.connectivity).toBe('reachable');
+      wait = true;
+      const scan = pool.scanAutoSessionsOnce();
+      setTimeout(() => { wait = false; release(); }, 1_200);
+      await scan;
+      expect(pool.getLiveStatus('slow')?.connectivity).toBe('reachable');
+    } finally {
+      release();
+      pool.close();
+      await liveServer.close();
+    }
+  });
+
   it('watches through the canonical slug socket without reading a path-hash duplicate', async () => {
     repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-watch-duplicate-'));
     const agentId = 'duplicate-live-session';

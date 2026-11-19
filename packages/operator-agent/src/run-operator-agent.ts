@@ -50,6 +50,8 @@ import {
   createReleaseReportsTool,
   createSetReportHoldTool,
   createSetSessionFocusTool,
+  createRequestSessionReportsTool,
+  createListPendingReportsTool,
 } from './operator-control-tools.js';
 import {
   createOperatorWatchPool,
@@ -130,6 +132,8 @@ export interface RunOperatorAgentDependencies {
   stderr?: OperatorAgentOutput;
   userEnsembleRoot?: string;
   agentFactory?: ConductorAgentFactory;
+  /** Controls automatic discovery in isolated tests. */
+  autoDiscoverSessions?: boolean;
 }
 
 interface OperatorRuntime {
@@ -256,6 +260,13 @@ export async function runOperatorAgent(
     batchMaxWaitMs: runtime.scheduling.batchMaxWaitMs,
     idleAgingMs: runtime.scheduling.idleAgingMs,
     focusInactivityTimeoutMs: runtime.scheduling.focusInactivityTimeoutMs,
+    pushThreshold: runtime.scheduling.pushThreshold,
+    reportWeights: {
+      session_state: runtime.scheduling.sessionStateWeight,
+      open_question: runtime.scheduling.openQuestionWeight,
+      conductor_message: runtime.scheduling.conductorMessageWeight,
+      idle_candidate: runtime.scheduling.idleCandidateWeight,
+    },
   });
   const reportResumeStoreDuplicate = (
     diagnostic: SessionResumeStoreDuplicateDiagnostic,
@@ -302,6 +313,7 @@ export async function runOperatorAgent(
   }
   const operatorAgentId = existingState?.operatorAgentId ?? `operator-${randomUUID()}`;
   const watchPool = await createOperatorWatchPool({
+    autoDiscoverSessions: dependencies.autoDiscoverSessions ?? true,
     userEnsembleRoot: runtime.userEnsembleRoot,
     profile: runtime.profileName,
     profileIncludes: runtime.profile.include,
@@ -422,6 +434,8 @@ export async function runOperatorAgent(
         createUnregisterConductorMessageListenTool(watchPool),
       set_report_hold: createSetReportHoldTool(dispatchQueue),
       release_reports: createReleaseReportsTool(dispatchQueue),
+      request_session_reports: createRequestSessionReportsTool(dispatchQueue),
+      list_pending_reports: createListPendingReportsTool(dispatchQueue),
       set_session_focus: createSetSessionFocusTool(dispatchQueue),
       send_operator_message: createSendOperatorMessageTool(
         { userEnsembleRoot: runtime.userEnsembleRoot },
@@ -1422,6 +1436,9 @@ async function runTtyConversation(options: {
             `Operator watch report acknowledgement failed after ${OPERATOR_WATCH_ACK_MAX_RETRIES} retries; pending reports were retained. Restart may redeliver the same report IDs.`,
             { cause: acknowledgement.error },
           );
+        }
+        if (batch.sourceKey.startsWith('session:')) {
+          options.dispatchQueue.completeReportRequest(batch.sourceKey.slice('session:'.length));
         }
       } else {
         const retryReadyAt = Date.now() + 5_000;

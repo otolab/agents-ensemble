@@ -207,6 +207,7 @@ describe('operator idle candidate dispatch run loop', () => {
           'profiles:',
           `  ${configProfile}:`,
           '    scheduling:',
+          '      pushThreshold: 1',
           `      idlePhaseThresholdMs: ${profile.startsWith('baseline') ? 7200000 : 600000}`,
           '      batchMaxWaitMs: 10000',
           '',
@@ -506,6 +507,7 @@ describe('operator idle candidate dispatch run loop', () => {
           stdin: input,
           stdout,
           agentFactory,
+          autoDiscoverSessions: false,
         },
       );
       submit = await ready;
