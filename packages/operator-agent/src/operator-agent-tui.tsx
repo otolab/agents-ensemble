@@ -30,6 +30,7 @@ export interface OperatorAgentTuiHost {
   appendOperatorResponse: (response: string) => void;
   setInputEnabled: (enabled: boolean) => void;
   setStatus: (status: string, since?: number) => void;
+  setHarnessStatus: (status: string) => void;
   dispose: () => Promise<void>;
 }
 
@@ -71,6 +72,7 @@ interface TuiSnapshot {
   readonly replayGeneration: number;
   readonly status: string;
   readonly statusSince: number;
+  readonly harnessStatus: string;
 }
 
 class OperatorAgentTuiModel {
@@ -90,6 +92,7 @@ class OperatorAgentTuiModel {
       inputEnabled: true,
       replayGeneration: 0,
       status: '待機中',
+      harnessStatus: '',
       statusSince: Date.now(),
     };
   }
@@ -141,6 +144,10 @@ class OperatorAgentTuiModel {
   setStatus(status: string, since?: number): void {
     if (since === undefined && this.snapshot.status === status) return;
     this.update({ status, statusSince: since ?? Date.now() });
+  }
+
+  setHarnessStatus(harnessStatus: string): void {
+    if (this.snapshot.harnessStatus !== harnessStatus) this.update({ harnessStatus });
   }
 
   private append(entry: NewActivityEntry): void {
@@ -282,6 +289,7 @@ function OperatorAgentTui({
           </Box>
           <Text> ({Math.max(0, Math.floor((now - snapshot.statusSince) / 1000))}s)</Text>
         </Box>
+        {snapshot.harnessStatus && <Text wrap="truncate">harness: {snapshot.harnessStatus}</Text>}
         <Box
           width={snapshot.columns}
           borderStyle="round"
@@ -389,6 +397,7 @@ export function createOperatorAgentTuiHost(
       model.appendDialogue('operator', response),
     setInputEnabled: (enabled) => model.setInputEnabled(enabled),
     setStatus: (status, since) => model.setStatus(status, since),
+    setHarnessStatus: (status) => model.setHarnessStatus(status),
     dispose: async () => {
       disposing = true;
       if (resizeTimer) {

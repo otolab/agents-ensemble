@@ -1017,12 +1017,8 @@ describe('runOperatorAgent', () => {
       '保存済み SessionResumeStore から implementer のセッション情報を確認できます。',
     );
     expect(readableTranscript).toContain('ライブ open question も確認できます。');
-    expect(transcript).toContain(
-      '[harness] 監視報告: 保留（理由: 会話、保留件数: 0 件）',
-    );
-    expect(transcript).toContain(
-      '[harness] 監視報告: 解除（理由: なし、保留件数: 0 件）',
-    );
+    expect(transcript).not.toContain('[harness] 監視報告:');
+    expect(readableTranscript).toContain('harness: 監視報告:');
     expect(transcript).toContain(
       '[observation] session ended.',
     );
