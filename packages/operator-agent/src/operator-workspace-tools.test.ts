@@ -333,6 +333,8 @@ describe('operator profile workspace file tools', () => {
     await expect(tools[READ_OPERATOR_WORKSPACE_FILE_TOOL]!.execute({ path: 'source' })).rejects.toThrow(/manual inspection/u);
     const status = await tools[GET_OPERATOR_WORKSPACE_MOVE_STATUS_TOOL]!.execute({});
     expect(status.structuredContent).toMatchObject({ status: 'inspection_required', source: 'source', destination: 'dest' });
+    expect(String(status.structuredContent?.guidance)).toContain('operator-workspace-maintain');
+    expect(String(status.structuredContent?.guidance).toLowerCase()).toContain('do not remove the journal directly');
   });
 
   it('copies across filesystems and preserves the source if copying fails', async () => {
@@ -398,6 +400,8 @@ describe('operator profile workspace file tools', () => {
     await writeFile(join(canonical, '..', `.ensemble-workspace-move-${hash}.json`), '{');
     const status = await tools[GET_OPERATOR_WORKSPACE_MOVE_STATUS_TOOL]!.execute({});
     expect(status.structuredContent?.status).toBe('journal_unreadable');
+    expect(String(status.structuredContent?.guidance)).toContain('operator-workspace-maintain');
+    expect(String(status.structuredContent?.guidance).toLowerCase()).toContain('do not remove the journal directly');
     for (const [name, args] of [
       [READ_OPERATOR_WORKSPACE_FILE_TOOL, { path: 'source' }],
       [WRITE_OPERATOR_WORKSPACE_FILE_TOOL, { path: 'source', content: 'changed' }],
@@ -598,6 +602,25 @@ describe('operator profile workspace file tools', () => {
       expect(await readFile(join(workspace, 'dest'), 'utf8')).toBe('FIRST');
       expect(await readFile(join(workspace, 'second'), 'utf8')).toBe('SECOND');
     } finally { child.kill('SIGKILL'); }
+  }, 15000);
+
+  it('bounds watch lock waits and permits retry after the workspace lock is released', async () => {
+    const { createOperatorWatchPool } = await import('./operator-watch-pool.js');
+    const { createOperatorDispatchQueue } = await import('./operator-dispatch.js');
+    const { withOperatorWorkspaceLock } = await import('./operator-workspace-lock.js');
+    const pool = await createOperatorWatchPool({ userEnsembleRoot: root, profile: 'work', dispatchQueue: createOperatorDispatchQueue(), autoDiscoverSessions: false });
+    let release!: () => void;
+    let entered!: () => void;
+    const barrier = new Promise<void>((resolve) => { release = resolve; });
+    const held = new Promise<void>((resolve) => { entered = resolve; });
+    const lock = withOperatorWorkspaceLock(await realpath(workspace), async () => { entered(); await barrier; });
+    try {
+      await held;
+      await expect(pool.registerRepository('example/repo', { scanIntervalMs: 60000, pollIntervalMs: 60000 })).rejects.toThrow(/Could not acquire operator workspace lock/u);
+      release();
+      await lock;
+      await expect(pool.registerRepository('example/repo', { scanIntervalMs: 60000, pollIntervalMs: 60000 })).resolves.toBeDefined();
+    } finally { release(); await lock; pool.close(); }
   }, 15000);
 
   it('preserves real watch pool updates while rejecting a move of its state', async () => {

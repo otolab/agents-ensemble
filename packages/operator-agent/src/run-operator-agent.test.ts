@@ -1061,9 +1061,10 @@ describe('runOperatorAgent', () => {
     expect(toolDescription('read_operator_workspace_file')).toContain('TOCTOU');
     expect(toolDescription('read_operator_workspace_file')).toContain('without secret redaction');
     expect(toolDescription('move_operator_workspace_file')).toContain('get_operator_workspace_move_status');
-    expect(toolDescription('move_operator_workspace_file')).toContain('singleton');
+    expect(toolDescription('move_operator_workspace_file')).toContain('operator-workspace-maintain');
     expect(toolDescription('write_operator_workspace_file')).toContain('AGENTS.md can be edited');
-    expect(toolDescription('get_operator_workspace_move_status')).toContain('preserve');
+    expect(toolDescription('get_operator_workspace_move_status')).toContain('operator-workspace-maintain');
+    expect(toolDescription('get_operator_workspace_move_status')).toContain('Never remove the journal directly');
     expect(agentOptions?.customTools).not.toHaveProperty('prompt_worker');
     expect(
       Object.keys(agentOptions?.customTools ?? {}).filter(

@@ -121,7 +121,7 @@ export function createOperatorWorkspaceFileTools(
     },
     [MOVE_OPERATOR_WORKSPACE_FILE_TOOL]: {
       name: MOVE_OPERATOR_WORKSPACE_FILE_TOOL,
-      description: 'Move a workspace file or directory. Existing destinations require overwrite: true. Final symlinks, moving a directory into itself, and moving or replacing root AGENTS.md are rejected. The managed watch directory and its resolved parents cannot be moved. Run operator-agent as a singleton. If a move fails or is interrupted, workspace file tools stop; use get_operator_workspace_move_status and tell the user to stop the agent and inspect and preserve the data manually. No automatic recovery or adoption is performed. Path checks are not an OS sandbox and cannot prevent same-user TOCTOU changes.',
+      description: 'Move a workspace file or directory. Existing destinations require overwrite: true. Final symlinks, moving a directory into itself, and moving or replacing root AGENTS.md are rejected. The managed watch directory and its resolved parents cannot be moved. If a move fails or is interrupted, workspace file tools stop; use get_operator_workspace_move_status and tell the user to stop the agent and run ensemble operator-workspace-maintain --profile <name>. No automatic recovery or adoption is performed. Path checks are not an OS sandbox and cannot prevent same-user TOCTOU changes.',
       inputSchema: {
         type: 'object',
         properties: { source: { type: 'string' }, destination: { type: 'string' }, overwrite: { type: 'boolean' } },
@@ -333,7 +333,7 @@ export function createOperatorWorkspaceFileTools(
   }
   tools[GET_OPERATOR_WORKSPACE_MOVE_STATUS_TOOL] = {
     name: GET_OPERATOR_WORKSPACE_MOVE_STATUS_TOOL,
-    description: 'Inspect a pending workspace move when workspace file tools are blocked. Tell the user to stop the agent, inspect and preserve source, destination, staging and the journal manually, and remove the journal only after preserving the data. A corrupt journal also requires manual inspection. No data is restored, selected, or deleted.',
+    description: 'Inspect a pending workspace move when workspace file tools are blocked. Tell the user to stop all agents and run ensemble operator-workspace-maintain --profile <name>. Keep that command running while inspecting and preserving source, destination, staging and the journal; confirm completion in the command. Never remove the journal directly. A corrupt journal also requires manual inspection. No data is restored, selected, or deleted.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     execute: (args) => {
       const run = queue.then(() => withOperatorWorkspaceLock(root, async () => {
@@ -379,10 +379,10 @@ export async function readMoveStatus(root: string, journalPath: string): Promise
     const record = data as Record<string, unknown>;
     if (record.version !== 1 || record.workspace !== root || typeof record.source !== 'string' || typeof record.destination !== 'string' || typeof record.staging !== 'string' || typeof record.overwrite !== 'boolean') throw new Error();
     for (const path of [record.source, record.destination, record.staging]) resolveWorkspaceFilePath(root, path as string);
-    return { status: 'inspection_required', journal: basename(journalPath), source: record.source as string, destination: record.destination as string, staging: record.staging as string, overwrite: record.overwrite as boolean, guidance: 'Stop the operator agent. Inspect source, destination, and staging/backup and staging/copy manually. Data may be partial. Do not remove the journal until all data is safely preserved.' };
+    return { status: 'inspection_required', journal: basename(journalPath), source: record.source as string, destination: record.destination as string, staging: record.staging as string, overwrite: record.overwrite as boolean, guidance: 'Stop all operator agents and run ensemble operator-workspace-maintain --profile <name>. Keep it running while inspecting and preserving source, destination, staging/backup and staging/copy. Data may be partial. Confirm completion in the command; do not remove the journal directly.' };
   } catch (error) {
     if (isNodeError(error, 'ENOENT')) return { status: 'idle' };
-    return { status: 'journal_unreadable', journal: basename(journalPath), guidance: 'Stop the operator agent and inspect the journal manually; no workspace operation is safe until it is resolved.' };
+    return { status: 'journal_unreadable', journal: basename(journalPath), guidance: 'Stop all operator agents and run ensemble operator-workspace-maintain --profile <name>. Keep it running while inspecting and preserving the journal and staging manually; confirm completion in the command. Do not remove the journal directly.' };
   }
 }
 

@@ -7,6 +7,7 @@ export default defineConfig({
     include: [
       'src/operator-workspace-lock.test.ts',
       'src/operator-workspace-maintenance.test.ts',
+      'src/operator-workspace-tools.test.ts',
     ],
   },
 });
