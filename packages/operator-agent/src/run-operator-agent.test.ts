@@ -3228,6 +3228,7 @@ describe('runOperatorAgent', () => {
     expect(output).toContain(
       '明示的に /reconnect するまで conductor への送信を停止します。',
     );
+    expect(output).toContain('operator: 待機中');
     expect(output).not.toContain(rawError);
     expect(stderr.capturedText()).not.toContain(rawError);
   });
@@ -3252,9 +3253,11 @@ describe('runOperatorAgent', () => {
       createFakeAgent({ send: async () => ({ runId: '', status: 'completed' }) }),
       createFakeAgent({ send: async () => ({ runId: '', status: 'completed' }) }),
     ];
+    let finishReconnect!: () => void;
+    const reconnectGate = new Promise<void>((resolve) => { finishReconnect = resolve; });
     const resume = vi
       .fn()
-      .mockResolvedValueOnce(resumedAgents[0])
+      .mockImplementationOnce(async () => { await reconnectGate; return resumedAgents[0]; })
       .mockRejectedValueOnce(new Error('resume unavailable'));
     let createdOptions: ConductorAgentCreateOptions | undefined;
 
@@ -3278,6 +3281,9 @@ describe('runOperatorAgent', () => {
     );
     stdin.write('/reconnect\n');
     await vi.waitFor(() => expect(resume).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(stdout.capturedText()).toContain('operator: reconnecting'));
+    finishReconnect();
+    await vi.waitFor(() => expect(stdout.capturedText()).toContain('conductor に再接続しました。'));
     stdin.write('reconnect\n');
     await vi.waitFor(() => expect(resume).toHaveBeenCalledTimes(2));
     stdin.write('/exit\n');
