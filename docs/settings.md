@@ -14,7 +14,7 @@
 | **user instructions** | `~/.ensemble/AGENTS.md` | profile に依存しない conductor / worker 共通の運用前提 |
 | **team profile** | `profile.yaml`（[elements.md](elements.md)） | worker 構成・workspace（**ACP は含まない → [config.md](config.md)**） |
 | **Codex profile** | `~/.codex/config.toml` + `codex --profile` | Codex CLI の profile（ensemble team profile とは無関係） |
-| **MCP** | `.agents/mcp.json` / `~/.ensemble/mcp.json` | Issue conductor は project > user で merge（[config.md § Conductor MCP](config.md#conductor-mcp-設定mcpjson)）。operator-agent は専用 profile から user 定義を明示選択（[config.md](config.md#operator-agent-の-mcp-選択)） |
+| **MCP** | `config.yaml` / `.agents/mcp.json` / `~/.ensemble/mcp.json` | Issue conductor は `conductor.mcp.servers` で選択し、定義を project > user で merge（[config.md § Conductor MCP](config.md#conductor-mcp-設定mcpjson)）。operator-agent は専用 profile から user 定義を明示選択（[config.md](config.md#operator-agent-の-mcp-選択)） |
 | **コード default** | `packages/core/src/config/defaults.ts` 等 | config 未作成時のフォールバック |
 
 config は default → 選択された user config → project config（読み込み有効時）の順に **deep merge** します。`--config <path>` を指定した場合は明示ファイルを user config 層として使い、標準 user config は読み込みません。project config は `config.loadProjectConfig` が有効な場合に適用され、同じキーは project config が優先します。この toggle は選択された user config から解決するため、明示ファイルにも指定できます。秘密情報（token 本体）は **config に平文で書かない**（[config.md](config.md)）。
@@ -203,7 +203,7 @@ TUI 設定は `loadEnsembleConfig` 結果を `createIssueSessionTuiHost` へ渡�
 
 | 設定 | ファイル | 解決順 |
 |------|----------|--------|
-| Issue conductor MCP | `.agents/mcp.json` / `~/.ensemble/mcp.json` | project > user（サーバー名単位 merge） |
+| Issue conductor MCP | ensemble config の `conductor.mcp.servers` + `.agents/mcp.json` / `~/.ensemble/mcp.json` | 選択は project config > 選択された user config で配列を置換。未指定・`[]` は MCP なし。定義は project > user で名前単位 merge |
 | operator-agent MCP | `~/.ensemble/operator-agents.config.yaml` + `~/.ensemble/mcp.json` | profile の明示選択 > common。起動 repository の MCP 設定は読まない |
 | user instructions | `~/.ensemble/AGENTS.md` | user 固定。conductor と worker 全員に適用。project 層なし |
 | team profile | `.ensemble/profiles/…` / `--profile` パス | [ADR 0018](https://github.com/otolab/agents-ensemble/blob/main/docs/adr/0018-team-profile-four-layer-resolution.md) |
@@ -228,7 +228,7 @@ TUI 設定は `loadEnsembleConfig` 結果を `createIssueSessionTuiHost` へ渡�
 | token | Cursor: 環境変数 or `ensemble auth login`、Pi: `ensemble auth login --provider <id>` / Pi `auth.json` / provider 環境変数、GitHub: `gh auth login`（いずれも config に書かない） |
 | tmux 内で Issue リンクを短縮表示 | `~/.ensemble/config.yaml` に `tui.forceHyperlink: on`（または env `FORCE_HYPERLINK=1`） |
 | worker ごとの model tier / workspace cwd | `profile.yaml` |
-| conductor の MCP | `mcp.json` |
+| conductor の MCP | ensemble config の `conductor.mcp.servers` で名前を選び、定義を `~/.ensemble/mcp.json` または `<repoRoot>/.agents/mcp.json` に置く（[設定方法](config.md#conductor-mcp-設定mcpjson)） |
 
 ## env-only の棚卸し
 
