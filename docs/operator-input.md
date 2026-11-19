@@ -456,7 +456,7 @@ GitHub update は conductor send が `finished` で完了した後に限って o
 
 その後、worker へ `session/cancel`、明示 exit 時は fast path teardown（`waitForIdle` スキップ・並列 close）が走る。終了後、isolated worktree の cleanup を試みます。詳細は [harness-events.md](harness-events.md) の `harness.teardown`。
 
-cleanup が dirty worktree のためスキップされた場合や、削除に失敗した場合は warning と復旧方法を表示します。cleanup の失敗はセッション結果を error にせず、CLI exit code に影響しません（[#448](https://github.com/otolab/agents-ensemble/issues/448)）。
+cleanup はセッションが使用したパスを Git の worktree 一覧で確認してから削除します。resume 時の別パスも対象です。dirty worktree のためスキップされた場合、一覧に対象がない場合、削除に失敗した場合は warning と復旧方法を表示します。cleanup の失敗はセッション結果を error にせず、CLI exit code に影響しません（[#448](https://github.com/otolab/agents-ensemble/issues/448)）。
 
 ### `/close` の即時フィードバック
 

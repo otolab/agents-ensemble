@@ -297,9 +297,16 @@ const WORKTREE_REMOVE_RETRY_DELAYS_MS = [100, 250] as const;
  */
 export async function removeWorkerWorktree(
   repoRoot: string,
-  issue: IssueRef,
+  path: string,
 ): Promise<RemoveWorkerWorktreeResult> {
-  const existing = await resolveWorkerWorktree(repoRoot, issue);
+  const listed = await listWorktrees(repoRoot);
+  let existing: ListedWorktree | undefined;
+  for (const entry of listed) {
+    if (await pathsEqual(entry.path, path)) {
+      existing = { ...entry, path: resolve(path) };
+      break;
+    }
+  }
   if (!existing) {
     return { status: 'not_found' };
   }

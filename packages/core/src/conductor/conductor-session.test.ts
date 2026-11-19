@@ -8038,7 +8038,9 @@ describe('runConductorSession resume / shutdown', () => {
     await sessionPromise;
 
     expect(removeSpy).toHaveBeenCalledOnce();
-    expect(removeSpy).toHaveBeenCalledWith(repoRoot, TEST_ISSUE);
+    expect(removeSpy).toHaveBeenCalledWith(
+      repoRoot, join(repoRoot, '.ensemble', 'worktrees', 'issue-1'),
+    );
   });
 
   it('tears down and flushes on /close when usage collection never resolves', async () => {
@@ -8879,6 +8881,61 @@ describe('runConductorSession resume / shutdown', () => {
       path: join(repoRoot, '.ensemble', 'worktrees', 'issue-1'),
       branch: 'ensemble/issue-1',
       error: 'git worktree remove failed: lock held',
+    });
+  });
+
+  it('removes the actual resume worktree on /exit and preserves the other session', async () => {
+    const { runGit } = await import('../git/run-git.js');
+    await runGit(['init'], repoRoot);
+    await runGit(['config', 'user.email', 'test@example.com'], repoRoot);
+    await runGit(['config', 'user.name', 'test'], repoRoot);
+    await runGit(['commit', '--allow-empty', '-m', 'init'], repoRoot);
+    const original = await worktreeModule.createWorkerWorktree(repoRoot, TEST_ISSUE);
+    await runGit(['switch', '-c', 'other-session'], original.path);
+    const recovery = await worktreeModule.resolveWorkerWorkspace(repoRoot, TEST_ISSUE, 'isolated', { resume: true });
+    expect(recovery.path).toContain('issue-1-resume-');
+    mockSend.mockResolvedValue({ runId: 'run-1', status: 'finished', result: 'done' });
+    let operatorApi: OperatorInputBindingApi | undefined;
+    const onPostLoopWait = vi.fn();
+    const sessionPromise = runConductorSession({
+      issueUrl: TEST_ISSUE.url, repoRoot, profile: { workers: [] }, maxTurns: 5,
+      permissionPipeline: new PermissionPipeline({}), registerProcessSignalHandlers: false,
+      waitForOperatorExit: true, onPostLoopWait, workerWorktree: recovery,
+      bindOperatorInput: (api) => { operatorApi = api; },
+    });
+    await vi.waitFor(() => expect(onPostLoopWait).toHaveBeenCalled());
+    operatorApi!.submit('/exit');
+    expect((await sessionPromise).stopReason).toBe('completed');
+    expect(await worktreeModule.resolveWorkerWorktree(repoRoot, TEST_ISSUE)).toBeDefined();
+    expect((await worktreeModule.listWorktrees(repoRoot)).some(
+      (entry) => entry.path.endsWith(recovery.path.split('/').at(-1)!),
+    )).toBe(false);
+  });
+
+  it('reports a missing session worktree after /exit', async () => {
+    mockSend.mockResolvedValue({ runId: 'run-1', status: 'finished', result: 'done' });
+    const path = join(repoRoot, '.ensemble', 'worktrees', 'issue-1-resume-test');
+    const removeSpy = vi.spyOn(worktreeModule, 'removeWorkerWorktree')
+      .mockResolvedValue({ status: 'not_found' });
+    const emitted: SessionLogEvent[] = [];
+    const sessionLogger = new SessionLogger({ issueUrl: TEST_ISSUE.url, repoRoot });
+    sessionLogger.subscribe((event) => emitted.push(event));
+    let operatorApi: OperatorInputBindingApi | undefined;
+    const onPostLoopWait = vi.fn();
+    const sessionPromise = runConductorSession({
+      issueUrl: TEST_ISSUE.url, repoRoot, profile: { workers: [] }, maxTurns: 5,
+      permissionPipeline: new PermissionPipeline({}), registerProcessSignalHandlers: false,
+      waitForOperatorExit: true, onPostLoopWait, sessionLogger,
+      workerWorktree: { path, branch: 'ensemble/issue-1-resume-test', issue: TEST_ISSUE },
+      bindOperatorInput: (api) => { operatorApi = api; },
+    });
+    await vi.waitFor(() => expect(onPostLoopWait).toHaveBeenCalled());
+    operatorApi!.submit('/exit');
+    expect((await sessionPromise).stopReason).toBe('completed');
+    expect(removeSpy).toHaveBeenCalledWith(repoRoot, path);
+    expect(emitted).toContainEqual({
+      type: 'harness.worktree.remove_failed', path,
+      branch: 'ensemble/issue-1-resume-test', error: 'worktree not found in git worktree list',
     });
   });
 

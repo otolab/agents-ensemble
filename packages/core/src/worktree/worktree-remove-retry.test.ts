@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { parseIssueUrl } from '../issue/issue-ref.js';
 import { removeWorkerWorktree } from './worktree.js';
 
 const { mockRunGit } = vi.hoisted(() => ({
@@ -10,7 +9,6 @@ vi.mock('../git/run-git.js', () => ({
   runGit: mockRunGit,
 }));
 
-const ISSUE = parseIssueUrl('https://github.com/org/repo/issues/7');
 const REPO_ROOT = '/repo';
 const WORKTREE_PATH = '/repo/.ensemble/worktrees/issue-7';
 
@@ -66,7 +64,7 @@ describe('removeWorkerWorktree retry', () => {
       throw new Error(`unexpected git invocation: ${args.join(' ')}`);
     });
 
-    const result = await removeWorkerWorktree(REPO_ROOT, ISSUE);
+    const result = await removeWorkerWorktree(REPO_ROOT, WORKTREE_PATH);
 
     expect(result).toEqual({
       status: 'failed',

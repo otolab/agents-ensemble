@@ -321,7 +321,7 @@ describe('removeWorkerWorktree', () => {
     const issue = parseIssueUrl('https://github.com/org/repo/issues/20');
     const worktree = await createWorkerWorktree(repoRoot, issue);
 
-    const result = await removeWorkerWorktree(repoRoot, issue);
+    const result = await removeWorkerWorktree(repoRoot, worktree.path);
     expect(result).toEqual({
       status: 'removed',
       path: worktree.path,
@@ -333,10 +333,39 @@ describe('removeWorkerWorktree', () => {
     expect(await resolveWorkerWorktree(repoRoot, issue)).toBeUndefined();
   });
 
+  it('removes the resume worktree while preserving the default worktree', async () => {
+    const issue = parseIssueUrl('https://github.com/org/repo/issues/24');
+    const original = await createWorkerWorktree(repoRoot, issue);
+    await runGit(['switch', '-c', 'other-session'], original.path);
+    const recovery = await resolveWorkerWorkspace(repoRoot, issue, 'isolated', { resume: true });
+    expect(recovery.path).toContain('issue-24-resume-');
+    expect(await removeWorkerWorktree(repoRoot, recovery.path)).toMatchObject({ status: 'removed' });
+    const listed = await listWorktrees(repoRoot);
+    expect(await resolveWorkerWorktree(repoRoot, issue)).toBeDefined();
+    expect(listed.some((entry) => entry.path === recovery.path)).toBe(false);
+  });
+
   it('is a no-op when worktree does not exist', async () => {
     const issue = parseIssueUrl('https://github.com/org/repo/issues/21');
-    const result = await removeWorkerWorktree(repoRoot, issue);
+    const result = await removeWorkerWorktree(repoRoot, workerWorktreePath(repoRoot, issue));
     expect(result).toEqual({ status: 'not_found' });
+  });
+
+  it('does not remove another worktree when the requested path is unregistered', async () => {
+    const issue = parseIssueUrl('https://github.com/org/repo/issues/25');
+    const original = await createWorkerWorktree(repoRoot, issue);
+    expect(await removeWorkerWorktree(repoRoot, `${original.path}-resume-missing`)).toEqual({ status: 'not_found' });
+    expect(await resolveWorkerWorktree(repoRoot, issue)).toBeDefined();
+  });
+
+  it('preserves a dirty resume worktree', async () => {
+    const issue = parseIssueUrl('https://github.com/org/repo/issues/26');
+    const original = await createWorkerWorktree(repoRoot, issue);
+    await runGit(['switch', '-c', 'other-session'], original.path);
+    const recovery = await resolveWorkerWorkspace(repoRoot, issue, 'isolated', { resume: true });
+    await writeFile(join(recovery.path, 'dirty.txt'), 'dirty\n');
+    expect(await removeWorkerWorktree(repoRoot, recovery.path)).toMatchObject({ status: 'skipped_dirty', path: recovery.path });
+    expect(await readFile(join(recovery.path, 'dirty.txt'), 'utf8')).toBe('dirty\n');
   });
 
   it('skips removal when worktree has uncommitted changes', async () => {
@@ -344,7 +373,7 @@ describe('removeWorkerWorktree', () => {
     const worktree = await createWorkerWorktree(repoRoot, issue);
     await writeFile(join(worktree.path, 'dirty.txt'), 'dirty\n');
 
-    const result = await removeWorkerWorktree(repoRoot, issue);
+    const result = await removeWorkerWorktree(repoRoot, worktree.path);
     expect(result).toEqual({
       status: 'skipped_dirty',
       path: worktree.path,
@@ -355,8 +384,8 @@ describe('removeWorkerWorktree', () => {
 
   it('round-trips create and remove', async () => {
     const issue = parseIssueUrl('https://github.com/org/repo/issues/23');
-    await createWorkerWorktree(repoRoot, issue);
-    await removeWorkerWorktree(repoRoot, issue);
+    const worktree = await createWorkerWorktree(repoRoot, issue);
+    await removeWorkerWorktree(repoRoot, worktree.path);
 
     const recreated = await createWorkerWorktree(repoRoot, issue);
     expect(recreated.path).toBe(resolve(workerWorktreePath(repoRoot, issue)));
