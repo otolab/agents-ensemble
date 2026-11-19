@@ -107,7 +107,7 @@ conductor   : 指摘レベルの照合 → implementer に差し戻し
 implementer : 対応コミット → 対応表を PR に投稿
 reviewer    : 再判定（0 ベース + 前回ブロッカー対応表）
 
-conductor   : マージして終われるか判定 → オペレータへ引き渡し
+conductor   : マージ可否・残課題 → 引き渡し（Issue/PR まとめ）→ 待機
 オペレータ  : 最終ゲート → マージ
 全員        : 待機（追加の問いに応答）
 ```

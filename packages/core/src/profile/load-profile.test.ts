@@ -694,7 +694,7 @@ describe('loadProfile', () => {
         expect.objectContaining({
           id: 'team-conductor',
           title: '標準動作モード（conductor）',
-          content: expect.stringContaining('## 果たすこと'),
+          content: expect.stringContaining('## 進行フェーズ'),
           kinds: ['conductor'],
         }),
       ]),
