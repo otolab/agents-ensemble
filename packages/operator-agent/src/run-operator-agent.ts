@@ -952,10 +952,17 @@ async function runTtyConversation(options: {
   const retryWatchLock = async <T>(
     operation: () => Promise<T>,
     description: string,
+    stopWhenInputEnded = false,
   ): Promise<{ stopped: true } | { stopped: false; value: T }> => {
+    const inputAlreadyEnded = inputEnded;
     while (true) {
       try {
-        return { stopped: false, value: await operation() };
+        const value = await operation();
+        if (
+          sendSuppression.signal.aborted ||
+          (inputEnded && (stopWhenInputEnded || !inputAlreadyEnded))
+        ) return { stopped: true };
+        return { stopped: false, value };
       } catch (error) {
         if (!(error instanceof OperatorLockTimeoutError)) throw error;
         writeChannelLine(
@@ -1492,6 +1499,7 @@ async function runTtyConversation(options: {
         const retryRecord = await retryWatchLock(
           async () => options.watchPool.recordRetry?.(batch.events, retryReadyAt),
           '再送時刻の保存',
+          true,
         );
         if (retryRecord.stopped) return exitContinuity;
         for (const event of batch.events) {
