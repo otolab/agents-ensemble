@@ -40,7 +40,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm run build
       - name: Test workspace locking and maintenance
-        run: pnpm --filter @agents-ensemble/operator-agent exec vitest run src/operator-workspace-lock.test.ts src/operator-workspace-maintenance.test.ts
+        run: pnpm --filter @agents-ensemble/operator-agent exec vitest run --config vitest.workspace.config.ts
 
   build-and-test:
     runs-on: ubuntu-latest
