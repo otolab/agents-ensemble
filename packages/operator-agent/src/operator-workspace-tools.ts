@@ -1,7 +1,10 @@
 import { constants as fsConstants } from 'node:fs';
 import {
   lstat,
-  link,
+  cp,
+  mkdtemp,
+  rename,
+  rm,
   readdir,
   unlink,
   mkdir,
@@ -48,10 +51,10 @@ export async function resolveOperatorWorkspaceRoot(
   try {
     metadata = await lstat(workspacePath);
   } catch {
-    throw new Error('The active operator profile workspace is unavailable.');
+    throw new WorkspaceError('The active operator profile workspace is unavailable.');
   }
   if (metadata.isSymbolicLink() || !metadata.isDirectory()) {
-    throw new Error(
+    throw new WorkspaceError(
       'The active operator profile workspace must be a real directory, not a symbolic link.',
     );
   }
@@ -61,10 +64,11 @@ export async function resolveOperatorWorkspaceRoot(
 /** Create file tools that are permanently scoped to the selected profile root. */
 export function createOperatorWorkspaceFileTools(
   workspaceRoot: string,
+  moveFs: MoveFilesystem = defaultMoveFilesystem,
 ): Record<string, ConductorTool> {
   const root = resolve(workspaceRoot);
   if (!isAbsolute(workspaceRoot) || root !== workspaceRoot) {
-    throw new Error('The operator profile workspace root must be canonical and absolute.');
+    throw new WorkspaceError('The operator profile workspace root must be canonical and absolute.');
   }
 
   return {
@@ -81,14 +85,14 @@ export function createOperatorWorkspaceFileTools(
       },
       execute: async (args) => {
         assertOnlyInputProperties(args, ['path', 'recursive', 'maxDepth', 'maxEntries']);
-        if (args.recursive !== undefined && typeof args.recursive !== 'boolean') throw new Error('recursive must be a boolean.');
+        if (args.recursive !== undefined && typeof args.recursive !== 'boolean') throw new WorkspaceError('recursive must be a boolean.');
         const depth = boundedInteger(args.maxDepth, 3, 10, 'maxDepth');
         const limit = boundedInteger(args.maxEntries, 100, 1000, 'maxEntries');
         const requested = args.path === undefined || args.path === '.' ? undefined : resolveWorkspaceFilePath(root, args.path);
         try {
           const directory = requested ? await realpath(requested.absolutePath) : root;
           assertWithinWorkspace(root, directory);
-          if (!(await stat(directory)).isDirectory()) throw new Error('The requested workspace path is not a directory.');
+          if (!(await stat(directory)).isDirectory()) throw new WorkspaceError('The requested workspace path is not a directory.');
           const entries: ConductorJsonValue[] = [];
           let truncated = false;
           const walk = async (dir: string, prefix: string, level: number): Promise<void> => {
@@ -111,29 +115,38 @@ export function createOperatorWorkspaceFileTools(
     },
     [MOVE_OPERATOR_WORKSPACE_FILE_TOOL]: {
       name: MOVE_OPERATOR_WORKSPACE_FILE_TOOL,
-      description: 'Move a regular workspace file without overwriting. Directories and symlinks are rejected. Path checks are not an OS sandbox and cannot prevent same-user TOCTOU changes.',
-      inputSchema: { type: 'object', properties: { source: { type: 'string' }, destination: { type: 'string' } }, required: ['source', 'destination'], additionalProperties: false },
+      description: 'Move a workspace file or directory. Existing destinations require overwrite: true. Final symlinks are rejected. Path checks are not an OS sandbox and cannot prevent same-user TOCTOU changes.',
+      inputSchema: {
+        type: 'object',
+        properties: { source: { type: 'string' }, destination: { type: 'string' }, overwrite: { type: 'boolean' } },
+        required: ['source', 'destination'], additionalProperties: false,
+      },
       execute: async (args) => {
-        assertOnlyInputProperties(args, ['source', 'destination']);
+        assertOnlyInputProperties(args, ['source', 'destination', 'overwrite']);
+        if (args.overwrite !== undefined && typeof args.overwrite !== 'boolean') throw new WorkspaceError('overwrite must be a boolean.');
         const source = resolveWorkspaceFilePath(root, args.source);
         const destination = resolveWorkspaceFilePath(root, args.destination);
         try {
           const sourceParent = await existingWorkspaceParent(root, source.parts.slice(0, -1));
-          const sourcePath = join(sourceParent, source.parts.at(-1)!);
+          const sourceEntry = join(sourceParent, source.parts.at(-1)!);
+          protectInstructions(root, sourceEntry);
+          const metadata = await lstat(sourceEntry);
+          if (!metadata.isFile() && !metadata.isDirectory()) throw new WorkspaceError('The requested workspace path is not a regular file or directory.');
+          const sourcePath = await realpath(sourceEntry);
+          assertWithinWorkspace(root, sourcePath);
           protectInstructions(root, sourcePath);
-          const metadata = await lstat(sourcePath);
-          if (!metadata.isFile()) throw new Error('The requested workspace path is not a regular file.');
-          const destinationParent = await ensureWorkspaceParent(root, destination.parts.slice(0, -1));
+          const destinationParent = await ensureWorkspaceParent(root, destination.parts.slice(0, -1), metadata.isDirectory() ? sourcePath : undefined);
           const destinationPath = join(destinationParent, destination.parts.at(-1)!);
           protectInstructions(root, destinationPath);
-          try { await link(sourcePath, destinationPath); } catch (error) {
-            if (isNodeError(error, 'EEXIST')) throw new Error('The destination already exists.');
-            throw error;
+          try {
+            const destinationEntry = await lstat(destinationPath);
+            if (!destinationEntry.isSymbolicLink()) protectInstructions(root, await realpath(destinationPath));
+          } catch (error) { if (!isNodeError(error, 'ENOENT')) throw error; }
+          if (sourcePath === destinationPath || (metadata.isDirectory() && isWithin(sourcePath, destinationPath))) {
+            throw new WorkspaceError('A directory cannot be moved into itself, and source and destination must differ.');
           }
-          try { await unlink(sourcePath); } catch (error) {
-            try { await unlink(destinationPath); } catch { /* best-effort rollback */ }
-            throw error;
-          }
+          if (isWithin(destinationPath, sourcePath)) throw new WorkspaceError('The destination cannot contain the source.');
+          await moveWorkspaceEntry(root, sourcePath, destinationPath, args.overwrite === true, moveFs);
           return toolResult({ source: source.relativePath, destination: destination.relativePath });
         } catch (error) { throw safeOperationError(error); }
       },
@@ -150,7 +163,8 @@ export function createOperatorWorkspaceFileTools(
           const target = join(parent, requested.parts.at(-1)!);
           protectInstructions(root, target);
           const metadata = await lstat(target);
-          if (!metadata.isFile() && !metadata.isSymbolicLink()) throw new Error('The requested workspace path is not a file or symlink.');
+          if (!metadata.isSymbolicLink()) protectInstructions(root, await realpath(target));
+          if (!metadata.isFile() && !metadata.isSymbolicLink()) throw new WorkspaceError('The requested workspace path is not a file or symlink.');
           await unlink(target);
           return toolResult({ path: requested.relativePath });
         } catch (error) { throw safeOperationError(error); }
@@ -179,10 +193,10 @@ export function createOperatorWorkspaceFileTools(
         try {
           const metadata = await handle.stat();
           if (!metadata.isFile()) {
-            throw new Error('The requested workspace path is not a file.');
+            throw new WorkspaceError('The requested workspace path is not a file.');
           }
           if (metadata.size > MAX_OPERATOR_WORKSPACE_FILE_BYTES) {
-            throw new Error(
+            throw new WorkspaceError(
               `Workspace files larger than ${MAX_OPERATOR_WORKSPACE_FILE_BYTES} bytes cannot be read.`,
             );
           }
@@ -200,7 +214,7 @@ export function createOperatorWorkspaceFileTools(
             bytesRead += result.bytesRead;
           }
           if (bytesRead > MAX_OPERATOR_WORKSPACE_FILE_BYTES) {
-            throw new Error(
+            throw new WorkspaceError(
               `Workspace files larger than ${MAX_OPERATOR_WORKSPACE_FILE_BYTES} bytes cannot be read.`,
             );
           }
@@ -237,11 +251,11 @@ export function createOperatorWorkspaceFileTools(
         assertOnlyInputProperties(args, ['path', 'content']);
         const requested = resolveWorkspaceFilePath(root, args.path);
         if (typeof args.content !== 'string') {
-          throw new Error('content must be a string.');
+          throw new WorkspaceError('content must be a string.');
         }
         const byteLength = Buffer.byteLength(args.content, 'utf8');
         if (byteLength > MAX_OPERATOR_WORKSPACE_FILE_BYTES) {
-          throw new Error(
+          throw new WorkspaceError(
             `Workspace files are limited to ${MAX_OPERATOR_WORKSPACE_FILE_BYTES} bytes.`,
           );
         }
@@ -255,7 +269,7 @@ export function createOperatorWorkspaceFileTools(
         if (canonicalTarget) {
           const metadata = await stat(canonicalTarget);
           if (!metadata.isFile()) {
-            throw new Error('The requested workspace path is not a file.');
+            throw new WorkspaceError('The requested workspace path is not a file.');
           }
         }
 
@@ -270,7 +284,7 @@ export function createOperatorWorkspaceFileTools(
         try {
           const metadata = await handle.stat();
           if (!metadata.isFile()) {
-            throw new Error('The requested workspace path is not a file.');
+            throw new WorkspaceError('The requested workspace path is not a file.');
           }
           await handle.writeFile(args.content, 'utf8');
         } finally {
@@ -286,25 +300,90 @@ export function createOperatorWorkspaceFileTools(
   };
 }
 
+type MoveFilesystem = Pick<typeof import('node:fs/promises'), 'rename' | 'cp' | 'rm'>;
+const defaultMoveFilesystem: MoveFilesystem = { rename, cp, rm };
+
+function isWithin(parent: string, child: string): boolean {
+  const path = relative(parent, child);
+  return path === '' || (path !== '..' && !path.startsWith(`..${sep}`) && !isAbsolute(path));
+}
+
+/** Preserve an overwritten destination until the move is committed. */
+async function moveWorkspaceEntry(root: string, source: string, destination: string, overwrite: boolean, fs: MoveFilesystem): Promise<void> {
+  let exists = false;
+  try { await lstat(destination); exists = true; } catch (error) {
+    if (!isNodeError(error, 'ENOENT')) throw error;
+  }
+  if (exists && !overwrite) throw new WorkspaceError('The destination already exists.');
+  // A final destination symlink is never followed or replaced.
+  if (exists && (await lstat(destination)).isSymbolicLink()) throw new WorkspaceError('The destination cannot be a symbolic link.');
+
+  const staging = await mkdtemp(join(resolve(destination, '..'), '.ensemble-move-'));
+  const backup = join(staging, 'backup');
+  const copy = join(staging, 'copy');
+  const recovery = relative(root, staging).split(sep).join('/');
+  let backedUp = false;
+  let published = false;
+  let copied = false;
+  try {
+    if (exists) { await fs.rename(destination, backup); backedUp = true; }
+    // Node has no portable rename-no-replace; recheck after moving the old destination.
+    try { await lstat(destination); throw new WorkspaceError('The destination already exists.'); }
+    catch (error) { if (!isNodeError(error, 'ENOENT')) throw error; }
+    try {
+      await fs.rename(source, destination);
+      published = true;
+    } catch (error) {
+      if (!isNodeError(error, 'EXDEV')) throw error;
+      await fs.cp(source, copy, { recursive: true, dereference: false, verbatimSymlinks: true, errorOnExist: true, force: false, preserveTimestamps: true });
+      await fs.rename(copy, destination);
+      published = true;
+      copied = true;
+    }
+  } catch (error) {
+    if (backedUp) {
+      try {
+        try { await lstat(destination); throw new WorkspaceError('Destination appeared during rollback.'); }
+        catch (error) { if (!isNodeError(error, 'ENOENT')) throw error; }
+        await fs.rename(backup, destination); backedUp = false;
+      }
+      catch { throw new WorkspaceError(`Move failed and the previous destination could not be restored. Recover it from ${recovery}/backup; inspect source and destination before retrying.`); }
+    }
+    try { await fs.rm(staging, { recursive: true, force: true }); }
+    catch { throw new WorkspaceError(`Move failed; source remains, but temporary data could not be removed. Inspect ${recovery} before retrying.`); }
+    throw error;
+  }
+  if (copied) {
+    try { await fs.rm(source, { recursive: true }); }
+    catch { throw new WorkspaceError(`Move was partially completed: destination contains the copy, but source removal failed and may be partial. Inspect both before retrying.${backedUp ? ` The previous destination is at ${recovery}/backup.` : ` Temporary data remains at ${recovery}.`}`); }
+  }
+  if (published) {
+    try { await fs.rm(staging, { recursive: true, force: true }); }
+    catch { throw new WorkspaceError(`Move completed, but temporary data could not be removed. Inspect ${recovery} before retrying.`); }
+  }
+}
+
 function boundedInteger(value: ConductorJsonValue | undefined, fallback: number, max: number, name: string): number {
   if (value === undefined) return fallback;
-  if (typeof value !== 'number' || !Number.isInteger(value) || value < 1 || value > max) throw new Error(`${name} must be an integer between 1 and ${max}.`);
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 1 || value > max) throw new WorkspaceError(`${name} must be an integer between 1 and ${max}.`);
   return value;
 }
 
 async function existingWorkspaceParent(root: string, parts: string[]): Promise<string> {
   const parent = await realpath(resolve(root, ...parts));
   assertWithinWorkspace(root, parent);
-  if (!(await stat(parent)).isDirectory()) throw new Error('A workspace path component is not a directory.');
+  if (!(await stat(parent)).isDirectory()) throw new WorkspaceError('A workspace path component is not a directory.');
   return parent;
 }
 
 function protectInstructions(root: string, path: string): void {
-  if (path === join(root, 'AGENTS.md')) throw new Error('The workspace AGENTS.md is protected from move and delete.');
+  if (path === join(root, 'AGENTS.md')) throw new WorkspaceError('The workspace AGENTS.md is protected from move and delete.');
 }
 
+class WorkspaceError extends Error {}
+
 function safeOperationError(error: unknown): Error {
-  if (error instanceof Error && !('code' in error)) return error;
+  if (error instanceof WorkspaceError) return error;
   return sanitizeFilesystemError(error);
 }
 
@@ -313,7 +392,7 @@ function assertOnlyInputProperties(
   allowed: string[],
 ): void {
   if (Object.keys(args).some((key) => !allowed.includes(key))) {
-    throw new Error('The workspace file tool received an unexpected argument.');
+    throw new WorkspaceError('The workspace file tool received an unexpected argument.');
   }
 }
 
@@ -322,7 +401,7 @@ function resolveWorkspaceFilePath(
   value: ConductorJsonValue | undefined,
 ): WorkspaceFilePath {
   if (typeof value !== 'string' || value.trim().length === 0) {
-    throw new Error('path must be a non-empty workspace-relative file path.');
+    throw new WorkspaceError('path must be a non-empty workspace-relative file path.');
   }
   if (
     isAbsolute(value) ||
@@ -332,7 +411,7 @@ function resolveWorkspaceFilePath(
     throw outsideWorkspaceError();
   }
   if (value.includes('\\')) {
-    throw new Error('Workspace file paths must use forward slashes.');
+    throw new WorkspaceError('Workspace file paths must use forward slashes.');
   }
 
   const parts = value
@@ -342,7 +421,7 @@ function resolveWorkspaceFilePath(
     throw outsideWorkspaceError();
   }
   if (parts.length === 0) {
-    throw new Error('path must name a file inside the operator profile workspace.');
+    throw new WorkspaceError('path must name a file inside the operator profile workspace.');
   }
 
   const absolutePath = resolve(root, ...parts);
@@ -360,11 +439,11 @@ async function resolveExistingFile(
 ): Promise<string> {
   const canonicalPath = await resolveOptionalTarget(root, requested.absolutePath);
   if (!canonicalPath) {
-    throw new Error('The requested file does not exist inside the operator profile workspace.');
+    throw new WorkspaceError('The requested file does not exist inside the operator profile workspace.');
   }
   const metadata = await stat(canonicalPath);
   if (!metadata.isFile()) {
-    throw new Error('The requested workspace path is not a file.');
+    throw new WorkspaceError('The requested workspace path is not a file.');
   }
   return canonicalPath;
 }
@@ -397,10 +476,12 @@ async function resolveOptionalTarget(
 async function ensureWorkspaceParent(
   root: string,
   parts: string[],
+  forbidden?: string,
 ): Promise<string> {
   let current = root;
   for (const part of parts) {
     const candidate = join(current, part);
+    if (forbidden && isWithin(forbidden, candidate)) throw new WorkspaceError('A directory cannot be moved into itself.');
     try {
       await lstat(candidate);
     } catch (error) {
@@ -421,9 +502,10 @@ async function ensureWorkspaceParent(
       throw sanitizeFilesystemError(error);
     }
     assertWithinWorkspace(root, canonicalPath);
+    if (forbidden && isWithin(forbidden, canonicalPath)) throw new WorkspaceError('A directory cannot be moved into itself.');
     const metadata = await stat(canonicalPath);
     if (!metadata.isDirectory()) {
-      throw new Error('A workspace path component is not a directory.');
+      throw new WorkspaceError('A workspace path component is not a directory.');
     }
     current = canonicalPath;
   }
@@ -445,25 +527,25 @@ function assertWithinWorkspace(
 }
 
 function outsideWorkspaceError(): Error {
-  return new Error(
+  return new WorkspaceError(
     'The requested path is outside the active operator profile workspace. Use a relative path contained within that workspace.',
   );
 }
 
 function sanitizeFilesystemError(error: unknown): Error {
   if (isNodeError(error, 'ENOENT')) {
-    return new Error('The requested file or directory does not exist in the workspace.');
+    return new WorkspaceError('The requested file or directory does not exist in the workspace.');
   }
   if (isNodeError(error, 'EACCES') || isNodeError(error, 'EPERM')) {
-    return new Error('Permission was denied for the requested workspace file.');
+    return new WorkspaceError('Permission was denied for the requested workspace file.');
   }
   if (isNodeError(error, 'ENOTDIR')) {
-    return new Error('A workspace path component is not a directory.');
+    return new WorkspaceError('A workspace path component is not a directory.');
   }
   if (isNodeError(error, 'ELOOP')) {
     return outsideWorkspaceError();
   }
-  return new Error('The workspace file operation failed.');
+  return new WorkspaceError('The workspace file operation failed.');
 }
 
 function isNodeError(

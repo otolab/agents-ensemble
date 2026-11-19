@@ -1,8 +1,11 @@
 import {
   lstat,
+  cp,
+  rename,
   mkdir,
   mkdtemp,
   readFile,
+  realpath,
   rm,
   symlink,
   writeFile,
@@ -236,7 +239,7 @@ describe('operator profile workspace file tools', () => {
     await move.execute({ source: 'note', destination: 'new/note' });
     await expect(readFile(join(workspace, 'new/note'), 'utf8')).resolves.toBe('content');
     await expect(del.execute({ path: 'new' })).rejects.toThrow(/not a file/u);
-    await expect(move.execute({ source: 'new', destination: 'other' })).rejects.toThrow(/not a regular file/u);
+    await expect(move.execute({ source: 'new', destination: 'new/child' })).rejects.toThrow(/itself/u);
     await expect(del.execute({ path: 'missing' })).rejects.toThrow(/does not exist/u);
     await expect(move.execute({ source: 'missing', destination: 'other' })).rejects.toThrow(/does not exist/u);
     await writeFile(join(workspace, 'AGENTS.md'), 'instructions');
@@ -249,6 +252,127 @@ describe('operator profile workspace file tools', () => {
     await del.execute({ path: 'link' });
     await expect(readFile(join(outside, 'secret'), 'utf8')).resolves.toBe('safe');
     await del.execute({ path: 'new/note' });
+  });
+
+  it('moves directories, requires explicit overwrite, and protects root and AGENTS.md', async () => {
+    const move = tools[MOVE_OPERATOR_WORKSPACE_FILE_TOOL]!;
+    const del = tools[DELETE_OPERATOR_WORKSPACE_FILE_TOOL]!;
+    await mkdir(join(workspace, 'folder', 'sub'), { recursive: true });
+    await writeFile(join(workspace, 'folder', 'sub', 'note'), 'source');
+    await mkdir(join(workspace, 'target'));
+    await writeFile(join(workspace, 'target', 'old'), 'old');
+    await expect(move.execute({ source: 'folder', destination: 'target' })).rejects.toThrow(/already exists/u);
+    await expect(move.execute({ source: 'folder', destination: 'folder/new/child' })).rejects.toThrow(/itself/u);
+    await expect(lstat(join(workspace, 'folder/new'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await symlink(join(workspace, 'folder'), join(workspace, 'alias'), 'dir');
+    await expect(move.execute({ source: 'folder', destination: 'alias/child' })).rejects.toThrow(/itself/u);
+    await move.execute({ source: 'folder', destination: 'target', overwrite: true });
+    await expect(readFile(join(workspace, 'target/sub/note'), 'utf8')).resolves.toBe('source');
+    await expect(lstat(join(workspace, 'target/old'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await writeFile(join(workspace, 'file'), 'new');
+    await writeFile(join(workspace, 'other'), 'old');
+    await move.execute({ source: 'file', destination: 'other', overwrite: true });
+    await expect(readFile(join(workspace, 'other'), 'utf8')).resolves.toBe('new');
+    await writeFile(join(workspace, 'AGENTS.md'), 'protected');
+    await expect(move.execute({ source: 'other', destination: 'AGENTS.md', overwrite: true })).rejects.toThrow(/protected/u);
+    await expect(move.execute({ source: '.', destination: 'other', overwrite: true })).rejects.toThrow();
+    await expect(del.execute({ path: '.' })).rejects.toThrow();
+    await expect(readFile(join(workspace, 'AGENTS.md'), 'utf8')).resolves.toBe('protected');
+    await expect(move.execute({ source: 'other', destination: 'x', overwrite: 'yes' })).rejects.toThrow(/boolean/u);
+  });
+
+  it('handles cross-filesystem moves and reports partial source removal', async () => {
+    await mkdir(join(workspace, 'source'));
+    await writeFile(join(workspace, 'source/note'), 'source');
+    await mkdir(join(workspace, 'dest'));
+    await writeFile(join(workspace, 'dest/old'), 'old');
+    const sourcePath = await realpath(join(workspace, 'source'));
+    const fakeFs = {
+      rename: async (from: Parameters<typeof rename>[0], to: Parameters<typeof rename>[1]) => {
+        if (String(from) === sourcePath) throw Object.assign(new Error('private path'), { code: 'EXDEV' });
+        return rename(from, to);
+      },
+      cp,
+      rm: async (path: Parameters<typeof rm>[0], options?: Parameters<typeof rm>[1]) => {
+        if (String(path) === sourcePath) throw Object.assign(new Error('private path'), { code: 'EACCES' });
+        return rm(path, options);
+      },
+    };
+    const move = createOperatorWorkspaceFileTools(await resolveOperatorWorkspaceRoot(workspace), fakeFs)[MOVE_OPERATOR_WORKSPACE_FILE_TOOL]!;
+    await expect(move.execute({ source: 'source', destination: 'dest', overwrite: true })).rejects.toThrow(/partially completed.*previous destination is at/u);
+    await expect(readFile(join(workspace, 'dest/note'), 'utf8')).resolves.toBe('source');
+    await expect(readFile(join(workspace, 'source/note'), 'utf8')).resolves.toBe('source');
+    const staging = (await import('node:fs/promises')).readdir(workspace);
+    const backup = (await staging).find((entry) => entry.startsWith('.ensemble-move-'))!;
+    await expect(readFile(join(workspace, backup, 'backup/old'), 'utf8')).resolves.toBe('old');
+  });
+
+  it('restores destination on failed move and sanitizes filesystem errors', async () => {
+    await writeFile(join(workspace, 'source'), 'source');
+    await writeFile(join(workspace, 'dest'), 'old');
+    const sourcePath = await realpath(join(workspace, 'source'));
+    const fakeFs = {
+      rename: async (from: Parameters<typeof rename>[0], to: Parameters<typeof rename>[1]) => {
+        if (String(from) === sourcePath) throw Object.assign(new Error('/secret/private'), { code: 'EACCES' });
+        return rename(from, to);
+      }, cp, rm,
+    };
+    const move = createOperatorWorkspaceFileTools(await resolveOperatorWorkspaceRoot(workspace), fakeFs)[MOVE_OPERATOR_WORKSPACE_FILE_TOOL]!;
+    await expect(move.execute({ source: 'source', destination: 'dest', overwrite: true })).rejects.toThrow('Permission was denied');
+    await expect(readFile(join(workspace, 'source'), 'utf8')).resolves.toBe('source');
+    await expect(readFile(join(workspace, 'dest'), 'utf8')).resolves.toBe('old');
+    for (const tool of [tools[LIST_OPERATOR_WORKSPACE_FILES_TOOL]!, tools[DELETE_OPERATOR_WORKSPACE_FILE_TOOL]!]) {
+      try { await tool.execute({ path: 'missing/secret' }); throw new Error('expected failure'); }
+      catch (error) { expect(String(error)).not.toContain(workspace); }
+    }
+  });
+
+  it('copies across filesystems and preserves the source if copying fails', async () => {
+    const source = join(await realpath(workspace), 'source');
+    const fakeRename = async (from: Parameters<typeof rename>[0], to: Parameters<typeof rename>[1]) => {
+      if (String(from) === source) throw Object.assign(new Error('private'), { code: 'EXDEV' });
+      return rename(from, to);
+    };
+    await writeFile(source, 'source');
+    const failCopy = async () => { throw Object.assign(new Error('/private/secret'), { code: 'EIO' }); };
+    const failing = createOperatorWorkspaceFileTools(await realpath(workspace), { rename: fakeRename, cp: failCopy, rm })[MOVE_OPERATOR_WORKSPACE_FILE_TOOL]!;
+    await expect(failing.execute({ source: 'source', destination: 'target' })).rejects.toThrow('The workspace file operation failed.');
+    await expect(readFile(source, 'utf8')).resolves.toBe('source');
+    await expect(lstat(join(workspace, 'target'))).rejects.toMatchObject({ code: 'ENOENT' });
+    const move = createOperatorWorkspaceFileTools(await realpath(workspace), { rename: fakeRename, cp, rm })[MOVE_OPERATOR_WORKSPACE_FILE_TOOL]!;
+    await move.execute({ source: 'source', destination: 'target' });
+    await expect(readFile(join(workspace, 'target'), 'utf8')).resolves.toBe('source');
+    await expect(lstat(source)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('reports recovery location when a destination appears during rollback', async () => {
+    const rootPath = await realpath(workspace);
+    const source = join(rootPath, 'source');
+    const dest = join(rootPath, 'dest');
+    await writeFile(source, 'source');
+    await writeFile(dest, 'old');
+    const fakeRename = async (from: Parameters<typeof rename>[0], to: Parameters<typeof rename>[1]) => {
+      if (String(from) === source) {
+        await writeFile(dest, 'concurrent');
+        throw Object.assign(new Error('private'), { code: 'EACCES' });
+      }
+      return rename(from, to);
+    };
+    const move = createOperatorWorkspaceFileTools(rootPath, { rename: fakeRename, cp, rm })[MOVE_OPERATOR_WORKSPACE_FILE_TOOL]!;
+    await expect(move.execute({ source: 'source', destination: 'dest', overwrite: true })).rejects.toThrow(/could not be restored.*backup/u);
+    await expect(readFile(dest, 'utf8')).resolves.toBe('concurrent');
+    const entries = await (await import('node:fs/promises')).readdir(rootPath);
+    const backup = entries.find((entry) => entry.startsWith('.ensemble-move-'))!;
+    await expect(readFile(join(rootPath, backup, 'backup'), 'utf8')).resolves.toBe('old');
+    await expect(readFile(source, 'utf8')).resolves.toBe('source');
+  });
+
+  it('enforces list limit boundaries', async () => {
+    const list = tools[LIST_OPERATOR_WORKSPACE_FILES_TOOL]!;
+    for (const args of [{ maxDepth: 0 }, { maxDepth: 11 }, { maxEntries: 0 }, { maxEntries: 1001 }, { maxEntries: 1.5 }]) {
+      await expect(list.execute(args)).rejects.toThrow(/integer/u);
+    }
+    await expect(list.execute({ maxDepth: 10, maxEntries: 1000 })).resolves.toBeDefined();
   });
 
   it('rejects escapes through paths and symlinked parents', async () => {
