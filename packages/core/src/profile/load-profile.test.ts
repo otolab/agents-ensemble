@@ -719,7 +719,9 @@ describe('loadProfile', () => {
 
     expect(content).toContain('### 5. オペレータへ引き渡し');
     expect(content).toContain('## 横断ルール');
-    expect(content).toContain('Issue に作業過程と引き渡し判断の根拠をまとめる');
+    expect(content).toContain('引き渡し情報');
+    expect(content).toContain('作業の内容と流れ');
+    expect(content).toMatch(/4 と 5 の境界/);
     expect(content).not.toContain('## 果たすこと');
     expect(content).not.toContain('## 引き渡し時の心得');
   });
