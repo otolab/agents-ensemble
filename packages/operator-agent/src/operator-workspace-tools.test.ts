@@ -443,6 +443,167 @@ describe('operator profile workspace file tools', () => {
     } finally { child.kill('SIGKILL'); }
   });
 
+  it.each(['before_rename', 'after_rename', 'partial_copy', 'copy_complete', 'after_publish', 'partial_remove', 'after_remove', 'cleanup'])(
+    'preserves identifiable data after process termination at %s', async (stage) => {
+      const { spawn } = await import('node:child_process');
+      const { once } = await import('node:events');
+      const canonical = await realpath(workspace);
+      await mkdir(join(workspace, 'source'));
+      await writeFile(join(workspace, 'source', 'a'), 'A');
+      await writeFile(join(workspace, 'source', 'b'), 'B');
+      await mkdir(join(workspace, 'dest'));
+      await writeFile(join(workspace, 'dest', 'old'), 'OLD');
+      const moduleUrl = new URL('../dist/operator-workspace-tools.js', import.meta.url).href;
+      const script = `
+        import { createOperatorWorkspaceFileTools } from ${JSON.stringify(moduleUrl)};
+        import { rename, cp, rm, mkdir, writeFile } from 'node:fs/promises';
+        import { join, basename } from 'node:path';
+        const [root, stage] = process.argv.slice(1);
+        const pause = async () => { console.log('ready'); setInterval(() => {}, 1000); await new Promise(() => {}); };
+        const source = join(root, 'source');
+        const dest = join(root, 'dest');
+        const cross = ['partial_copy', 'copy_complete', 'after_publish', 'partial_remove', 'after_remove'].includes(stage);
+        const fake = {
+          rename: async (from, to) => {
+            if (String(from) === source) {
+              if (stage === 'before_rename') await pause();
+              if (cross) throw Object.assign(new Error('EXDEV'), { code: 'EXDEV' });
+              await rename(from, to);
+              if (stage === 'after_rename') await pause();
+              return;
+            }
+            await rename(from, to);
+            if (basename(String(from)) === 'copy' && String(to) === dest && stage === 'after_publish') await pause();
+          },
+          cp: async (from, to, options) => {
+            if (stage === 'partial_copy') {
+              await mkdir(to);
+              await writeFile(join(to, 'a'), 'A');
+              await pause();
+            }
+            await cp(from, to, options);
+            if (stage === 'copy_complete') await pause();
+          },
+          rm: async (path, options) => {
+            if (String(path) === source && stage === 'partial_remove') {
+              await rm(join(source, 'a'));
+              await pause();
+            }
+            if (basename(String(path)).startsWith('.ensemble-move-') && stage === 'cleanup') await pause();
+            await rm(path, options);
+            if (String(path) === source && stage === 'after_remove') await pause();
+          },
+        };
+        await createOperatorWorkspaceFileTools(root, fake).move_operator_workspace_file.execute({ source: 'source', destination: 'dest', overwrite: true });
+      `;
+      const child = spawn(process.execPath, ['--input-type=module', '-e', script, canonical, stage], { stdio: ['ignore', 'pipe', 'pipe'] });
+      try {
+        await once(child.stdout, 'data');
+        child.kill('SIGKILL');
+        await once(child, 'exit');
+        const status = await tools[GET_OPERATOR_WORKSPACE_MOVE_STATUS_TOOL]!.execute({});
+        expect(status.structuredContent).toMatchObject({ status: 'inspection_required', source: 'source', destination: 'dest' });
+        const staging = status.structuredContent?.staging as string;
+        await expect(readFile(join(workspace, staging, 'backup', 'old'), 'utf8')).resolves.toBe('OLD');
+        if (stage === 'partial_copy' || stage === 'copy_complete') await expect(readFile(join(workspace, staging, 'copy', 'a'), 'utf8')).resolves.toBe('A');
+        if (stage === 'partial_remove' || stage === 'after_publish' || stage === 'after_remove') {
+          await expect(readFile(join(workspace, 'dest', 'a'), 'utf8')).resolves.toBe('A');
+          await expect(readFile(join(workspace, 'dest', 'b'), 'utf8')).resolves.toBe('B');
+        }
+        if (stage === 'before_rename' || stage === 'partial_copy' || stage === 'copy_complete') await expect(readFile(join(workspace, 'source', 'b'), 'utf8')).resolves.toBe('B');
+        if (stage === 'after_rename' || stage === 'cleanup') await expect(readFile(join(workspace, 'dest', 'b'), 'utf8')).resolves.toBe('B');
+        await expect(tools[LIST_OPERATOR_WORKSPACE_FILES_TOOL]!.execute({})).rejects.toThrow(/manual inspection/u);
+      } finally { child.kill('SIGKILL'); }
+    }, 15000,
+  );
+
+  it.each(['journal_open', 'journal_partial', 'journal_complete', 'before_journal_unlink', 'after_journal_unlink'])(
+    'handles process termination at %s', async (stage) => {
+      const { spawn } = await import('node:child_process');
+      const { once } = await import('node:events');
+      const canonical = await realpath(workspace);
+      await writeFile(join(workspace, 'source'), 'SOURCE');
+      await writeFile(join(workspace, 'dest'), 'OLD');
+      const moduleUrl = new URL('../dist/operator-workspace-tools.js', import.meta.url).href;
+      const script = `
+        import { createOperatorWorkspaceFileTools } from ${JSON.stringify(moduleUrl)};
+        import { rename, cp, rm } from 'node:fs/promises';
+        const [root, stage] = process.argv.slice(1);
+        const fake = { rename, cp, rm, checkpoint: async (point) => {
+          if (point === stage) { console.log('ready'); setInterval(() => {}, 1000); await new Promise(() => {}); }
+        }};
+        await createOperatorWorkspaceFileTools(root, fake).move_operator_workspace_file.execute({ source: 'source', destination: 'dest', overwrite: true });
+      `;
+      const child = spawn(process.execPath, ['--input-type=module', '-e', script, canonical, stage], { stdio: ['ignore', 'pipe', 'pipe'] });
+      try {
+        await once(child.stdout, 'data');
+        child.kill('SIGKILL');
+        await once(child, 'exit');
+        const status = await tools[GET_OPERATOR_WORKSPACE_MOVE_STATUS_TOOL]!.execute({});
+        if (stage === 'journal_open' || stage === 'journal_partial') {
+          expect(status.structuredContent?.status).toBe('journal_unreadable');
+          await expect(readFile(join(workspace, 'source'), 'utf8')).resolves.toBe('SOURCE');
+          await expect(readFile(join(workspace, 'dest'), 'utf8')).resolves.toBe('OLD');
+        } else if (stage === 'after_journal_unlink') {
+          expect(status.structuredContent?.status).toBe('idle');
+          await expect(readFile(join(workspace, 'dest'), 'utf8')).resolves.toBe('SOURCE');
+        } else {
+          expect(status.structuredContent).toMatchObject({ status: 'inspection_required', source: 'source', destination: 'dest' });
+          if (stage === 'journal_complete') {
+            await expect(readFile(join(workspace, 'source'), 'utf8')).resolves.toBe('SOURCE');
+            await expect(readFile(join(workspace, 'dest'), 'utf8')).resolves.toBe('OLD');
+          } else await expect(readFile(join(workspace, 'dest'), 'utf8')).resolves.toBe('SOURCE');
+        }
+        if (stage !== 'after_journal_unlink') await expect(tools[LIST_OPERATOR_WORKSPACE_FILES_TOOL]!.execute({})).rejects.toThrow(/manual inspection/u);
+      } finally { child.kill('SIGKILL'); }
+    }, 15000,
+  );
+
+  it('preserves real watch pool updates while rejecting a move of its state', async () => {
+    const { createOperatorWatchPool } = await import('./operator-watch-pool.js');
+    const { createOperatorDispatchQueue } = await import('./operator-dispatch.js');
+    const pool = await createOperatorWatchPool({ userEnsembleRoot: root, profile: 'work', dispatchQueue: createOperatorDispatchQueue(), autoDiscoverSessions: false });
+    try {
+      await pool.registerRepository('example/repo', { scanIntervalMs: 60000, pollIntervalMs: 60000 });
+      const [update, move] = await Promise.allSettled([
+        pool.registerRepository('example/repo', { scanIntervalMs: 90000, pollIntervalMs: 60000 }),
+        tools[MOVE_OPERATOR_WORKSPACE_FILE_TOOL]!.execute({ source: 'watch', destination: 'archive' }),
+      ]);
+      expect(update.status).toBe('fulfilled');
+      expect(move.status).toBe('rejected');
+      const state = JSON.parse(await readFile(join(workspace, 'watch', 'repository-watch-state.json'), 'utf8'));
+      expect(state.watches['example/repo'].scanIntervalMs).toBe(90000);
+      await expect(lstat(join(workspace, 'archive'))).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally { pool.close(); }
+  });
+
+  it('protects active watch data from mutations through direct paths and aliases', async () => {
+    const watch = join(workspace, 'watch');
+    await mkdir(watch);
+    await writeFile(join(watch, 'watch-state.json'), 'before');
+    await writeFile(join(watch, 'watch-state-lock.sqlite'), 'lock');
+    await writeFile(join(workspace, 'note'), 'note');
+    await symlink(watch, join(workspace, 'alias'), 'dir');
+    await symlink(join(watch, 'watch-state.json'), join(workspace, 'state-alias'));
+    const move = tools[MOVE_OPERATOR_WORKSPACE_FILE_TOOL]!;
+    const write = tools[WRITE_OPERATOR_WORKSPACE_FILE_TOOL]!;
+    const del = tools[DELETE_OPERATOR_WORKSPACE_FILE_TOOL]!;
+    const update = writeFile(join(watch, 'watch-state.json'), 'updated by watch');
+    await expect(move.execute({ source: 'watch', destination: 'archive' })).rejects.toThrow(/watch directory/u);
+    await update;
+    for (const path of ['watch', 'watch/watch-state.json', 'alias/watch-state.json']) {
+      await expect(move.execute({ source: path, destination: 'archive' })).rejects.toThrow();
+      await expect(del.execute({ path })).rejects.toThrow(/watch directory/u);
+    }
+    for (const path of ['watch/watch-state.json', 'alias/watch-state.json', 'state-alias']) {
+      await expect(write.execute({ path, content: 'blocked' })).rejects.toThrow(/watch directory/u);
+    }
+    await expect(move.execute({ source: 'note', destination: 'alias/replaced', overwrite: true })).rejects.toThrow(/watch directory/u);
+    await expect(readFile(join(watch, 'watch-state.json'), 'utf8')).resolves.toBe('updated by watch');
+    await expect(readFile(join(watch, 'watch-state-lock.sqlite'), 'utf8')).resolves.toBe('lock');
+    await expect(tools[READ_OPERATOR_WORKSPACE_FILE_TOOL]!.execute({ path: 'watch/watch-state.json' })).resolves.toMatchObject({ structuredContent: { content: 'updated by watch' } });
+  });
+
   it('enforces list limit boundaries', async () => {
     const list = tools[LIST_OPERATOR_WORKSPACE_FILES_TOOL]!;
     for (const args of [{ maxDepth: 0 }, { maxDepth: 11 }, { maxEntries: 0 }, { maxEntries: 1001 }, { maxEntries: 1.5 }]) {

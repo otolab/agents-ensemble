@@ -131,6 +131,8 @@ export function createOperatorWorkspaceFileTools(
         if (args.overwrite !== undefined && typeof args.overwrite !== 'boolean') throw new WorkspaceError('overwrite must be a boolean.');
         const source = resolveWorkspaceFilePath(root, args.source);
         const destination = resolveWorkspaceFilePath(root, args.destination);
+        await protectWatch(root, source.absolutePath);
+        await protectWatch(root, destination.absolutePath);
         try {
           const sourceParent = await existingWorkspaceParent(root, source.parts.slice(0, -1));
           const sourceEntry = join(sourceParent, source.parts.at(-1)!);
@@ -139,13 +141,19 @@ export function createOperatorWorkspaceFileTools(
           if (!metadata.isFile() && !metadata.isDirectory()) throw new WorkspaceError('The requested workspace path is not a regular file or directory.');
           const sourcePath = await realpath(sourceEntry);
           assertWithinWorkspace(root, sourcePath);
+          await protectWatch(root, sourcePath);
           protectInstructions(root, sourcePath);
           const destinationParent = await ensureWorkspaceParent(root, destination.parts.slice(0, -1), metadata.isDirectory() ? sourcePath : undefined);
           const destinationPath = join(destinationParent, destination.parts.at(-1)!);
+          await protectWatch(root, destinationPath);
           protectInstructions(root, destinationPath);
           try {
             const destinationEntry = await lstat(destinationPath);
-            if (!destinationEntry.isSymbolicLink()) protectInstructions(root, await realpath(destinationPath));
+            if (!destinationEntry.isSymbolicLink()) {
+              const canonicalDestination = await realpath(destinationPath);
+              await protectWatch(root, canonicalDestination);
+              protectInstructions(root, canonicalDestination);
+            }
           } catch (error) { if (!isNodeError(error, 'ENOENT')) throw error; }
           if (sourcePath === destinationPath || (metadata.isDirectory() && isWithin(sourcePath, destinationPath))) {
             throw new WorkspaceError('A directory cannot be moved into itself, and source and destination must differ.');
@@ -163,9 +171,11 @@ export function createOperatorWorkspaceFileTools(
       execute: async (args) => {
         assertOnlyInputProperties(args, ['path']);
         const requested = resolveWorkspaceFilePath(root, args.path);
+        await protectWatch(root, requested.absolutePath);
         try {
           const parent = await existingWorkspaceParent(root, requested.parts.slice(0, -1));
           const target = join(parent, requested.parts.at(-1)!);
+          await protectWatch(root, target);
           protectInstructions(root, target);
           const metadata = await lstat(target);
           if (!metadata.isSymbolicLink()) protectInstructions(root, await realpath(target));
@@ -255,6 +265,7 @@ export function createOperatorWorkspaceFileTools(
       execute: async (args) => {
         assertOnlyInputProperties(args, ['path', 'content']);
         const requested = resolveWorkspaceFilePath(root, args.path);
+        await protectWatch(root, requested.absolutePath);
         if (typeof args.content !== 'string') {
           throw new WorkspaceError('content must be a string.');
         }
@@ -270,8 +281,10 @@ export function createOperatorWorkspaceFileTools(
           requested.parts.slice(0, -1),
         );
         const targetPath = join(parentPath, requested.parts.at(-1)!);
+        await protectWatch(root, targetPath);
         const canonicalTarget = await resolveOptionalTarget(root, targetPath);
         if (canonicalTarget) {
+          await protectWatch(root, canonicalTarget);
           const metadata = await stat(canonicalTarget);
           if (!metadata.isFile()) {
             throw new WorkspaceError('The requested workspace path is not a file.');
@@ -333,7 +346,9 @@ export function createOperatorWorkspaceFileTools(
   return tools;
 }
 
-type MoveFilesystem = Pick<typeof import('node:fs/promises'), 'rename' | 'cp' | 'rm'>;
+type MoveFilesystem = Pick<typeof import('node:fs/promises'), 'rename' | 'cp' | 'rm'> & {
+  checkpoint?: (stage: string) => Promise<void>;
+};
 const defaultMoveFilesystem: MoveFilesystem = { rename, cp, rm };
 
 function isWithin(parent: string, child: string): boolean {
@@ -385,7 +400,18 @@ async function moveWorkspaceEntry(root: string, source: string, destination: str
   const pathInWorkspace = (path: string) => relative(root, path).split(sep).join('/');
   const record = JSON.stringify({ version: 1, workspace: root, source: pathInWorkspace(source), destination: pathInWorkspace(destination), staging: pathInWorkspace(staging), overwrite });
   const handle = await open(journalPath, fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_WRONLY | NOFOLLOW, 0o600);
-  try { await handle.writeFile(record, 'utf8'); } finally { await handle.close(); }
+  try {
+    await fs.checkpoint?.('journal_open');
+    if (fs.checkpoint) {
+      const middle = Math.floor(record.length / 2);
+      await handle.writeFile(record.slice(0, middle), 'utf8');
+      await fs.checkpoint('journal_partial');
+      await handle.writeFile(record.slice(middle), 'utf8');
+    } else {
+      await handle.writeFile(record, 'utf8');
+    }
+    await fs.checkpoint?.('journal_complete');
+  } finally { await handle.close(); }
   try {
     await mkdir(staging, { mode: 0o700 });
     if (exists) await fs.rename(destination, backup);
@@ -401,7 +427,9 @@ async function moveWorkspaceEntry(root: string, source: string, destination: str
     }
     if (copied) await fs.rm(source, { recursive: true });
     await fs.rm(staging, { recursive: true, force: true });
+    await fs.checkpoint?.('before_journal_unlink');
     await unlink(journalPath);
+    await fs.checkpoint?.('after_journal_unlink');
   } catch {
     throw new WorkspaceError('Workspace move was interrupted or failed. Data was retained where possible; use get_operator_workspace_move_status and inspect manually.');
   }
@@ -418,6 +446,19 @@ async function existingWorkspaceParent(root: string, parts: string[]): Promise<s
   assertWithinWorkspace(root, parent);
   if (!(await stat(parent)).isDirectory()) throw new WorkspaceError('A workspace path component is not a directory.');
   return parent;
+}
+
+/** watch is owned by the running operator-agent, outside the file tool queue. */
+async function protectWatch(root: string, candidate: string): Promise<void> {
+  const relativePath = relative(root, candidate);
+  const firstPart = relativePath.split(sep)[0]?.toLowerCase();
+  if (firstPart === 'watch') throw new WorkspaceError('The operator watch directory is managed by the operator-agent and cannot be modified by workspace tools.');
+  try {
+    const canonicalWatch = await realpath(join(root, 'watch'));
+    if (isWithin(canonicalWatch, candidate)) throw new WorkspaceError('The operator watch directory is managed by the operator-agent and cannot be modified by workspace tools.');
+  } catch (error) {
+    if (!isNodeError(error, 'ENOENT')) throw safeOperationError(error);
+  }
 }
 
 function protectInstructions(root: string, path: string): void {
@@ -525,6 +566,7 @@ async function ensureWorkspaceParent(
   let current = root;
   for (const part of parts) {
     const candidate = join(current, part);
+    await protectWatch(root, candidate);
     if (forbidden && isWithin(forbidden, candidate)) throw new WorkspaceError('A directory cannot be moved into itself.');
     try {
       await lstat(candidate);
@@ -546,6 +588,7 @@ async function ensureWorkspaceParent(
       throw sanitizeFilesystemError(error);
     }
     assertWithinWorkspace(root, canonicalPath);
+    await protectWatch(root, canonicalPath);
     if (forbidden && isWithin(forbidden, canonicalPath)) throw new WorkspaceError('A directory cannot be moved into itself.');
     const metadata = await stat(canonicalPath);
     if (!metadata.isDirectory()) {
