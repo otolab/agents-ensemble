@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { tmpdir } from 'node:os';
@@ -29,6 +29,10 @@ async function waitForSignal<T>(signal: Promise<T>, label: string, timeoutMs = 2
   } finally {
     if (timer) clearTimeout(timer);
   }
+}
+
+async function removeFixtureIfSafe(root: string, preserve: boolean): Promise<void> {
+  if (!preserve) await rm(root, { recursive: true, force: true });
 }
 
 const tuiHarness = vi.hoisted(() => ({
@@ -109,11 +113,22 @@ vi.mock('./operator-agent-tui.js', () => ({
 describe('operator idle candidate dispatch run loop', () => {
   let repoRoot = '';
   let closeServers: Array<() => Promise<void>> = [];
+  let preserveFixture = false;
 
   afterEach(async () => {
-    for (const closeServer of closeServers) await closeServer();
+    const root = repoRoot;
+    const errors: string[] = [];
+    for (const closeServer of closeServers) {
+      try {
+        await waitForSignal(closeServer(), 'server close');
+      } catch (error) {
+        preserveFixture = true;
+        errors.push(String(error));
+      }
+    }
     closeServers = [];
-    await rm(repoRoot, { recursive: true, force: true });
+    if (pollHarness.pending.size > 0) preserveFixture = true;
+    await removeFixtureIfSafe(root, preserveFixture);
     repoRoot = '';
     tuiHarness.onSubmit = undefined;
     tuiHarness.readyResolvers = [];
@@ -121,9 +136,13 @@ describe('operator idle candidate dispatch run loop', () => {
     pollHarness.onRefreshStarted = undefined;
     pollHarness.onRefreshCompleted = undefined;
     vi.restoreAllMocks();
+    if (preserveFixture) {
+      preserveFixture = false;
+      throw new Error(`fixture preserved at ${root}; pending watch operations: ${pollHarness.pending.size}; ${errors.join('; ')}`);
+    }
   });
 
-  it.each(['normal', 'late', 'inflight', 'cleanup'] as const)(
+  it.each(['normal', 'late', 'inflight', 'cleanup', 'held-cleanup', 'timeout-cleanup'] as const)(
     'compares baseline and idle integration through runOperatorAgent: %s', async (scenario) => {
     repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-idle-run-loop-'));
     const userRoot = join(repoRoot, '.ensemble');
@@ -143,6 +162,7 @@ describe('operator idle candidate dispatch run loop', () => {
     let failGateRefresh = false;
     let refreshReadActive = false;
     let questionPollActive = false;
+    let extraPollBarrier: Promise<void> = Promise.resolve();
     let overlappingReads = 0;
     const questionServer = await startOpenQuestionControlServer({
       listOpenQuestions: () => currentQuestion ? [currentQuestion] : [],
@@ -163,6 +183,7 @@ describe('operator idle candidate dispatch run loop', () => {
           questionPollActive = true;
           signalBlockedQuestionPoll();
           await questionPollBarrier;
+          await extraPollBarrier;
         }
         return {
           sequence: observationSequence,
@@ -262,7 +283,7 @@ describe('operator idle candidate dispatch run loop', () => {
         | 'integrated-inflight'
         | 'integrated-inflight-late'
         | 'integrated-inflight-fail',
-      fault?: 'missing-refresh' | 'assertion',
+      fault?: 'missing-refresh' | 'assertion' | 'held-poll' | 'timeout-poll',
     ) => {
       tuiHarness.onSubmit = undefined;
       const configProfile = `smoke-${profile}${fault ? `-${fault}` : ''}`;
@@ -656,6 +677,11 @@ describe('operator idle candidate dispatch run loop', () => {
               ),
             ),
           ]);
+          if (fault === 'held-poll' || fault === 'timeout-poll') {
+            expect(questionPollActive).toBe(true);
+            expect(pollHarness.pending.size).toBeGreaterThan(0);
+            throw new Error('injected failure with poll held');
+          }
         }
         fakeNow = startAt + 10_000;
         gateReleased = true;
@@ -792,12 +818,15 @@ describe('operator idle candidate dispatch run loop', () => {
         tuiHarness.onSubmit?.('/exit');
         input.end();
         try {
-          await run.catch(() => {
-            // Preserve the original failure while still releasing the fixture.
-          });
-          while (pollHarness.pending.size > 0) {
-            await waitForSignal(Promise.allSettled([...pollHarness.pending]).then(() => {}), 'pending watch operations');
-          }
+          await waitForSignal(run.catch(() => {}), 'runner shutdown');
+          await waitForSignal((async () => {
+            while (pollHarness.pending.size > 0) {
+              await Promise.allSettled([...pollHarness.pending]);
+            }
+          })(), 'pending watch operations');
+        } catch (error) {
+          preserveFixture = true;
+          throw new Error(`cleanup failed; fixture preserved at ${repoRoot}; pending watch operations: ${pollHarness.pending.size}; ${String(error)}`);
         } finally {
           input.destroy();
           stdout.destroy();
@@ -956,7 +985,7 @@ describe('operator idle candidate dispatch run loop', () => {
           (report) => report.reportType === 'open_question',
         ),
       ).toHaveLength(1);
-    } else {
+    } else if (scenario === 'cleanup') {
       await expect(runProfile('integrated-inflight', 'assertion'))
         .rejects.toThrow('injected assertion failure');
       await expect(runProfile('integrated-inflight', 'missing-refresh'))
@@ -967,6 +996,34 @@ describe('operator idle candidate dispatch run loop', () => {
       ]);
       for (const closeServer of closeServers) await closeServer();
       closeServers = [];
+    } else if (scenario === 'held-cleanup') {
+      await expect(runProfile('integrated-inflight', 'held-poll'))
+        .rejects.toThrow('injected failure with poll held');
+      expect(pollHarness.pending.size).toBe(0);
+      expect(preserveFixture).toBe(false);
+      await runProfile('integrated');
+      for (const closeServer of closeServers) await waitForSignal(closeServer(), 'server close');
+      closeServers = [];
+      await removeFixtureIfSafe(repoRoot, preserveFixture);
+      await expect(access(repoRoot)).rejects.toThrow();
+    } else {
+      let releaseExtraPoll!: () => void;
+      extraPollBarrier = new Promise<void>((resolve) => { releaseExtraPoll = resolve; });
+      try {
+        await expect(runProfile('integrated-inflight', 'timeout-poll'))
+          .rejects.toThrow(`fixture preserved at ${repoRoot}`);
+        expect(preserveFixture).toBe(true);
+        expect(pollHarness.pending.size).toBeGreaterThan(0);
+        await removeFixtureIfSafe(repoRoot, preserveFixture);
+        await access(repoRoot);
+      } finally {
+        releaseExtraPoll();
+        await waitForSignal(Promise.allSettled([...pollHarness.pending]).then(() => {}), 'released test poll');
+      }
+      expect(pollHarness.pending.size).toBe(0);
+      preserveFixture = false;
+      extraPollBarrier = Promise.resolve();
+      await runProfile('integrated');
     }
   });
 });

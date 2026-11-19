@@ -47,6 +47,7 @@ import {
 } from './operator-agent-state.js';
 
 const watchPollHarness = vi.hoisted(() => ({
+  pending: new Set<Promise<unknown>>(),
   onCompleted: undefined as ((id: string, count: number) => void) | undefined,
   onAcknowledged: undefined as (() => void) | undefined,
 }));
@@ -57,9 +58,17 @@ vi.mock('./operator-watch-pool.js', async (importOriginal) => {
     ...actual,
     createOperatorWatchPool: async (...args: Parameters<typeof actual.createOperatorWatchPool>) => {
       const pool = await actual.createOperatorWatchPool(...args);
+      const track = <T>(operation: Promise<T>): Promise<T> => {
+        watchPollHarness.pending.add(operation);
+        void operation.then(
+          () => watchPollHarness.pending.delete(operation),
+          () => watchPollHarness.pending.delete(operation),
+        );
+        return operation;
+      };
       const pollOnce = pool.pollOnce.bind(pool);
       const polling = new Set<string>();
-      pool.pollOnce = async (id) => {
+      pool.pollOnce = (id) => track((async () => {
         if (polling.has(id)) return pollOnce(id);
         polling.add(id);
         try {
@@ -69,7 +78,7 @@ vi.mock('./operator-watch-pool.js', async (importOriginal) => {
         } finally {
           polling.delete(id);
         }
-      };
+      })());
       const acknowledge = pool.acknowledge.bind(pool);
       pool.acknowledge = async (...args) => {
         const result = await acknowledge(...args);
@@ -96,6 +105,7 @@ function nextWatchPoll(minimumReports = 0): Promise<void> {
 describe('runOperatorAgent', () => {
   let repoRoot = '';
   let closeServers: Array<() => Promise<void>> = [];
+  let preserveFixture = false;
   let originalModelEnv: string | undefined;
   let originalReasoningEnv: string | undefined;
   let originalProfileEnv: string | undefined;
@@ -209,7 +219,25 @@ describe('runOperatorAgent', () => {
   afterEach(async () => {
     watchPollHarness.onCompleted = undefined;
     watchPollHarness.onAcknowledged = undefined;
-    for (const close of closeServers) await close();
+    const closeErrors: string[] = [];
+    try {
+      await waitForNotification((async () => {
+        while (watchPollHarness.pending.size > 0) {
+          await Promise.allSettled([...watchPollHarness.pending]);
+        }
+      })(), 'pending watch polls', 5_000);
+    } catch (error) {
+      preserveFixture = true;
+      closeErrors.push(`${String(error)}; pending polls: ${watchPollHarness.pending.size}`);
+    }
+    for (const close of closeServers) {
+      try {
+        await waitForNotification(close(), 'server close', 2_000);
+      } catch (error) {
+        preserveFixture = true;
+        closeErrors.push(String(error));
+      }
+    }
     closeServers = [];
     if (originalModelEnv === undefined) {
       delete process.env.CONDUCTOR_MODEL_ID;
@@ -256,8 +284,12 @@ describe('runOperatorAgent', () => {
     } else {
       process.env.NO_COLOR = originalNoColorEnv;
     }
-    await rm(repoRoot, { recursive: true, force: true });
+    if (!preserveFixture) await rm(repoRoot, { recursive: true, force: true });
     vi.unstubAllEnvs();
+    if (preserveFixture) {
+      preserveFixture = false;
+      throw new Error(`fixture preserved at ${repoRoot}; ${closeErrors.join('; ')}`);
+    }
   });
 
   it('requires both terminal streams before loading config or starting an agent', async () => {
@@ -3263,7 +3295,7 @@ describe('runOperatorAgent', () => {
     }
   }, 30_000);
 
-  it.each(['normal', 'missing-output', 'missing-ack', 'assertion'] as const)(
+  it.each(['normal', 'missing-output', 'missing-ack', 'assertion', 'held-send'] as const)(
     'retains a cancelled watch report across restart and acknowledges it only after a completed retry: %s', async (scenario) => {
     let releaseInitialPoll!: () => void;
     const initialPollCompleted = new Promise<void>((resolve) => {
@@ -3301,6 +3333,10 @@ describe('runOperatorAgent', () => {
     const firstOutput = createOutput();
     let firstAgentOptions: ConductorAgentCreateOptions | undefined;
     const firstPrompts: string[] = [];
+    let releaseHeldSend!: () => void;
+    let signalHeldSend!: () => void;
+    const heldSend = new Promise<void>((resolve) => { releaseHeldSend = resolve; });
+    const heldSendStarted = new Promise<void>((resolve) => { signalHeldSend = resolve; });
     const firstAgent = createFakeAgent({
       send: async (prompt) => {
         firstPrompts.push(prompt);
@@ -3311,6 +3347,10 @@ describe('runOperatorAgent', () => {
             debounceMs: 0,
           });
           await initialPollCompleted;
+          if (scenario === 'held-send') {
+            signalHeldSend();
+            await heldSend;
+          }
           liveSnapshot = {
             sequence: 1,
             openQuestions: [
@@ -3364,23 +3404,30 @@ describe('runOperatorAgent', () => {
         expect(firstOutput.capturedText()).toContain('user>'),
       );
       firstInput.write('watch this session\n');
+      if (scenario === 'held-send') await waitForNotification(heldSendStarted, 'held send', 5_000);
       await waitForOutput(
         firstOutput,
-        scenario === 'missing-output' ? 'injected missing output' : 'send not completed (status=cancelled); watched reports retained for retry.',
-        scenario === 'missing-output' ? AbortSignal.timeout(100) : undefined,
+        scenario === 'missing-output' || scenario === 'held-send' ? 'injected missing output' : 'send not completed (status=cancelled); watched reports retained for retry.',
+        scenario === 'missing-output' || scenario === 'held-send' ? AbortSignal.timeout(100) : undefined,
       );
       firstInput.end();
-      await firstRun;
+      await waitForNotification(firstRun.then(() => {}), 'first runner shutdown', 5_000);
     } catch (error) {
-      if (scenario !== 'missing-output') throw error;
+      if (scenario !== 'missing-output' && scenario !== 'held-send') throw error;
       firstFailure = error;
     } finally {
       releaseInitialPoll();
+      releaseHeldSend();
       watchPollHarness.onCompleted = undefined;
       firstInput.end();
-      await firstRun.catch(() => {});
+      try {
+        await waitForNotification(firstRun.then(() => {}, () => {}), 'first runner shutdown', 5_000);
+      } catch (error) {
+        preserveFixture = true;
+        throw new Error(`fixture preserved at ${repoRoot}; ${String(error)}`);
+      }
     }
-    if (scenario === 'missing-output') {
+    if (scenario === 'missing-output' || scenario === 'held-send') {
       expect(firstFailure).toBeInstanceOf(Error);
       expect(firstOutput.listenerCount('data')).toBe(1);
       return;
@@ -3446,14 +3493,19 @@ describe('runOperatorAgent', () => {
       };
       expect(saved.pendingReports).toHaveLength(0);
       retryInput.write('/exit\n');
-      await retryRun;
+      await waitForNotification(retryRun.then(() => {}), 'retry runner shutdown', 5_000);
     } catch (error) {
       if (scenario === 'normal') throw error;
       retryFailure = error;
     } finally {
       watchPollHarness.onAcknowledged = undefined;
       retryInput.end();
-      await retryRun.catch(() => {});
+      try {
+        await waitForNotification(retryRun.then(() => {}, () => {}), 'retry runner shutdown', 5_000);
+      } catch (error) {
+        preserveFixture = true;
+        throw new Error(`fixture preserved at ${repoRoot}; ${String(error)}`);
+      }
     }
     if (scenario !== 'normal') expect(retryFailure).toBeInstanceOf(Error);
   }, 15_000);
