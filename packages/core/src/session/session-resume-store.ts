@@ -1,5 +1,6 @@
 import type { Dirent } from 'node:fs';
-import { chmod, mkdir, readdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import { chmod, mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import type { OpenQuestion } from '../escalation/open-question.js';
 import type { GitHubMonitorCursor } from '../github/github-monitor-cursor.js';
@@ -386,14 +387,18 @@ async function writeSessionResumeStoreFile(
   const directory = dirname(path);
   await mkdir(directory, { recursive: true, mode: 0o700 });
   await chmod(directory, 0o700);
-  const tempPath = `${path}.tmp`;
-  await writeFile(
-    tempPath,
-    `${JSON.stringify(value, null, 2)}\n`,
-    { encoding: 'utf8', mode: 0o600 },
-  );
-  await chmod(tempPath, 0o600);
-  await rename(tempPath, path);
+  const tempPath = `${path}.${randomUUID()}.tmp`;
+  try {
+    await writeFile(
+      tempPath,
+      `${JSON.stringify(value, null, 2)}\n`,
+      { encoding: 'utf8', mode: 0o600, flag: 'wx' },
+    );
+    await chmod(tempPath, 0o600);
+    await rename(tempPath, path);
+  } finally {
+    await rm(tempPath, { force: true });
+  }
 }
 
 /** @deprecated Use saveSessionResumeStore; supported for one release only. */
