@@ -112,6 +112,7 @@ export type {
 export type {
   ConductorAgent,
   ConductorAgentCreateOptions,
+  ConductorCompactionEvent,
   ConductorAgentFactory,
   ConductorSendResult,
 } from './conductor/conductor-agent.js';

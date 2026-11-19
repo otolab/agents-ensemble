@@ -135,6 +135,8 @@ operator-agent は Issue TUI と別の会話 runtime です。`~/.ensemble/opera
 
 TTY では各 `agent.send` の開始時に `[harness] operator: 処理中` を表示し、backend から tool 開始 callback が届いた場合は `[harness] operator: calling <tool>` を追加します。thinking / reasoning 本文や tool 引数は表示しません。`NO_COLOR` が有効な場合も活動表示は残し、色だけを抑制します。operator-agent は stdin と stdout の TTY を必要とするため、非 TTY では起動せず、活動表示も行いません。
 
+Pi backend では operator-agent 自身の compaction の開始理由と、成功・失敗・中断を活動ログに表示します。失敗時はエラー、成功時は取得できた圧縮前 token 数と、このプロセスでの成功回数を表示します。resume 時も回数は 0 から数えます。表示は入力や report の保留・配送を止めません。Cursor backend は compaction を観測できないため表示しません。表示がないことは compaction が起きていないことを意味しません。watch 対象の Issue session の compaction は表示対象外です。
+
 会話画面は Ink のシンプルな TUI です。会話と活動ログは上側に順に追記され、端末のスクロールバックからも確認できます。入力欄は画面下端に固定されます。入力中や operator-agent の応答中にログが増えても、下書きとカーソル位置は保たれます。端末サイズを変えると画面と端末のスクロールバックを消去し、この会話の活動ログを順に再描画して入力欄を下端に戻します。operator-agent 起動前の端末履歴は復元されません。終了時には raw mode とカーソル表示を復元します。終了時にサイズ変更が続く場合は最大1秒待ち、収束しなければ最後に取得したサイズで画面とスクロールバックを消去し、保持した会話・活動ログを順に再描画して端末を復元します。その後もサイズが変わると最終画面が折り返されることがあります。
 
 入力欄では `ensemble issue` と同じ textarea のキー操作を使います。`Enter` で送信し、`Shift+Enter` で改行を挿入します。複数行を貼り付けた場合は一つの下書きとして挿入され、貼り付けだけでは送信されません。送信本文の途中にある改行はそのまま agent に渡します。共通の編集キーは [TTY 入力ショートカット](cli-text-input-keybindings.md)を参照してください。

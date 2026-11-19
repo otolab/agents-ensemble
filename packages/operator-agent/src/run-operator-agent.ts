@@ -303,7 +303,8 @@ export async function runOperatorAgent(
       ttyChannels.harness(`watch warning: ${message}`),
   });
 
-  const agentOptions = {
+  let compactionCount = 0;
+  const agentOptions: ConductorAgentCreateOptions = {
     cwd: runtime.workspace,
     systemPrompt: runtime.systemPrompt,
     modelId: runtime.modelId,
@@ -326,6 +327,21 @@ export async function runOperatorAgent(
           piSkills: runtime.profile.pi?.skills !== false,
           piExtensions: false,
           operatorPiMcpMode: 'direct' as const,
+          onCompactionEvent: (event) => {
+            const reason = { manual: '手動', threshold: '自動', overflow: 'context 超過' }[event.reason];
+            if (event.type === 'start') {
+              ttyChannels.harness(`operator: compaction 開始（${reason}）`);
+            } else if (event.outcome === 'success') {
+              compactionCount += 1;
+              const tokens = event.tokensBefore === undefined ? '' : `、圧縮前 ${event.tokensBefore} tokens`;
+              ttyChannels.harness(`operator: compaction 成功（このプロセスで ${compactionCount} 回${tokens}）`);
+            } else if (event.outcome === 'aborted') {
+              ttyChannels.harness('operator: compaction 中断');
+            } else {
+              const error = escapeTerminalControlCharacters(event.errorMessage ?? '詳細不明');
+              ttyChannels.harness(`operator: compaction 失敗: ${error}`);
+            }
+          },
         }
       : {}),
     customTools: {

@@ -8,6 +8,10 @@ export interface ConductorPiResourceOptions {
   projectDir?: string;
 }
 
+export type ConductorCompactionEvent =
+  | { type: 'start'; reason: 'manual' | 'threshold' | 'overflow' }
+  | { type: 'end'; reason: 'manual' | 'threshold' | 'overflow'; outcome: 'success' | 'failed' | 'aborted'; tokensBefore?: number; errorMessage?: string };
+
 /** Backend-neutral options used when creating or resuming a conductor. */
 export interface ConductorAgentCreateOptions {
   cwd: string;
@@ -36,6 +40,8 @@ export interface ConductorAgentCreateOptions {
   operatorPiMcpMode?: 'direct';
   /** Pi backend only: called when `compaction_end` reports a successful compaction. */
   onContextCompaction?: () => void;
+  /** Pi backend only: observational compaction lifecycle notifications. */
+  onCompactionEvent?: (event: ConductorCompactionEvent) => void;
   apiKey?: string;
   /**
    * Resolved model override. `default` selects the backend default; omission
