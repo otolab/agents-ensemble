@@ -772,6 +772,28 @@ describe('operator dispatch batching', () => {
     }
   });
 
+  it('keeps a threshold batch deadline that passes after selection', () => {
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_000);
+    try {
+      const queue = createOperatorDispatchQueue({
+        ...DEFAULT_OPERATOR_DISPATCH_SCHEDULING,
+        pushThreshold: 10,
+        reportWeights: { session_state: 1, open_question: 10, conductor_message: 5, idle_candidate: 1 },
+      });
+      queue.enqueueReport({
+        type: 'report', reportType: 'open_question', reportId: 'question',
+        conductorAgentId: 'one', issueUrl: 'https://github.com/example/repo/issues/1', text: 'question',
+      }, 1);
+      expect(queue.selectBatch({ continuationConsumed: false }, 1_000)).toBeUndefined();
+      now.mockReturnValue(1_001);
+      expect(queue.nextReadyAt()).toBeUndefined();
+      expect(queue.nextReadyAt(1_000)).toBe(1_001);
+      expect(queue.selectBatch({ continuationConsumed: false }, 1_001)?.events).toHaveLength(1);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
   it('requeues an unconfirmed report with its stable report id', () => {
     const queue = createOperatorDispatchQueue();
     queue.enqueueReport(
