@@ -139,6 +139,8 @@ Pi backend では operator-agent 自身の compaction の開始理由と、成�
 
 会話画面は Ink のシンプルな TUI です。会話と活動ログは上側に順に追記され、端末のスクロールバックからも確認できます。入力欄は画面下端に固定されます。入力中や operator-agent の応答中にログが増えても、下書きとカーソル位置は保たれます。端末サイズを変えると画面と端末のスクロールバックを消去し、この会話の活動ログを順に再描画して入力欄を下端に戻します。operator-agent 起動前の端末履歴は復元されません。終了時には raw mode とカーソル表示を復元します。終了時にサイズ変更が続く場合は最大1秒待ち、収束しなければ最後に取得したサイズで画面とスクロールバックを消去し、保持した会話・活動ログを順に再描画して端末を復元します。その後もサイズが変わると最終画面が折り返されることがあります。
 
+Pi backend では provider 内部の再試行を `[pi retry]` として活動ログに表示します。開始時は試行回数・上限、待ち時間、エラー、終了時は成否と失敗時の最終エラーを示します。compaction などの要約生成の再試行は `[pi summarization retry]` で表示します。この終了通知には成否が含まれません。これらは harness が行う `[auth]` / `[transport]` の再接続とは別です。再試行が尽きて send が失敗した場合は、後続の再接続・recovery の案内も確認してください。Cursor backend では同等の通知を取得できず、表示されないことは再試行が起きていないことを意味しません。
+
 入力欄では `ensemble issue` と同じ textarea のキー操作を使います。`Enter` で送信し、`Shift+Enter` で改行を挿入します。複数行を貼り付けた場合は一つの下書きとして挿入され、貼り付けだけでは送信されません。送信本文の途中にある改行はそのまま agent に渡します。共通の編集キーは [TTY 入力ショートカット](cli-text-input-keybindings.md)を参照してください。
 
 `ensemble operator-agent` では、空でない通常の TTY 入力を受け取った時点で会話 hold を有効にし、登録済み session の自動 watch report が operator-agent の LLM に割り込まないようにします。watch pool の登録や polling は止めず、会話中に得た report は queue に保留します。user 入力は通常どおり最優先で dispatch され、明示的な `send_operator_message` もこの hold の対象外です。既に開始した `agent.send` は取り消しません。

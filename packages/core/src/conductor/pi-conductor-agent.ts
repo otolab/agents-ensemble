@@ -332,6 +332,7 @@ export class PiConductorAgent implements ConductorAgent {
     private readonly piPromptResources: boolean,
     private readonly onStreamText?: (text: string) => void,
     private readonly onContextCompaction?: () => void,
+    private readonly onRetryEvent?: ConductorAgentCreateOptions['onRetryEvent'],
     private readonly onCompactionEvent?: ConductorAgentCreateOptions['onCompactionEvent'],
   ) {
     this.unsubscribe = this.session.subscribe((event) => this.handleEvent(event));
@@ -621,6 +622,21 @@ export class PiConductorAgent implements ConductorAgent {
       event.errorMessage == null
     ) {
       this.onContextCompaction?.();
+      return;
+    }
+
+    if (
+      event.type === 'auto_retry_start' || event.type === 'auto_retry_end' ||
+      event.type === 'summarization_retry_scheduled' ||
+      event.type === 'summarization_retry_attempt_start' ||
+      event.type === 'summarization_retry_finished'
+    ) {
+      // Retry notifications are observational and must not disrupt the session.
+      try {
+        this.onRetryEvent?.(event);
+      } catch {
+        // Ignore observer failures.
+      }
       return;
     }
 
@@ -1143,6 +1159,7 @@ async function createPiConductorSession(
       piPromptResources,
       options.onStreamText,
       options.onContextCompaction,
+      options.onRetryEvent,
       options.onCompactionEvent,
     );
   } catch (error) {
