@@ -46,9 +46,66 @@ import {
   type OperatorAgentState,
 } from './operator-agent-state.js';
 
+const watchPollHarness = vi.hoisted(() => ({
+  pending: new Set<Promise<unknown>>(),
+  onCompleted: undefined as ((id: string, count: number) => void) | undefined,
+  onAcknowledged: undefined as (() => void) | undefined,
+}));
+
+vi.mock('./operator-watch-pool.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./operator-watch-pool.js')>();
+  return {
+    ...actual,
+    createOperatorWatchPool: async (...args: Parameters<typeof actual.createOperatorWatchPool>) => {
+      const pool = await actual.createOperatorWatchPool(...args);
+      const track = <T>(operation: Promise<T>): Promise<T> => {
+        watchPollHarness.pending.add(operation);
+        void operation.then(
+          () => watchPollHarness.pending.delete(operation),
+          () => watchPollHarness.pending.delete(operation),
+        );
+        return operation;
+      };
+      const pollOnce = pool.pollOnce.bind(pool);
+      const polling = new Set<string>();
+      pool.pollOnce = (id) => track((async () => {
+        if (polling.has(id)) return pollOnce(id);
+        polling.add(id);
+        try {
+          const count = await pollOnce(id);
+          watchPollHarness.onCompleted?.(id, count);
+          return count;
+        } finally {
+          polling.delete(id);
+        }
+      })());
+      const acknowledge = pool.acknowledge.bind(pool);
+      pool.acknowledge = async (...args) => {
+        const result = await acknowledge(...args);
+        if (args[0].some((event) => event.type === 'report' && event.reportId)) {
+          watchPollHarness.onAcknowledged?.();
+        }
+        return result;
+      };
+      return pool;
+    },
+  };
+});
+
+function nextWatchPoll(minimumReports = 0): Promise<void> {
+  return new Promise((resolve) => {
+    watchPollHarness.onCompleted = (id, count) => {
+      if (id !== 'conductor-one' || count < minimumReports) return;
+      watchPollHarness.onCompleted = undefined;
+      resolve();
+    };
+  });
+}
+
 describe('runOperatorAgent', () => {
   let repoRoot = '';
   let closeServers: Array<() => Promise<void>> = [];
+  let preserveFixture = false;
   let originalModelEnv: string | undefined;
   let originalReasoningEnv: string | undefined;
   let originalProfileEnv: string | undefined;
@@ -160,7 +217,27 @@ describe('runOperatorAgent', () => {
   });
 
   afterEach(async () => {
-    for (const close of closeServers) await close();
+    watchPollHarness.onCompleted = undefined;
+    watchPollHarness.onAcknowledged = undefined;
+    const closeErrors: string[] = [];
+    try {
+      await waitForNotification((async () => {
+        while (watchPollHarness.pending.size > 0) {
+          await Promise.allSettled([...watchPollHarness.pending]);
+        }
+      })(), 'pending watch polls', 5_000);
+    } catch (error) {
+      preserveFixture = true;
+      closeErrors.push(`${String(error)}; pending polls: ${watchPollHarness.pending.size}`);
+    }
+    for (const close of closeServers) {
+      try {
+        await waitForNotification(close(), 'server close', 2_000);
+      } catch (error) {
+        preserveFixture = true;
+        closeErrors.push(String(error));
+      }
+    }
     closeServers = [];
     if (originalModelEnv === undefined) {
       delete process.env.CONDUCTOR_MODEL_ID;
@@ -207,8 +284,12 @@ describe('runOperatorAgent', () => {
     } else {
       process.env.NO_COLOR = originalNoColorEnv;
     }
-    await rm(repoRoot, { recursive: true, force: true });
+    if (!preserveFixture) await rm(repoRoot, { recursive: true, force: true });
     vi.unstubAllEnvs();
+    if (preserveFixture) {
+      preserveFixture = false;
+      throw new Error(`fixture preserved at ${repoRoot}; ${closeErrors.join('; ')}`);
+    }
   });
 
   it('requires both terminal streams before loading config or starting an agent', async () => {
@@ -1192,15 +1273,24 @@ describe('runOperatorAgent', () => {
       await status('writing');
       callbacks!.onOutputPhase?.('thinking');
       await status('thinking');
+      const earlier = Date.now() - 60_000;
+      const clock = vi.spyOn(Date, 'now').mockReturnValueOnce(earlier);
       callbacks!.onToolCallStarted?.({ runId: 'run', tool: 'same', callId: 'a' });
-      await status('calling same (0s)');
-      await vi.waitFor(() => expect(screen()).toContain('calling same (1s)'), { timeout: 2500 });
+      clock.mockRestore();
+      await vi.waitFor(() => expect(screen()).toMatch(/calling same \([1-9]\d*s\)/), { timeout: 2500 });
+      const firstElapsed = Number(screen().match(/calling same \((\d+)s\)/)![1]);
       callbacks!.onToolCallStarted?.({ runId: 'run', tool: 'same', callId: 'b' });
-      await status('calling same (0s)');
+      await vi.waitFor(() => {
+        const elapsed = Number(screen().match(/calling same \((\d+)s\)/)?.[1] ?? Infinity);
+        expect(elapsed).toBeLessThan(firstElapsed);
+      });
       callbacks!.onOutputPhase?.('writing');
       expect(screen()).not.toContain('operator: writing');
       callbacks!.onToolCallStarted?.({ runId: 'run', tool: 'other', callId: 'c' });
-      await status('calling other (0s)');
+      await vi.waitFor(() => {
+        const elapsed = Number(screen().match(/calling other \((\d+)s\)/)?.[1] ?? Infinity);
+        expect(elapsed).toBeLessThan(firstElapsed);
+      });
       callbacks!.onToolCallCompleted?.({ runId: 'run', tool: 'same', callId: 'b' });
       expect(screen()).toContain('calling other');
       callbacks!.onToolCallCompleted?.({ runId: 'run', tool: 'other', callId: 'c' });
@@ -1886,16 +1976,15 @@ describe('runOperatorAgent', () => {
       await vi.waitFor(() =>
         expect(output.capturedText()).toContain('user>'),
       );
+      const baselinePoll = nextWatchPoll();
       input.write('summarize the live update\n');
       await userStarted;
-      await vi.waitFor(async () => {
-        const state = JSON.parse(
-          await readFile(baseWatchStatePath(repoRoot), 'utf8'),
-        ) as {
-          cursors: Record<string, { sequence: number }>;
-        };
-        expect(state.cursors['conductor-one']?.sequence).toBe(0);
-      });
+      await baselinePoll;
+      const baselineState = JSON.parse(await readFile(baseWatchStatePath(repoRoot), 'utf8')) as {
+        cursors: Record<string, { sequence: number }>;
+      };
+      expect(baselineState.cursors['conductor-one']?.sequence).toBe(0);
+      const reportPoll = nextWatchPoll(1);
 
       liveSnapshot = {
         sequence: 1,
@@ -1910,23 +1999,22 @@ describe('runOperatorAgent', () => {
           },
         ],
       };
-      await vi.waitFor(async () => {
-        const state = JSON.parse(
-          await readFile(baseWatchStatePath(repoRoot), 'utf8'),
-        ) as {
-          cursors: Record<string, { sequence: number }>;
-        };
-        expect(state.cursors['conductor-one']?.sequence).toBe(1);
-        const holdState =
-          await agentOptions!.customTools!.set_report_hold!.execute({
-            hold: false,
-          });
-        expect(holdState.structuredContent).toMatchObject({
-          conversationHold: true,
-          reportHold: false,
-          effectiveHold: true,
-          heldEventCount: 1,
+      await reportPoll;
+      const state = JSON.parse(
+        await readFile(baseWatchStatePath(repoRoot), 'utf8'),
+      ) as {
+        cursors: Record<string, { sequence: number }>;
+      };
+      expect(state.cursors['conductor-one']?.sequence).toBe(1);
+      const holdState =
+        await agentOptions!.customTools!.set_report_hold!.execute({
+          hold: false,
         });
+      expect(holdState.structuredContent).toMatchObject({
+        conversationHold: true,
+        reportHold: false,
+        effectiveHold: true,
+        heldEventCount: 1,
       });
 
       // The event enters through Pi's session listener while the report is held.
@@ -2046,16 +2134,15 @@ describe('runOperatorAgent', () => {
       await vi.waitFor(() =>
         expect(output.capturedText()).toContain('user>'),
       );
+      const baselinePoll = nextWatchPoll();
       input.write('start the discussion\n');
       await firstStarted;
-      await vi.waitFor(async () => {
-        const state = JSON.parse(
-          await readFile(baseWatchStatePath(repoRoot), 'utf8'),
-        ) as {
-          cursors: Record<string, { sequence: number }>;
-        };
-        expect(state.cursors['conductor-one']?.sequence).toBe(0);
-      });
+      await baselinePoll;
+      const baselineState = JSON.parse(await readFile(baseWatchStatePath(repoRoot), 'utf8')) as {
+        cursors: Record<string, { sequence: number }>;
+      };
+      expect(baselineState.cursors['conductor-one']?.sequence).toBe(0);
+      const reportPoll = nextWatchPoll(1);
       liveSnapshot = {
         sequence: 1,
         openQuestions: [
@@ -2069,17 +2156,16 @@ describe('runOperatorAgent', () => {
           },
         ],
       };
-      await vi.waitFor(async () => {
-        const result =
-          await agentOptions!.customTools!.set_report_hold!.execute({
-            hold: true,
-          });
-        expect(result.structuredContent).toMatchObject({
-          conversationHold: true,
-          reportHold: true,
-          effectiveHold: true,
-          heldEventCount: 1,
+      await reportPoll;
+      const result =
+        await agentOptions!.customTools!.set_report_hold!.execute({
+          hold: true,
         });
+      expect(result.structuredContent).toMatchObject({
+        conversationHold: true,
+        reportHold: true,
+        effectiveHold: true,
+        heldEventCount: 1,
       });
 
       input.write('/resume-watch\n');
@@ -2129,43 +2215,41 @@ describe('runOperatorAgent', () => {
     let agentOptions: ConductorAgentCreateOptions | undefined;
     const fakeAgent = createFakeAgent({
       send: async () => {
+        const baselinePoll = nextWatchPoll();
         await agentOptions!.customTools!.set_report_hold!.execute({ hold: true });
         await agentOptions!.customTools!.register_session_watch!.execute({
           conductorAgentId: 'conductor-one',
           pollIntervalMs: 250,
           debounceMs: 0,
         });
-        setTimeout(() => {
-          void (async () => {
-            const questionPath = resolveEnsemblePaths({ repoRoot })
-              .canonicalOpenQuestionsPath(
-                'https://github.com/example/project/issues/12',
-                'conductor-one',
-              );
-            await mkdir(dirname(questionPath), { recursive: true });
-            await writeFile(
-              questionPath,
-              [
-                'version: 1',
-                'sequence: 2',
-                'openQuestions:',
-                '  - id: inq-1',
-                '    question: "Approve this operation?"',
-                '    responseType: yes_no',
-                '    source: conductor',
-                '    status: open',
-                '    askedAt: 1',
-                '  - id: inq-2',
-                '    question: "New question while offline?"',
-                '    responseType: text',
-                '    source: conductor',
-                '    status: open',
-                '    askedAt: 2',
-                '',
-              ].join('\n'),
-            );
-          })();
-        }, 350);
+        await baselinePoll;
+        const questionPath = resolveEnsemblePaths({ repoRoot })
+          .canonicalOpenQuestionsPath(
+            'https://github.com/example/project/issues/12',
+            'conductor-one',
+          );
+        await mkdir(dirname(questionPath), { recursive: true });
+        await writeFile(
+          questionPath,
+          [
+            'version: 1',
+            'sequence: 2',
+            'openQuestions:',
+            '  - id: inq-1',
+            '    question: "Approve this operation?"',
+            '    responseType: yes_no',
+            '    source: conductor',
+            '    status: open',
+            '    askedAt: 1',
+            '  - id: inq-2',
+            '    question: "New question while offline?"',
+            '    responseType: text',
+            '    source: conductor',
+            '    status: open',
+            '    askedAt: 2',
+            '',
+          ].join('\n'),
+        );
         return { runId: 'run-1', status: 'completed', result: 'watch started' };
       },
     });
@@ -2188,7 +2272,8 @@ describe('runOperatorAgent', () => {
       expect(output.capturedText()).toContain('user>'),
     );
     input.write('監視を開始\n');
-    setTimeout(() => input.write('/exit\n'), 750);
+    await waitForOutput(output, '監視報告: 保留（理由: 手動、保留件数: 1 件）');
+    input.write('/exit\n');
     await run;
 
     expect(output.capturedText()).toContain(
@@ -2204,6 +2289,11 @@ describe('runOperatorAgent', () => {
       sendCount: number;
       dispatchSource: string;
     }> = [];
+    const initialPollCompleted = new Promise<void>((resolve) => {
+      watchPollHarness.onCompleted = (id) => {
+        if (id === 'conductor-one') resolve();
+      };
+    });
     let liveSnapshot: SessionObservationSnapshot = {
       sequence: 0,
       openQuestions: [],
@@ -2233,9 +2323,12 @@ describe('runOperatorAgent', () => {
     const output = createOutput();
     let agentOptions: ConductorAgentCreateOptions | undefined;
     const sentPrompts: string[] = [];
+    let signalReportSent!: () => void;
+    const reportSent = new Promise<void>((resolve) => { signalReportSent = resolve; });
     const fakeAgent = createFakeAgent({
       send: async (prompt) => {
         sentPrompts.push(prompt);
+        if (sentPrompts.length === 2) signalReportSent();
         if (sentPrompts.length === 1) {
           await agentOptions!.customTools!.register_session_watch!.execute({
             conductorAgentId: 'conductor-one',
@@ -2246,40 +2339,39 @@ describe('runOperatorAgent', () => {
             conductorAgentId: 'conductor-one',
             messageDebounceMs: 5_000,
           });
-          setTimeout(() => {
-            liveSnapshot = {
-              sequence: 2,
-              openQuestions: [
-                {
-                  id: 'inq-2',
-                  question: 'Review the implementation?',
-                  responseType: 'text',
-                  source: 'conductor',
-                  status: 'open',
-                  askedAt: 2,
-                },
-                {
-                  id: 'inq-3',
-                  question: 'Confirm the test result?',
-                  responseType: 'yes_no',
-                  source: 'conductor',
-                  status: 'open',
-                  askedAt: 3,
-                },
-              ],
-              sessionState: {
-                current: { statusLine: 'レビュー確認済み', reportedAt: 4 },
-                history: [],
+          await initialPollCompleted;
+          liveSnapshot = {
+            sequence: 2,
+            openQuestions: [
+              {
+                id: 'inq-2',
+                question: 'Review the implementation?',
+                responseType: 'text',
+                source: 'conductor',
+                status: 'open',
+                askedAt: 2,
               },
-            };
-            messages = [1, 2].map((sendCount) => ({
-              text: `conductor reply ${sendCount}`,
-              inbound: `operator message ${sendCount}`,
-              at: 1_700_000_000_000 + sendCount,
-              sendCount,
-              dispatchSource: 'operator',
-            }));
-          }, 350);
+              {
+                id: 'inq-3',
+                question: 'Confirm the test result?',
+                responseType: 'yes_no',
+                source: 'conductor',
+                status: 'open',
+                askedAt: 3,
+              },
+            ],
+            sessionState: {
+              current: { statusLine: 'レビュー確認済み', reportedAt: 4 },
+              history: [],
+            },
+          };
+          messages = [1, 2].map((sendCount) => ({
+            text: `conductor reply ${sendCount}`,
+            inbound: `operator message ${sendCount}`,
+            at: 1_700_000_000_000 + sendCount,
+            sendCount,
+            dispatchSource: 'operator',
+          }));
         }
         return {
           runId: `run-${sentPrompts.length}`,
@@ -2308,10 +2400,7 @@ describe('runOperatorAgent', () => {
         expect(output.capturedText()).toContain('user>'),
       );
       input.write('start watching\n');
-      await vi.waitFor(
-        () => expect(sentPrompts).toHaveLength(2),
-        { timeout: 15_000, interval: 50 },
-      );
+      await reportSent;
       input.write('/exit\n');
       await run;
     } finally {
@@ -2364,6 +2453,9 @@ describe('runOperatorAgent', () => {
         return { runId: 'request-test', status: 'finished', result: 'done' };
       },
     });
+    const reportAcknowledged = new Promise<void>((resolve) => {
+      watchPollHarness.onAcknowledged = resolve;
+    });
     const run = runOperatorAgent({ repoRoot, newSession: true }, {
       stdin: input,
       stdout: output,
@@ -2375,12 +2467,11 @@ describe('runOperatorAgent', () => {
     try {
       await vi.waitFor(() => expect(output.capturedText()).toContain('user>'));
       input.write('request the pending report\n');
-      await vi.waitFor(() => expect(prompts).toHaveLength(2));
+      await reportAcknowledged;
+      expect(prompts).toHaveLength(2);
       expect(prompts[1]).toContain('requested candidate');
-      await vi.waitFor(async () => {
-        const saved = JSON.parse(await readFile(baseWatchStatePath(repoRoot), 'utf8')) as { pendingReports: unknown[] };
-        expect(saved.pendingReports).toHaveLength(0);
-      });
+      const saved = JSON.parse(await readFile(baseWatchStatePath(repoRoot), 'utf8')) as { pendingReports: unknown[] };
+      expect(saved.pendingReports).toHaveLength(0);
     } finally {
       input.end();
       await run;
@@ -2429,6 +2520,10 @@ describe('runOperatorAgent', () => {
         return { runId: 'overlapping-request', status: 'finished', result: 'done' };
       },
     });
+    let acknowledgements = 0;
+    const reportsAcknowledged = new Promise<void>((resolve) => {
+      watchPollHarness.onAcknowledged = () => { if (++acknowledgements === 2) resolve(); };
+    });
     const run = runOperatorAgent({ repoRoot, newSession: true }, {
       stdin: input, stdout: output,
       agentFactory: { create: async (value) => { options = value; return agent; }, resume: async () => agent },
@@ -2447,10 +2542,9 @@ describe('runOperatorAgent', () => {
       expect(prompts[1]).toContain('first requested report');
       expect(prompts[1]).not.toContain('later requested report');
       expect(prompts[2]).toContain('later requested report');
-      await vi.waitFor(async () => {
-        const state = JSON.parse(await readFile(baseWatchStatePath(repoRoot), 'utf8')) as { pendingReports: unknown[] };
-        expect(state.pendingReports).toHaveLength(0);
-      });
+      await reportsAcknowledged;
+      const state = JSON.parse(await readFile(baseWatchStatePath(repoRoot), 'utf8')) as { pendingReports: unknown[] };
+      expect(state.pendingReports).toHaveLength(0);
     } finally {
       if (lock) { lock.exec('ROLLBACK'); lock.close(); }
       peer.close();
@@ -2513,17 +2607,19 @@ describe('runOperatorAgent', () => {
         return { runId: 'retry', status: 'finished', result: 'done' };
       },
     });
+    const retryAcknowledged = new Promise<void>((resolve) => {
+      watchPollHarness.onAcknowledged = resolve;
+    });
     const resumed = runOperatorAgent({ repoRoot }, {
       stdin: resumedInput, stdout: resumedOutput,
       agentFactory: { create: async () => resumedAgent, resume: async () => resumedAgent },
     });
     try {
-      await vi.waitFor(() => expect(resumedPrompts).toHaveLength(1), { timeout: 8_000 });
+      await retryAcknowledged;
+      expect(resumedPrompts).toHaveLength(1);
       expect(resumedPrompts[0]).toBe(frozen.frozenPayload);
-      await vi.waitFor(async () => {
-        const state = JSON.parse(await readFile(baseWatchStatePath(repoRoot), 'utf8')) as { pendingReports: unknown[] };
-        expect(state.pendingReports).toHaveLength(0);
-      });
+      const state = JSON.parse(await readFile(baseWatchStatePath(repoRoot), 'utf8')) as { pendingReports: unknown[] };
+      expect(state.pendingReports).toHaveLength(0);
     } finally {
       resumedInput.end();
       await resumed;
@@ -3195,7 +3291,15 @@ describe('runOperatorAgent', () => {
     }
   }, 30_000);
 
-  it('retains a cancelled watch report across restart and acknowledges it only after a completed retry', async () => {
+  it.each(['normal', 'missing-output', 'missing-ack', 'assertion', 'held-send'] as const)(
+    'retains a cancelled watch report across restart and acknowledges it only after a completed retry: %s', async (scenario) => {
+    let releaseInitialPoll!: () => void;
+    const initialPollCompleted = new Promise<void>((resolve) => {
+      releaseInitialPoll = resolve;
+      watchPollHarness.onCompleted = (id) => {
+        if (id === 'conductor-one') resolve();
+      };
+    });
     let liveSnapshot: SessionObservationSnapshot = {
       sequence: 0,
       openQuestions: [],
@@ -3225,6 +3329,10 @@ describe('runOperatorAgent', () => {
     const firstOutput = createOutput();
     let firstAgentOptions: ConductorAgentCreateOptions | undefined;
     const firstPrompts: string[] = [];
+    let releaseHeldSend!: () => void;
+    let signalHeldSend!: () => void;
+    const heldSend = new Promise<void>((resolve) => { releaseHeldSend = resolve; });
+    const heldSendStarted = new Promise<void>((resolve) => { signalHeldSend = resolve; });
     const firstAgent = createFakeAgent({
       send: async (prompt) => {
         firstPrompts.push(prompt);
@@ -3234,21 +3342,24 @@ describe('runOperatorAgent', () => {
             pollIntervalMs: 250,
             debounceMs: 0,
           });
-          setTimeout(() => {
-            liveSnapshot = {
-              sequence: 1,
-              openQuestions: [
-                {
-                  id: 'inq-cancelled',
-                  question: 'Should this report be retried?',
-                  responseType: 'text',
-                  source: 'conductor',
-                  status: 'open',
-                  askedAt: 10,
-                },
-              ],
-            };
-          }, 350);
+          await initialPollCompleted;
+          if (scenario === 'held-send') {
+            signalHeldSend();
+            await heldSend;
+          }
+          liveSnapshot = {
+            sequence: 1,
+            openQuestions: [
+              {
+                id: 'inq-cancelled',
+                question: 'Should this report be retried?',
+                responseType: 'text',
+                source: 'conductor',
+                status: 'open',
+                askedAt: 10,
+              },
+            ],
+          };
           return {
             runId: 'first-user-send',
             status: 'completed',
@@ -3283,18 +3394,40 @@ describe('runOperatorAgent', () => {
       },
     );
 
-    await vi.waitFor(() =>
-      expect(firstOutput.capturedText()).toContain('user>'),
-    );
-    firstInput.write('watch this session\n');
-    await vi.waitFor(() => expect(firstPrompts).toHaveLength(2));
-    await vi.waitFor(() =>
-      expect(normalizeTtyText(firstOutput.capturedText())).toContain(
-        'send not completed (status=cancelled); watched reports retained for retry.',
-      ),
-    );
-    firstInput.end();
-    await firstRun;
+    let firstFailure: unknown;
+    try {
+      await vi.waitFor(() =>
+        expect(firstOutput.capturedText()).toContain('user>'),
+      );
+      firstInput.write('watch this session\n');
+      if (scenario === 'held-send') await waitForNotification(heldSendStarted, 'held send', 5_000);
+      await waitForOutput(
+        firstOutput,
+        scenario === 'missing-output' || scenario === 'held-send' ? 'injected missing output' : 'send not completed (status=cancelled); watched reports retained for retry.',
+        scenario === 'missing-output' || scenario === 'held-send' ? AbortSignal.timeout(100) : undefined,
+      );
+      firstInput.end();
+      await waitForNotification(firstRun.then(() => {}), 'first runner shutdown', 5_000);
+    } catch (error) {
+      if (scenario !== 'missing-output' && scenario !== 'held-send') throw error;
+      firstFailure = error;
+    } finally {
+      releaseInitialPoll();
+      releaseHeldSend();
+      watchPollHarness.onCompleted = undefined;
+      firstInput.end();
+      try {
+        await waitForNotification(firstRun.then(() => {}, () => {}), 'first runner shutdown', 5_000);
+      } catch (error) {
+        preserveFixture = true;
+        throw new Error(`fixture preserved at ${repoRoot}; ${String(error)}`);
+      }
+    }
+    if (scenario === 'missing-output' || scenario === 'held-send') {
+      expect(firstFailure).toBeInstanceOf(Error);
+      expect(firstOutput.listenerCount('data')).toBe(1);
+      return;
+    }
 
     const afterCancelledSend = JSON.parse(
       await readFile(statePath, 'utf8'),
@@ -3323,6 +3456,9 @@ describe('runOperatorAgent', () => {
         };
       },
     });
+    const retryAcknowledged = new Promise<void>((resolve) => {
+      watchPollHarness.onAcknowledged = resolve;
+    });
     const retryRun = runOperatorAgent(
       { repoRoot },
       {
@@ -3337,19 +3473,37 @@ describe('runOperatorAgent', () => {
       },
     );
 
-    await vi.waitFor(
-      () => expect(retryPrompts).toHaveLength(1),
-      { timeout: 8_000, interval: 50 },
-    );
-    expect(retryPrompts[0]).toContain('Should this report be retried?');
-    await vi.waitFor(async () => {
+    let retryFailure: unknown;
+    try {
+      if (scenario === 'missing-ack') {
+        await waitForNotification(new Promise<void>(() => {}), 'retry acknowledgement', 100);
+      } else if (scenario === 'assertion') {
+        expect(false, 'injected retry assertion failure').toBe(true);
+      } else {
+        await waitForNotification(retryAcknowledged, 'retry acknowledgement', 8_000);
+      }
+      expect(retryPrompts).toHaveLength(1);
+      expect(retryPrompts[0]).toContain('Should this report be retried?');
       const saved = JSON.parse(await readFile(statePath, 'utf8')) as {
         pendingReports: Array<{ reportId: string }>;
       };
       expect(saved.pendingReports).toHaveLength(0);
-    });
-    retryInput.write('/exit\n');
-    await retryRun;
+      retryInput.write('/exit\n');
+      await waitForNotification(retryRun.then(() => {}), 'retry runner shutdown', 5_000);
+    } catch (error) {
+      if (scenario === 'normal') throw error;
+      retryFailure = error;
+    } finally {
+      watchPollHarness.onAcknowledged = undefined;
+      retryInput.end();
+      try {
+        await waitForNotification(retryRun.then(() => {}, () => {}), 'retry runner shutdown', 5_000);
+      } catch (error) {
+        preserveFixture = true;
+        throw new Error(`fixture preserved at ${repoRoot}; ${String(error)}`);
+      }
+    }
+    if (scenario !== 'normal') expect(retryFailure).toBeInstanceOf(Error);
   }, 15_000);
 
   it('keeps the TTY transcript free of ANSI escapes when NO_COLOR is set', async () => {
@@ -3743,15 +3897,18 @@ describe('runOperatorAgent', () => {
     const sentPrompts: string[] = [];
     let agentOptions: ConductorAgentCreateOptions | undefined;
     const oldClose = vi.fn().mockResolvedValue(undefined);
+    let reportPoll!: Promise<void>;
     const firstSend = vi.fn(async (prompt: string) => {
+      const baselinePoll = nextWatchPoll();
       sentPrompts.push(prompt);
       await agentOptions!.customTools!.register_session_watch!.execute({
         conductorAgentId: 'conductor-one',
         pollIntervalMs: 250,
         debounceMs: 0,
       });
-      setTimeout(() => {
-        liveSnapshot = {
+      await baselinePoll;
+      reportPoll = nextWatchPoll(1);
+      liveSnapshot = {
           sequence: 1,
           openQuestions: [
             {
@@ -3763,8 +3920,7 @@ describe('runOperatorAgent', () => {
               askedAt: 1,
             },
           ],
-        };
-      }, 350);
+      };
       return authFailure;
     });
     const resumedSend = vi.fn(async (prompt: string) => {
@@ -3823,12 +3979,11 @@ describe('runOperatorAgent', () => {
 
       input.write(`${followupInput}\n`);
       const watchStatePath = baseWatchStatePath(repoRoot);
-      await vi.waitFor(async () => {
-        const saved = JSON.parse(
-          await readFile(watchStatePath, 'utf8'),
-        ) as { pendingReports: Array<{ reportId: string }> };
-        expect(saved.pendingReports).toHaveLength(1);
-      });
+      await reportPoll;
+      const heldState = JSON.parse(
+        await readFile(watchStatePath, 'utf8'),
+      ) as { pendingReports: Array<{ reportId: string }> };
+      expect(heldState.pendingReports).toHaveLength(1);
       expect(firstSend).toHaveBeenCalledOnce();
       expect(resumedSend).not.toHaveBeenCalled();
       rejectAutomaticResume(new Error('automatic resume unavailable'));
@@ -3856,8 +4011,12 @@ describe('runOperatorAgent', () => {
       });
       expect(resumedSend).not.toHaveBeenCalled();
 
+      const reportAcknowledged = new Promise<void>((resolve) => {
+        watchPollHarness.onAcknowledged = resolve;
+      });
       input.write('/recovery continue\n');
-      await vi.waitFor(() => expect(resumedSend).toHaveBeenCalledTimes(2));
+      await reportAcknowledged;
+      expect(resumedSend).toHaveBeenCalledTimes(2);
       expect(sentPrompts).toHaveLength(3);
       expect(sentPrompts[1]).toContain(
         'agents-ensemble の operator ロール',
@@ -3871,12 +4030,10 @@ describe('runOperatorAgent', () => {
       expect(sentPrompts[2]).not.toContain(
         'agents-ensemble の operator ロール',
       );
-      await vi.waitFor(async () => {
-        const saved = JSON.parse(
-          await readFile(watchStatePath, 'utf8'),
-        ) as { pendingReports: Array<{ reportId: string }> };
-        expect(saved.pendingReports).toHaveLength(0);
-      });
+      const saved = JSON.parse(
+        await readFile(watchStatePath, 'utf8'),
+      ) as { pendingReports: Array<{ reportId: string }> };
+      expect(saved.pendingReports).toHaveLength(0);
 
       input.write('/exit\n');
       await run;
@@ -4854,6 +5011,46 @@ function normalizeTtyText(text: string): string {
     .replace(/\u001b\[[0-?]*[ -/]*[@-~]/gu, ' ')
     .replace(/\s+/gu, ' ')
     .trim();
+}
+
+async function waitForNotification(signal: Promise<void>, label: string, timeoutMs: number): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      signal,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} did not arrive`)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+function waitForOutput(
+  output: ReturnType<typeof createOutput>,
+  text: string,
+  signal: AbortSignal = AbortSignal.timeout(5_000),
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const cleanup = () => {
+      output.off('data', check);
+      signal.removeEventListener('abort', abort);
+    };
+    const abort = () => {
+      cleanup();
+      reject(new Error(`output did not contain: ${text}`));
+    };
+    const check = () => {
+      if (!normalizeTtyText(output.capturedText()).includes(text)) return;
+      cleanup();
+      resolve();
+    };
+    output.on('data', check);
+    signal.addEventListener('abort', abort, { once: true });
+    if (signal.aborted) return abort();
+    check();
+  });
 }
 
 function createOutput(
