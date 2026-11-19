@@ -663,7 +663,10 @@ describe('runConductorSession resume / shutdown', () => {
       await tools!.report_session_state!.execute({ statusLine: '作業状況を確認中' });
       pool = await createOperatorWatchPool({ userEnsembleRoot: userRoot, dispatchQueue: createOperatorDispatchQueue() });
       await pool.register('agent-test', { pollIntervalMs: 60_000, debounceMs: 0 });
-      await pool.pollOnce('agent-test');
+      await vi.waitFor(async () => {
+        await pool!.pollOnce('agent-test');
+        expect(pool!.listIdleCandidateObservations()).toHaveLength(1);
+      });
       const watchList = createListOperatorSessionsTool({ userEnsembleRoot: userRoot }, (id) => pool!.getLiveStatus(id));
       const watched = JSON.parse((await watchList.execute({ includeGithub: false, workStatus: 'waiting' })).content[0]!.text);
       expect(watched.sessions).toMatchObject([{ workStatus: { status: 'waiting', source: 'uds', observedAt: pool.getLiveStatus('agent-test')!.checkedAt } }]);
@@ -3241,6 +3244,7 @@ describe('runConductorSession resume / shutdown', () => {
         });
 
         await vi.waitFor(() => expect(secondSend).toHaveBeenCalledOnce());
+        await secondSend.mock.results[0]!.value;
         const resumedPrompt = (
           factory.resume.mock.calls[1]![1] as ConductorAgentCreateOptions
         ).systemPrompt;
