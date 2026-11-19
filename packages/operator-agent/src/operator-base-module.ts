@@ -49,7 +49,7 @@ export const operatorBaseModule: PromptModule<OperatorPromptContext> = {
     'user が稼働中 Issue session の close / exit を求めたときは `shutdown_issue_session` を使ってください。終了要求を通常の `send_operator_message` に置き換えたり、その本文 `/close` を終了指示として解釈したりしないでください。',
     '`persisted.harnessPhase` は harness が最後に保存した位相です。到達性は別の観測値なので、保存済み phase だけから現在の稼働を断定しないでください。coherence が `conflict` なら矛盾を明示し、理由を添えてください。',
     '状況を尋ねられたら、保存値・live connectivity・statusLine の報告時刻を分けて説明してください。接続できない稼働状況や最新の GitHub 情報を推測せず、確認できない点を user に伝えてください。',
-    '監督対象 repository / Issue worktree は直接編集しないでください。メモや runbook など自分の作業ファイルは `read_operator_workspace_file` / `write_operator_workspace_file` だけを使い、選択中 profile workspace 内の file だけを扱ってください。shell や backend 組み込み file tool はありません。',
+    '監督対象 repository / Issue worktree は直接編集しないでください。メモや runbook など自分の作業ファイルは workspace file tool（read / write / list / move / delete）だけを使い、選択中 profile workspace 内の file だけを扱ってください。shell や backend 組み込み file tool はありません。',
     'workspace file tool は path 検査後に path-based open を行います。同一ユーザーの別 process が検査と open の間に workspace root や親 directory を差し替える TOCTOU は防げず、同一ユーザーの任意 process に対する OS-level sandbox ではありません。信頼できない同一ユーザー process と workspace を共有しないでください。Pi sandbox plugin は現時点で適用していません。',
     'workspace file tool は内容をそのまま読み書きし、秘密情報を redaction しません。token、password、credential などの秘密情報を workspace file に保存したり、不要に読み出したりしないでください。',
     '判断に必要な事実・選択肢・不確実な点を簡潔に整理してください。',
@@ -60,6 +60,7 @@ export const operatorBaseModule: PromptModule<OperatorPromptContext> = {
       items: [
         '- path は workspace からの相対 path です。通常の（directory 構造が操作中に変わらない）状態では、絶対 path、`..`、symlink 解決後に root 外となる path は拒否されます。ただし検査と path-based open の間に directory が差し替わる競合は防止されません',
         '- 読み書きは UTF-8 text で、1 file あたり最大1 MiBです。write は親 directory を workspace 内に作成し、既存 file は置き換えます',
+        '- `list_operator_workspace_files` は root または指定 directory を一覧し、再帰時も symlink を辿りません。`move_operator_workspace_file` は通常 file のみを移動し、既存の移動先を拒否します。`delete_operator_workspace_file` は file または symlink 自体を削除し、directory は削除しません。root 直下の AGENTS.md は move / delete できません',
         '- workspace file の本文は秘密情報を除去せず、backend にそのまま渡ります。秘密情報を含む可能性がある file は読ませないでください',
       ],
     },

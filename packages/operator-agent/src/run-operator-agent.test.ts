@@ -916,6 +916,17 @@ describe('runOperatorAgent', () => {
           path: 'notes/session.md',
         });
         workspaceFileResult = readResult.content[0]?.text ?? '';
+        const list = agentOptions?.customTools?.list_operator_workspace_files;
+        const move = agentOptions?.customTools?.move_operator_workspace_file;
+        const del = agentOptions?.customTools?.delete_operator_workspace_file;
+        expect(list && move && del).toBeTruthy();
+        await move!.execute({ source: 'notes/session.md', destination: 'archive/session.md' });
+        expect((await list!.execute({ path: 'archive' })).structuredContent?.entries)
+          .toEqual([expect.objectContaining({ path: 'archive/session.md', type: 'file' })]);
+        await del!.execute({ path: 'archive/session.md' });
+        await expect(readWorkspaceFile!.execute({ path: 'archive/session.md' })).rejects.toThrow(/does not exist/u);
+        await writeWorkspaceFile!.execute({ path: 'notes/session.md', content: 'Session notes.' });
+
         return {
           runId: 'run-1',
           status: 'completed',
@@ -1082,6 +1093,9 @@ describe('runOperatorAgent', () => {
       'set_session_focus',
       'send_operator_message',
       'shutdown_issue_session',
+      'list_operator_workspace_files',
+      'move_operator_workspace_file',
+      'delete_operator_workspace_file',
       'read_operator_workspace_file',
       'write_operator_workspace_file',
     ]);

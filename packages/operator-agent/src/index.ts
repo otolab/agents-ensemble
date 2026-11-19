@@ -15,6 +15,9 @@ export {
 } from './worker-session-tools.js';
 export {
   createOperatorWorkspaceFileTools,
+  LIST_OPERATOR_WORKSPACE_FILES_TOOL,
+  MOVE_OPERATOR_WORKSPACE_FILE_TOOL,
+  DELETE_OPERATOR_WORKSPACE_FILE_TOOL,
   MAX_OPERATOR_WORKSPACE_FILE_BYTES,
   READ_OPERATOR_WORKSPACE_FILE_TOOL,
   resolveOperatorWorkspaceRoot,

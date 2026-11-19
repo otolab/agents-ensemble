@@ -12,6 +12,9 @@ import { tmpdir } from 'node:os';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   createOperatorWorkspaceFileTools,
+  LIST_OPERATOR_WORKSPACE_FILES_TOOL,
+  MOVE_OPERATOR_WORKSPACE_FILE_TOOL,
+  DELETE_OPERATOR_WORKSPACE_FILE_TOOL,
   MAX_OPERATOR_WORKSPACE_FILE_BYTES,
   READ_OPERATOR_WORKSPACE_FILE_TOOL,
   resolveOperatorWorkspaceRoot,
@@ -205,6 +208,63 @@ describe('operator profile workspace file tools', () => {
         extra: 'ignored by schema',
       }),
     ).rejects.toThrow(/unexpected argument/u);
+  });
+
+  it('lists entries with bounded recursion and never follows symlinks', async () => {
+    await mkdir(join(workspace, 'dir', 'nested'), { recursive: true });
+    await writeFile(join(workspace, 'dir', 'nested', 'note'), 'hello');
+    await symlink(outside, join(workspace, 'escape'), 'dir');
+    const list = tools[LIST_OPERATOR_WORKSPACE_FILES_TOOL]!;
+    const result = await list.execute({ recursive: true, maxDepth: 2 });
+    expect(result.structuredContent?.entries).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: 'dir', type: 'directory', size: expect.any(Number), mtime: expect.any(String) }),
+      expect.objectContaining({ path: 'escape', type: 'symlink' }),
+      expect.objectContaining({ path: 'dir/nested', type: 'directory' }),
+    ]));
+    expect(JSON.stringify(result)).not.toContain('dir/nested/note');
+    expect((await list.execute({ maxEntries: 1 })).structuredContent?.truncated).toBe(true);
+    await expect(list.execute({ path: 'escape' })).rejects.toThrow(/outside/u);
+    await expect(list.execute({ path: 'missing' })).rejects.toThrow(/does not exist/u);
+  });
+
+  it('moves files without overwrite and deletes files or symlinks safely', async () => {
+    const move = tools[MOVE_OPERATOR_WORKSPACE_FILE_TOOL]!;
+    const del = tools[DELETE_OPERATOR_WORKSPACE_FILE_TOOL]!;
+    await writeFile(join(workspace, 'note'), 'content');
+    await writeFile(join(workspace, 'existing'), 'keep');
+    await expect(move.execute({ source: 'note', destination: 'existing' })).rejects.toThrow(/already exists/u);
+    await move.execute({ source: 'note', destination: 'new/note' });
+    await expect(readFile(join(workspace, 'new/note'), 'utf8')).resolves.toBe('content');
+    await expect(del.execute({ path: 'new' })).rejects.toThrow(/not a file/u);
+    await expect(move.execute({ source: 'new', destination: 'other' })).rejects.toThrow(/not a regular file/u);
+    await expect(del.execute({ path: 'missing' })).rejects.toThrow(/does not exist/u);
+    await expect(move.execute({ source: 'missing', destination: 'other' })).rejects.toThrow(/does not exist/u);
+    await writeFile(join(workspace, 'AGENTS.md'), 'instructions');
+    await expect(del.execute({ path: 'AGENTS.md' })).rejects.toThrow(/protected/u);
+    await expect(move.execute({ source: 'AGENTS.md', destination: 'other' })).rejects.toThrow(/protected/u);
+    await expect(del.execute({ path: '.' })).rejects.toThrow();
+    await writeFile(join(outside, 'secret'), 'safe');
+    await symlink(join(outside, 'secret'), join(workspace, 'link'));
+    await expect(move.execute({ source: 'link', destination: 'other' })).rejects.toThrow(/not a regular file/u);
+    await del.execute({ path: 'link' });
+    await expect(readFile(join(outside, 'secret'), 'utf8')).resolves.toBe('safe');
+    await del.execute({ path: 'new/note' });
+  });
+
+  it('rejects escapes through paths and symlinked parents', async () => {
+    await writeFile(join(outside, 'secret'), 'safe');
+    await writeFile(join(workspace, 'local'), 'local');
+    await symlink(outside, join(workspace, 'escape'), 'dir');
+    const move = tools[MOVE_OPERATOR_WORKSPACE_FILE_TOOL]!;
+    const del = tools[DELETE_OPERATOR_WORKSPACE_FILE_TOOL]!;
+    const list = tools[LIST_OPERATOR_WORKSPACE_FILES_TOOL]!;
+    for (const path of ['../outside/secret', join(outside, 'secret'), 'escape/secret']) {
+      await expect(del.execute({ path })).rejects.toThrow(/outside/u);
+      await expect(move.execute({ source: path, destination: 'dest' })).rejects.toThrow(/outside/u);
+      await expect(move.execute({ source: 'local', destination: path })).rejects.toThrow(/outside/u);
+      await expect(list.execute({ path })).rejects.toThrow(/outside/u);
+    }
+    await expect(readFile(join(outside, 'secret'), 'utf8')).resolves.toBe('safe');
   });
 
   it('rejects a symlink as the profile workspace root', async () => {
