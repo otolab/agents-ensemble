@@ -6,7 +6,7 @@
 
 ## インストール
 
-Node.js 22.13.0 以上を用意し、npm または pnpm でインストールします。
+Node.js 22.19.0 以上を用意し、npm または pnpm でインストールします。Pi 依存の要件に合わせて最低バージョンを引き上げたため、22.13〜22.18 を使用している場合は Node.js を更新してください。
 
 ```bash
 npm install -g @agents-ensemble/cli

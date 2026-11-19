@@ -4,7 +4,7 @@
 
 ## 前提
 
-Node.js 22.13.0 以上と、ルート `package.json` の `packageManager` に指定された pnpm を使用する。operator-agent の profile lock に Node.js 組み込み SQLite を使います。Builtin Pi worker runtime を使う場合は Node.js 22.19.0 以上が必要です。Corepack も利用できます。
+Node.js 22.19.0 以上と、ルート `package.json` の `packageManager` に指定された pnpm を使用する。Pi 依存と builtin Pi worker runtime は Node.js 22.19.0 以上を要求します。operator-agent の profile lock に Node.js 組み込み SQLite を使います。Corepack も利用できます。
 
 ```bash
 corepack enable   # 初回のみ（任意）
@@ -108,7 +108,7 @@ Node version manager を使う場合は、リモートで起動する wrapper �
 mkdir -p "$HOME/bin"
 cat > "$HOME/bin/ensemble-with-node" <<'EOF'
 #!/bin/sh
-node_bin="$HOME/.nvm/versions/node/v22.14.0/bin"
+node_bin="$HOME/.nvm/versions/node/v22.22.0/bin"
 PATH="$node_bin:$PATH"
 export PATH
 exec "$node_bin/ensemble" "$@"
