@@ -4,7 +4,6 @@ import {
   lstat,
   cp,
   readFile,
-  readlink,
   rename,
   rm,
   readdir,
@@ -23,7 +22,6 @@ import {
   join,
   dirname,
   basename,
-  parse,
 } from 'node:path';
 import {
   type ConductorJsonValue,
@@ -305,9 +303,6 @@ export function createOperatorWorkspaceFileTools(
           if (!metadata.isFile()) {
             throw new WorkspaceError('The requested workspace path is not a file.');
           }
-          if (metadata.nlink !== 1) {
-            throw new WorkspaceError('Files with multiple hard links cannot be written by workspace tools.');
-          }
           await handle.truncate(0);
           await handle.writeFile(args.content, 'utf8');
         } finally {
@@ -461,44 +456,12 @@ async function protectWatch(root: string, candidate: string, protectAncestors = 
   try {
     const canonicalWatch = await realpath(join(root, 'watch'));
     if (isWithin(canonicalWatch, candidate)) throw new WorkspaceError('The operator watch directory is managed by the operator-agent and cannot be modified by workspace tools.');
-    if (protectAncestors) {
-      for (const entry of await watchResolutionEntries(root)) {
-        if (isWithin(candidate, entry)) throw new WorkspaceError('The operator watch directory or its resolution path cannot be modified by workspace tools.');
-      }
+    if (protectAncestors && isWithin(candidate, canonicalWatch)) {
+      throw new WorkspaceError('The operator watch directory or its parent cannot be modified by workspace tools.');
     }
   } catch (error) {
     if (!isNodeError(error, 'ENOENT')) throw safeOperationError(error);
-    try {
-      await lstat(join(root, 'watch'));
-      throw new WorkspaceError('The operator watch directory cannot be resolved; workspace modifications are blocked.');
-    } catch (watchError) {
-      if (!isNodeError(watchError, 'ENOENT')) throw safeOperationError(watchError);
-    }
   }
-}
-
-/** Include symlink entries as well as each resolved directory in the watch path. */
-async function watchResolutionEntries(root: string): Promise<string[]> {
-  let pending = join(root, 'watch');
-  const entries: string[] = [];
-  for (let links = 0; links <= 40; links += 1) {
-    const pathRoot = parse(pending).root;
-    let current = pathRoot;
-    const parts = pending.slice(pathRoot.length).split(sep).filter(Boolean);
-    let followed = false;
-    for (let index = 0; index < parts.length; index += 1) {
-      current = join(current, parts[index]!);
-      entries.push(current);
-      if ((await lstat(current)).isSymbolicLink()) {
-        const target = await readlink(current);
-        pending = resolve(dirname(current), target, ...parts.slice(index + 1));
-        followed = true;
-        break;
-      }
-    }
-    if (!followed) return entries;
-  }
-  throw new WorkspaceError('The operator watch directory cannot be resolved; workspace modifications are blocked.');
 }
 
 function protectInstructions(root: string, path: string): void {
