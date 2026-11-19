@@ -697,8 +697,31 @@ describe('loadProfile', () => {
           content: expect.stringContaining('## 進行フェーズ'),
           kinds: ['conductor'],
         }),
+        expect.objectContaining({
+          id: 'team-common',
+          title: '標準動作モード（共通）',
+          content: expect.stringContaining(
+            'マージ可否・残課題 → 引き渡し（Issue/PR まとめ）→ 待機',
+          ),
+        }),
       ]),
     );
+  });
+
+  it('bundled team-conductor materials use phased flow, not the legacy checklist heading', async () => {
+    const { profile } = await loadProfile({
+      cwd: '/no-such-cwd',
+      env: {},
+    });
+    const conductor = profile.materials?.find((m) => m.id === 'team-conductor');
+    expect(conductor?.content).toBeDefined();
+    const content = conductor!.content!;
+
+    expect(content).toContain('### 5. オペレータへ引き渡し');
+    expect(content).toContain('## 横断ルール');
+    expect(content).toContain('Issue に作業過程と引き渡し判断の根拠をまとめる');
+    expect(content).not.toContain('## 果たすこと');
+    expect(content).not.toContain('## 引き渡し時の心得');
   });
 
   it('loads project-local profile when name is not bundled', async () => {
@@ -853,6 +876,10 @@ describe('default profile compilation', () => {
       prompt.indexOf('### 標準動作モード（conductor）'),
     );
     expect(prompt).toContain('**すべてを理解することは求められていない。**');
+    expect(prompt).toContain('## 進行フェーズ');
+    expect(prompt).toContain('### 5. オペレータへ引き渡し');
+    expect(prompt).toContain('マージ可否・残課題 → 引き渡し（Issue/PR まとめ）→ 待機');
+    expect(prompt).not.toContain('## 果たすこと');
     expect(prompt).toContain('permission.pending');
     expect(prompt).toContain('resolve_permission');
     expect(prompt).toContain('operatorSummary');
