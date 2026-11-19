@@ -318,6 +318,25 @@ export async function runOperatorAgent(
       : {}),
     ...(runtime.backend === 'pi'
       ? {
+          onRetryEvent: (event: Parameters<NonNullable<ConductorAgentCreateOptions['onRetryEvent']>>[0]) => {
+            switch (event.type) {
+              case 'auto_retry_start':
+                ttyChannels.harness(`[pi retry] attempt ${event.attempt}/${event.maxAttempts} in ${event.delayMs}ms error=${escapeTerminalControlCharacters(event.errorMessage)}`);
+                break;
+              case 'auto_retry_end':
+                ttyChannels.harness(`[pi retry] ${event.success ? 'succeeded' : 'failed'} attempt=${event.attempt}${event.finalError ? ` error=${escapeTerminalControlCharacters(event.finalError)}` : ''}`);
+                break;
+              case 'summarization_retry_scheduled':
+                ttyChannels.harness(`[pi summarization retry] attempt ${event.attempt}/${event.maxAttempts} in ${event.delayMs}ms error=${escapeTerminalControlCharacters(event.errorMessage)}`);
+                break;
+              case 'summarization_retry_attempt_start':
+                ttyChannels.harness(`[pi summarization retry] attempt started source=${event.source}${event.reason ? ` reason=${event.reason}` : ''}`);
+                break;
+              case 'summarization_retry_finished':
+                ttyChannels.harness('[pi summarization retry] finished');
+                break;
+            }
+          },
           pi: runtime.piResourceRoots,
           sessionDir: operatorPiSessionDirectory(
             runtime.userEnsembleRoot,

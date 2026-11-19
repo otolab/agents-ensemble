@@ -1645,6 +1645,8 @@ describe('runOperatorAgent', () => {
         });
       });
 
+      agentOptions!.onRetryEvent!({ type: 'auto_retry_start', attempt: 1, maxAttempts: 2, delayMs: 10, errorMessage: 'timeout' });
+      agentOptions!.onRetryEvent!({ type: 'auto_retry_end', success: true, attempt: 1 });
       expect(sentPrompts).toHaveLength(1);
       expect(sentPrompts[0]).toBe('summarize the live update');
 
@@ -3225,6 +3227,42 @@ describe('runOperatorAgent', () => {
     expect(stderr.capturedText()).not.toContain(rawError);
   });
 
+  it('displays Pi retry lifecycle while a send is pending and keeps reconnect available afterwards', async () => {
+    const stdin = createInteractiveInput();
+    const stdout = createOutput();
+    let options: ConductorAgentCreateOptions;
+    let finish!: () => void;
+    const pending = new Promise<void>((resolve) => { finish = resolve; });
+    const send = vi.fn(async () => {
+      options.onRetryEvent?.({ type: 'auto_retry_start', attempt: 1, maxAttempts: 3, delayMs: 20, errorMessage: 'overloaded' });
+      options.onRetryEvent?.({ type: 'summarization_retry_scheduled', attempt: 1, maxAttempts: 2, delayMs: 10, errorMessage: 'timeout' });
+      options.onRetryEvent?.({ type: 'summarization_retry_attempt_start', source: 'compaction', reason: 'threshold' });
+      options.onRetryEvent?.({ type: 'summarization_retry_finished' });
+      await pending;
+      options.onRetryEvent?.({ type: 'auto_retry_end', success: true, attempt: 1 });
+      return { runId: 'run', status: 'completed', result: 'done' };
+    });
+    const resume = vi.fn(async () => createFakeAgent({ send }));
+    const run = runOperatorAgent({ repoRoot }, { stdin, stdout, agentFactory: {
+      create: async (value) => { options = value; return createFakeAgent({ send }); }, resume,
+    } });
+    try {
+      await vi.waitFor(() => expect(stdout.capturedText()).toContain('(pi) ready'));
+      stdin.write('hello\n');
+      await vi.waitFor(() => expect(stdout.capturedText()).toContain('[pi retry] attempt 1/3'));
+      stdin.write('/reconnect\n');
+      expect(resume).not.toHaveBeenCalled();
+      finish();
+      await vi.waitFor(() => expect(stdout.capturedText()).toContain('[pi retry] succeeded'));
+      await vi.waitFor(() => expect(resume).toHaveBeenCalledOnce());
+      expect(stdout.capturedText()).toContain('[pi summarization retry]');
+    } finally {
+      finish();
+      stdin.write('/exit\n');
+      await run;
+    }
+  });
+
   it('intercepts reconnect commands and reports each resume result without sending them', async () => {
     await writeOperatorSettings(repoRoot, 'pi', undefined, {
       profile: ['reconnect-server'],
@@ -3335,7 +3373,10 @@ describe('runOperatorAgent', () => {
           'API key auth failed for provider litellm: Failed to resolve API key for provider "litellm" from shell command: cached-auth.mjs',
       },
     };
+    let retryOptions: ConductorAgentCreateOptions;
     const firstSend = vi.fn(async (message: string) => {
+      retryOptions.onRetryEvent?.({ type: 'auto_retry_start', attempt: 1, maxAttempts: 1, delayMs: 10, errorMessage: 'auth failed' });
+      retryOptions.onRetryEvent?.({ type: 'auto_retry_end', success: false, attempt: 1, finalError: 'auth failed' });
       expect(message).toContain(prompt);
       return authFailure;
     });
@@ -3365,7 +3406,7 @@ describe('runOperatorAgent', () => {
         stdout,
         stderr,
         agentFactory: {
-          create: async () => createFakeAgent({ send: firstSend }),
+          create: async (options) => { retryOptions = options; return createFakeAgent({ send: firstSend }); },
           resume,
         },
       },
@@ -3376,6 +3417,8 @@ describe('runOperatorAgent', () => {
     );
     stdin.write(`${prompt}\n`);
     await vi.waitFor(() => expect(stderr.capturedText()).toContain('[auth] Pi 認証エラー'));
+    expect(stdout.capturedText()).toContain('[pi retry] failed');
+    expect(stdout.capturedText()).toContain('[auth] conductor reconnect');
     expect(firstSend).toHaveBeenCalledOnce();
     expect(automaticRetrySend).not.toHaveBeenCalled();
     expect(resume).toHaveBeenCalledOnce();
