@@ -14,7 +14,7 @@ ConductorSession の **View 層**契約。入力・表示はここに閉じ、�
 | **SessionDriver** | イベントキュー消費・max-turns 登録・`agent.send` | `conductor-session-driver.ts` |
 | **SessionView** | TTY Ink TUI / CLI 引数 / env からのオペレータ入力 | CLI `createIssueSessionTuiHost` / `bindAsyncOperatorInput` |
 
-データの正本: **イベントキュー**（`SessionEventQueue`）と **OpenQuestionRegistry**。通常の View 入力は `submit` で `operator.message` をキューへ積む。`/reconnect`、`/recovery`、`/close`、`/exit` は conductor へ送らない専用コマンドとして SessionView の binding で intercept する。TTY の pane / stream は、未回答 open question について `OperatorInputBindingApi.getContext().openQuestions`（Registry の `listOpen()` スナップショット）を表示状態の正本として使う。binding 前の初回描画だけは、イベント reducer の表示 state をフォールバックにする。
+データの正本: **イベントキュー**（`SessionEventQueue`）と **OpenQuestionRegistry**。質問を選択して送信した入力はコマンドや配信 prefix より優先して回答として扱う。slash なしの `close` / `exit` / `reconnect` は通常メッセージとして扱う。通常の View 入力は `submit` で `operator.message` をキューへ積む。`/reconnect`、`/recovery`、`/close`、`/exit` は conductor へ送らない専用コマンドとして SessionView の binding で intercept する。TTY の pane / stream は、未回答 open question について `OperatorInputBindingApi.getContext().openQuestions`（Registry の `listOpen()` スナップショット）を表示状態の正本として使う。binding 前の初回描画だけは、イベント reducer の表示 state をフォールバックにする。
 
 ## View 契約: `OperatorInputBinding`
 
@@ -61,11 +61,11 @@ type OperatorInputBinding = (
 
 - 空文字は無視（`false` を返す）
 - 受け付けたら `operator.message` をイベントキューへ enqueue（`true`）
-- `/reconnect` / `reconnect` は `operator.reconnect` をイベントキューへ enqueue し、conductor へは送らない（`true`）
+- `/reconnect` は `operator.reconnect` をイベントキューへ enqueue し、conductor へは送らない（`true`）
 - `/recovery ...` は binding 内で一覧・表示・削除を行い、`submit` や conductor dispatch には渡さない
 - `/recovery bootstrap` は旧 Cursor session の bootstrap 状態を表示し、`assume-complete` / `assume-incomplete` の判断を記録する。対話 TTY でのみ選択できる
-- `/close` / `close` は専用の終了 signal として扱い、イベントキューへは enqueue しない（`false`）。SessionResumeStore を flush して worker / conductor / GitHub monitor を停止し、worktree を残してプロセスを終了する
-- `/exit` / `exit` は専用の終了 signal として扱い、イベントキューへは enqueue しない（`false`）
+- `/close` は専用の終了 signal として扱い、イベントキューへは enqueue しない（`false`）。SessionResumeStore を flush して worker / conductor / GitHub monitor を停止し、worktree を残してプロセスを終了する
+- `/exit` は専用の終了 signal として扱い、イベントキューへは enqueue しない（`false`）
 - TTY の通常入力は配信モード prefix を付けられる。`/idle ...`、`/next ...`、`/interrupt ...` を本文先頭に置き、prefix 自体は conductor へ送らない。prefix なしは `next`
 - TTY（Ink TUI）では選択中の open question への回答として `submit` する（`targetOpenQuestionId` オプション）
 - 非 TTY では未回答 1 件のときはプレーンテキストをその open question への回答として解釈する
@@ -349,7 +349,7 @@ URL が端末幅を超える場合も URL は省略せず、上枠の title / su
 
 ### `/reconnect` — conductor transport の手動再接続
 
-`/reconnect` または `reconnect`（大文字小文字無視・前後空白トリム）は、conductor に送らない control command です。通常は現在の agent を一度 `close` してから、同じ `agentId` で `resume` します。close が reject した場合、自動 reconnect はそこで止まります。手動 `/reconnect` は明示的な置き換え操作として `resume` を試み、close を再実行しません。cleanup の完了が確認できない場合はその旨を知らせます。コマンド自体は prompt を送りません。自動 reconnect または手動 reconnect が成功しても、失敗した prompt の再送や recovery report の conductor 送信は行いません。
+`/reconnect`（大文字小文字無視・前後空白トリム）は、conductor に送らない control command です。通常は現在の agent を一度 `close` してから、同じ `agentId` で `resume` します。close が reject した場合、自動 reconnect はそこで止まります。手動 `/reconnect` は明示的な置き換え操作として `resume` を試み、close を再実行しません。cleanup の完了が確認できない場合はその旨を知らせます。コマンド自体は prompt を送りません。自動 reconnect または手動 reconnect が成功しても、失敗した prompt の再送や recovery report の conductor 送信は行いません。
 
 send の結果が未確定になった後は、agent availability と operator confirmation を別々に扱います。agent が unavailable の場合は `/reconnect` が成功するまで通常 dispatch を止めます。resume に失敗した場合、次の `/reconnect` は旧 agent を再 close せず resume を再試行します。再接続できても後続 dispatch は自動再開せず、operator が現在の状態を確認して `/recovery continue` を実行する必要があります。reconnect 失敗後も既存 queue は保持し、旧 handle へ送信しません。
 
@@ -390,7 +390,7 @@ recovery snapshot 本文を新しい SessionLogEvent、終了 summary、SessionR
 
 ### `/close` — worktree を残してセッションを閉じる
 
-`/close` または `close`（大文字小文字無視・前後空白トリム）は、conductor に送らない一時終了コマンドです。入力直後に `session.operator_close` を emit し、force teardown で処理中 worker prompt を停止して未解決 permission を deny します。通常の attach 済み worker は、初回 prompt の完了前でも ACP session ID と cwd を runtime から snapshot します。ただし復旧 bootstrap 中の置換 session は未初期化なので snapshot から除外し、直前に保存した ID を保ちます。GitHub monitor を停止して最新 cursor と未配送 outbox を SessionResumeStore に flush した後、worker と conductor を force stop し、TUI を dispose してプロセスを終了します。正常に完了した `/close` は exit code 0 です。
+`/close`（大文字小文字無視・前後空白トリム）は、conductor に送らない一時終了コマンドです。入力直後に `session.operator_close` を emit し、force teardown で処理中 worker prompt を停止して未解決 permission を deny します。通常の attach 済み worker は、初回 prompt の完了前でも ACP session ID と cwd を runtime から snapshot します。ただし復旧 bootstrap 中の置換 session は未初期化なので snapshot から除外し、直前に保存した ID を保ちます。GitHub monitor を停止して最新 cursor と未配送 outbox を SessionResumeStore に flush した後、worker と conductor を force stop し、TUI を dispose してプロセスを終了します。正常に完了した `/close` は exit code 0 です。
 
 この flush に conductor send 中の batch、SessionDriver の状態、recovery candidate / report は含まれません。Ctrl+C / SIGINT も同じく event queue を保存しません（SessionResumeStore の flush は best effort）。再開後に失敗 batch や report は自動再生されないため、状態を確認して新しい operator message で未完了分を伝えてください。
 
@@ -434,7 +434,7 @@ GitHub update は conductor send が `finished` で完了した後に限って o
 
 ### `/exit` の即時フィードバック（#170）
 
-`/exit` または `exit`（大文字小文字無視・前後空白トリム）を受け付けた直後、harness は `session.operator_exit` を **同期** emit する。
+`/exit`（大文字小文字無視・前後空白トリム）を受け付けた直後、harness は `session.operator_exit` を **同期** emit する。
 
 | 表示経路 | 内容 |
 |----------|------|
@@ -447,7 +447,7 @@ cleanup が dirty worktree のためスキップされた場合や、削除に�
 
 ### `/close` の即時フィードバック
 
-`/close` または `close` を受け付けた直後は `session.operator_close` を同期 emit します。TTY の活動ログには「セッションを保存して閉じています…」と表示し、入力欄を無効化します。teardown 後に終了 JSON を出し、worktree cleanup を行わず exit code 0 でプロセスを終了します。YAML / SessionResumeStore の flush failure は warning として扱い、`/close`・`/exit`・割り込み・通常終了など、どの終了経路でも終了を続けます。`/exit` の cleanup failure を warning のみ・exit 0 とする [#448](https://github.com/otolab/agents-ensemble/issues/448) の契約とは別の条件です。
+`/close` を受け付けた直後は `session.operator_close` を同期 emit します。TTY の活動ログには「セッションを保存して閉じています…」と表示し、入力欄を無効化します。teardown 後に終了 JSON を出し、worktree cleanup を行わず exit code 0 でプロセスを終了します。YAML / SessionResumeStore の flush failure は warning として扱い、`/close`・`/exit`・割り込み・通常終了など、どの終了経路でも終了を続けます。`/exit` の cleanup failure を warning のみ・exit 0 とする [#448](https://github.com/otolab/agents-ensemble/issues/448) の契約とは別の条件です。
 
 ### operator-agent からの remote close / exit
 

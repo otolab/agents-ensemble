@@ -101,15 +101,17 @@ function createBindTuiOperatorInput(
     onSubmitRef.current = (text: string, options?: OperatorInputSubmitOptions) => {
       const trimmed = trimBlankLinesOnly(text);
       if (trimmed) {
-        const recoveryCommand = executeRecoveryInboxCommand(api, trimmed, {
-          canDisplaySensitiveContent:
-            process.stdin.isTTY === true &&
-            process.stdout.isTTY === true &&
-            process.stderr.isTTY === true,
-        });
-        if (recoveryCommand.handled) {
-          setRecoveryInspection(recoveryCommand.inspection);
-          return;
+        if (options?.targetOpenQuestionId === undefined) {
+          const recoveryCommand = executeRecoveryInboxCommand(api, trimmed, {
+            canDisplaySensitiveContent:
+              process.stdin.isTTY === true &&
+              process.stdout.isTTY === true &&
+              process.stderr.isTTY === true,
+          });
+          if (recoveryCommand.handled) {
+            setRecoveryInspection(recoveryCommand.inspection);
+            return;
+          }
         }
         hideRecoveryInspection();
         api.submit(trimmed, options);

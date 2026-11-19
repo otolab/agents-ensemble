@@ -2564,6 +2564,27 @@ describe('IssueSessionTui', () => {
       expect(submitOptions).toEqual({ targetOpenQuestionId: 'inq-2' });
     });
 
+    it.each(['close', 'exit', 'reconnect'])('submits choice id or label %s as the selected answer', async (value) => {
+      for (const choice of [{ id: value, label: 'Alternative' }, { id: 'option', label: value }]) {
+        const viewModel = createTuiViewModel();
+        viewModel.setDisplayState({
+          workers: {}, conductorOutput: null,
+          openQuestions: [createOpenQuestion({ id: 'inq-1', question: 'Choose', responseType: 'choice', choices: [choice] })],
+          dispatchHold: { hold: false, heldEventCount: 0 },
+        });
+        const onSubmit = vi.fn();
+        const instance = render(<IssueSessionTui viewModel={viewModel} onSubmit={onSubmit} />);
+        instance.stdin.write(value);
+        await flushInkStdin();
+        instance.stdin.write('\r');
+        await flushInkStdin();
+        instance.stdin.write('\r');
+        await flushInkStdin();
+        expect(onSubmit).toHaveBeenCalledWith(choice.id, { targetOpenQuestionId: 'inq-1' });
+        instance.unmount();
+      }
+    });
+
     it('submits ordinary input without an open-question target', async () => {
       const viewModel = createTuiViewModel();
       viewModel.setDisplayState({

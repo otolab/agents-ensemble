@@ -2149,6 +2149,13 @@ async function runConductorSessionWithStartupGuard(
     };
     const bindingDispose = options.bindOperatorInput({
       submit: (message, submitOptions) => {
+        if (submitOptions?.targetOpenQuestionId !== undefined) {
+          return submitOperatorMessage({
+            message,
+            delivery: 'next',
+            targetOpenQuestionId: submitOptions.targetOpenQuestionId,
+          });
+        }
         if (isOperatorExitCommand(message)) {
           requestOperatorShutdown('exit');
           return false;
@@ -2162,11 +2169,9 @@ async function runConductorSessionWithStartupGuard(
           return true;
         }
         const parsed =
-          submitOptions?.targetOpenQuestionId !== undefined
-            ? { message, delivery: 'next' as const }
-            : submitOptions?.delivery === undefined
-              ? parseOperatorMessageDelivery(message)
-              : { message, delivery: submitOptions.delivery };
+          submitOptions?.delivery === undefined
+            ? parseOperatorMessageDelivery(message)
+            : { message, delivery: submitOptions.delivery };
         return submitOperatorMessage({
           message: parsed.message,
           delivery: parsed.delivery,

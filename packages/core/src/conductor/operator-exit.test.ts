@@ -2,9 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { isOperatorExitCommand } from './operator-exit.js';
 
 describe('isOperatorExitCommand', () => {
-  it('matches the exit command and its alias', () => {
+  it('matches the exit command without a slashless alias', () => {
     expect(isOperatorExitCommand('/exit')).toBe(true);
-    expect(isOperatorExitCommand('exit')).toBe(true);
+    expect(isOperatorExitCommand('exit')).toBe(false);
   });
 
   it('does not claim another operator command or partial input', () => {
