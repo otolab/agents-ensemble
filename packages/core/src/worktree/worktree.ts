@@ -292,13 +292,17 @@ export type RemoveWorkerWorktreeResult =
 const WORKTREE_REMOVE_RETRY_DELAYS_MS = [100, 250] as const;
 
 /**
- * isolated worktree を削除する。存在しない場合は no-op。
+ * isolated worktree を削除する。IssueRef は既定パス、文字列は指定パスを対象にする。
+ * 対象が Git の管理一覧にない場合は `not_found` を返す。
  * 未コミット変更がある場合は削除せず `skipped_dirty` を返す（`--force` は使わない）。
  */
 export async function removeWorkerWorktree(
   repoRoot: string,
-  path: string,
+  issueOrPath: IssueRef | string,
 ): Promise<RemoveWorkerWorktreeResult> {
+  const path = typeof issueOrPath === 'string'
+    ? issueOrPath
+    : workerWorktreePath(repoRoot, issueOrPath);
   const listed = await listWorktrees(repoRoot);
   let existing: ListedWorktree | undefined;
   for (const entry of listed) {

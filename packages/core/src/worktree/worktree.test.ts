@@ -11,10 +11,10 @@ import { dirname, join, resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { runGit } from '../git/run-git.js';
 import { parseIssueUrl } from '../issue/issue-ref.js';
+import { removeWorkerWorktree } from '../workspace/index.js';
 import {
   createWorkerWorktree,
   listWorktrees,
-  removeWorkerWorktree,
   resolveInRepoWorkspace,
   resolveWorkerWorkspace,
   resolveWorkerWorktree,
@@ -330,6 +330,21 @@ describe('removeWorkerWorktree', () => {
 
     const listed = await listWorktrees(repoRoot);
     expect(listed.some((entry) => entry.path === worktree.path)).toBe(false);
+    expect(await resolveWorkerWorktree(repoRoot, issue)).toBeUndefined();
+  });
+
+  it('preserves the public IssueRef call for clean, dirty, and missing worktrees', async () => {
+    const issue = parseIssueUrl('https://github.com/org/repo/issues/27');
+    expect(await removeWorkerWorktree(repoRoot, issue)).toEqual({ status: 'not_found' });
+    const worktree = await createWorkerWorktree(repoRoot, issue);
+    await writeFile(join(worktree.path, 'dirty.txt'), 'dirty\n');
+    expect(await removeWorkerWorktree(repoRoot, issue)).toEqual({
+      status: 'skipped_dirty', path: worktree.path, branch: worktree.branch,
+    });
+    await rm(join(worktree.path, 'dirty.txt'));
+    expect(await removeWorkerWorktree(repoRoot, issue)).toEqual({
+      status: 'removed', path: worktree.path, branch: worktree.branch,
+    });
     expect(await resolveWorkerWorktree(repoRoot, issue)).toBeUndefined();
   });
 
