@@ -5,3 +5,10 @@ packages:
 # 2 本目以降の worktree で install を高速化する（pnpm 10.12.1+、CI では自動無効）。
 # https://pnpm.io/git-worktrees
 enableGlobalVirtualStore: true
+
+# ink-testing-library imports ink but does not declare it. Bind its peer in
+# the virtual store so test runners resolve the workspace's ink installation.
+packageExtensions:
+  ink-testing-library@4.0.0:
+    peerDependencies:
+      ink: '*'

@@ -36,6 +36,7 @@ vi.mock('./operator-agent-tui.js', () => ({
       appendOperatorResponse: () => {},
       setInputEnabled: () => {},
       setStatus: () => {},
+      setHarnessStatus: () => {},
       dispose: async () => {},
     } satisfies OperatorAgentTuiHost;
   },
