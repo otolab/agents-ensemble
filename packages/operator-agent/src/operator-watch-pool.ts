@@ -2213,7 +2213,7 @@ export function createRegisterSessionWatchTool(
   return {
     name: 'register_session_watch',
     description:
-      'Add a saved Issue session to the operator watch pool. Reports new open questions, open-to-answered transitions, and disappearance from the observed question list. Each report identifies whether it came from live harness UDS or saved SessionResumeStore/YAML.',
+      'Add a saved Issue session to the operator watch pool. Reports new open questions, open-to-answered transitions, and disappearance from the observed question list. Each report identifies whether it came from live harness UDS or saved SessionResumeStore/YAML. answeredBy: operator records the operator role and does not distinguish a human on the Issue TTY from operator-agent; only answeredBy: conductor means a conductor-side answer. A question disappearing from the list without answer data is unconfirmed, not resolved.',
     inputSchema: {
       type: 'object',
       properties: {

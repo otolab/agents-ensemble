@@ -168,7 +168,7 @@ live UDS を使った report には稼働中 UDS、UDS が到達不能または�
 
 Open Question / session-state / conductor-message report は、同じ `conductorAgentId` の source にまとめます。各 report の ID と到着順は保ち、質問・status・発言を本文付きの別 section として同じ `agent.send` に渡します。Open Question を含む session は通常の status report より優先され、別 session の report は混ぜません。report ID は process 内の queue で重複 enqueue を抑え、disk から ack 済みになった未 dispatch copy は refresh 時に取り除きます。send が未完了なら同じ ID を5秒後に通常 dispatch queue へ戻し、`agent.send` を再試行します。send 完了後に ack 保存だけが失敗した場合は、report を in-flight に保って同じ batch の ack だけを5秒間隔で最大3回 retry し、完了済み turn は再送しません。全 retry に失敗すると pending state を残して明示 error で runner を停止します。再起動後は at-least-once 契約により同じ ID が再送される可能性があります。poll refresh は retry deadline を早めません。どの process からの ack でも pending state から削除できます。別 process が同じ report をすでに send 中なら止められず重複配送になることがあり、exactly-once は保証しません（設計判断は [ADR 0081](adr/0081-operator-watch-pending-report-handoff.md)、[ADR 0082](adr/0082-operator-watch-acknowledgement-retry.md)）。
 
-watch の poll interval は既定 2,000ms、`debounceMs` は既定 250ms（0〜10,000ms）です。conductor message listen は別の既定 2,000ms poll と `messageDebounceMs` 既定 10,000ms（0〜120,000ms）を持ちます。message listen 中は watch report も `max(debounceMs, messageDebounceMs)` の期限を待ちます。message report が届くたび同一 session の未 dispatch report 全体を最新 message の quiet window まで延長するため、短いやり取りの report をまとめやすくなります。message listen がある場合、message が来なくても watch report は最大設定値まで待ち、message が続けば quiet window がその都度延びます。遅延を抑えたい場合は `register_conductor_message_listen` の `messageDebounceMs` を短くしてください。hold 中も report は個別に保存され、両 hold 解除後に到着順で batch されます。
+watch の poll interval（`register_session_watch` の `pollIntervalMs`）は既定 2,000ms、250〜60,000ms で調整でき、`debounceMs` は既定 250ms（0〜10,000ms）です。conductor message listen は別の既定 2,000ms poll と `messageDebounceMs` 既定 10,000ms（0〜120,000ms）を持ちます。message listen 中は watch report も `max(debounceMs, messageDebounceMs)` の期限を待ちます。message report が届くたび同一 session の未 dispatch report 全体を最新 message の quiet window まで延長するため、短いやり取りの report をまとめやすくなります。message listen がある場合、message が来なくても watch report は最大設定値まで待ち、message が続けば quiet window がその都度延びます。遅延を抑えたい場合は `register_conductor_message_listen` の `messageDebounceMs` を短くしてください。hold 中も report は個別に保存され、両 hold 解除後に到着順で batch されます。
 
 ### `open_questions.list`
 
@@ -297,7 +297,7 @@ Response（応答なし）:
 | `message.at` | number | harness が send 完了を処理した時刻（Unix epoch milliseconds） |
 | `message.sendCount` | number | 対応する `conductor.send` の通し番号 |
 
-operator の入力、応答履歴、失敗応答は返しません。状態は稼働中プロセスのメモリ内だけにあり、再開した session には引き継がれません。operator-agent tool の `structuredContent` と text content は、UDS result と同じ `{ "message": ... }` です。
+成功応答には bootstrap（初回 `initial` send）への応答も含みます。この点は bootstrap を対象外とする `session.conductor_messages.list` と、その listen とは異なります。operator の入力、応答履歴、失敗応答は返しません。状態は稼働中プロセスのメモリ内だけにあり、再開した session には引き継がれません。operator-agent tool の `structuredContent` と text content は、UDS result と同じ `{ "message": ... }` です。
 
 ### `session.conductor_messages.list`
 

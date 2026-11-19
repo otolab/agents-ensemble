@@ -251,7 +251,7 @@ export function createListOperatorSessionsTool(
   return {
     name: LIST_OPERATOR_SESSIONS_TOOL,
     description:
-      'List one row per saved Issue run. Saved phase and live connectivity are separate facts; reachable does not mean working and unknown does not mean stopped. Connectivity and work status may change between cursor pages. Work status reflects harness activity, not guaranteed progress; unknown is not stopped. Freshness and reportedBefore are evaluated at dataAsOf; accepted observations retain their original timestamps even if stale. Includes bounded GitHub summaries.',
+      'List one row per saved Issue run. Saved phase and live connectivity are separate facts; reachable does not mean working and unknown does not mean stopped. Connectivity and work status may change between cursor pages. Work status reflects harness activity, not guaranteed progress; unknown is not stopped. Freshness and reportedBefore are evaluated at dataAsOf; accepted observations retain their original timestamps even if stale. Includes bounded GitHub summaries. openQuestionHistory is read from the Open Questions YAML (source resume_store_compatibility means a legacy ResumeStore copy; status unavailable means unconfirmed, not that no question existed). pullRequests none means no PR reference was found; unavailable means it could not be checked; a null review decision or zero CI checks is not approval or success. posture indeterminate is not a confirmed work instruction; coherence conflict means observations contradict each other.',
     inputSchema: {
       type: 'object',
       properties: {
