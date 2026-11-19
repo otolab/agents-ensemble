@@ -34,7 +34,7 @@ import {
   type SessionResumeStoreDuplicateDiagnostic,
 } from '@agents-ensemble/core/operator-runtime';
 import { operatorBaseModule } from './operator-base-module.js';
-import { withOperatorWorkspaceLock } from './operator-workspace-lock.js';
+import { OperatorLockTimeoutError, withOperatorWorkspaceLock } from './operator-workspace-lock.js';
 import {
   createOperatorDispatchQueue,
   formatOperatorDispatchBatch,
@@ -867,6 +867,7 @@ async function runTtyConversation(options: {
   const stopping = new Promise<void>((resolve) => {
     stop = resolve;
   });
+  const inputEnding = new AbortController();
   const sendSuppression = new AbortController();
   let handleInput = (_message: string) => {};
   let tui: ReturnType<typeof createOperatorAgentTuiHost>;
@@ -930,19 +931,41 @@ async function runTtyConversation(options: {
     detail: string,
     displayOptions: OperatorAgentTuiLogOptions = {},
   ) => tui.appendChannel(channel, detail, displayOptions);
-  const waitForAcknowledgementRetry = (delayMs: number) =>
+  const waitForAcknowledgementRetry = (delayMs: number, stopOnInputEnd = false) =>
     new Promise<boolean>((resolve) => {
       let settled = false;
       let timer: NodeJS.Timeout;
+      const abort = () => finish(true);
       const finish = (stopped: boolean) => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
+        sendSuppression.signal.removeEventListener('abort', abort);
+        inputEnding.signal.removeEventListener('abort', abort);
         resolve(stopped);
       };
       timer = setTimeout(() => finish(false), delayMs);
-      void stopping.then(() => finish(true));
+      sendSuppression.signal.addEventListener('abort', abort);
+      if (stopOnInputEnd) inputEnding.signal.addEventListener('abort', abort);
+      if (sendSuppression.signal.aborted || (stopOnInputEnd && inputEnding.signal.aborted)) abort();
     });
+  const retryWatchLock = async <T>(
+    operation: () => Promise<T>,
+    description: string,
+  ): Promise<{ stopped: true } | { stopped: false; value: T }> => {
+    while (true) {
+      try {
+        return { stopped: false, value: await operation() };
+      } catch (error) {
+        if (!(error instanceof OperatorLockTimeoutError)) throw error;
+        writeChannelLine(
+          'harness',
+          `監視報告の${description}は lock の競合で待機中です。1 秒後に再試行します。`,
+        );
+        if (await waitForAcknowledgementRetry(1_000, true)) return { stopped: true };
+      }
+    }
+  };
   const unsubscribeHoldChanges = options.dispatchQueue.subscribe(() => {
     const nextStatus = formatReportHoldStatus(options.dispatchQueue);
     if (nextStatus === shownHoldStatus) return;
@@ -989,6 +1012,7 @@ async function runTtyConversation(options: {
   const handleTermination = () => requestStop(143);
   const handleInputEnd = () => {
     inputEnded = true;
+    inputEnding.abort();
     options.dispatchQueue.wake();
   };
   const handleSubmittedInput = (rawMessage: string) => {
@@ -1022,6 +1046,7 @@ async function runTtyConversation(options: {
     if (isOperatorCommand(normalizedMessage, 'exit')) {
       exitContinuity = true;
       inputEnded = true;
+      inputEnding.abort();
       tui.setInputEnabled(false);
       writeChannelLine('observation', 'session ended.');
       options.dispatchQueue.wake();
@@ -1256,7 +1281,18 @@ async function runTtyConversation(options: {
       idleCandidateMonitor.notifyActivityChanged();
       let committed: boolean;
       try {
-        committed = await options.watchPool.commitBatch(batch, dispatchState);
+        const result = await retryWatchLock(
+          () => options.watchPool.commitBatch(batch, dispatchState),
+          '送信準備',
+        );
+        if (result.stopped) {
+          agentSendInFlight = false;
+          idleCandidateMonitor.notifyActivityChanged();
+          if (reservation) options.recoveryInbox.release(reservation);
+          options.dispatchLifecycle.settleSend(lease, { completed: true });
+          return exitContinuity;
+        }
+        committed = result.value;
       } catch (error) {
         agentSendInFlight = false;
         idleCandidateMonitor.notifyActivityChanged();
@@ -1453,7 +1489,11 @@ async function runTtyConversation(options: {
         }
       } else {
         const retryReadyAt = Date.now() + 5_000;
-        await options.watchPool.recordRetry?.(batch.events, retryReadyAt);
+        const retryRecord = await retryWatchLock(
+          async () => options.watchPool.recordRetry?.(batch.events, retryReadyAt),
+          '再送時刻の保存',
+        );
+        if (retryRecord.stopped) return exitContinuity;
         for (const event of batch.events) {
           if (event.type === 'report') options.dispatchQueue.requeue(event, 5_000);
         }

@@ -2,6 +2,14 @@ import { createHash } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
+/** The protected operation has not started and can safely be retried. */
+export class OperatorLockTimeoutError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = 'OperatorLockTimeoutError';
+  }
+}
+
 /** Serialize cooperating operations for a canonical workspace across processes. */
 export async function withOperatorWorkspaceLock<T>(
   root: string,
@@ -22,7 +30,7 @@ export async function withOperatorWorkspaceLock<T>(
         if (attempt < 39) await new Promise((resolve) => setTimeout(resolve, 25));
       }
     }
-    if (!locked) throw new Error('Could not acquire operator workspace lock.');
+    if (!locked) throw new OperatorLockTimeoutError('Could not acquire operator workspace lock.');
     return await operation();
   } finally {
     try {

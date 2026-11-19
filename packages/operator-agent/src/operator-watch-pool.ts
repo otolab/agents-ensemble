@@ -1,4 +1,4 @@
-import { withOperatorWorkspaceLock } from './operator-workspace-lock.js';
+import { OperatorLockTimeoutError, withOperatorWorkspaceLock } from './operator-workspace-lock.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import {
@@ -3675,7 +3675,7 @@ async function withWatchStateLockInsideWorkspace<T>(
       }
     }
     if (!transactionStarted) {
-      throw new Error(
+      throw new OperatorLockTimeoutError(
         `Could not acquire operator watch state profile lock after ${WATCH_STATE_LOCK_RETRIES} attempts.`,
         { cause: lastLockError },
       );

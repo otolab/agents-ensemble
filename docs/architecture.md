@@ -154,6 +154,8 @@ watch pool は選択 profile の watch state だけを読みます。旧 user ha
 
 watch report を含む `agent.send` は `finished` / `completed` のときだけ成功として acknowledge し、永続 pending から削除する。`cancelled`、`error`、その他完了を確認できない status では report を同じ ID で5秒後に通常 dispatch queue へ戻し、send を再試行する。一方、send 完了後の ack 保存だけが失敗した場合は、完了済み turn を再送せず、同じ batch の ack を5秒間隔で最大3回 retry する。全 retry が失敗した場合は pending を保持したまま明示 error で runner を停止し、再起動時に同じ ID が再送される可能性を伝える。終了・再起動をまたぐ重複もありうるため delivery は at-least-once であり、受け手は対象 session の現在状態を確認する（設計判断は [ADR 0037](adr/0037-operator-agent-session-watch-and-dispatch.md)、[ADR 0038](adr/0038-operator-agent-conversation-report-hold.md)、[ADR 0082](adr/0082-operator-watch-acknowledgement-retry.md)）。
 
+送信前の batch 確定と未完了 send の再送時刻保存は、workspace / watch lock を取得できなかった場合に限り、通知を出して1秒後に再試行する。保守が長引けば報告の送信も待機する。終了操作があれば待機を中断し、永続 pending は次回起動時に再投入する。lock 取得後の書き込みや解放に失敗した場合は結果が不確かなため、この自動再試行の対象にしない。未完了 send や ack 前の終了を挟む再送では、受け手が既に処理している可能性がある。
+
 Issue harness 側では `session.observe` が全 Open Question と sequence、完了済み `report_session_state` の保存値を返す。`operator.message.send` は通常の operator message として既存 queue に入り、`{ queued: true, delivery }` は queue 受付を示す。dispatch 完了 ack ではない。`delivery` は `idle | next | interrupt` で、省略時は `next`（詳細は [Issue #525](https://github.com/otolab/agents-ensemble/issues/525)）。
 
 Issue session の SessionResumeStore、Open Questions / session-state YAML、tool-call 履歴、Pi transcript は canonical GitHub slug（`~/.ensemble/sessions/github.com/<owner>/<repo>/`）だけを通常読み取り・保存先にします。ResumeStore は `repoRoot` の一致を条件にせず全ローカル slug を調べます。path-hash と project-local data は明示 migration の source として残り、runtime は読まず、変更・削除・rename もしません。
