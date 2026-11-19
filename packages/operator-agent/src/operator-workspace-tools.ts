@@ -79,7 +79,7 @@ export function createOperatorWorkspaceFileTools(
   const tools: Record<string, ConductorTool> = {
     [LIST_OPERATOR_WORKSPACE_FILES_TOOL]: {
       name: LIST_OPERATOR_WORKSPACE_FILES_TOOL,
-      description: 'List workspace entries without following symlinks during recursion. Path checks are not an OS sandbox and cannot prevent same-user TOCTOU changes.',
+      description: 'List workspace entries without following symlinks during recursion. Recursive depth defaults to 3 (maximum 10); entries default to 100 (maximum 1000). Path checks are not an OS sandbox and cannot prevent same-user TOCTOU changes.',
       inputSchema: {
         type: 'object', properties: {
           path: { type: 'string', description: 'Directory relative to workspace; omitted for root.' },
@@ -120,7 +120,7 @@ export function createOperatorWorkspaceFileTools(
     },
     [MOVE_OPERATOR_WORKSPACE_FILE_TOOL]: {
       name: MOVE_OPERATOR_WORKSPACE_FILE_TOOL,
-      description: 'Move a workspace file or directory. Existing destinations require overwrite: true. Final symlinks are rejected. Path checks are not an OS sandbox and cannot prevent same-user TOCTOU changes.',
+      description: 'Move a workspace file or directory. Existing destinations require overwrite: true. Final symlinks, moving a directory into itself, and moving or replacing root AGENTS.md are rejected. The managed watch directory and its resolved parents cannot be moved. Run operator-agent as a singleton. If a move fails or is interrupted, workspace file tools stop; use get_operator_workspace_move_status and tell the user to stop the agent and inspect and preserve the data manually. No automatic recovery or adoption is performed. Path checks are not an OS sandbox and cannot prevent same-user TOCTOU changes.',
       inputSchema: {
         type: 'object',
         properties: { source: { type: 'string' }, destination: { type: 'string' }, overwrite: { type: 'boolean' } },
@@ -166,7 +166,7 @@ export function createOperatorWorkspaceFileTools(
     },
     [DELETE_OPERATOR_WORKSPACE_FILE_TOOL]: {
       name: DELETE_OPERATOR_WORKSPACE_FILE_TOOL,
-      description: 'Delete a workspace file or the symlink itself; directories are rejected. Path checks are not an OS sandbox and cannot prevent same-user TOCTOU changes.',
+      description: 'Delete a workspace file or the symlink itself; directories, root AGENTS.md, and the managed watch directory and its contents are protected. Path checks are not an OS sandbox and cannot prevent same-user TOCTOU changes.',
       inputSchema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'], additionalProperties: false },
       execute: async (args) => {
         assertOnlyInputProperties(args, ['path']);
@@ -188,7 +188,7 @@ export function createOperatorWorkspaceFileTools(
     [READ_OPERATOR_WORKSPACE_FILE_TOOL]: {
       name: READ_OPERATOR_WORKSPACE_FILE_TOOL,
       description:
-        'Read a UTF-8 file in the active operator profile workspace. The path must be relative to that workspace. During ordinary operation without concurrent directory changes, path checks reject absolute paths, parent traversal, and symlinks that resolve outside the workspace. These checks are not an OS sandbox and do not prevent same-user TOCTOU changes between validation and path-based open. Files larger than 1 MiB are rejected.',
+        'Read a UTF-8 file in the active operator profile workspace. The path must be relative to that workspace. During ordinary operation without concurrent directory changes, path checks reject absolute paths, parent traversal, and symlinks that resolve outside the workspace. These checks are not an OS sandbox and do not prevent same-user TOCTOU changes between validation and path-based open. Files larger than 1 MiB are rejected. File content is passed to the backend as is, without secret redaction; do not read files that may contain secrets.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -246,7 +246,7 @@ export function createOperatorWorkspaceFileTools(
     [WRITE_OPERATOR_WORKSPACE_FILE_TOOL]: {
       name: WRITE_OPERATOR_WORKSPACE_FILE_TOOL,
       description:
-        'Create or replace a UTF-8 file in the active operator profile workspace. Parent directories are created inside that workspace as needed. The path must be relative. During ordinary operation without concurrent directory changes, path checks reject absolute paths, parent traversal, and symlinks that resolve outside the workspace. These checks are not an OS sandbox and do not prevent same-user TOCTOU changes between validation and path-based open. Content larger than 1 MiB is rejected.',
+        'Create or replace a UTF-8 file in the active operator profile workspace. Parent directories are created inside that workspace as needed. The path must be relative. AGENTS.md can be edited, but the managed watch directory and its contents cannot be modified. During ordinary operation without concurrent directory changes, path checks reject absolute paths, parent traversal, and symlinks that resolve outside the workspace. These checks are not an OS sandbox and do not prevent same-user TOCTOU changes between validation and path-based open. Content larger than 1 MiB is rejected. Content is written as is, without secret redaction; do not store secrets.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -332,7 +332,7 @@ export function createOperatorWorkspaceFileTools(
   }
   tools[GET_OPERATOR_WORKSPACE_MOVE_STATUS_TOOL] = {
     name: GET_OPERATOR_WORKSPACE_MOVE_STATUS_TOOL,
-    description: 'Inspect a pending workspace move. No data is restored, selected, or deleted.',
+    description: 'Inspect a pending workspace move when workspace file tools are blocked. Tell the user to stop the agent, inspect and preserve source, destination, staging and the journal manually, and remove the journal only after preserving the data. A corrupt journal also requires manual inspection. No data is restored, selected, or deleted.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     execute: (args) => {
       const run = queue.then(async () => {

@@ -52,7 +52,7 @@ export function createListConductorMessagesTool(
   return {
     name: LIST_CONDUCTOR_MESSAGES_TOOL,
     description:
-      'List up to 100 recent user prompts and final conductor responses from provider session history, including after the Issue harness stops. Defaults to 20 in descending provider order. Pass a returned providerId as an exclusive cursor to continue paging.',
+      'List up to 100 recent user prompts and final conductor responses from provider session history, including after the Issue harness stops. Defaults to 20 in descending provider order. Pass a returned providerId as an exclusive cursor to continue paging. Inbound message bodies are not secret-redacted.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -223,7 +223,7 @@ export function createAnswerLiveOpenQuestionTool(
   return {
     name: ANSWER_LIVE_OPEN_QUESTION_TOOL,
     description:
-      'Submit an operator-approved answer to one open question in a running Issue harness. The harness persists the answer and normally waits for conductor dispatch before returning. If shutdown interrupts dispatch, the answer remains recorded and the result reports an unknown outcome; do not resubmit it, inspect the saved session state.',
+      'Submit an operator-approved answer to one open question in a running Issue harness. The harness persists the answer and normally waits for conductor dispatch before returning. If shutdown interrupts dispatch, the answer remains recorded and the result reports an unknown outcome; do not resubmit it, inspect the saved session state. Question, context, and answer text are handled as stored; free-form answers are not secret-masked.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -287,7 +287,7 @@ export function createSendOperatorMessageTool(
   return {
     name: SEND_OPERATOR_MESSAGE_TOOL,
     description:
-      'Send a message to a running conductor. Set listen to true to prepare or reuse its persistent message listener before sending. Queued does not mean processed or answered.',
+      'Send a message to a running conductor. Set listen to true to prepare or reuse its persistent message listener before sending. Queued does not mean processed or answered. With listen, correlation with this send and arrival of a reply are not guaranteed. If the outcome is unknown, do not resend automatically; check the session first.',
     inputSchema: {
       type: 'object',
       properties: {

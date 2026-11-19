@@ -33,7 +33,7 @@ export function createListWorkerMessagesTool(
   return {
     name: LIST_WORKER_MESSAGES_TOOL,
     description:
-      'Read saved ACP worker transcript messages for one exact Issue URL and conductorAgentId. Reports unsupported readers, missing saved worker sessions, and unavailable transcripts explicitly.',
+      'Read saved ACP worker transcript messages for one exact Issue URL and conductorAgentId. Reports unsupported readers, missing saved worker sessions, and unavailable transcripts explicitly. Worker prompt failures are not persisted, so do not infer a failure from a missing worker record or transcript. Pass the opaque nextCursor unmodified with the same target and order; on paginationStatus invalid_cursor, restart from the first page.',
     inputSchema: {
       type: 'object',
       properties: {

@@ -1047,26 +1047,23 @@ describe('runOperatorAgent', () => {
     expect(agentOptions).not.toHaveProperty('reasoning');
     expect(agentOptions?.systemPrompt).toContain('operator ロール');
     expect(agentOptions?.systemPrompt).toContain('Profile operator guidance.');
-    expect(agentOptions?.systemPrompt).toContain('answer_live_open_question');
-    expect(agentOptions?.systemPrompt).toContain('自動解決はしません');
-    expect(agentOptions?.systemPrompt).toContain('get_last_conductor_message');
-    expect(agentOptions?.systemPrompt).toContain('list_conductor_messages');
-    expect(agentOptions?.systemPrompt).toContain('list_worker_messages');
-    expect(agentOptions?.systemPrompt).toContain(
-      'Pi / Codex / Cursor ACP transcript',
-    );
-    expect(agentOptions?.systemPrompt).toContain('openQuestionHistory');
-    expect(agentOptions?.systemPrompt).toContain('register_conductor_message_listen');
     expect(agentOptions?.systemPrompt).toContain('shutdown_issue_session');
-    expect(agentOptions?.systemPrompt).toContain(
-      '検査と open の間に workspace root や親 directory を差し替える TOCTOU は防げず',
-    );
-    expect(agentOptions?.systemPrompt).toContain(
-      '信頼できない同一ユーザー process と workspace を共有しないでください',
-    );
-    expect(agentOptions?.systemPrompt).toContain(
-      'workspace file tool は内容をそのまま読み書きし、秘密情報を redaction しません',
-    );
+    expect(agentOptions?.systemPrompt).not.toContain('answer_live_open_question');
+    const toolDescription = (name: string): string =>
+      String(
+        (agentOptions?.customTools as Record<string, { description?: string }> | undefined)?.[name]
+          ?.description,
+      );
+    expect(toolDescription('answer_live_open_question')).toContain('not secret-masked');
+    expect(toolDescription('list_worker_messages')).toContain('do not infer a failure');
+    expect(toolDescription('list_operator_sessions')).toContain('openQuestionHistory');
+    expect(toolDescription('register_session_watch')).toContain('answeredBy: operator');
+    expect(toolDescription('read_operator_workspace_file')).toContain('TOCTOU');
+    expect(toolDescription('read_operator_workspace_file')).toContain('without secret redaction');
+    expect(toolDescription('move_operator_workspace_file')).toContain('get_operator_workspace_move_status');
+    expect(toolDescription('move_operator_workspace_file')).toContain('singleton');
+    expect(toolDescription('write_operator_workspace_file')).toContain('AGENTS.md can be edited');
+    expect(toolDescription('get_operator_workspace_move_status')).toContain('preserve');
     expect(agentOptions?.customTools).not.toHaveProperty('prompt_worker');
     expect(
       Object.keys(agentOptions?.customTools ?? {}).filter(
