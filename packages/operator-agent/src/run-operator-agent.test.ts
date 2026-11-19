@@ -1085,6 +1085,50 @@ describe('runOperatorAgent', () => {
     ).resolves.toEqual([]);
   });
 
+  it('shows compaction outcomes while a send and next input continue', async () => {
+    const input = createInteractiveInput();
+    input.isTTY = true;
+    const output = createOutput();
+    let options: ConductorAgentCreateOptions | undefined;
+    let finishFirst: ((result: Awaited<ReturnType<ConductorAgent['send']>>) => void) | undefined;
+    const prompts: string[] = [];
+    const fakeAgent = createFakeAgent({
+      send: async (prompt) => {
+        prompts.push(prompt);
+        if (prompts.length === 1) return await new Promise((resolve) => { finishFirst = resolve; });
+        return { runId: 'second', status: 'completed', result: 'second done' };
+      },
+    });
+    const run = runOperatorAgent({ repoRoot, backend: 'pi' }, {
+      stdin: input, stdout: output,
+      agentFactory: {
+        create: async (value) => { options = value; return fakeAgent; },
+        resume: async (id, value) => { options = value; return fakeAgent; },
+      },
+    });
+    input.write('first\n');
+    await vi.waitFor(() => expect(finishFirst).toBeTypeOf('function'));
+    const emit = options!.onCompactionEvent!;
+    emit({ type: 'start', reason: 'threshold' });
+    emit({ type: 'end', reason: 'threshold', outcome: 'success', tokensBefore: 200 });
+    emit({ type: 'start', reason: 'manual' });
+    emit({ type: 'end', reason: 'manual', outcome: 'failed', errorMessage: 'failure detail' });
+    emit({ type: 'start', reason: 'overflow' });
+    emit({ type: 'end', reason: 'overflow', outcome: 'aborted' });
+    input.write('second\n');
+    finishFirst!({ runId: 'first', status: 'completed', result: 'first done' });
+    await vi.waitFor(() => expect(prompts).toHaveLength(2));
+    await vi.waitFor(() => expect(output.capturedText()).toContain('second done'));
+    const transcript = output.capturedText();
+    expect(transcript).toContain('compaction 開始（自動）');
+    expect(transcript).toContain('compaction 成功（このプロセスで 1 回、圧縮前 200 tokens）');
+    expect(transcript).toContain('compaction 失敗: failure detail');
+    expect(transcript).toContain('compaction 中断');
+    input.write('/exit\n');
+    input.end();
+    await run;
+  });
+
   it('shows send and tool activity while preserving the TTY prompt', async () => {
     const input = createInteractiveInput();
     input.isTTY = true;
@@ -1645,6 +1689,8 @@ describe('runOperatorAgent', () => {
         });
       });
 
+      agentOptions!.onCompactionEvent!({ type: 'start', reason: 'threshold' });
+      agentOptions!.onCompactionEvent!({ type: 'end', reason: 'threshold', outcome: 'success' });
       expect(sentPrompts).toHaveLength(1);
       expect(sentPrompts[0]).toBe('summarize the live update');
 

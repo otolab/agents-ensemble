@@ -1,6 +1,7 @@
 export type {
   ConductorAgent,
   ConductorAgentCreateOptions,
+  ConductorCompactionEvent,
   ConductorPiResourceOptions,
   ConductorAgentFactory,
   ConductorAgentOptions,
