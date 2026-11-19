@@ -1,6 +1,6 @@
 # ADR 0021: conductor MCP 設定の 2 層解決と inline 配線
 
-- Status: accepted
+- Status: superseded by [0084](0084-conductor-mcp-selection.md)
 - Date: 2026-09-03
 
 ## Context

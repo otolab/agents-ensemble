@@ -394,6 +394,7 @@ describe('Pi conductor backend integration', () => {
       conductor: {
         ...DEFAULT_ENSEMBLE_CONFIG.conductor,
         backend: 'pi' as const,
+        mcp: { servers: ['fixture'] },
       },
     };
     const sessionOptions = {

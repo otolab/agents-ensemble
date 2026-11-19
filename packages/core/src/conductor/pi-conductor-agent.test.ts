@@ -1844,6 +1844,7 @@ describe('PiConductorAgent', () => {
         conductor: {
           ...DEFAULT_ENSEMBLE_CONFIG.conductor,
           backend: 'pi' as const,
+          mcp: { servers: ['fixture'] },
           pi: { agentDir, projectDir },
         },
       };

@@ -4,7 +4,7 @@
 
 `.ensemble/config.yaml` は `ensemble issue` harness の設定の正本。team-profile（`profile.yaml`）や conductor backend の認証とは別系統です。`ensemble operator-agent` はこの設定・team profile を読み込まず、専用の `~/.ensemble/operator-agents.config.yaml` を使います（本書の [operator-agent 設定](#operator-agent-専用設定) を参照）。
 
-conductor に渡す MCP 設定もこの config.yaml とは別の JSON ファイルで管理する（下記の [Conductor MCP 設定](#conductor-mcp-設定mcpjson) を参照）。
+conductor の MCP server はこの config.yaml で選択し、定義は別の JSON ファイルで管理する（下記の [Conductor MCP 設定](#conductor-mcp-設定mcpjson) を参照）。
 
 ## 配置と解決順
 
@@ -737,14 +737,22 @@ worker 単位の ACP preset 切り替えは対象外です。tier 配分は prof
 
 ## Conductor MCP 設定（mcp.json）
 
-MCP 設定は次の 2 層から読み込み、`mcpServers` のサーバー名単位でマージする。
+conductor が使う server を ensemble config の `conductor.mcp.servers` に名前で指定する。標準 user config またはその代替の `--config` を読み、project config が有効ならその設定を後から適用する。project の配列は user の配列を追加せず置き換える。`servers: []` または両層で未指定なら MCP なしで起動する。team profile は選択に関与しない。
+
+```yaml
+conductor:
+  mcp:
+    servers: [example]
+```
+
+選択した名前の定義を次の 2 層から読み込み、`mcpServers` のサーバー名単位でマージする。
 
 | 層 | パス | 優先度 |
 |----|------|--------|
 | プロジェクト | `<repoRoot>/.agents/mcp.json` | 高（同名を上書き） |
 | ユーザ | `~/.ensemble/mcp.json` | 低（既定） |
 
-プロジェクト設定が同名サーバーを定義した場合は、ユーザ設定の定義全体を置き換える。片方だけ存在する場合はその設定を使い、両方とも無い場合は MCP なしで起動する。
+プロジェクト設定が同名サーバーを定義した場合は、ユーザ設定の定義全体を置き換える。選択名が定義されていない場合は server 名と両方の定義ファイルの場所を示して起動を止める。定義を書くだけでは server は起動しない。従来の全 server 自動選択は廃止されたため、使い続ける server は明示的に選択する。
 
 ファイル形式は Cursor SDK の `mcp.json` 形式（`mcpServers` オブジェクト）を使う。
 
@@ -763,7 +771,7 @@ MCP 設定は次の 2 層から読み込み、`mcpServers` のサーバー名単
 }
 ```
 
-解決済み設定は conductor の両 backend に同じ map として渡す。Cursor SDK では `Agent.create` / `Agent.resume` の inline MCP として、Pi では Pi 1.x の `DefaultResourceLoader` に `createMcpExtension({ loadConfig })` を extension factory として登録し、`createAgentSession` の起動時に注入する。Pi 側で `.pi/mcp.json` へ同期・コピー・symlink は行わず、resume 時は現在 clone で解決した map を使う。SessionResumeStore にはこの map の canonical SHA-256 digest を診断情報として保存するが、digest の差だけで resume を拒否しない。digest に秘密値そのものは保存しない。MCP 接続の管理、tool discovery、OAuth、resource tools は Pi 公式 extension に委ね、core は MCP client/transport を実装しない。
+選択後の設定だけを conductor の両 backend に同じ map として渡す。Cursor SDK では `Agent.create` / `Agent.resume` の inline MCP として、Pi では Pi 1.x の `DefaultResourceLoader` に `createMcpExtension({ loadConfig })` を extension factory として登録し、`createAgentSession` の起動時に注入する。Pi 側で `.pi/mcp.json` へ同期・コピー・symlink は行わず、resume 時は現在 clone で解決した map を使う。SessionResumeStore にはこの map の canonical SHA-256 digest を診断情報として保存するが、digest の差だけで resume を拒否しない。digest に秘密値そのものは保存しない。MCP 接続の管理、tool discovery、OAuth、resource tools は Pi 公式 extension に委ね、core は MCP client/transport を実装しない。
 
 `command` / `args` / `env` / `cwd` / `url` / `headers` / `auth` は harness 境界で Cursor 形式の placeholder を解決してから Pi 公式 extension に渡す。`${env:VAR}` は現在の process environment の値、`${workspaceFolder}` / `${workspaceFolderBasename}` は conductor の cwd へ変換し、値が見つからない placeholder は literal のまま渡さず明確なエラーにする。Pi 標準の `$VAR` / `${VAR}` は公式 resolver に委ねる。Pi は `stdio` と Streamable HTTP (`http`) をサポートするが、shared `mcp.json` の `sse` 定義は Pi 1.x ではサポートしないため、Pi conductor の起動時に明確なエラーにする。HTTP の `auth` (`CLIENT_ID` / `CLIENT_SECRET` / `scopes`) は Pi の MCP OAuth 設定へ渡され、認可フローと credential 保存は公式 extension が管理する。`.cursor/mcp.json` や `.pi/mcp.json` へのコピー・symlink、`settings.json` の書き換えは行わず、ACP worker にはこの設定を渡さない。MCP server tool は公式名 `mcp__<server>__<tool>`（長すぎる・衝突する場合は Pi の hash suffix）で公開される。resources がある場合は公式の `list_mcp_resources`、`list_mcp_resource_templates`、`read_mcp_resource` が提供される。`codemode` / `tool_search` の exposure は公式 extension の設定に従う。
 

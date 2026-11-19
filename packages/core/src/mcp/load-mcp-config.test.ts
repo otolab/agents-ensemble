@@ -9,6 +9,7 @@ import {
   PROJECT_MCP_CONFIG_DIR,
   resolveMcpServerConfigMapPlaceholders,
   resolveMcpServers,
+  resolveConductorMcpServers,
   resolveMcpServersForSdk,
   resolveUserMcpServers,
 } from './load-mcp-config.js';
@@ -41,6 +42,21 @@ describe('loadMcpConfig', () => {
     await expect(loadMcpConfig(repoRoot, { userEnsembleRoot })).resolves.toEqual({
       mcpServers: {},
     });
+  });
+
+  it('selects only named definitions and reports missing names with both paths', async () => {
+    await writeUserConfig(JSON.stringify({ mcpServers: {
+      chosen: { command: 'user' }, unused: { command: 'unused' },
+    } }));
+    await writeProjectConfig(JSON.stringify({ mcpServers: { chosen: { command: 'project' } } }));
+    const options = { userEnsembleRoot };
+    await expect(resolveConductorMcpServers(repoRoot, [], options)).resolves.toEqual({});
+    const selected = await resolveConductorMcpServers(repoRoot, ['chosen'], options);
+    expect(selected).toEqual({ chosen: { command: 'project' } });
+    expect(computeMcpConfigDigest(selected)).toBe(computeMcpConfigDigest({ chosen: { command: 'project' } }));
+    await expect(resolveConductorMcpServers(repoRoot, ['missing'], options)).rejects.toThrow(
+      `MCP server "missing" is not defined in ${join(userEnsembleRoot, 'mcp.json')} or ${join(repoRoot, '.agents', 'mcp.json')}`,
+    );
   });
 
   it('loads the user config from ~/.ensemble/mcp.json', async () => {

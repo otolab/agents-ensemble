@@ -104,12 +104,21 @@ function parseConductorConfig(raw: unknown): EnsembleConductorConfig | undefined
   const backend = parseConductorBackend(obj.backend);
   const verbose = readBoolean(obj.verbose);
   const pi = parseConductorPiConfig(obj.pi);
+  let mcp: { servers: string[] } | undefined;
+  if (obj.mcp !== undefined) {
+    const rawMcp = readObject(obj.mcp);
+    if (!rawMcp || !Array.isArray(rawMcp.servers) || !rawMcp.servers.every((name: unknown) => typeof name === 'string' && name.trim().length > 0)) {
+      throw new Error('conductor.mcp.servers must be an array of non-empty strings');
+    }
+    mcp = { servers: rawMcp.servers as string[] };
+  }
   if (
     model === undefined &&
     reasoning === undefined &&
     backend === undefined &&
     verbose === undefined &&
-    pi === undefined
+    pi === undefined &&
+    mcp === undefined
   ) {
     return undefined;
   }
@@ -119,6 +128,7 @@ function parseConductorConfig(raw: unknown): EnsembleConductorConfig | undefined
     ...(backend !== undefined ? { backend } : {}),
     ...(verbose !== undefined ? { verbose } : {}),
     ...(pi !== undefined ? { pi } : {}),
+    ...(mcp !== undefined ? { mcp } : {}),
   } as EnsembleConductorConfig;
 }
 
