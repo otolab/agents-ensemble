@@ -1,5 +1,25 @@
 # @agents-ensemble/operator-agent
 
+## 0.7.0
+
+### Minor Changes
+
+- 68acfc0: Pi operator-agent の compaction の開始と結果を活動ログに表示する。
+- 027936d: Automatically discover live sessions and let the operator agent request queued reports while controlling automatic delivery with configurable weights.
+- c4278cd: Add workspace listing, file moving, and deletion tools for operator agents.
+
+### Patch Changes
+
+- f960533: Show Pi provider and summarization retry activity in operator-agent.
+- 7828080: operator-agent の入力欄に現在の処理状態と経過時間を表示します。
+- 75f3fb8: operator-agent のシステムプロンプトを整理しました。tool の使い方は各 tool の description に任せ、プロンプトには役割（user / operator / conductor / worker と、ensemble harness / operator harness）、情報の流れ、判断の原則だけを書きます。
+- Updated dependencies [68acfc0]
+- Updated dependencies [f960533]
+- Updated dependencies [7525904]
+- Updated dependencies [7828080]
+- Updated dependencies [325ccd0]
+  - @agents-ensemble/core@0.24.0
+
 ## 0.6.3
 
 ### Patch Changes
