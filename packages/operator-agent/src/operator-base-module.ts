@@ -60,7 +60,7 @@ export const operatorBaseModule: PromptModule<OperatorPromptContext> = {
       items: [
         '- path は workspace からの相対 path です。通常の（directory 構造が操作中に変わらない）状態では、絶対 path、`..`、symlink 解決後に root 外となる path は拒否されます。ただし検査と path-based open の間に directory が差し替わる競合は防止されません',
         '- 読み書きは UTF-8 text で、1 file あたり最大1 MiBです。write は親 directory を workspace 内に作成し、既存 file は置き換えます',
-        '- `list_operator_workspace_files` は root または指定 directory を一覧し、再帰時も symlink を辿りません。`move_operator_workspace_file` は file / directory を移動し、既存の移動先は `overwrite: true` の場合のみ置き換えます。directory の自己配下への移動と最終 symlink の移動・上書きはできません。`delete_operator_workspace_file` は file または symlink 自体を削除し、directory は削除しません。root 直下の AGENTS.md は move / delete できず、移動先として置き換えることもできません。filesystem を跨ぐ move でエラーが起きた場合は通知された状態・復旧場所を確認してください',
+        '- `list_operator_workspace_files` は root または指定 directory を一覧し、再帰時も symlink を辿りません。`move_operator_workspace_file` は file / directory を移動し、既存の移動先は `overwrite: true` の場合のみ置き換えます。directory の自己配下への移動と最終 symlink の移動・上書きはできません。`delete_operator_workspace_file` は file または symlink 自体を削除し、directory は削除しません。root 直下の AGENTS.md は move / delete できず、移動先として置き換えることもできません。operator-agent は singleton で動作させてください。move の中断・失敗時は `get_operator_workspace_move_status` の情報を user に伝え、人が手動で確認するまで workspace file tool を停止します。自動復元・採用はしません',
         '- workspace file の本文は秘密情報を除去せず、backend にそのまま渡ります。秘密情報を含む可能性がある file は読ませないでください',
       ],
     },

@@ -1,8 +1,9 @@
 import { constants as fsConstants } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
 import {
   lstat,
   cp,
-  mkdtemp,
+  readFile,
   rename,
   rm,
   readdir,
@@ -19,6 +20,8 @@ import {
   sep,
   win32,
   join,
+  dirname,
+  basename,
 } from 'node:path';
 import {
   type ConductorJsonValue,
@@ -32,6 +35,7 @@ export const WRITE_OPERATOR_WORKSPACE_FILE_TOOL =
 export const LIST_OPERATOR_WORKSPACE_FILES_TOOL = 'list_operator_workspace_files';
 export const MOVE_OPERATOR_WORKSPACE_FILE_TOOL = 'move_operator_workspace_file';
 export const DELETE_OPERATOR_WORKSPACE_FILE_TOOL = 'delete_operator_workspace_file';
+export const GET_OPERATOR_WORKSPACE_MOVE_STATUS_TOOL = 'get_operator_workspace_move_status';
 export const MAX_OPERATOR_WORKSPACE_FILE_BYTES = 1024 * 1024;
 
 const NOFOLLOW =
@@ -71,7 +75,8 @@ export function createOperatorWorkspaceFileTools(
     throw new WorkspaceError('The operator profile workspace root must be canonical and absolute.');
   }
 
-  return {
+  const journalPath = workspaceMoveJournalPath(root);
+  const tools: Record<string, ConductorTool> = {
     [LIST_OPERATOR_WORKSPACE_FILES_TOOL]: {
       name: LIST_OPERATOR_WORKSPACE_FILES_TOOL,
       description: 'List workspace entries without following symlinks during recursion. Path checks are not an OS sandbox and cannot prevent same-user TOCTOU changes.',
@@ -146,7 +151,7 @@ export function createOperatorWorkspaceFileTools(
             throw new WorkspaceError('A directory cannot be moved into itself, and source and destination must differ.');
           }
           if (isWithin(destinationPath, sourcePath)) throw new WorkspaceError('The destination cannot contain the source.');
-          await moveWorkspaceEntry(root, sourcePath, destinationPath, args.overwrite === true, moveFs);
+          await moveWorkspaceEntry(root, sourcePath, destinationPath, args.overwrite === true, moveFs, journalPath);
           return toolResult({ source: source.relativePath, destination: destination.relativePath });
         } catch (error) { throw safeOperationError(error); }
       },
@@ -298,6 +303,34 @@ export function createOperatorWorkspaceFileTools(
       },
     },
   };
+
+  // Calls within the singleton instance share a queue, including journal checks.
+  let queue: Promise<unknown> = Promise.resolve();
+  for (const tool of Object.values(tools)) {
+    const execute = tool.execute;
+    tool.execute = (args) => {
+      const run = queue.then(async () => {
+        await assertNoMoveJournal(journalPath);
+        return execute(args);
+      });
+      queue = run.catch(() => undefined);
+      return run;
+    };
+  }
+  tools[GET_OPERATOR_WORKSPACE_MOVE_STATUS_TOOL] = {
+    name: GET_OPERATOR_WORKSPACE_MOVE_STATUS_TOOL,
+    description: 'Inspect a pending workspace move. No data is restored, selected, or deleted.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    execute: (args) => {
+      const run = queue.then(async () => {
+        assertOnlyInputProperties(args, []);
+        return toolResult(await readMoveStatus(root, journalPath));
+      });
+      queue = run.catch(() => undefined);
+      return run;
+    },
+  };
+  return tools;
 }
 
 type MoveFilesystem = Pick<typeof import('node:fs/promises'), 'rename' | 'cp' | 'rm'>;
@@ -308,58 +341,69 @@ function isWithin(parent: string, child: string): boolean {
   return path === '' || (path !== '..' && !path.startsWith(`..${sep}`) && !isAbsolute(path));
 }
 
-/** Preserve an overwritten destination until the move is committed. */
-async function moveWorkspaceEntry(root: string, source: string, destination: string, overwrite: boolean, fs: MoveFilesystem): Promise<void> {
+function workspaceMoveJournalPath(root: string): string {
+  const id = createHash('sha256').update(root).digest('hex');
+  return join(dirname(root), `.ensemble-workspace-move-${id}.json`);
+}
+
+async function assertNoMoveJournal(path: string): Promise<void> {
+  try { await lstat(path); } catch (error) {
+    if (isNodeError(error, 'ENOENT')) return;
+    throw new WorkspaceError('Cannot check workspace move status. Inspect the move journal manually.');
+  }
+  throw new WorkspaceError('A workspace move needs manual inspection. Use get_operator_workspace_move_status.');
+}
+
+async function readMoveStatus(root: string, journalPath: string): Promise<Record<string, ConductorJsonValue>> {
+  try {
+    const metadata = await lstat(journalPath);
+    if (!metadata.isFile() || metadata.size > 16384) throw new Error();
+    const data: unknown = JSON.parse(await readFile(journalPath, 'utf8'));
+    if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error();
+    const record = data as Record<string, unknown>;
+    if (record.version !== 1 || record.workspace !== root || typeof record.source !== 'string' || typeof record.destination !== 'string' || typeof record.staging !== 'string' || typeof record.overwrite !== 'boolean') throw new Error();
+    for (const path of [record.source, record.destination, record.staging]) resolveWorkspaceFilePath(root, path as string);
+    return { status: 'inspection_required', journal: basename(journalPath), source: record.source as string, destination: record.destination as string, staging: record.staging as string, overwrite: record.overwrite as boolean, guidance: 'Stop the operator agent. Inspect source, destination, and staging/backup and staging/copy manually. Data may be partial. Do not remove the journal until all data is safely preserved.' };
+  } catch (error) {
+    if (isNodeError(error, 'ENOENT')) return { status: 'idle' };
+    return { status: 'journal_unreadable', journal: basename(journalPath), guidance: 'Stop the operator agent and inspect the journal manually; no workspace operation is safe until it is resolved.' };
+  }
+}
+
+/** Journal before changing data; on any failure retain every remaining entry for manual inspection. */
+async function moveWorkspaceEntry(root: string, source: string, destination: string, overwrite: boolean, fs: MoveFilesystem, journalPath: string): Promise<void> {
   let exists = false;
   try { await lstat(destination); exists = true; } catch (error) {
     if (!isNodeError(error, 'ENOENT')) throw error;
   }
   if (exists && !overwrite) throw new WorkspaceError('The destination already exists.');
-  // A final destination symlink is never followed or replaced.
   if (exists && (await lstat(destination)).isSymbolicLink()) throw new WorkspaceError('The destination cannot be a symbolic link.');
 
-  const staging = await mkdtemp(join(resolve(destination, '..'), '.ensemble-move-'));
+  const staging = join(dirname(destination), `.ensemble-move-${randomUUID()}`);
   const backup = join(staging, 'backup');
   const copy = join(staging, 'copy');
-  const recovery = relative(root, staging).split(sep).join('/');
-  let backedUp = false;
-  let published = false;
-  let copied = false;
+  const pathInWorkspace = (path: string) => relative(root, path).split(sep).join('/');
+  const record = JSON.stringify({ version: 1, workspace: root, source: pathInWorkspace(source), destination: pathInWorkspace(destination), staging: pathInWorkspace(staging), overwrite });
+  const handle = await open(journalPath, fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_WRONLY | NOFOLLOW, 0o600);
+  try { await handle.writeFile(record, 'utf8'); } finally { await handle.close(); }
   try {
-    if (exists) { await fs.rename(destination, backup); backedUp = true; }
-    // Node has no portable rename-no-replace; recheck after moving the old destination.
+    await mkdir(staging, { mode: 0o700 });
+    if (exists) await fs.rename(destination, backup);
     try { await lstat(destination); throw new WorkspaceError('The destination already exists.'); }
     catch (error) { if (!isNodeError(error, 'ENOENT')) throw error; }
-    try {
-      await fs.rename(source, destination);
-      published = true;
-    } catch (error) {
+    let copied = false;
+    try { await fs.rename(source, destination); }
+    catch (error) {
       if (!isNodeError(error, 'EXDEV')) throw error;
       await fs.cp(source, copy, { recursive: true, dereference: false, verbatimSymlinks: true, errorOnExist: true, force: false, preserveTimestamps: true });
       await fs.rename(copy, destination);
-      published = true;
       copied = true;
     }
-  } catch (error) {
-    if (backedUp) {
-      try {
-        try { await lstat(destination); throw new WorkspaceError('Destination appeared during rollback.'); }
-        catch (error) { if (!isNodeError(error, 'ENOENT')) throw error; }
-        await fs.rename(backup, destination); backedUp = false;
-      }
-      catch { throw new WorkspaceError(`Move failed and the previous destination could not be restored. Recover it from ${recovery}/backup; inspect source and destination before retrying.`); }
-    }
-    try { await fs.rm(staging, { recursive: true, force: true }); }
-    catch { throw new WorkspaceError(`Move failed; source remains, but temporary data could not be removed. Inspect ${recovery} before retrying.`); }
-    throw error;
-  }
-  if (copied) {
-    try { await fs.rm(source, { recursive: true }); }
-    catch { throw new WorkspaceError(`Move was partially completed: destination contains the copy, but source removal failed and may be partial. Inspect both before retrying.${backedUp ? ` The previous destination is at ${recovery}/backup.` : ` Temporary data remains at ${recovery}.`}`); }
-  }
-  if (published) {
-    try { await fs.rm(staging, { recursive: true, force: true }); }
-    catch { throw new WorkspaceError(`Move completed, but temporary data could not be removed. Inspect ${recovery} before retrying.`); }
+    if (copied) await fs.rm(source, { recursive: true });
+    await fs.rm(staging, { recursive: true, force: true });
+    await unlink(journalPath);
+  } catch {
+    throw new WorkspaceError('Workspace move was interrupted or failed. Data was retained where possible; use get_operator_workspace_move_status and inspect manually.');
   }
 }
 

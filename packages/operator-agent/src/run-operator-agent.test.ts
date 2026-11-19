@@ -1098,6 +1098,7 @@ describe('runOperatorAgent', () => {
       'delete_operator_workspace_file',
       'read_operator_workspace_file',
       'write_operator_workspace_file',
+      'get_operator_workspace_move_status',
     ]);
     await expect(
       listOperatorAgentStates(join(repoRoot, '.ensemble')),

@@ -18,6 +18,7 @@ import {
   LIST_OPERATOR_WORKSPACE_FILES_TOOL,
   MOVE_OPERATOR_WORKSPACE_FILE_TOOL,
   DELETE_OPERATOR_WORKSPACE_FILE_TOOL,
+  GET_OPERATOR_WORKSPACE_MOVE_STATUS_TOOL,
   MAX_OPERATOR_WORKSPACE_FILE_BYTES,
   READ_OPERATOR_WORKSPACE_FILE_TOOL,
   resolveOperatorWorkspaceRoot,
@@ -284,6 +285,7 @@ describe('operator profile workspace file tools', () => {
   it('handles cross-filesystem moves and reports partial source removal', async () => {
     await mkdir(join(workspace, 'source'));
     await writeFile(join(workspace, 'source/note'), 'source');
+    await writeFile(join(workspace, 'source/partial'), 'partial');
     await mkdir(join(workspace, 'dest'));
     await writeFile(join(workspace, 'dest/old'), 'old');
     const sourcePath = await realpath(join(workspace, 'source'));
@@ -294,20 +296,25 @@ describe('operator profile workspace file tools', () => {
       },
       cp,
       rm: async (path: Parameters<typeof rm>[0], options?: Parameters<typeof rm>[1]) => {
-        if (String(path) === sourcePath) throw Object.assign(new Error('private path'), { code: 'EACCES' });
+        if (String(path) === sourcePath) {
+          await rm(join(sourcePath, 'partial'));
+          throw Object.assign(new Error('private path'), { code: 'EACCES' });
+        }
         return rm(path, options);
       },
     };
     const move = createOperatorWorkspaceFileTools(await resolveOperatorWorkspaceRoot(workspace), fakeFs)[MOVE_OPERATOR_WORKSPACE_FILE_TOOL]!;
-    await expect(move.execute({ source: 'source', destination: 'dest', overwrite: true })).rejects.toThrow(/partially completed.*previous destination is at/u);
+    await expect(move.execute({ source: 'source', destination: 'dest', overwrite: true })).rejects.toThrow(/inspect manually/u);
     await expect(readFile(join(workspace, 'dest/note'), 'utf8')).resolves.toBe('source');
     await expect(readFile(join(workspace, 'source/note'), 'utf8')).resolves.toBe('source');
+    await expect(lstat(join(workspace, 'source/partial'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(readFile(join(workspace, 'dest/partial'), 'utf8')).resolves.toBe('partial');
     const staging = (await import('node:fs/promises')).readdir(workspace);
     const backup = (await staging).find((entry) => entry.startsWith('.ensemble-move-'))!;
     await expect(readFile(join(workspace, backup, 'backup/old'), 'utf8')).resolves.toBe('old');
   });
 
-  it('restores destination on failed move and sanitizes filesystem errors', async () => {
+  it('preserves the previous destination on failed move and blocks further operations', async () => {
     await writeFile(join(workspace, 'source'), 'source');
     await writeFile(join(workspace, 'dest'), 'old');
     const sourcePath = await realpath(join(workspace, 'source'));
@@ -318,13 +325,13 @@ describe('operator profile workspace file tools', () => {
       }, cp, rm,
     };
     const move = createOperatorWorkspaceFileTools(await resolveOperatorWorkspaceRoot(workspace), fakeFs)[MOVE_OPERATOR_WORKSPACE_FILE_TOOL]!;
-    await expect(move.execute({ source: 'source', destination: 'dest', overwrite: true })).rejects.toThrow('Permission was denied');
+    await expect(move.execute({ source: 'source', destination: 'dest', overwrite: true })).rejects.toThrow(/inspect manually/u);
     await expect(readFile(join(workspace, 'source'), 'utf8')).resolves.toBe('source');
-    await expect(readFile(join(workspace, 'dest'), 'utf8')).resolves.toBe('old');
-    for (const tool of [tools[LIST_OPERATOR_WORKSPACE_FILES_TOOL]!, tools[DELETE_OPERATOR_WORKSPACE_FILE_TOOL]!]) {
-      try { await tool.execute({ path: 'missing/secret' }); throw new Error('expected failure'); }
-      catch (error) { expect(String(error)).not.toContain(workspace); }
-    }
+    const staging = (await (await import('node:fs/promises')).readdir(workspace)).find((name) => name.startsWith('.ensemble-move-'))!;
+    await expect(readFile(join(workspace, staging, 'backup'), 'utf8')).resolves.toBe('old');
+    await expect(tools[READ_OPERATOR_WORKSPACE_FILE_TOOL]!.execute({ path: 'source' })).rejects.toThrow(/manual inspection/u);
+    const status = await tools[GET_OPERATOR_WORKSPACE_MOVE_STATUS_TOOL]!.execute({});
+    expect(status.structuredContent).toMatchObject({ status: 'inspection_required', source: 'source', destination: 'dest' });
   });
 
   it('copies across filesystems and preserves the source if copying fails', async () => {
@@ -336,9 +343,11 @@ describe('operator profile workspace file tools', () => {
     await writeFile(source, 'source');
     const failCopy = async () => { throw Object.assign(new Error('/private/secret'), { code: 'EIO' }); };
     const failing = createOperatorWorkspaceFileTools(await realpath(workspace), { rename: fakeRename, cp: failCopy, rm })[MOVE_OPERATOR_WORKSPACE_FILE_TOOL]!;
-    await expect(failing.execute({ source: 'source', destination: 'target' })).rejects.toThrow('The workspace file operation failed.');
+    await expect(failing.execute({ source: 'source', destination: 'target' })).rejects.toThrow(/inspect manually/u);
     await expect(readFile(source, 'utf8')).resolves.toBe('source');
     await expect(lstat(join(workspace, 'target'))).rejects.toMatchObject({ code: 'ENOENT' });
+    const journalName = (await (await import('node:fs/promises')).readdir(join(workspace, '..'))).find((name) => name.startsWith('.ensemble-workspace-move-'))!;
+    await rm(join(workspace, '..', journalName));
     const move = createOperatorWorkspaceFileTools(await realpath(workspace), { rename: fakeRename, cp, rm })[MOVE_OPERATOR_WORKSPACE_FILE_TOOL]!;
     await move.execute({ source: 'source', destination: 'target' });
     await expect(readFile(join(workspace, 'target'), 'utf8')).resolves.toBe('source');
@@ -359,12 +368,79 @@ describe('operator profile workspace file tools', () => {
       return rename(from, to);
     };
     const move = createOperatorWorkspaceFileTools(rootPath, { rename: fakeRename, cp, rm })[MOVE_OPERATOR_WORKSPACE_FILE_TOOL]!;
-    await expect(move.execute({ source: 'source', destination: 'dest', overwrite: true })).rejects.toThrow(/could not be restored.*backup/u);
+    await expect(move.execute({ source: 'source', destination: 'dest', overwrite: true })).rejects.toThrow(/inspect manually/u);
     await expect(readFile(dest, 'utf8')).resolves.toBe('concurrent');
     const entries = await (await import('node:fs/promises')).readdir(rootPath);
     const backup = entries.find((entry) => entry.startsWith('.ensemble-move-'))!;
     await expect(readFile(join(rootPath, backup, 'backup'), 'utf8')).resolves.toBe('old');
     await expect(readFile(source, 'utf8')).resolves.toBe('source');
+  });
+
+  it('serializes competing moves in one instance and preserves both files', async () => {
+    await writeFile(join(workspace, 'a'), 'A');
+    await writeFile(join(workspace, 'b'), 'B');
+    const move = tools[MOVE_OPERATOR_WORKSPACE_FILE_TOOL]!;
+    const results = await Promise.allSettled([
+      move.execute({ source: 'a', destination: 'dest' }),
+      move.execute({ source: 'b', destination: 'dest' }),
+    ]);
+    expect(results.map((result) => result.status)).toEqual(['fulfilled', 'rejected']);
+    await expect(readFile(join(workspace, 'dest'), 'utf8')).resolves.toBe('A');
+    await expect(readFile(join(workspace, 'b'), 'utf8')).resolves.toBe('B');
+  });
+
+  it('fails closed on an unreadable move record without changing workspace data', async () => {
+    await writeFile(join(workspace, 'source'), 'safe');
+    const { createHash } = await import('node:crypto');
+    const canonical = await realpath(workspace);
+    const hash = createHash('sha256').update(canonical).digest('hex');
+    await writeFile(join(canonical, '..', `.ensemble-workspace-move-${hash}.json`), '{');
+    const status = await tools[GET_OPERATOR_WORKSPACE_MOVE_STATUS_TOOL]!.execute({});
+    expect(status.structuredContent?.status).toBe('journal_unreadable');
+    for (const [name, args] of [
+      [READ_OPERATOR_WORKSPACE_FILE_TOOL, { path: 'source' }],
+      [WRITE_OPERATOR_WORKSPACE_FILE_TOOL, { path: 'source', content: 'changed' }],
+      [LIST_OPERATOR_WORKSPACE_FILES_TOOL, {}],
+      [MOVE_OPERATOR_WORKSPACE_FILE_TOOL, { source: 'source', destination: 'dest' }],
+      [DELETE_OPERATOR_WORKSPACE_FILE_TOOL, { path: 'source' }],
+    ] as const) await expect(tools[name]!.execute(args)).rejects.toThrow(/manual inspection/u);
+    await expect(readFile(join(workspace, 'source'), 'utf8')).resolves.toBe('safe');
+  });
+
+  it('preserves and identifies an interrupted overwrite after process termination', async () => {
+    const { spawn } = await import('node:child_process');
+    const { once } = await import('node:events');
+    const canonical = await realpath(workspace);
+    await writeFile(join(workspace, 'source'), 'source');
+    await writeFile(join(workspace, 'dest'), 'old');
+    const moduleUrl = new URL('../dist/operator-workspace-tools.js', import.meta.url).href;
+    const script = `
+      import { createOperatorWorkspaceFileTools } from ${JSON.stringify(moduleUrl)};
+      import { rename, cp, rm } from 'node:fs/promises';
+      import { join } from 'node:path';
+      const root = process.argv[1];
+      const fake = { cp, rm, rename: async (from, to) => {
+        if (String(from) === join(root, 'source')) {
+          console.log('ready');
+          await new Promise(() => {});
+        }
+        return rename(from, to);
+      }};
+      await createOperatorWorkspaceFileTools(root, fake).move_operator_workspace_file.execute({ source: 'source', destination: 'dest', overwrite: true });
+    `;
+    const child = spawn(process.execPath, ['--input-type=module', '-e', script, canonical], { stdio: ['ignore', 'pipe', 'pipe'] });
+    try {
+      await once(child.stdout, 'data');
+      child.kill('SIGKILL');
+      await once(child, 'exit');
+      const status = await tools[GET_OPERATOR_WORKSPACE_MOVE_STATUS_TOOL]!.execute({});
+      expect(status.structuredContent).toMatchObject({ status: 'inspection_required', source: 'source', destination: 'dest', overwrite: true });
+      const staging = status.structuredContent?.staging as string;
+      await expect(readFile(join(workspace, staging, 'backup'), 'utf8')).resolves.toBe('old');
+      await expect(readFile(join(workspace, 'source'), 'utf8')).resolves.toBe('source');
+      await expect(lstat(join(workspace, 'dest'))).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(tools[LIST_OPERATOR_WORKSPACE_FILES_TOOL]!.execute({})).rejects.toThrow(/manual inspection/u);
+    } finally { child.kill('SIGKILL'); }
   });
 
   it('enforces list limit boundaries', async () => {
