@@ -111,6 +111,9 @@ import type { AcpBridge } from '../../core/src/acp/acp-bridge.js';
 import { DEFAULT_ENSEMBLE_CONFIG } from '../../core/src/config/defaults.js';
 import { runIssueSession as runIssueSessionImpl } from '../../core/src/conductor/issue-session.js';
 import { resolveEnsemblePaths } from '../../core/src/ensemble-paths.js';
+import { SessionLogger } from '../../core/src/conductor/session/session-logger.js';
+import { createTuiViewModel } from './tui/tui-view-model.js';
+import { createTuiTelemetrySink } from './tui/create-tui-telemetry-sink.js';
 import { runGit } from '../../core/src/git/run-git.js';
 import { loadSessionResumeStore } from '../../core/src/session/session-resume-store.js';
 import { saveOpenQuestionsStore } from '../../core/src/session/open-questions-store.js';
@@ -240,6 +243,43 @@ describe('executeIssueCommand with the core session', () => {
     vi.unstubAllEnvs();
     if (homeRoot) await rm(homeRoot, { recursive: true, force: true });
     homeRoot = '';
+  });
+
+  it('delivers factory notifications through the session logger to TUI and durable storage before the first send', async () => {
+    const repoRoot = join(homeRoot, 'repo');
+    await mkdir(repoRoot);
+    vi.stubEnv('ENSEMBLE_USER_ROOT', join(homeRoot, 'user-ensemble'));
+    const model = createTuiViewModel();
+    const logger = new SessionLogger({ issueUrl, repoRoot });
+    logger.subscribe(createTuiTelemetrySink(model));
+    const factory = {
+      create: vi.fn(async (options: import('../../core/src/conductor/conductor-agent.js').ConductorAgentCreateOptions) => {
+        options.onCompactionEvent?.({ type: 'start', reason: 'overflow' });
+        options.onRetryEvent?.({ type: 'auto_retry_start', attempt: 1, maxAttempts: 2, delayMs: 1, errorMessage: 'private-token' });
+        expect(model.getSnapshot().conductorStatus?.text).toBe('retrying 1/2');
+        options.onRetryEvent?.({ type: 'auto_retry_end', success: true, attempt: 1 });
+        expect(model.getSnapshot().conductorStatus?.text).toBe('compacting (overflow)');
+        options.onCompactionEvent?.({ type: 'end', reason: 'overflow', outcome: 'failed', errorMessage: 'private-token' });
+        expect(model.getSnapshot().conductorStatus?.text).toBe('compaction failed');
+        return { agentId: 'agent-test', send: mockSend, close: mockClose, getUsage: vi.fn().mockResolvedValue({}) };
+      }),
+      resume: vi.fn(),
+    };
+    mockSend.mockResolvedValue({ runId: 'run-1', status: 'finished', result: 'done' });
+    await runIssueSessionImpl({
+      issueUrl, repoRoot, sessionLogger: logger,
+      profile: { conductor: { backend: 'pi' }, workers: [] },
+      ensembleConfig: { ...DEFAULT_ENSEMBLE_CONFIG, conductor: { ...DEFAULT_ENSEMBLE_CONFIG.conductor, backend: 'pi' } },
+      conductorAgentFactory: factory,
+      mcpConfigOptions: { userEnsembleRoot: join(homeRoot, 'user-ensemble') },
+      workerWorktree: { path: repoRoot, branch: 'main', issue: { owner: 'org', repo: 'repo', number: 1, url: issueUrl }, inRepo: true },
+      registerProcessSignalHandlers: false, waitForOperatorExit: false,
+    });
+    const path = join(homeRoot, 'user-ensemble', 'sessions', 'github.com', 'org', 'repo', 'agent-test', 'conductor-failures.jsonl');
+    const saved = await readFile(path, 'utf8');
+    expect(saved).toContain('compaction_failed');
+    expect(saved).toContain('retry_scheduled');
+    expect(saved).not.toContain('private-token');
   });
 
   it('writes a real session result with unreported and unmapped models to both CLI channels', async () => {

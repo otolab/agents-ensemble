@@ -59,6 +59,9 @@ stderr 整形: core の SessionLogEvent representation（`packages/core/src/repr
 | `conductor.inbound` | harness が `agent.send` へ渡す trigger 束を確定した直前 | `[harness] conductor.deliver triggers=N sources=...` | なし |
 | `conductor.send.started` | 各 `agent.send` 開始直前 | verbose 時のみ `[harness] conductor.send.started n=N source=...` | なし（TUI Workers ペインで `conductor: thinking`） |
 | `conductor.send.progress` | conductor ターン中の SDK ツール開始 | **なし**（log 相当。活動ログ / stderr には出さない [#161](https://github.com/otolab/agents-ensemble/issues/161)） | なし（TUI: 活動ヒントのみ。例: `conductor: reading`） |
+| `conductor.output_phase` | Pi conductor の thinking / writing 通知 | なし | TUI の状態行 |
+| `conductor.compaction` | Pi conductor の compaction 開始・終了 | 失敗時は `[harness]` と失敗ログ | TUI の状態行 |
+| `conductor.retry` | Pi conductor の provider / summarization retry | 最終失敗は `[harness]`、retry 開始・provider 最終失敗は失敗ログ | TUI の状態行 |
 | `conductor.send` | 各 `agent.send` 完了後 | 成功は verbose 時のみ `[harness] conductor.send n=N status=finished ...`。失敗は既定でも障害種別・復旧ヒント付き | `sendCount`, `lastRunStatus`, `lastResult`, `lastError`（TUI Workers ペインで `conductor: idle`） |
 | `conductor.outbound` | conductor の 1 send 中に `prompt_worker` で送った worker を send 完了時に集約 | `[harness] worker.prompt workers=N mode=conductor names=...` | なし |
 | `worker.round` | worker の 1 `session/prompt` ラウンド完了（init prompt 含む） | verbose 時のみ `[harness] worker.round name=... kind=... source=... stopReason=... path=...` | `workerDispatches` に追記 |

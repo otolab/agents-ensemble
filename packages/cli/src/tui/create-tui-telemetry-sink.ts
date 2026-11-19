@@ -15,36 +15,42 @@ export function createTuiTelemetrySink(
   viewModel: TuiViewModel,
   options: TuiTelemetrySinkOptions = {},
 ): SessionLogSink {
-  let baseStatus = '待機中';
-  let compactionStatus: string | undefined;
-  let retryStatus: string | undefined;
+  type Status = { text: string; since: number };
+  const status = (text: string): Status => ({ text, since: Date.now() });
+  let baseStatus = status('待機中');
+  let compactionStatus: Status | undefined;
+  let providerRetry: Status | undefined;
+  let summarizationRetry: Status | undefined;
   return (event) => {
-    if (event.type === 'conductor.send.started') baseStatus = '処理中';
-    if (event.type === 'conductor.output_phase') baseStatus = event.phase;
-    if (event.type === 'conductor.send.progress') baseStatus = `calling ${event.tool}`;
+    if (event.type === 'conductor.send.started') baseStatus = status('処理中');
+    if (event.type === 'conductor.output_phase' && baseStatus.text !== event.phase) baseStatus = status(event.phase);
+    if (event.type === 'conductor.send.progress') baseStatus = status(`calling ${event.tool}`);
     if (event.type === 'conductor.send') {
-      baseStatus = '待機中';
+      baseStatus = status('待機中');
       compactionStatus = undefined;
-      retryStatus = undefined;
+      providerRetry = undefined;
+      summarizationRetry = undefined;
     }
     if (event.type === 'conductor.compaction') {
-      if (event.event.type === 'start') compactionStatus = `compacting (${event.event.reason})`;
-      else compactionStatus = event.event.outcome === 'failed' ? 'compaction failed' : undefined;
+      if (event.event.type === 'start') compactionStatus = status(`compacting (${event.event.reason})`);
+      else compactionStatus = event.event.outcome === 'failed' ? status('compaction failed') : undefined;
     }
     if (event.type === 'conductor.retry') {
       const retry = event.event;
-      if (retry.type === 'auto_retry_start' || retry.type === 'summarization_retry_scheduled') {
-        retryStatus = `retrying ${retry.attempt}/${retry.maxAttempts}`;
+      if (retry.type === 'auto_retry_start') {
+        providerRetry = status(`retrying ${retry.attempt}/${retry.maxAttempts}`);
       } else if (retry.type === 'auto_retry_end') {
-        retryStatus = retry.success ? undefined : 'retry failed';
+        providerRetry = retry.success ? undefined : status('retry failed');
+      } else if (retry.type === 'summarization_retry_scheduled') {
+        summarizationRetry = status(`retrying ${retry.attempt}/${retry.maxAttempts}`);
       } else if (retry.type === 'summarization_retry_attempt_start') {
-        if (!retryStatus) retryStatus = 'retrying';
+        summarizationRetry ??= status('retrying');
       } else {
-        retryStatus = undefined;
+        summarizationRetry = undefined;
       }
     }
     if (event.type === 'conductor.send.started' || event.type === 'conductor.send.progress' || event.type === 'conductor.output_phase' || event.type === 'conductor.send' || event.type === 'conductor.compaction' || event.type === 'conductor.retry') {
-      viewModel.setConductorStatus(retryStatus ?? compactionStatus ?? baseStatus);
+      viewModel.setConductorStatus(providerRetry ?? summarizationRetry ?? compactionStatus ?? baseStatus);
     }
     const harnessBody = formatHarnessLogBody(event, {
       verbose: options.verbose,

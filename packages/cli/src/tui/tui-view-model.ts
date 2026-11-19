@@ -38,7 +38,7 @@ export interface TuiViewModel {
   subscribe: (listener: () => void) => () => void;
   getSnapshot: () => TuiViewSnapshot;
   setDisplayState: (state: SessionDisplayState) => void;
-  setConductorStatus: (text: string) => void;
+  setConductorStatus: (status: NonNullable<TuiViewSnapshot['conductorStatus']>) => void;
   appendActivityLog: (label: ActivityLogLabel, text: string) => void;
   appendActivityLogSeparator: () => void;
   requestActivityLogReplay: () => void;
@@ -112,9 +112,9 @@ export function createTuiViewModel(options: {
       displayState = state;
       notify();
     },
-    setConductorStatus(text) {
-      if (conductorStatus?.text === text) return;
-      conductorStatus = { text, since: Date.now() };
+    setConductorStatus(status) {
+      if (conductorStatus?.text === status.text && conductorStatus.since === status.since) return;
+      conductorStatus = status;
       notify();
     },
     appendActivityLog(label, text) {

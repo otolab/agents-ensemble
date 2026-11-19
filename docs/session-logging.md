@@ -177,6 +177,9 @@ await runIssueSession({ sessionLogger: logger, ... });
 | `conductor.inbound` | harness が conductor へ渡す trigger 束の直前 | なし（sink のみ。既定は `conductor.deliver` 要約） |
 | `conductor.send.started` | 各 `agent.send` 開始直前 | なし（sink のみ） |
 | `conductor.send.progress` | conductor ターン中の SDK ツール開始 | なし（log 相当。活動ログ / stderr には出さない。Workers ペイン活動ヒントのみ #161） |
+| `conductor.output_phase` | Pi conductor の thinking / writing 通知 | 状態行のみ |
+| `conductor.compaction` | Pi conductor の compaction 開始・終了 | 状態行、失敗時は活動ログと失敗ログ |
+| `conductor.retry` | Pi conductor の provider / summarization retry | 状態行、最終失敗は活動ログ、retry 開始と provider 最終失敗は失敗ログ |
 | `conductor.send` | 各 `agent.send` 完了後 | `sendCount`, `lastRunStatus`, `lastResult`, `lastError` を更新。成功 result は conductor 対話、error は harness 障害表示 |
 | `conductor.outbound` | `prompt_worker` による conductor → worker prompt を send 完了時に集約 | なし（sink のみ。既定は `worker.prompt` 要約） |
 | `harness.worker.bootstrap` | eager はセッション開始時の init prompt 群、lazy は初回 instruction 時に attach する worker を要約 | なし（sink のみ。既定は `worker.prompt` 要約） |

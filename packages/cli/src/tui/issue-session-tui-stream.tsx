@@ -240,7 +240,7 @@ export function IssueSessionTuiStream({
   const openQuestionsPaneHeight =
     operatorInputDisplay.mode === 'withQuestions' ? openQuestionsLayout.paneHeight : 0;
   const workerPaneHeight = computeWorkerPaneHeight(
-    Object.keys(snapshot.displayState.workers).length,
+    Object.keys(snapshot.displayState.workers).length + (snapshot.conductorStatus && !snapshot.displayState.workers.conductor ? 1 : 0),
   );
   const compactRecoveryInspection =
     snapshot.recoveryInspection !== undefined &&

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createTuiTelemetrySink } from './create-tui-telemetry-sink.js';
 import { createTuiViewModel } from './tui-view-model.js';
 
@@ -25,6 +25,46 @@ describe('createTuiTelemetrySink', () => {
     expect(model.getSnapshot().conductorStatus?.text).toBe('compaction failed');
     expect(model.getSnapshot().activityLog.some((entry) => entry.text.includes('compaction failed'))).toBe(true);
   });
+  it.each(['provider-first', 'summarization-first'] as const)('preserves overlapping retries and their start times: %s', (order) => {
+    const clock = vi.spyOn(Date, 'now');
+    try {
+      const model = createTuiViewModel();
+      const sink = createTuiTelemetrySink(model);
+      clock.mockReturnValue(1000);
+      sink({ type: 'conductor.compaction', event: { type: 'start', reason: 'overflow' } });
+      clock.mockReturnValue(2000);
+      const providerStart = () => sink({ type: 'conductor.retry', event: { type: 'auto_retry_start', attempt: 2, maxAttempts: 4, delayMs: 1, errorMessage: 'e' } });
+      const summaryStart = () => sink({ type: 'conductor.retry', event: { type: 'summarization_retry_scheduled', attempt: 1, maxAttempts: 3, delayMs: 1, errorMessage: 'e' } });
+      if (order === 'provider-first') { providerStart(); clock.mockReturnValue(3000); summaryStart(); }
+      else { summaryStart(); clock.mockReturnValue(3000); providerStart(); }
+      const providerSince = order === 'provider-first' ? 2000 : 3000;
+      expect(model.getSnapshot().conductorStatus).toEqual({ text: 'retrying 2/4', since: providerSince });
+      clock.mockReturnValue(5000);
+      if (order === 'provider-first') {
+        sink({ type: 'conductor.retry', event: { type: 'summarization_retry_finished' } });
+        expect(model.getSnapshot().conductorStatus).toEqual({ text: 'retrying 2/4', since: providerSince });
+        sink({ type: 'conductor.retry', event: { type: 'auto_retry_end', success: true, attempt: 2 } });
+        expect(model.getSnapshot().conductorStatus).toEqual({ text: 'compacting (overflow)', since: 1000 });
+      } else {
+        sink({ type: 'conductor.retry', event: { type: 'auto_retry_end', success: true, attempt: 2 } });
+        expect(model.getSnapshot().conductorStatus).toEqual({ text: 'retrying 1/3', since: 2000 });
+        sink({ type: 'conductor.retry', event: { type: 'summarization_retry_finished' } });
+        expect(model.getSnapshot().conductorStatus).toEqual({ text: 'compacting (overflow)', since: 1000 });
+      }
+    } finally { clock.mockRestore(); }
+  });
+
+  it('retains a provider failure when summarization finishes', () => {
+    const model = createTuiViewModel();
+    const sink = createTuiTelemetrySink(model);
+    sink({ type: 'conductor.retry', event: { type: 'summarization_retry_scheduled', attempt: 1, maxAttempts: 3, delayMs: 1, errorMessage: 'e' } });
+    sink({ type: 'conductor.retry', event: { type: 'auto_retry_start', attempt: 1, maxAttempts: 2, delayMs: 1, errorMessage: 'e' } });
+    sink({ type: 'conductor.retry', event: { type: 'auto_retry_end', success: false, attempt: 1, finalError: 'e' } });
+    sink({ type: 'conductor.retry', event: { type: 'summarization_retry_finished' } });
+    expect(model.getSnapshot().conductorStatus?.text).toBe('retry failed');
+    expect(model.getSnapshot().activityLog.some((entry) => entry.text.includes('retry failed'))).toBe(true);
+  });
+
   it('separates harness from observation entries in the activity log', () => {
     const viewModel = createTuiViewModel();
     const sink = createTuiTelemetrySink(viewModel);

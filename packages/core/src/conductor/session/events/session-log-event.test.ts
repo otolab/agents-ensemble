@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, expectTypeOf, it } from 'vitest';
 import type { SessionEvent } from './session-event.js';
 import type { SessionLogEvent } from './session-log-event.js';
 import {
@@ -17,7 +17,7 @@ describe('session event type groups', () => {
   it('lists every SessionLogEvent type exactly once', () => {
     const types = new Set(ALL_SESSION_LOG_EVENT_TYPES);
     expect(types.size).toBe(ALL_SESSION_LOG_EVENT_TYPES.length);
-    expect(types.size).toBe(43);
+    expectTypeOf<(typeof ALL_SESSION_LOG_EVENT_TYPES)[number]>().toEqualTypeOf<SessionLogEvent['type']>();
   });
 
   it('lists every SessionEvent type exactly once', () => {
@@ -143,6 +143,12 @@ describe('session event type groups', () => {
           return { type, text: 'hi' };
         case 'conductor.inbound':
           return { type, triggers: 1, sources: ['initial'] };
+        case 'conductor.output_phase':
+          return { type, phase: 'thinking' };
+        case 'conductor.compaction':
+          return { type, event: { type: 'start', reason: 'overflow' } };
+        case 'conductor.retry':
+          return { type, event: { type: 'summarization_retry_finished' } };
         case 'conductor.send.started':
           return { type, sendCount: 1 };
         case 'conductor.send.progress':

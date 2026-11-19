@@ -336,7 +336,10 @@ export function WorkerStatusPane({
     const timer = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(timer);
   }, []);
-  const entries = sortWorkerEntries(Object.entries(workers));
+  const visibleWorkers = conductorStatus && !workers.conductor
+    ? { ...workers, conductor: { kind: 'conductor', status: 'idle' as const } }
+    : workers;
+  const entries = sortWorkerEntries(Object.entries(visibleWorkers));
   const paneHeight = height ?? computeWorkerPaneHeight(entries.length);
   const statusLineWidth = usePaneContentWidth(terminalColumns ?? process.stdout.columns ?? 80);
   const issueTitleRight = issueUrl ? formatIssueLabel(issueUrl) : undefined;
@@ -566,7 +569,7 @@ export function IssueSessionTui({
   const openQuestionsPaneHeight =
     operatorInputDisplay.mode === 'withQuestions' ? openQuestionsLayout.paneHeight : 0;
   const workerPaneHeight = computeWorkerPaneHeight(
-    Object.keys(snapshot.displayState.workers).length,
+    Object.keys(snapshot.displayState.workers).length + (snapshot.conductorStatus && !snapshot.displayState.workers.conductor ? 1 : 0),
   );
   const queuedMessages = snapshot.operatorContext?.queuedMessages ?? [];
   const desiredQueueRows = queuedMessages.length === 0 ? 0 :

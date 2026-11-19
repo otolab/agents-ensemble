@@ -8,6 +8,8 @@ import { cleanup, render } from 'ink-testing-library';
 import stringWidth from 'string-width';
 import { IssueSessionTui } from './issue-session-tui.js';
 import { createTuiViewModel } from './tui-view-model.js';
+import { createTuiTelemetrySink } from './create-tui-telemetry-sink.js';
+import { SessionLogger } from '@agents-ensemble/core';
 import { buildActivityLogDisplayLines } from './activity-log.js';
 import { resolveOperatorInputDisplayMode } from './format-operator-context.js';
 import { flushInkStdin, INK_TEST_KEYS } from './ink-test-keys.js';
@@ -128,6 +130,23 @@ function resolveOpenQuestionsPaneHeight(
 }
 
 describe('IssueSessionTui', () => {
+  it('shows factory notifications and their elapsed time before the first send', () => {
+    const clock = vi.spyOn(Date, 'now');
+    try {
+      const model = createTuiViewModel();
+      const logger = new SessionLogger({ issueUrl: 'https://github.com/o/r/issues/1', repoRoot: '/tmp' });
+      logger.subscribe(createTuiTelemetrySink(model));
+      clock.mockReturnValue(1000);
+      logger.emit({ type: 'conductor.compaction', event: { type: 'start', reason: 'overflow' } });
+      clock.mockReturnValue(2000);
+      logger.emit({ type: 'conductor.retry', event: { type: 'auto_retry_start', attempt: 1, maxAttempts: 3, delayMs: 10, errorMessage: 'e' } });
+      clock.mockReturnValue(6000);
+      logger.emit({ type: 'conductor.retry', event: { type: 'auto_retry_end', success: true, attempt: 1 } });
+      const { lastFrame, unmount } = render(<IssueSessionTui viewModel={model} onSubmit={() => {}} />);
+      expect(lastFrame()).toContain('conductor: compacting (overflow) (5s)');
+      unmount();
+    } finally { clock.mockRestore(); }
+  });
   beforeEach(() => {
     Object.defineProperty(process.stdout, 'rows', {
       configurable: true,
@@ -1487,7 +1506,7 @@ describe('IssueSessionTui', () => {
       conductorOutput: null, openQuestions: [],
       dispatchHold: { hold: false, heldEventCount: 0 },
     });
-    viewModel.setConductorStatus('compacting (overflow)');
+    viewModel.setConductorStatus({ text: 'compacting (overflow)', since: Date.now() });
     const { lastFrame, unmount } = render(<IssueSessionTui viewModel={viewModel} onSubmit={() => {}} />);
     expect(lastFrame()).toContain('conductor: compacting (overflow) (0s)');
     unmount();
