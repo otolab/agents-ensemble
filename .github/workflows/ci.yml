@@ -43,7 +43,8 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm run build
       - name: Install ConPTY test dependency
-        run: python -m pip install --only-binary=:all: pywinpty==3.1.2
+        run: >-
+          python -m pip install --only-binary=:all: pywinpty==3.1.2
       - name: Test workspace maintenance through Windows ConPTY
         run: python packages/cli/test/fixtures/workspace-maintenance-conpty.py (Get-Command node).Source packages/cli/dist/index.js
       - name: Test workspace locking and maintenance
