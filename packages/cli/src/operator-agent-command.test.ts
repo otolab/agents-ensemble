@@ -45,4 +45,13 @@ describe('ensemble operator-agent command', () => {
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('--repo-root <path>');
   });
+  it.skipIf(process.platform === 'win32')('preserves workspace maintenance behavior in a real TTY after a competing start', () => {
+    const script = fileURLToPath(new URL('../test/fixtures/workspace-maintenance-tty.py', import.meta.url));
+    const cliEntry = fileURLToPath(new URL('../dist/index.js', import.meta.url));
+    const result = spawnSync('python3', [script, process.execPath, cliEntry], { encoding: 'utf8', timeout: 90_000 });
+    expect(result.error).toBeUndefined();
+    expect(result.stderr).toBe('');
+    expect(result.status).toBe(0);
+  }, 95_000);
+
 });
