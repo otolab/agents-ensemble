@@ -1,5 +1,6 @@
 import {
   lstat,
+  link,
   cp,
   rename,
   mkdir,
@@ -602,6 +603,59 @@ describe('operator profile workspace file tools', () => {
     await expect(readFile(join(watch, 'watch-state.json'), 'utf8')).resolves.toBe('updated by watch');
     await expect(readFile(join(watch, 'watch-state-lock.sqlite'), 'utf8')).resolves.toBe('lock');
     await expect(tools[READ_OPERATOR_WORKSPACE_FILE_TOOL]!.execute({ path: 'watch/watch-state.json' })).resolves.toMatchObject({ structuredContent: { content: 'updated by watch' } });
+  });
+
+  it('protects every symlink resolution ancestor while the real watch pool updates', async () => {
+    await mkdir(join(workspace, 'data', 'managed'), { recursive: true });
+    await mkdir(join(workspace, 'links'));
+    await symlink('../data', join(workspace, 'links', 'target'), 'dir');
+    await symlink('links/target/managed', join(workspace, 'watch'), 'dir');
+    await mkdir(join(workspace, 'replacement'));
+    const { createOperatorWatchPool } = await import('./operator-watch-pool.js');
+    const { createOperatorDispatchQueue } = await import('./operator-dispatch.js');
+    const pool = await createOperatorWatchPool({ userEnsembleRoot: root, profile: 'work', dispatchQueue: createOperatorDispatchQueue(), autoDiscoverSessions: false });
+    try {
+      await pool.registerRepository('example/repo', { scanIntervalMs: 60000, pollIntervalMs: 60000 });
+      const move = tools[MOVE_OPERATOR_WORKSPACE_FILE_TOOL]!;
+      const del = tools[DELETE_OPERATOR_WORKSPACE_FILE_TOOL]!;
+      const [update, attempt] = await Promise.allSettled([
+        pool.registerRepository('example/repo', { scanIntervalMs: 90000, pollIntervalMs: 60000 }),
+        move.execute({ source: 'data', destination: 'archive' }),
+      ]);
+      expect(update.status).toBe('fulfilled');
+      expect(attempt.status).toBe('rejected');
+      await expect(move.execute({ source: 'replacement', destination: 'data', overwrite: true })).rejects.toThrow(/watch/u);
+      await expect(move.execute({ source: 'links', destination: 'archive' })).rejects.toThrow(/watch/u);
+      await expect(del.execute({ path: 'links/target' })).rejects.toThrow(/watch/u);
+      const state = JSON.parse(await readFile(join(workspace, 'watch', 'repository-watch-state.json'), 'utf8'));
+      expect(state.watches['example/repo'].scanIntervalMs).toBe(90000);
+      await expect(move.execute({ source: 'replacement', destination: 'renamed' })).resolves.toBeDefined();
+    } finally { pool.close(); }
+  });
+
+  it('rejects writes through existing hard links before truncating shared data', async () => {
+    await mkdir(join(workspace, 'watch'));
+    const state = join(workspace, 'watch', 'watch-state.json');
+    await writeFile(state, 'watch state');
+    await link(state, join(workspace, 'alias'));
+    await expect(tools[WRITE_OPERATOR_WORKSPACE_FILE_TOOL]!.execute({ path: 'alias', content: 'lost' })).rejects.toThrow(/hard links/u);
+    await expect(readFile(state, 'utf8')).resolves.toBe('watch state');
+    await expect(readFile(join(workspace, 'alias'), 'utf8')).resolves.toBe('watch state');
+    await writeFile(join(workspace, 'note'), 'before');
+    await link(join(workspace, 'note'), join(workspace, 'note-link'));
+    await expect(tools[WRITE_OPERATOR_WORKSPACE_FILE_TOOL]!.execute({ path: 'note', content: 'blocked' })).rejects.toThrow(/hard links/u);
+    await expect(readFile(join(workspace, 'note'), 'utf8')).resolves.toBe('before');
+    await tools[DELETE_OPERATOR_WORKSPACE_FILE_TOOL]!.execute({ path: 'note-link' });
+    await expect(tools[WRITE_OPERATOR_WORKSPACE_FILE_TOOL]!.execute({ path: 'note', content: 'after' })).resolves.toBeDefined();
+    await expect(readFile(join(workspace, 'note'), 'utf8')).resolves.toBe('after');
+  });
+
+  it('fails closed on an unresolved watch symlink', async () => {
+    await symlink('missing', join(workspace, 'watch'), 'dir');
+    await writeFile(join(workspace, 'note'), 'safe');
+    await expect(tools[WRITE_OPERATOR_WORKSPACE_FILE_TOOL]!.execute({ path: 'note', content: 'blocked' })).rejects.toThrow(/cannot be resolved/u);
+    await expect(tools[MOVE_OPERATOR_WORKSPACE_FILE_TOOL]!.execute({ source: 'note', destination: 'other' })).rejects.toThrow(/cannot be resolved/u);
+    await expect(readFile(join(workspace, 'note'), 'utf8')).resolves.toBe('safe');
   });
 
   it('enforces list limit boundaries', async () => {
