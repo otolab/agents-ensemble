@@ -51,7 +51,7 @@ stderr 整形: core の SessionLogEvent representation（`packages/core/src/repr
 | `harness.worktree` | worktree resolve 直後（セッション開始、worker あり） | verbose 時のみ `[harness] worktree path=... branch=... mode=...` | なし |
 | `harness.worktree.removed` | post-loop `/exit` 後、isolated worktree 削除成功 | verbose 時のみ `[harness] worktree.removed path=... branch=...` | なし |
 | `harness.worktree.remove_skipped` | post-loop `/exit` の isolated worktree cleanup で未コミット変更あり等により削除拒否 | `[harness] worktree.remove_skipped path=... branch=... reason=dirty` に加え、利用者向け `[worktree] ⚠️` warning（TTY 活動ログ / 非 TTY stderr） | なし |
-| `harness.worktree.remove_failed` | post-loop `/exit` の isolated worktree cleanup で `git worktree remove` の限定リトライ後も失敗 | `[harness] worktree.remove_failed path=... branch=... error=...` に加え、利用者向け `[worktree] ⚠️` warning（TTY 活動ログ / 非 TTY stderr） | なし |
+| `harness.worktree.remove_failed` | post-loop `/exit` の isolated worktree cleanup で対象が Git の一覧にない、または `git worktree remove` の限定リトライ後も失敗 | `[harness] worktree.remove_failed path=... branch=... error=...` に加え、利用者向け `[worktree] ⚠️` warning（TTY 活動ログ / 非 TTY stderr） | なし |
 | `operator.input` | オペレータ発話をキューに受理したとき | verbose 時のみ `[harness] operator.input delivery=idle\|next\|interrupt turn=N bytes=...` | なし |
 | `worker.secret.requested` | worker の `secret exec` が一回限りの値を待ち始めたとき | `[harness] secret.request worker=... label=... env=... command=... cwd=... expiresIn=... socket=... request=...` | なし。secret 値は含めない。request ID / socket path は有効中の接続情報として capture log に残る |
 | `operator.queue.changed` | waiter から operator message をキューに戻したとき | TUI のキューを更新 | なし |

@@ -3067,7 +3067,7 @@ async function emitWorktreeRemoval(
 ): Promise<void> {
   let result: RemoveWorkerWorktreeResult;
   try {
-    result = await removeWorkerWorktree(repoRoot, worktree.issue);
+    result = await removeWorkerWorktree(repoRoot, worktree.path);
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     sessionLogger.emit({
@@ -3104,6 +3104,12 @@ async function emitWorktreeRemoval(
       });
       break;
     case 'not_found':
+      sessionLogger.emit({
+        type: 'harness.worktree.remove_failed',
+        path: worktree.path,
+        branch: worktree.branch,
+        error: 'worktree not found in git worktree list',
+      });
       break;
   }
 }
