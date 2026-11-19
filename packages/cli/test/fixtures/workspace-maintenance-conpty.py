@@ -16,7 +16,8 @@ node, cli = sys.argv[1:]
 
 
 def start(env, args):
-    return PtyProcess.spawn([node, *args], env=env, dimensions=(40, 160), backend=Backend.ConPTY)
+    # pywinpty treats integer 0 as an unspecified backend before converting it.
+    return PtyProcess.spawn([node, *args], env=env, dimensions=(40, 160), backend=str(Backend.ConPTY))
 
 
 def read_until(process, marker, timeout=30):
