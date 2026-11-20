@@ -31,7 +31,7 @@ import {
 import type {
   OperatorSessionLiveStatus,
   OperatorSessionTrackingInfo,
-} from './operator-watch-pool.js';
+} from './types.js';
 import {
   normalizeRepositoryPattern,
   repositoryMatchesPatterns,

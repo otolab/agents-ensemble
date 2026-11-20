@@ -6,7 +6,7 @@ import type {
 import type {
   OperatorIdleCandidateObservation,
   OperatorWatchPool,
-} from './operator-watch-pool.js';
+} from './types.js';
 
 const MIN_OBSERVATION_FRESHNESS_MS = 10_000;
 

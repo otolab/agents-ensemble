@@ -63,11 +63,19 @@ import {
 } from './operator-repository-watch-state.js';
 import type {
   OperatorDispatchEvent,
-  OperatorDispatchBatch,
-  OperatorDispatchState,
-  OperatorDispatchQueue,
 } from './operator-dispatch.js';
 import { formatOversizedConductorMessageWarning } from './operator-dispatch.js';
+
+import type {
+  ConductorMessageListenConfig,
+  CreateOperatorWatchPoolOptions,
+  OperatorIdleCandidateObservation,
+  OperatorSessionLiveStatus,
+  OperatorSessionTrackingInfo,
+  OperatorWatchPool,
+  SessionCursor,
+  WatchConfig,
+} from './types.js';
 
 const WATCH_STATE_VERSION = 1;
 const DEFAULT_POLL_INTERVAL_MS = 2_000;
@@ -81,84 +89,14 @@ const PENDING_REPORT_REFRESH_INTERVAL_MS = 2_000;
 const WATCH_STATE_LOCK_RETRIES = 40;
 const WATCH_STATE_LOCK_RETRY_DELAY_MS = 25;
 
-interface WatchConfig {
-  conductorAgentId: string;
-  pollIntervalMs: number;
-  debounceMs: number;
-}
-
-interface SessionCursor {
-  sequence: number;
-  questionFingerprints: Record<string, string>;
-  questionSnapshots?: Record<
-    string,
-    { question: string; status: 'open' | 'answered'; askedAt: number }
-  >;
-  statusFingerprints: Record<string, string>;
-  questionCountObservation?: {
-    metric: 'unanswered_open_questions';
-    current: {
-      count: number;
-      checkedAt: number;
-      source: 'uds' | 'resume_store';
-    };
-    previous?: {
-      count: number;
-      checkedAt: number;
-      source: 'uds' | 'resume_store';
-    };
-  };
-}
-
-export interface ConductorMessageListenConfig {
-  conductorAgentId: string;
-  messageDebounceMs: number;
-}
-
-export interface OperatorSessionLiveStatus {
-  connectivity: 'reachable' | 'unreachable' | 'unknown';
-  checkedAt: number | null;
-  unreachableSince: number | null;
-  snapshot?: SessionObservationSnapshot;
-}
-
-export interface OperatorIdleCandidateObservation {
-  conductorAgentId: string;
-  issueUrl: string;
-  observationVersion: number;
-  source: 'uds' | 'resume_store';
-  connectivity: OperatorSessionLiveStatus['connectivity'];
-  checkedAt: number;
-  pollIntervalMs: number;
-  harnessPhase?: SessionResumeStore['harnessPhase'];
-  harnessModifiedAt?: number;
-  lifecycle?: SessionResumeStore['lifecycle'];
-  openQuestionCount?: number;
-  statusLine?: {
-    text: string;
-    reportedAt: number;
-  };
-}
-
-export interface OperatorSessionTrackingInfo {
-  firstObservedAt: number | null;
-  repositoryWatchEnabled: boolean;
-  repositoryScan: {
-    status: 'fresh' | 'stale' | 'not_observed';
-    checkedAt: number | null;
-    error: 'scan_failed' | null;
-  };
-  watchEnabled: boolean;
-  watchSource: 'manual' | 'repository_auto' | 'live_auto' | null;
-  watchReason:
-    | 'watching'
-    | 'auto_watch_capacity'
-    | 'suppressed'
-    | 'not_registered'
-    | 'repository_watch_stopped';
-  pollIntervalMs: number | null;
-  questionCountObservation?: SessionCursor['questionCountObservation'];
-}
+export type {
+  ConductorMessageListenConfig,
+  CreateOperatorWatchPoolOptions,
+  OperatorIdleCandidateObservation,
+  OperatorSessionLiveStatus,
+  OperatorSessionTrackingInfo,
+  OperatorWatchPool,
+} from './types.js';
 
 interface OperatorWatchState {
   version: typeof WATCH_STATE_VERSION;
@@ -193,82 +131,6 @@ interface OperatorWatchState {
     sendCount?: number;
     oversizedSendCounts?: number[];
   }>;
-}
-
-export interface OperatorWatchPool {
-  register(
-    conductorAgentId: string,
-    options?: { pollIntervalMs?: number; debounceMs?: number },
-  ): Promise<WatchConfig>;
-  unregister(conductorAgentId: string): Promise<boolean>;
-  list(): WatchConfig[];
-  registerRepository(
-    githubRepo: string,
-    options?: {
-      scanIntervalMs?: number;
-      pollIntervalMs?: number;
-      debounceMs?: number;
-    },
-  ): Promise<RepositoryWatchConfig>;
-  unregisterRepository(githubRepo: string): Promise<boolean>;
-  listRepositoryWatches(): RepositoryWatchConfig[];
-  scanRepositoriesOnce(): Promise<number>;
-  getSessionTrackingInfo(
-    conductorAgentId: string,
-    issueUrl: string,
-  ): OperatorSessionTrackingInfo;
-  registerConductorMessageListen(
-    conductorAgentId: string,
-    options?: { messageDebounceMs?: number },
-  ): Promise<ConductorMessageListenConfig>;
-  ensureConductorMessageListen(conductorAgentId: string): Promise<{
-    listener: ConductorMessageListenConfig;
-    created: boolean;
-  }>;
-  unregisterConductorMessageListen(conductorAgentId: string): Promise<boolean>;
-  listConductorMessageListens(): ConductorMessageListenConfig[];
-  pollOnce(conductorAgentId: string): Promise<number>;
-  pollConductorMessagesOnce(conductorAgentId: string): Promise<number>;
-  refreshPendingReports?(): Promise<void>;
-  getLiveStatus(conductorAgentId: string): OperatorSessionLiveStatus | undefined;
-  listIdleCandidateObservations(): OperatorIdleCandidateObservation[];
-  refreshIdleCandidateObservation?(
-    conductorAgentId: string,
-    afterObservationVersion?: number,
-  ): Promise<boolean>;
-  acknowledge(events: readonly OperatorDispatchEvent[]): Promise<void>;
-  enqueueIdleCandidate?(input: {
-    conductorAgentId: string;
-    text: string;
-    kind: 'idle_phase' | 'stale_running';
-    fingerprint: string;
-    /** Rechecked after the durable profile lock is acquired. */
-    shouldAdmit?: () => boolean;
-    /** Requested by the producer; the pool records its actual admission time instead. */
-    eligibleAt: number;
-  }): Promise<string | undefined>;
-  commitBatch(batch: OperatorDispatchBatch, state?: OperatorDispatchState): Promise<boolean>;
-  recordRetry?(
-    events: readonly OperatorDispatchEvent[],
-    retryReadyAt: number,
-  ): Promise<void>;
-  scanAutoSessionsOnce(): Promise<void>;
-  close(): void;
-}
-
-export interface CreateOperatorWatchPoolOptions {
-  /** User storage root used by the operator-agent runtime. */
-  userEnsembleRoot?: string;
-  /** Profile whose watch state is active. */
-  profile?: string;
-  /** Repository patterns allowed by the selected profile and CLI. */
-  profileIncludes?: readonly string[];
-  repoFilters?: readonly string[];
-  /** @deprecated Test and internal compatibility for pre-Phase 3 callers. */
-  repoRoot?: string;
-  autoDiscoverSessions?: boolean;
-  dispatchQueue: OperatorDispatchQueue;
-  onError?: (message: string) => void;
 }
 
 export { operatorWatchStatePath } from './operator-state-paths.js';
