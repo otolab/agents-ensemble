@@ -2480,6 +2480,47 @@ describe('runOperatorAgent', () => {
     }
   });
 
+  it('delivers a report while another process holds the scheduling event lock', async () => {
+    const root = join(repoRoot, '.ensemble');
+    const setupPool = await createOperatorWatchPool({
+      repoRoot, userEnsembleRoot: root, profile: 'smoke', dispatchQueue: createOperatorDispatchQueue(),
+    });
+    await setupPool.enqueueIdleCandidate!({
+      conductorAgentId: 'conductor-one', text: 'blocked writer candidate',
+      kind: 'idle_phase', fingerprint: 'blocked-writer', eligibleAt: Date.now(),
+    });
+    await setupPool.flushSchedulingEvents?.();
+    setupPool.close();
+    await setupPool.flushSchedulingEvents?.();
+    const lock = new DatabaseSync(join(root, 'operator-agents', 'smoke', 'scheduling-events-lock.sqlite'));
+    lock.exec('BEGIN IMMEDIATE');
+    const input = createInteractiveInput();
+    const output = createOutput();
+    let options: ConductorAgentCreateOptions | undefined;
+    let sends = 0;
+    const agent = createFakeAgent({ send: async () => {
+      sends++;
+      if (sends === 1) {
+        await options!.customTools!.request_session_reports!.execute({ conductorAgentId: 'conductor-one' });
+        return { runId: 'request', status: 'finished', result: 'requested' };
+      }
+      return { runId: 'report', status: 'cancelled', result: 'cancelled' };
+    } });
+    const run = runOperatorAgent({ repoRoot, newSession: true }, {
+      stdin: input, stdout: output,
+      agentFactory: { create: async (value) => { options = value; return agent; }, resume: async () => agent },
+    });
+    try {
+      await vi.waitFor(() => expect(output.capturedText()).toContain('user>'));
+      input.write('request report\n');
+      await vi.waitFor(() => expect(output.capturedText()).toContain('send not completed (status=cancelled)'), { timeout: 8_000 });
+      expect(sends).toBe(2);
+    } finally {
+      input.end();
+      try { await run; } finally { lock.exec('ROLLBACK'); lock.close(); }
+    }
+  }, 20_000);
+
   it('records an initial report attempt and its frozen replay after runner restart', async () => {
     const setupPool = await createOperatorWatchPool({
       repoRoot,
