@@ -161,4 +161,3 @@ export interface CreateOperatorWatchPoolOptions {
   dispatchQueue: OperatorDispatchQueue;
   onError?: (message: string) => void;
 }
-
