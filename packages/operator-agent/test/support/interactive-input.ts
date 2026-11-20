@@ -53,23 +53,21 @@ export function createInteractiveInput(): PassThrough &
     }
 
     override end(
-      chunk?: Uint8Array | string,
+      chunk?: Uint8Array | string | (() => void),
       encodingOrCallback?:
         | BufferEncoding
         | ((error?: Error | null) => void),
       callback?: (error?: Error | null) => void,
     ): this {
-      if (chunk !== undefined) {
-        this.write(
-          chunk,
-          encodingOrCallback as BufferEncoding | undefined,
-          callback,
-        );
+      if (chunk !== undefined && typeof chunk !== 'function') {
+        this.write(chunk, typeof encodingOrCallback === 'string' ? encodingOrCallback : undefined);
       }
       this.pendingEndCallback =
-        typeof encodingOrCallback === 'function'
-          ? encodingOrCallback
-          : callback;
+        typeof chunk === 'function'
+          ? chunk
+          : typeof encodingOrCallback === 'function'
+            ? encodingOrCallback
+            : callback;
       this.pendingEnd = true;
       this.scheduleFlush();
       return this;
