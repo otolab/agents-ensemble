@@ -31,7 +31,7 @@ import {
   formatOperatorDispatchBatch,
 } from './operator-dispatch.js';
 import {
-  createOperatorWatchPool,
+  createOperatorWatchPool as createWatchPool,
   createRegisterRepositoryWatchTool,
   createRegisterSessionWatchTool,
   createUnregisterRepositoryWatchTool,
@@ -169,6 +169,20 @@ describe('operator watch pool', () => {
   let repoRoot = '';
   let homeRoot = '';
   let closeServers: Array<() => Promise<void>> = [];
+  let writerDrains: Promise<void>[] = [];
+
+  const createOperatorWatchPool: typeof createWatchPool = async (...args) => {
+    const pool = await createWatchPool(...args);
+    const close = pool.close.bind(pool);
+    pool.close = () => {
+      // close() starts a bounded asynchronous drain. Wait for the preceding
+      // barrier in teardown before removing the writer's temporary directory.
+      const drain = pool.flushSchedulingEvents?.();
+      if (drain) writerDrains.push(drain);
+      close();
+    };
+    return pool;
+  };
 
   beforeEach(async () => {
     homeRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-watch-home-'));
@@ -180,6 +194,8 @@ describe('operator watch pool', () => {
     vi.useRealTimers();
     for (const close of closeServers) await close();
     closeServers = [];
+    await Promise.all(writerDrains);
+    writerDrains = [];
     if (repoRoot) await rm(repoRoot, { recursive: true, force: true });
     repoRoot = '';
     if (homeRoot) await rm(homeRoot, { recursive: true, force: true });

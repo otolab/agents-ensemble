@@ -16,6 +16,7 @@ export interface OperatorIdleCandidate {
   fingerprint: string;
   text: string;
   evaluatedAt: number;
+  evidence: { phase: 'idle' | 'running'; ageMs: number; thresholdMs: number };
 }
 
 export function evaluateOperatorIdleCandidate(
@@ -62,6 +63,7 @@ export function evaluateOperatorIdleCandidate(
       kind: 'idle_phase',
       fingerprint,
       evaluatedAt: now,
+      evidence: { phase: 'idle', ageMs: harnessStateAgeMs, thresholdMs: scheduling.idlePhaseThresholdMs },
       text: [
         '稼働 session の確認候補（保存 phase: idle）',
         `対象: ${observation.issueUrl} (${observation.conductorAgentId})`,
@@ -96,6 +98,7 @@ export function evaluateOperatorIdleCandidate(
     kind: 'stale_running',
     fingerprint,
     evaluatedAt: now,
+    evidence: { phase: 'running', ageMs: now - observation.statusLine.reportedAt, thresholdMs: scheduling.staleRunningThresholdMs },
     text: [
       `稼働 session の確認候補（statusLine 最終更新から${formatDuration(thresholdMinutes)}以上・要確認）`,
       `対象: ${observation.issueUrl} (${observation.conductorAgentId})`,
@@ -213,6 +216,7 @@ export function createOperatorIdleCandidateMonitor(
               text: candidate.text,
               kind: candidate.kind,
               fingerprint: candidate.fingerprint,
+              evidence: candidate.evidence,
               eligibleAt: candidate.evaluatedAt,
               shouldAdmit: () =>
                 !closed &&

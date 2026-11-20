@@ -24,6 +24,7 @@ import {
   requireNonEmptyString,
 } from './operator-watch-validation.js';
 import { hash } from './operator-watch-hash.js';
+import { createSchedulingEventWriter } from './operator-scheduling-events.js';
 import { collectReports, cursorFor } from './operator-watch-reports.js';
 import {
   emptyWatchState,
@@ -109,6 +110,22 @@ export async function createOperatorWatchPool(
   const root = options.userEnsembleRoot ?? resolveUserEnsembleRoot();
   const profile = options.profile ?? 'default';
   await listOperatorWatchStatePaths(root, profile);
+  const eventWriter = createSchedulingEventWriter(root, profile, options.onError);
+  const schedulingInstanceId = randomUUID();
+  const recordQueued = (report: {
+    reportId: string;
+    reportType: string;
+    priority?: string;
+    conductorAgentId: string;
+    firstQueuedAt?: number;
+    readyAt: number;
+  }, evidence?: { phase: 'idle' | 'running'; ageMs: number; thresholdMs: number }) => eventWriter.record({
+    type: 'report.queued', ts: Date.now(), reportId: report.reportId,
+    reportType: report.reportType, priority: report.priority,
+    conductorAgentId: report.conductorAgentId,
+    firstQueuedAt: report.firstQueuedAt, readyAt: report.readyAt,
+    ...(evidence ? { evidence } : {}),
+  });
   const stores = (
     await listUserLocatedSessionResumeStoresPage(
       {},
@@ -1704,6 +1721,7 @@ export async function createOperatorWatchPool(
           }
           state.cursors[id] = next;
           if (reports.length > 0 || cursorChanged) await persist();
+          for (const report of reports) recordQueued(report);
           return reports.length;
         });
       } catch (error) {
@@ -1833,6 +1851,7 @@ export async function createOperatorWatchPool(
             state.pendingReports.push(...reports);
           }
           if (reports.length > 0 || nextCursor !== cursor) await persist();
+          for (const report of reports) recordQueued(report);
           if (readResult.responseSizeError) {
             throw readResult.responseSizeError;
           }
@@ -1843,6 +1862,8 @@ export async function createOperatorWatchPool(
       }
     },
     refreshPendingReports,
+    recordSchedulingEvent: (event) => eventWriter.record({ ...event, schedulingInstanceId }),
+    flushSchedulingEvents: () => eventWriter.flush(),
     async acknowledge(events) {
       const acknowledged = new Set(
         events.flatMap((event) =>
@@ -1851,12 +1872,22 @@ export async function createOperatorWatchPool(
       );
       if (acknowledged.size === 0) return;
       await withStateLock(async () => {
+        const removed = state.pendingReports.filter(
+          (report) => acknowledged.has(report.reportId),
+        );
         const remaining = state.pendingReports.filter(
           (report) => !acknowledged.has(report.reportId),
         );
         if (remaining.length === state.pendingReports.length) return;
         state.pendingReports = remaining;
         await persist();
+        const ackedAt = Date.now();
+        for (const report of removed) {
+          eventWriter.record({
+            type: 'report.acked', ts: ackedAt, reportId: report.reportId,
+            firstQueuedAt: report.firstQueuedAt, ackedAt,
+          });
+        }
       });
       options.dispatchQueue.discardQueuedReports?.([...acknowledged]);
     },
@@ -1919,6 +1950,7 @@ export async function createOperatorWatchPool(
           }
           throw error;
         }
+        recordQueued(state.pendingReports.find((report) => report.reportId === reportId)!, input.evidence);
         return true;
       });
       return admitted ? reportId : undefined;
@@ -1985,6 +2017,20 @@ export async function createOperatorWatchPool(
             saveWatchStateSync(path, retained ? mergeWatchStates(partition, retained) : partition);
             durable = true;
             statePaths.add(path);
+            eventWriter.record({
+              type: 'batch.committed', ts: Date.now(), batchId: batch.batchId,
+              sourceKey: batch.sourceKey,
+              reportIds: reports.map((event) => event.reportId),
+              count: reports.length,
+              reportTypes: reports.map((event) => event.reportType),
+              oldestFirstQueuedAt: Math.min(...reports.map((event) => event.firstQueuedAt ?? event.readyAt)),
+              readyReason: batch.selectionReason === 'oq' || batch.selectionReason === 'continuation' || batch.selectionReason === 'aged_idle'
+                ? batch.selectionReason : batch.deadlineReason === 'cap' || batch.deadlineReason === 'quiet' ? batch.deadlineReason : 'unknown',
+              deadlineReason: batch.deadlineReason ?? 'unknown',
+              eligibility: batch.eligibility ?? 'unknown',
+              selectionReason: batch.selectionReason ?? 'unknown',
+              usedContinuation: batch.usedContinuation,
+            });
           });
         }, false);
       } catch (error) {
@@ -2080,6 +2126,7 @@ export async function createOperatorWatchPool(
       }
     },
     close() {
+      eventWriter.close();
       closed = true;
       if (autoScanTimer) clearInterval(autoScanTimer);
       autoWatches.clear();

@@ -61,6 +61,7 @@ import {
   type PiModelsSyncTarget,
 } from './pi-model-catalog-command.js';
 import { runSecretExec, runSecretPush } from './secret-command.js';
+import { readSchedulingStats } from './session-scheduling-stats.js';
 
 const program = new Command();
 const cliEntrypoint = fileURLToPath(import.meta.url);
@@ -168,6 +169,23 @@ const session = program
   .description(
     'Read saved conductor and worker session data without starting an agent',
   );
+
+session
+  .command('scheduling-stats')
+  .description('Summarize saved operator-agent scheduling events')
+  .option('--profile <name>', 'Filter by operator profile')
+  .option('--since <date>', 'Inclusive start time')
+  .option('--until <date>', 'Exclusive end time')
+  .option('--json', 'Output JSON')
+  .action(async (options: { profile?: string; since?: string; until?: string; json?: boolean }) => {
+    try {
+      const result = await readSchedulingStats(options);
+      console.log(options.json ? JSON.stringify(result, null, 2) : Object.entries(result).map(([key, value]) => `${key}: ${typeof value === 'object' ? JSON.stringify(value) : String(value)}`).join('\n'));
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : error);
+      process.exitCode = 1;
+    }
+  });
 
 session
   .command('export')
