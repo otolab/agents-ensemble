@@ -60,14 +60,28 @@ export async function readSchedulingStats(options: { profile?: string; since?: s
   const sends = window.filter((e) => e.type === 'batch.sent');
   const reasons: Record<string, number> = {};
   const deadlines: Record<string, number> = {};
+  const deliveries = { initial: 0, frozenReplay: 0, unknown: 0 };
+  for (const event of sends) {
+    if (event.deliveryKind === 'initial') deliveries.initial++;
+    else if (event.deliveryKind === 'frozen_replay') deliveries.frozenReplay++;
+    else deliveries.unknown++;
+  }
+  const uniqueBatches = new Set<string>();
+  for (const event of committed.values()) {
+    if (event.ts < since || event.ts >= until || typeof event.batchId !== 'string') continue;
+    const id = key(event.profile, event.batchId);
+    if (uniqueBatches.has(id)) continue;
+    uniqueBatches.add(id);
+    const reason = String(event.readyReason ?? 'unknown');
+    const deadline = String(event.deadlineReason ?? 'unknown');
+    reasons[reason] = (reasons[reason] ?? 0) + 1;
+    deadlines[deadline] = (deadlines[deadline] ?? 0) + 1;
+  }
   const waits: Record<string, number[]> = {};
   let matched = 0, missing = 0, members = 0;
   for (const send of sends) {
     const batch = committed.get(key(send.profile, send.batchId));
     if (!batch || !Array.isArray(batch.reportIds)) { missing++; continue; }
-    reasons[String(batch.readyReason ?? 'unknown')] = (reasons[String(batch.readyReason ?? 'unknown')] ?? 0) + 1;
-    const deadline = String(batch.deadlineReason ?? 'unknown');
-    deadlines[deadline] = (deadlines[deadline] ?? 0) + 1;
     members += batch.reportIds.length;
     for (const id of batch.reportIds) {
       const report = queued.get(key(send.profile, id));
@@ -94,5 +108,5 @@ export async function readSchedulingStats(options: { profile?: string; since?: s
       : 'unknown/unknown';
     evidenceDistribution[group] = (evidenceDistribution[group] ?? 0) + 1;
   }
-  return { profiles, since: options.since ?? null, until: options.until ?? null, queued: window.filter((e) => e.type === 'report.queued').length, sends: sends.length, aggregationRate: sends.length ? members / sends.length : null, readyReasons: reasons, deadlineReasons: deadlines, capFraction: knownDeadline ? (deadlines.cap ?? 0) / knownDeadline : null, latency, focus: { clears: clears.length, timeout, timeoutFraction: clears.length ? timeout / clears.length : null, deferred: window.filter((e) => e.type === 'report.deferred_by_focus').length }, idle: { count: idle.length, evidenceDistribution, evidence: idle.map((e) => e.evidence ?? null) }, correlation: { matched, missing, malformed, duplicates } };
+  return { profiles, since: options.since ?? null, until: options.until ?? null, queued: window.filter((e) => e.type === 'report.queued').length, sends: sends.length, deliveries, aggregationRate: sends.length ? members / sends.length : null, committedBatches: uniqueBatches.size, readyReasons: reasons, deadlineReasons: deadlines, capFraction: knownDeadline ? (deadlines.cap ?? 0) / knownDeadline : null, latency, focus: { clears: clears.length, timeout, timeoutFraction: clears.length ? timeout / clears.length : null, deferred: window.filter((e) => e.type === 'report.deferred_by_focus').length }, idle: { count: idle.length, evidenceDistribution, evidence: idle.map((e) => e.evidence ?? null) }, correlation: { matched, missing, malformed, duplicates } };
 }

@@ -3,15 +3,16 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { createOperatorDispatchQueue, DEFAULT_OPERATOR_DISPATCH_SCHEDULING } from './operator-dispatch.js';
 import { createOperatorWatchPool } from './operator-watch-pool.js';
 import { resolveEnsemblePaths } from '@agents-ensemble/core';
 import { retryOperatorWatchAcknowledgement } from './operator-watch-ack.js';
 import { withWatchStateLock } from './watch-state-store.js';
+import { DatabaseSync } from 'node:sqlite';
 
 describe('scheduling event persistence', () => {
-  it('keeps the dispatch queue usable while an event waits for a held profile lock', async () => {
+  it('persists events independently of a held profile lock', async () => {
     const root = await mkdtemp(join(tmpdir(), 'scheduling-lock-delay-'));
     let pool: Awaited<ReturnType<typeof createOperatorWatchPool>> | undefined;
     let release: () => void = () => {};
@@ -27,11 +28,10 @@ describe('scheduling event persistence', () => {
       queue.enqueueUser('hello');
       expect(queue.selectBatch({ continuationConsumed: false })?.sourceKey).toBe('user');
       const flush = pool.flushSchedulingEvents!();
-      await new Promise((resolve) => setTimeout(resolve, 50));
-      release();
-      await lock;
       await flush;
       expect(await readFile(join(root, 'operator-agents', 'default', 'scheduling-events.jsonl'), 'utf8')).toContain('focus.set');
+      release();
+      await lock;
     } finally { release(); pool?.close(); await pool?.flushSchedulingEvents?.(); await rm(root, { recursive: true, force: true }); }
   });
 
@@ -46,12 +46,46 @@ describe('scheduling event persistence', () => {
         child.on('error', reject);
         child.on('exit', (code) => code === 0 ? resolve() : reject(new Error(`child ${id} exited ${code}: ${errors}`)));
       });
+      const directory = join(root, 'operator-agents', 'default');
+      await mkdir(directory, { recursive: true });
+      await writeFile(join(directory, 'scheduling-events.jsonl'), JSON.stringify({ type: 'padding', data: 'x'.repeat(5 * 1024 * 1024 - 100) }) + '\n');
       await Promise.all([run('a'), run('b')]);
-      const text = await readFile(join(root, 'operator-agents', 'default', 'scheduling-events.jsonl'), 'utf8');
-      const events = text.trim().split('\n').map((line) => JSON.parse(line) as { conductorAgentId: string });
+      const files = await Promise.all(['scheduling-events.jsonl.1', 'scheduling-events.jsonl'].map((name) => readFile(join(directory, name), 'utf8')));
+      const events = files.flatMap((text) => text.trim().split('\n').map((line) => JSON.parse(line) as { type: string; conductorAgentId: string })).filter((event) => event.type !== 'padding');
       expect(events).toHaveLength(48);
       expect(new Set(events.map((event) => event.conductorAgentId)).size).toBe(48);
     } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it('keeps enqueue, durable commit and acknowledgement moving while the event lock is held', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'scheduling-event-stall-'));
+    let pool: Awaited<ReturnType<typeof createOperatorWatchPool>> | undefined;
+    let database: DatabaseSync | undefined;
+    try {
+      const issueUrl = 'https://github.com/example/repo/issues/1';
+      const path = resolveEnsemblePaths({ repoRoot: root, userEnsembleRoot: root }).canonicalSessionResumeStorePath(issueUrl, 'one');
+      await mkdir(dirname(path), { recursive: true });
+      await writeFile(path, JSON.stringify({ version: 1, conductorAgentId: 'one', issueUrl, repoRoot: root, profile: { workers: [], agents: {} }, openQuestions: [], sequence: 0, workers: {}, updatedAt: Date.now() }));
+      const directory = join(root, 'operator-agents', 'default');
+      await mkdir(directory, { recursive: true });
+      database = new DatabaseSync(join(directory, 'scheduling-events-lock.sqlite'));
+      database.exec('BEGIN IMMEDIATE');
+      const queue = createOperatorDispatchQueue();
+      pool = await createOperatorWatchPool({ userEnsembleRoot: root, profile: 'default', autoDiscoverSessions: false, dispatchQueue: queue });
+      const lifecycle = (async () => {
+        await pool!.enqueueIdleCandidate!({ conductorAgentId: 'one', text: 'candidate', kind: 'idle_phase', fingerprint: 'fp', eligibleAt: Date.now() });
+        const batch = queue.selectBatch({ continuationConsumed: false })!;
+        expect(await pool!.commitBatch(batch, { continuationConsumed: false })).toBe(true);
+        await pool!.acknowledge(batch.events);
+      })();
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try { await Promise.race([lifecycle, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('state lifecycle blocked by event writer')), 400); })]); }
+      finally { if (timer) clearTimeout(timer); }
+      pool.close();
+      const start = Date.now();
+      await pool.flushSchedulingEvents?.();
+      expect(Date.now() - start).toBeLessThan(1200);
+    } finally { database?.exec('ROLLBACK'); database?.close(); pool?.close(); await pool?.flushSchedulingEvents?.(); await rm(root, { recursive: true, force: true }); }
   });
 
   it('retains frozen report identity and first queue time after restart', async () => {
@@ -104,6 +138,7 @@ describe('scheduling event persistence', () => {
       }, async () => false);
       expect(acknowledgement).toMatchObject({ status: 'acknowledged', attempts: 2, retries: 1 });
       expect(queue.selectBatch({ continuationConsumed: false })).toBeUndefined();
+      await pool.flushSchedulingEvents?.();
       if (fail) expect(errors.some((message) => message.includes('scheduling event write failed'))).toBe(true);
       else {
         const text = await readFile(join(root, 'operator-agents', 'default', 'scheduling-events.jsonl'), 'utf8');
@@ -129,12 +164,6 @@ describe('scheduling event persistence', () => {
       queue.enqueueReport({ type: 'report', reportId: 'r', reportType: 'session_state', conductorAgentId: 'one', issueUrl: 'https://github.com/a/b/issues/1', text: 'x' }, 0);
       expect(queue.selectBatch({ continuationConsumed: false })?.sourceKey).toBe('session:one');
       queue.setFocus(undefined, now + 1);
-      if (!fail) {
-        await vi.waitFor(async () => {
-          const text = await readFile(join(root, 'operator-agents', 'default', 'scheduling-events.jsonl'), 'utf8');
-          expect(text).toContain('focus.clear');
-        });
-      }
       await pool.flushSchedulingEvents?.();
       expect(queue.selectBatch({ continuationConsumed: false })?.sourceKey).toBe('session:one');
       if (fail) expect(errors.some((message) => message.includes('scheduling event write failed'))).toBe(true);

@@ -9,7 +9,7 @@ import {
   parseBoundedInteger,
 } from './operator-watch-validation.js';
 import { hash } from './operator-watch-hash.js';
-import { appendSchedulingEvent } from './operator-scheduling-events.js';
+import { createSchedulingEventWriter } from './operator-scheduling-events.js';
 import { collectReports, cursorFor } from './operator-watch-reports.js';
 import {
   emptyWatchState,
@@ -103,31 +103,8 @@ export async function createOperatorWatchPool(
 ): Promise<OperatorWatchPool> {
   const root = options.userEnsembleRoot ?? resolveUserEnsembleRoot();
   const profile = options.profile ?? 'default';
-  const pendingSchedulingEvents: Record<string, unknown>[] = [];
-  let eventFlush: Promise<void> | undefined;
-  let eventFlushScheduled = false;
-  const flushSchedulingEvents = async (): Promise<void> => {
-    if (eventFlush) {
-      await eventFlush;
-      if (pendingSchedulingEvents.length > 0) await flushSchedulingEvents();
-      return;
-    }
-    if (pendingSchedulingEvents.length === 0) return;
-    // Bound the work done under one profile lock so bursts do not monopolize it.
-    const events = pendingSchedulingEvents.splice(0, 16);
-    eventFlush = withWatchStateLock(root, profile, async () => {
-      for (const event of events) appendSchedulingEvent(root, profile, event, options.onError);
-    }).catch((error: unknown) => {
-      try {
-        options.onError?.(`scheduling event lock failed: ${error instanceof Error ? error.message : String(error)}`);
-      } catch { /* diagnostic only */ }
-    }).finally(() => { eventFlush = undefined; });
-    await eventFlush;
-    if (pendingSchedulingEvents.length > 0) {
-      await new Promise<void>((resolve) => setImmediate(resolve));
-      await flushSchedulingEvents();
-    }
-  };
+  await listOperatorWatchStatePaths(root, profile);
+  const eventWriter = createSchedulingEventWriter(root, profile, options.onError);
   const recordQueued = (report: {
     reportId: string;
     reportType: string;
@@ -135,14 +112,13 @@ export async function createOperatorWatchPool(
     conductorAgentId: string;
     firstQueuedAt?: number;
     readyAt: number;
-  }, evidence?: { phase: 'idle' | 'running'; ageMs: number; thresholdMs: number }) => appendSchedulingEvent(root, profile, {
+  }, evidence?: { phase: 'idle' | 'running'; ageMs: number; thresholdMs: number }) => eventWriter.record({
     type: 'report.queued', ts: Date.now(), reportId: report.reportId,
     reportType: report.reportType, priority: report.priority,
     conductorAgentId: report.conductorAgentId,
     firstQueuedAt: report.firstQueuedAt, readyAt: report.readyAt,
     ...(evidence ? { evidence } : {}),
-  }, options.onError);
-  await listOperatorWatchStatePaths(root, profile);
+  });
   const stores = (
     await listUserLocatedSessionResumeStoresPage(
       {},
@@ -1879,21 +1855,8 @@ export async function createOperatorWatchPool(
       }
     },
     refreshPendingReports,
-    recordSchedulingEvent(event) {
-      if (pendingSchedulingEvents.length >= 1000) {
-        try { options.onError?.('scheduling event buffer is full'); } catch { /* diagnostic only */ }
-        return;
-      }
-      pendingSchedulingEvents.push(event);
-      if (!eventFlushScheduled) {
-        eventFlushScheduled = true;
-        setImmediate(() => {
-          eventFlushScheduled = false;
-          void flushSchedulingEvents();
-        });
-      }
-    },
-    flushSchedulingEvents,
+    recordSchedulingEvent: (event) => eventWriter.record(event),
+    flushSchedulingEvents: () => eventWriter.flush(),
     async acknowledge(events) {
       const acknowledged = new Set(
         events.flatMap((event) =>
@@ -1913,10 +1876,10 @@ export async function createOperatorWatchPool(
         await persist();
         const ackedAt = Date.now();
         for (const report of removed) {
-          appendSchedulingEvent(root, profile, {
+          eventWriter.record({
             type: 'report.acked', ts: ackedAt, reportId: report.reportId,
             firstQueuedAt: report.firstQueuedAt, ackedAt,
-          }, options.onError);
+          });
         }
       });
       options.dispatchQueue.discardQueuedReports?.([...acknowledged]);
@@ -2047,7 +2010,7 @@ export async function createOperatorWatchPool(
             saveWatchStateSync(path, retained ? mergeWatchStates(partition, retained) : partition);
             durable = true;
             statePaths.add(path);
-            appendSchedulingEvent(root, profile, {
+            eventWriter.record({
               type: 'batch.committed', ts: Date.now(), batchId: batch.batchId,
               sourceKey: batch.sourceKey,
               reportIds: reports.map((event) => event.reportId),
@@ -2060,7 +2023,7 @@ export async function createOperatorWatchPool(
               eligibility: batch.eligibility ?? 'unknown',
               selectionReason: batch.selectionReason ?? 'unknown',
               usedContinuation: batch.usedContinuation,
-            }, options.onError);
+            });
           });
         }, false);
       } catch (error) {
@@ -2156,6 +2119,7 @@ export async function createOperatorWatchPool(
       }
     },
     close() {
+      eventWriter.close();
       closed = true;
       if (autoScanTimer) clearInterval(autoScanTimer);
       autoWatches.clear();

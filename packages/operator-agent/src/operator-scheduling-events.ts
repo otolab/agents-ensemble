@@ -1,33 +1,86 @@
-import { appendFileSync, mkdirSync, renameSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { fork, type ChildProcess } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
-const MAX_BYTES = 5 * 1024 * 1024;
+const MAX_PENDING = 1000;
+const SHUTDOWN_WAIT_MS = 500;
 
-/** Called only while the profile watch-state lock is held. */
-export function appendSchedulingEvent(
-  root: string,
-  profile: string,
-  event: Record<string, unknown>,
-  onError?: (message: string) => void,
-): void {
+/** The writer owns all event filesystem operations in a separate process. */
+export function createSchedulingEventWriter(root: string, profile: string, onError?: (message: string) => void) {
+  let child: ChildProcess | undefined;
+  let pending = 0;
+  let closed = false;
+  let nextId = 0;
+  const barriers = new Map<number, () => void>();
+  const warn = (message: string) => {
+    queueMicrotask(() => { try { onError?.(message); } catch { /* diagnostic only */ } });
+  };
+  const finishBarriers = () => { for (const resolve of barriers.values()) resolve(); barriers.clear(); };
   try {
-    const directory = join(root, 'operator-agents', profile);
-    const path = join(directory, 'scheduling-events.jsonl');
-    mkdirSync(directory, { recursive: true, mode: 0o700 });
-    const line = `${JSON.stringify(event)}\n`;
-    try {
-      if (statSync(path).size + Buffer.byteLength(line) > MAX_BYTES) {
-        renameSync(path, `${path}.1`);
+    const writerUrl = import.meta.url.endsWith('.ts')
+      ? new URL('../dist/operator-scheduling-writer.js', import.meta.url)
+      : new URL('./operator-scheduling-writer.js', import.meta.url);
+    child = fork(fileURLToPath(writerUrl), [root, profile], { stdio: ['ignore', 'ignore', 'ignore', 'ipc'], execArgv: [] });
+    child.unref();
+    child.channel?.unref();
+    child.on('message', (message: { type?: string; id?: number; message?: string }) => {
+      if (message.type === 'event') {
+        pending = Math.max(0, pending - 1);
+        if (message.message) warn(`scheduling event write failed: ${message.message}`);
+      } else if (message.type === 'barrier' && typeof message.id === 'number') {
+        barriers.get(message.id)?.();
+        barriers.delete(message.id);
       }
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-    }
-    appendFileSync(path, line, { mode: 0o600 });
+    });
+    child.on('error', (error) => { warn(`scheduling event writer failed: ${error.message}`); finishBarriers(); });
+    child.on('exit', (code) => {
+      if (pending > 0 || (!closed && code !== 0)) warn(`scheduling event writer exited; ${pending} pending event(s) may be lost`);
+      child = undefined;
+      finishBarriers();
+    });
   } catch (error) {
-    try {
-      onError?.(`scheduling event write failed: ${error instanceof Error ? error.message : String(error)}`);
-    } catch {
-      // Diagnostics must not affect scheduling either.
-    }
+    warn(`scheduling event writer failed: ${error instanceof Error ? error.message : String(error)}`);
   }
+  const send = (message: object) => {
+    if (!child?.connected) return false;
+    try {
+      child.send(message, (error) => { if (error) warn(`scheduling event writer IPC failed: ${error.message}`); });
+      return true;
+    } catch (error) {
+      warn(`scheduling event writer IPC failed: ${error instanceof Error ? error.message : String(error)}`);
+      return false;
+    }
+  };
+  const flush = async (timeoutMs: number) => {
+    if (!child?.connected) return;
+    const id = ++nextId;
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(() => {
+        barriers.delete(id);
+        warn('scheduling event flush timed out; pending events may be lost');
+        resolve();
+      }, timeoutMs);
+      barriers.set(id, () => { clearTimeout(timer); resolve(); });
+      if (!send({ type: 'barrier', id })) { clearTimeout(timer); barriers.delete(id); resolve(); }
+    });
+  };
+  let closePromise: Promise<void> | undefined;
+  return {
+    record(event: Record<string, unknown>) {
+      if (closed || pending >= MAX_PENDING) {
+        warn('scheduling event buffer is unavailable or full');
+        return;
+      }
+      pending++;
+      if (!send({ type: 'event', event })) pending--;
+    },
+    flush: () => closePromise ?? flush(5000),
+    close() {
+      if (closed) return;
+      closed = true;
+      closePromise = flush(SHUTDOWN_WAIT_MS).finally(() => {
+        try { if (child?.connected) child.disconnect(); } catch { /* already gone */ }
+        child?.kill();
+      });
+    },
+  };
 }

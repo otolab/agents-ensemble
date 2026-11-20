@@ -1290,6 +1290,7 @@ async function runTtyConversation(options: {
       agentSendInFlight = true;
       idleCandidateMonitor.notifyActivityChanged();
       let committed: boolean;
+      const deliveryKind = batch.batchId ? 'frozen_replay' : 'initial';
       try {
         const result = await retryWatchLock(
           () => options.watchPool.commitBatch(batch, dispatchState),
@@ -1437,7 +1438,7 @@ async function runTtyConversation(options: {
         options.watchPool.recordSchedulingEvent?.({
           type: 'batch.sent', ts: completedAt, batchId: batch.batchId,
           sendCount: nextSendCount, status: result?.status ?? 'interrupted',
-          startedAt: sendStartedAt, completedAt,
+          startedAt: sendStartedAt, completedAt, deliveryKind,
         });
       }
       if (!result) {

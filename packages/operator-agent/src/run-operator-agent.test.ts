@@ -2480,6 +2480,67 @@ describe('runOperatorAgent', () => {
     }
   });
 
+  it('records an initial report attempt and its frozen replay after runner restart', async () => {
+    const setupPool = await createOperatorWatchPool({
+      repoRoot,
+      userEnsembleRoot: join(repoRoot, '.ensemble'),
+      profile: 'smoke',
+      dispatchQueue: createOperatorDispatchQueue(),
+    });
+    await setupPool.enqueueIdleCandidate!({
+      conductorAgentId: 'conductor-one', text: 'replay candidate',
+      kind: 'idle_phase', fingerprint: 'replay-fixture', eligibleAt: Date.now(),
+    });
+    setupPool.close();
+    const firstInput = createInteractiveInput();
+    const firstOutput = createOutput();
+    let agentOptions: ConductorAgentCreateOptions | undefined;
+    let sends = 0;
+    const firstAgent = createFakeAgent({
+      send: async () => {
+        sends++;
+        if (sends === 1) {
+          await agentOptions!.customTools!.request_session_reports!.execute({ conductorAgentId: 'conductor-one' });
+          return { runId: 'request', status: 'finished', result: 'requested' };
+        }
+        return { runId: 'cancelled', status: 'cancelled', result: 'cancelled' };
+      },
+    });
+    const firstRun = runOperatorAgent({ repoRoot, newSession: true }, {
+      stdin: firstInput, stdout: firstOutput,
+      agentFactory: { create: async (options) => { agentOptions = options; return firstAgent; }, resume: async () => firstAgent },
+    });
+    try {
+      await vi.waitFor(() => expect(firstOutput.capturedText()).toContain('user>'));
+      firstInput.write('request report\n');
+      await vi.waitFor(() => expect(firstOutput.capturedText()).toContain('send not completed (status=cancelled)'), { timeout: 8_000 });
+    } finally {
+      firstInput.end();
+      await firstRun;
+    }
+    const retryInput = createInteractiveInput();
+    const retryOutput = createOutput();
+    const acknowledged = new Promise<void>((resolve) => { watchPollHarness.onAcknowledged = resolve; });
+    const retryAgent = createFakeAgent({ send: async () => ({ runId: 'replay', status: 'finished', result: 'done' }) });
+    const retryRun = runOperatorAgent({ repoRoot }, {
+      stdin: retryInput, stdout: retryOutput,
+      agentFactory: { create: async () => { throw new Error('expected resume'); }, resume: async () => retryAgent },
+    });
+    try {
+      await waitForNotification(acknowledged, 'replay acknowledgement', 10_000);
+    } finally {
+      watchPollHarness.onAcknowledged = undefined;
+      retryInput.end();
+      await retryRun;
+    }
+    const path = join(repoRoot, '.ensemble', 'operator-agents', 'smoke', 'scheduling-events.jsonl');
+    const events = (await readFile(path, 'utf8')).trim().split('\n').map((line) => JSON.parse(line) as { type: string; batchId?: string; deliveryKind?: string; status?: string });
+    const sent = events.filter((event) => event.type === 'batch.sent');
+    expect(sent).toHaveLength(2);
+    expect(sent[0]).toMatchObject({ deliveryKind: 'initial', status: 'cancelled' });
+    expect(sent[1]).toMatchObject({ deliveryKind: 'frozen_replay', status: 'finished', batchId: sent[0]!.batchId });
+  }, 20_000);
+
   it.each([
     ['send', false], ['send', true], ['ack retry', false], ['ack retry', true],
   ])('retains a later request during %s (focus: %s)', async (phase, focus) => {
