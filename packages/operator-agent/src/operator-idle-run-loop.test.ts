@@ -1,3 +1,4 @@
+import { waitForSignal } from '../test/support/wait.js';
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -17,19 +18,6 @@ import { runOperatorAgent } from './run-operator-agent.js';
 import { operatorWatchStatePath } from './operator-watch-pool.js';
 import type { OperatorAgentTuiHost } from './operator-agent-tui.js';
 
-async function waitForSignal<T>(signal: Promise<T>, label: string, timeoutMs = 2_000): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      signal,
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error(`${label} did not complete`)), timeoutMs);
-      }),
-    ]);
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
-}
 
 async function removeFixtureIfSafe(root: string, preserve: boolean): Promise<void> {
   if (!preserve) await rm(root, { recursive: true, force: true });

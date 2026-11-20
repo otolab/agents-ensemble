@@ -1,7 +1,8 @@
+import { createFakeAgent, createOutput, writeOperatorSettings } from '../test/support/operator-fixtures.js';
+import { waitForNotification } from '../test/support/wait.js';
 import { mkdtemp, mkdir, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { DatabaseSync } from 'node:sqlite';
 import { dirname, join } from 'node:path';
-import { PassThrough } from 'node:stream';
 import { createInteractiveInput } from '../test/support/interactive-input.js';
 import xterm from '@xterm/headless';
 import { PiConductorAgent } from '../../core/src/conductor/pi-conductor-agent.js';
@@ -25,7 +26,6 @@ import type {
 import {
   runOperatorAgent,
   type OperatorAgentInput,
-  type OperatorAgentOutput,
 } from './run-operator-agent.js';
 import {
   OPERATOR_WATCH_ACK_MAX_RETRIES,
@@ -4888,19 +4888,6 @@ function normalizeTtyText(text: string): string {
     .trim();
 }
 
-async function waitForNotification(signal: Promise<void>, label: string, timeoutMs: number): Promise<void> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    await Promise.race([
-      signal,
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error(`${label} did not arrive`)), timeoutMs);
-      }),
-    ]);
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
-}
 
 function waitForOutput(
   output: ReturnType<typeof createOutput>,
@@ -4928,19 +4915,6 @@ function waitForOutput(
   });
 }
 
-function createOutput(
-  isTTY = true,
-): OperatorAgentOutput & { capturedText: () => string } {
-  const output = new PassThrough() as PassThrough &
-    OperatorAgentOutput & { capturedText: () => string };
-  const chunks: string[] = [];
-  output.on('data', (chunk) => chunks.push(String(chunk)));
-  output.capturedText = () => chunks.join('');
-  output.isTTY = isTTY;
-  output.columns = 80;
-  output.rows = 24;
-  return output;
-}
 
 // Exercise the real Pi conductor event and send handling with a deterministic
 // AgentSession boundary; no provider or network is needed.
@@ -4984,18 +4958,6 @@ function createScriptedPiAgent(
   return { agent, results, emit: (event: any) => listener(event) };
 }
 
-function createFakeAgent(overrides: {
-  send: ConductorAgent['send'];
-}): ConductorAgent {
-  return {
-    agentId: 'operator-agent-id',
-    send: overrides.send,
-    reload: async () => {},
-    getUsage: async () => ({}),
-    setSystemPrompt: async () => {},
-    close: async () => {},
-  };
-}
 
 function canonicalBaseResumeStorePath(repoRoot: string): string {
   return resolveEnsemblePaths({ repoRoot }).canonicalSessionResumeStorePath(
@@ -5012,58 +4974,6 @@ function baseWatchStatePath(repoRoot: string): string {
   );
 }
 
-async function writeOperatorSettings(
-  repoRoot: string,
-  backend: 'pi' | 'cursor',
-  reasoning?: string,
-  mcp?: { common?: string[]; profile?: string[] },
-): Promise<void> {
-  const model = backend === 'pi' ? 'smoke-model' : 'cursor-model';
-  await writeFile(
-    join(repoRoot, '.ensemble', 'operator-agents.config.yaml'),
-    [
-      'version: 1',
-      'defaultProfile: smoke',
-      'common:',
-      '  conductor:',
-      `    backend: ${backend}`,
-      `    model: ${model}`,
-      ...(reasoning ? [`    reasoning: ${reasoning}`] : []),
-      '  pi:',
-      '    agentDir: pi-user',
-      ...(mcp?.common !== undefined
-        ? [
-            '  mcp:',
-            ...(mcp.common.length > 0
-              ? [
-                  '    servers:',
-                  ...mcp.common.map((name) => `      - ${JSON.stringify(name)}`),
-                ]
-              : ['    servers: []']),
-          ]
-        : []),
-      'profiles:',
-      '  smoke:',
-      '    prompt:',
-      '      instructions:',
-      '        - Profile operator guidance.',
-      '    pi:',
-      '      projectDir: pi-project',
-      ...(mcp?.profile !== undefined
-        ? [
-            '    mcp:',
-            ...(mcp.profile.length > 0
-              ? [
-                  '      servers:',
-                  ...mcp.profile.map((name) => `        - ${JSON.stringify(name)}`),
-                ]
-              : ['      servers: []']),
-          ]
-        : []),
-      '',
-    ].join('\n'),
-  );
-}
 
 async function writeUserMcpConfig(
   repoRoot: string,
