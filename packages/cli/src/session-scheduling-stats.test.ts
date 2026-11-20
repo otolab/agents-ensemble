@@ -17,9 +17,9 @@ describe('scheduling statistics', () => {
         { type: 'report.queued', ts: 1, reportId: 'r', reportType: 'session_state', firstQueuedAt: 1 },
         { type: 'report.queued', ts: 1, reportId: 'r', reportType: 'session_state', firstQueuedAt: 1 },
         { type: 'batch.committed', ts: 2, batchId: 'b', reportIds: ['r'], readyReason: 'oq', deadlineReason: 'cap' },
-        { type: 'report.deferred_by_focus', ts: 3, reportId: 'r', evidence: 'selection_counterfactual' },
-        { type: 'batch.sent', ts: 4, batchId: 'b', startedAt: 4, deliveryKind: 'initial' },
-        { type: 'batch.sent', ts: 5, batchId: 'b', startedAt: 5, deliveryKind: 'frozen_replay' },
+        { type: 'report.deferred_by_focus', ts: 3, reportId: 'r', evidence: 'selection_counterfactual', schedulingInstanceId: 'one' },
+        { type: 'batch.sent', ts: 4, batchId: 'b', startedAt: 4, schedulingInstanceId: 'one', deliveryKind: 'initial' },
+        { type: 'batch.sent', ts: 5, batchId: 'b', startedAt: 5, schedulingInstanceId: 'one', deliveryKind: 'frozen_replay' },
         { type: 'batch.sent', ts: 6, batchId: 'missing', startedAt: 6 },
       ];
       await writeFile(join(directory, 'scheduling-events.jsonl'), `${events.map((event) => JSON.stringify(event)).join('\n')}\n{bad\n`);
@@ -58,8 +58,40 @@ describe('scheduling statistics', () => {
       const stats = await readSchedulingStats({ root });
       expect(stats.focus).toMatchObject({ deferred: 1, unverified: 1 });
       expect(stats.latency['session_state/deferred']?.count).toBe(1);
-      expect(stats.latency['session_state/not_observed_deferred']?.count).toBe(2);
-      expect(stats.latency['session_state/unknown_deferred']?.count).toBe(1);
+      expect(stats.latency['session_state/unknown_deferred']?.count).toBe(3);
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it('correlates the same report only within the sending process across restart and period boundaries', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'focus-peer-'));
+    try {
+      const fixture = fileURLToPath(new URL('../test/fixtures/focus-stats-child.mjs', import.meta.url));
+      const run = promisify(execFile);
+      const workers = await Promise.all([
+        run(process.execPath, [fixture, 'a', '10', 'yes', 'shared']),
+        run(process.execPath, [fixture, 'b', '10', 'no', 'shared']),
+        run(process.execPath, [fixture, 'restart', '10', 'no', 'shared']),
+      ]);
+      const events = workers.flatMap(({ stdout }, index) => (JSON.parse(stdout) as Record<string, unknown>[]).map((event) =>
+        event.type === 'batch.sent' ? { ...event, ...(index === 2 ? { batchId: 'a' } : {}), ts: 200 + index, startedAt: 200 + index, deliveryKind: index === 2 ? 'frozen_replay' : 'initial' } : event));
+      events.push({ type: 'report.deferred_by_focus', ts: 101, reportId: 'shared', evidence: 'selection_counterfactual' },
+        { type: 'batch.sent', ts: 203, batchId: 'a', startedAt: 203 });
+      const directory = join(root, 'operator-agents', 'default');
+      await mkdir(directory, { recursive: true });
+      await writeFile(join(directory, 'scheduling-events.jsonl'), events.map((event) => JSON.stringify(event)).join('\n'));
+      const all = await readSchedulingStats({ root });
+      expect(all.latency['session_state/deferred']?.count).toBe(1);
+      expect(all.latency['session_state/unknown_deferred']?.count).toBe(3);
+      expect(all.focus).toMatchObject({ deferred: 1, unverified: 1 });
+      const later = await readSchedulingStats({ root, since: '1970-01-01T00:00:00.201Z', until: '1970-01-01T00:00:00.203Z' });
+      expect(later.latency['session_state/deferred']).toBeUndefined();
+      expect(later.latency['session_state/unknown_deferred']?.count).toBe(2);
+      expect(later.deliveries.frozenReplay).toBe(1);
+      const withoutFocusEvidence = events.filter((event) => event.type !== 'report.deferred_by_focus');
+      await writeFile(join(directory, 'scheduling-events.jsonl'), withoutFocusEvidence.map((event) => JSON.stringify(event)).join('\n'));
+      const missing = await readSchedulingStats({ root });
+      expect(missing.latency['session_state/deferred']).toBeUndefined();
+      expect(missing.latency['session_state/unknown_deferred']?.count).toBe(4);
     } finally { await rm(root, { recursive: true, force: true }); }
   });
 

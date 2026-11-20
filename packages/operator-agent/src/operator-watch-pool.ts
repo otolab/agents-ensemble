@@ -105,6 +105,7 @@ export async function createOperatorWatchPool(
   const profile = options.profile ?? 'default';
   await listOperatorWatchStatePaths(root, profile);
   const eventWriter = createSchedulingEventWriter(root, profile, options.onError);
+  const schedulingInstanceId = randomUUID();
   const recordQueued = (report: {
     reportId: string;
     reportType: string;
@@ -1855,7 +1856,7 @@ export async function createOperatorWatchPool(
       }
     },
     refreshPendingReports,
-    recordSchedulingEvent: (event) => eventWriter.record(event),
+    recordSchedulingEvent: (event) => eventWriter.record({ ...event, schedulingInstanceId }),
     flushSchedulingEvents: () => eventWriter.flush(),
     async acknowledge(events) {
       const acknowledged = new Set(

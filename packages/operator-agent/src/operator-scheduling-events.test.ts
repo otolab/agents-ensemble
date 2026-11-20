@@ -88,6 +88,33 @@ describe('scheduling event persistence', () => {
     } finally { database?.exec('ROLLBACK'); database?.close(); pool?.close(); await pool?.flushSchedulingEvents?.(); await rm(root, { recursive: true, force: true }); }
   });
 
+  it('uses one fresh scheduling instance ID per pool for focus and send events', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'scheduling-instance-'));
+    let first: Awaited<ReturnType<typeof createOperatorWatchPool>> | undefined;
+    let second: Awaited<ReturnType<typeof createOperatorWatchPool>> | undefined;
+    try {
+      const makePool = () => createOperatorWatchPool({ userEnsembleRoot: root, profile: 'default', autoDiscoverSessions: false, dispatchQueue: createOperatorDispatchQueue() });
+      first = await makePool();
+      second = await makePool();
+      first.recordSchedulingEvent!({ type: 'report.deferred_by_focus', ts: 1, reportId: 'shared', evidence: 'selection_counterfactual' });
+      first.recordSchedulingEvent!({ type: 'batch.sent', ts: 2, batchId: 'a' });
+      second.recordSchedulingEvent!({ type: 'batch.sent', ts: 3, batchId: 'b' });
+      await Promise.all([first.flushSchedulingEvents!(), second.flushSchedulingEvents!()]);
+      const events = (await readFile(join(root, 'operator-agents', 'default', 'scheduling-events.jsonl'), 'utf8')).trim().split('\n').map((line) => JSON.parse(line) as { type: string; batchId?: string; schedulingInstanceId?: string });
+      const deferred = events.find((event) => event.type === 'report.deferred_by_focus')!;
+      const a = events.find((event) => event.batchId === 'a')!;
+      const b = events.find((event) => event.batchId === 'b')!;
+      expect(deferred.schedulingInstanceId).toEqual(expect.any(String));
+      expect(a.schedulingInstanceId).toBe(deferred.schedulingInstanceId);
+      expect(b.schedulingInstanceId).toEqual(expect.any(String));
+      expect(b.schedulingInstanceId).not.toBe(a.schedulingInstanceId);
+    } finally {
+      first?.close(); second?.close();
+      await Promise.all([first?.flushSchedulingEvents?.(), second?.flushSchedulingEvents?.()]);
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('retains frozen report identity and first queue time after restart', async () => {
     const root = await mkdtemp(join(tmpdir(), 'scheduling-restart-'));
     let pool: Awaited<ReturnType<typeof createOperatorWatchPool>> | undefined;

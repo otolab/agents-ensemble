@@ -2575,11 +2575,14 @@ describe('runOperatorAgent', () => {
       await retryRun;
     }
     const path = join(repoRoot, '.ensemble', 'operator-agents', 'smoke', 'scheduling-events.jsonl');
-    const events = (await readFile(path, 'utf8')).trim().split('\n').map((line) => JSON.parse(line) as { type: string; batchId?: string; deliveryKind?: string; status?: string });
+    const events = (await readFile(path, 'utf8')).trim().split('\n').map((line) => JSON.parse(line) as { type: string; batchId?: string; deliveryKind?: string; status?: string; schedulingInstanceId?: string });
     const sent = events.filter((event) => event.type === 'batch.sent');
     expect(sent).toHaveLength(2);
     expect(sent[0]).toMatchObject({ deliveryKind: 'initial', status: 'cancelled' });
     expect(sent[1]).toMatchObject({ deliveryKind: 'frozen_replay', status: 'finished', batchId: sent[0]!.batchId });
+    expect(sent[0]!.schedulingInstanceId).toEqual(expect.any(String));
+    expect(sent[1]!.schedulingInstanceId).toEqual(expect.any(String));
+    expect(sent[1]!.schedulingInstanceId).not.toBe(sent[0]!.schedulingInstanceId);
   }, 20_000);
 
   it.each([
