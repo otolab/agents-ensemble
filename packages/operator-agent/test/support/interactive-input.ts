@@ -53,7 +53,7 @@ export function createInteractiveInput(): PassThrough &
     }
 
     override end(
-      chunk?: Uint8Array | string,
+      chunk?: Uint8Array | string | (() => void),
       encodingOrCallback?:
         | BufferEncoding
         | ((error?: Error | null) => void),
@@ -61,7 +61,7 @@ export function createInteractiveInput(): PassThrough &
     ): this {
       if (chunk !== undefined) {
         this.write(
-          chunk,
+          chunk as Uint8Array | string,
           encodingOrCallback as BufferEncoding | undefined,
           callback,
         );
