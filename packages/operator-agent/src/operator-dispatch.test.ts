@@ -52,7 +52,10 @@ describe('operator dispatch batching', () => {
       expect(queue.requestReports('one')).toBe(true);
       expect(queue.selectBatch({ continuationConsumed: false })).toBeUndefined();
       queue.setHold(false);
-      expect(queue.selectBatch({ continuationConsumed: false })?.events).toHaveLength(1);
+      const batch = queue.selectBatch({ continuationConsumed: false });
+      expect(batch?.events).toHaveLength(1);
+      expect(batch?.eligibility).toBe('request');
+      expect(batch?.deadlineReason).toBe('unknown');
     } finally {
       now.mockRestore();
     }
@@ -78,6 +81,8 @@ describe('operator dispatch batching', () => {
       expect(queue.selectBatch({ continuationConsumed: false }, 79_999)).toBeUndefined();
       now.mockReturnValue(80_000);
       const batch = queue.selectBatch({ continuationConsumed: false })!;
+      expect(batch.eligibility).toBe('threshold');
+      expect(batch.deadlineReason).toBe('cap');
       expect(batch.events.map((item) => item.type === 'report' && item.reportId)).toEqual(['first', 'second']);
       queue.commitBatch(batch);
       for (const item of batch.events) queue.requeue(item, 5_000);
@@ -91,6 +96,44 @@ describe('operator dispatch batching', () => {
     } finally {
       now.mockRestore();
     }
+  });
+
+  it('preserves a quiet deadline after a later update and reports equal deadlines as a tie', () => {
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_000);
+    try {
+      const add = (queue: ReturnType<typeof createOperatorDispatchQueue>, reportId: string, debounceMs: number) =>
+        queue.enqueueDebouncedReports([{
+          type: 'report', reportType: 'session_state', reportId,
+          conductorAgentId: 'one', issueUrl: 'https://github.com/example/repo/issues/1', text: reportId,
+        }], debounceMs);
+      const queue = createOperatorDispatchQueue({ ...DEFAULT_OPERATOR_DISPATCH_SCHEDULING, batchMaxWaitMs: 30_000 });
+      add(queue, 'first', 1_000);
+      now.mockReturnValue(3_000);
+      add(queue, 'second', 60_000);
+      now.mockReturnValue(40_000);
+      expect(queue.selectBatch({ continuationConsumed: false })?.deadlineReason).toBe('quiet');
+
+      now.mockReturnValue(50_000);
+      const tied = createOperatorDispatchQueue({ ...DEFAULT_OPERATOR_DISPATCH_SCHEDULING, batchMaxWaitMs: 30_000 });
+      add(tied, 'tie', 30_000);
+      now.mockReturnValue(80_000);
+      expect(tied.selectBatch({ continuationConsumed: false })?.deadlineReason).toBe('tie');
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it('records focus deferral once without changing the selected session', () => {
+    const events: Record<string, unknown>[] = [];
+    const queue = createOperatorDispatchQueue(DEFAULT_OPERATOR_DISPATCH_SCHEDULING, undefined, (event) => events.push(event));
+    for (const id of ['one', 'two']) {
+      queue.enqueueReport({ type: 'report', reportType: 'session_state', reportId: id, conductorAgentId: id, issueUrl: `https://github.com/example/repo/issues/${id}`, text: 'private' }, 0);
+    }
+    queue.setFocus('one');
+    expect(queue.selectBatch({ continuationConsumed: false })?.sourceKey).toBe('session:one');
+    expect(queue.selectBatch({ continuationConsumed: false })?.sourceKey).toBe('session:one');
+    expect(events.filter((event) => event.type === 'report.deferred_by_focus')).toMatchObject([{ reportId: 'two' }]);
+    expect(JSON.stringify(events)).not.toContain('private');
   });
 
   it('retains an explicit request if freezing fails and is rolled back', () => {

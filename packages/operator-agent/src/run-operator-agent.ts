@@ -258,6 +258,7 @@ export async function runOperatorAgent(
   const factory = addOperatorMcpStartupContext(
     dependencies.agentFactory ?? createConductorAgentFactory(runtime.backend),
   );
+  let watchPoolForEvents: OperatorWatchPool | undefined;
   const dispatchQueue = createOperatorDispatchQueue({
     batchMaxWaitMs: runtime.scheduling.batchMaxWaitMs,
     idleAgingMs: runtime.scheduling.idleAgingMs,
@@ -269,7 +270,7 @@ export async function runOperatorAgent(
       conductor_message: runtime.scheduling.conductorMessageWeight,
       idle_candidate: runtime.scheduling.idleCandidateWeight,
     },
-  });
+  }, undefined, (event) => watchPoolForEvents?.recordSchedulingEvent?.(event));
   const reportResumeStoreDuplicate = (
     diagnostic: SessionResumeStoreDuplicateDiagnostic,
   ) => {
@@ -324,6 +325,7 @@ export async function runOperatorAgent(
     onError: (message) =>
       ttyChannels.harness(`watch warning: ${message}`),
   });
+  watchPoolForEvents = watchPool;
 
   const piActivity: OperatorPiActivity = {};
   let compactionCount = 0;
@@ -520,6 +522,7 @@ export async function runOperatorAgent(
   } finally {
     recoveryInbox.dispose();
     watchPool.close();
+    await watchPool.flushSchedulingEvents?.();
     await closeConductorAgentOnce(agentHandle.conductor);
   }
 }
@@ -1337,6 +1340,7 @@ async function runTtyConversation(options: {
       };
       automaticReconnectResult.current = undefined;
       let result: ConductorSendResult | undefined;
+      const sendStartedAt = Date.now();
       try {
         result = await Promise.race([
           sendConductorWithReconnect(
@@ -1346,6 +1350,7 @@ async function runTtyConversation(options: {
               conductorAgentFactory: options.agentHandle.factory,
               conductorOptions: options.agentHandle.agentOptions,
               signal: sendSuppression.signal,
+              history: { sendCount: nextSendCount, dispatchSource: batch.sourceKey },
               onOutputPhase: (phase) => {
                 if (acceptingActivity && activeTools.size === 0) setStatus(phase);
               },
@@ -1426,6 +1431,14 @@ async function runTtyConversation(options: {
         setStatus('待機中');
         agentSendInFlight = false;
         idleCandidateMonitor.notifyActivityChanged();
+      }
+      if (batch.batchId) {
+        const completedAt = Date.now();
+        options.watchPool.recordSchedulingEvent?.({
+          type: 'batch.sent', ts: completedAt, batchId: batch.batchId,
+          sendCount: nextSendCount, status: result?.status ?? 'interrupted',
+          startedAt: sendStartedAt, completedAt,
+        });
       }
       if (!result) {
         if (reservation) options.recoveryInbox.release(reservation);

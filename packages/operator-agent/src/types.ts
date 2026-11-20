@@ -128,11 +128,14 @@ export interface OperatorWatchPool {
     afterObservationVersion?: number,
   ): Promise<boolean>;
   acknowledge(events: readonly OperatorDispatchEvent[]): Promise<void>;
+  recordSchedulingEvent?(event: Record<string, unknown>): void;
+  flushSchedulingEvents?(): Promise<void>;
   enqueueIdleCandidate?(input: {
     conductorAgentId: string;
     text: string;
     kind: 'idle_phase' | 'stale_running';
     fingerprint: string;
+    evidence?: { phase: 'idle' | 'running'; ageMs: number; thresholdMs: number };
     /** Rechecked after the durable profile lock is acquired. */
     shouldAdmit?: () => boolean;
     /** Requested by the producer; the pool records its actual admission time instead. */

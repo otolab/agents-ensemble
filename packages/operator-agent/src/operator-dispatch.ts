@@ -49,6 +49,9 @@ export interface OperatorDispatchBatch {
   priority?: OperatorDispatchPriority;
   batchId?: string;
   payload?: string;
+  selectionReason?: 'focus' | 'oq' | 'continuation' | 'normal_fifo' | 'aged_idle' | 'idle_fifo';
+  eligibility?: 'request' | 'threshold' | 'ungated' | 'retry';
+  deadlineReason?: 'cap' | 'quiet' | 'tie' | 'unknown';
 }
 
 export interface OperatorDispatchScheduling {
@@ -153,6 +156,8 @@ export function selectOperatorDispatchBatch(
     DEFAULT_OPERATOR_DISPATCH_SCHEDULING,
   alreadyReady?: OperatorDispatchBatch,
   readyHeads?: WeakSet<OperatorDispatchEvent>,
+  deadlineReasons?: WeakMap<OperatorDispatchEvent, NonNullable<OperatorDispatchBatch['deadlineReason']>>,
+  onFocusDeferred?: (event: Extract<OperatorDispatchEvent, { type: 'report' }>) => void,
 ): { batch: OperatorDispatchBatch; remaining: OperatorDispatchEvent[] } | undefined {
   const ordered = [...queue].sort(compareDispatchEvents);
   const readyUsers = ordered.filter(
@@ -218,7 +223,16 @@ export function selectOperatorDispatchBatch(
       !remainsSelectedHead &&
       (frozenBatchId !== undefined || !readyHeads?.has(first))
     ) continue;
-    if (!frozenBatchId && readyAt <= now) readyHeads?.add(first);
+    if (!frozenBatchId && readyAt <= now) {
+      if (deadlineReasons && !deadlineReasons.has(first)) {
+        const quietAt = Math.max(...events.map((event) => event.readyAt));
+        const capAt = Math.min(...events.map((event) =>
+          (event.firstQueuedAt ?? event.readyAt) + scheduling.batchMaxWaitMs));
+        const retained = events.some((event) => event.batchReadyAt !== undefined);
+        deadlineReasons.set(first, retained ? 'unknown' : quietAt === capAt ? 'tie' : quietAt < capAt ? 'quiet' : 'cap');
+      }
+      readyHeads?.add(first);
+    }
 
     const priority: OperatorDispatchPriority = events.some(
       (event) => event.priority === 'open_question',
@@ -246,6 +260,7 @@ export function selectOperatorDispatchBatch(
   const user = readyUsers[0];
   let sourceKey: string;
   let usedContinuation = false;
+  let selectionReason: OperatorDispatchBatch['selectionReason'];
   let selectedCandidate:
     | (typeof candidates)[number]
     | undefined;
@@ -262,6 +277,13 @@ export function selectOperatorDispatchBatch(
       .filter((candidate) => candidate.hasQuestion)
       .sort((left, right) => left.order - right.order)[0];
     selectedCandidate = focus ?? question;
+    if (focus && onFocusDeferred) {
+      for (const candidate of candidates) {
+        if (candidate !== focus) for (const event of candidate.events) onFocusDeferred(event);
+      }
+    }
+    if (focus) selectionReason = 'focus';
+    else if (question) selectionReason = 'oq';
     if (
       !selectedCandidate &&
       !state.continuationConsumed &&
@@ -272,6 +294,7 @@ export function selectOperatorDispatchBatch(
           candidate.sourceKey === state.lastDispatchedSourceKey,
       );
       usedContinuation = selectedCandidate !== undefined;
+      if (selectedCandidate) selectionReason = 'continuation';
     }
     if (!selectedCandidate) {
       const normalFifo = candidates
@@ -280,6 +303,8 @@ export function selectOperatorDispatchBatch(
       selectedCandidate =
         normalFifo[0] ??
         candidates.sort((left, right) => left.order - right.order)[0];
+      selectionReason = selectedCandidate?.aged ? 'aged_idle'
+        : selectedCandidate?.priority === 'normal' ? 'normal_fifo' : 'idle_fifo';
     }
     if (!selectedCandidate) return undefined;
     sourceKey = selectedCandidate.sourceKey;
@@ -314,6 +339,8 @@ export function selectOperatorDispatchBatch(
       sourceKey,
       events,
       usedContinuation,
+      ...(selectionReason ? { selectionReason } : {}),
+      ...(selectedCandidate ? { deadlineReason: deadlineReasons?.get(selectedCandidate.events[0]!) ?? 'unknown' } : {}),
       ...(selectedCandidate ? { priority: selectedCandidate.aged ? 'normal' : selectedCandidate.priority } : {}),
       ...(frozen?.frozenBatchId ? { batchId: frozen.frozenBatchId } : {}),
       ...(frozen?.frozenPayload ? { payload: frozen.frozenPayload } : {}),
@@ -498,11 +525,13 @@ const realOperatorClock: OperatorClock = {
 export function createOperatorDispatchQueue(
   scheduling: OperatorDispatchScheduling = DEFAULT_OPERATOR_DISPATCH_SCHEDULING,
   clock: OperatorClock = realOperatorClock,
+  onSchedulingEvent?: (event: Record<string, unknown>) => void,
 ): OperatorDispatchQueue {
   let arrival = 0;
   let held: Extract<OperatorDispatchEvent, { type: 'report' }>[] = [];
   let pending: OperatorDispatchEvent[] = [];
   const readyHeads = new WeakSet<OperatorDispatchEvent>();
+  const deadlineReasons = new WeakMap<OperatorDispatchEvent, NonNullable<OperatorDispatchBatch['deadlineReason']>>();
   const inFlightReportIds = new Set<string>();
   const retryReadyAtById = new Map<string, number>();
   const requestedReports = new Map<string, Set<string>>();
@@ -514,6 +543,15 @@ export function createOperatorDispatchQueue(
   let focusLastInputAt: number | undefined;
   let lastOperatorInputAt: number | undefined;
   let firstFocusActivationAt: number | undefined;
+  const deferred = new Set<string>();
+  const record = (event: Record<string, unknown>) => {
+    try { onSchedulingEvent?.(event); } catch { /* diagnostic only */ }
+  };
+  const recordDeferred = (event: Extract<OperatorDispatchEvent, { type: 'report' }>, now: number) => {
+    if (!event.reportId || deferred.has(event.reportId)) return;
+    deferred.add(event.reportId);
+    record({ type: 'report.deferred_by_focus', ts: now, reportId: event.reportId, conductorAgentId: event.conductorAgentId });
+  };
   const isHeld = () => conversationHold || reportHold;
   const hasReport = (reportId: string) =>
     inFlightReportIds.has(reportId) ||
@@ -527,8 +565,10 @@ export function createOperatorDispatchQueue(
       focusLastInputAt !== undefined &&
       now - focusLastInputAt >= scheduling.focusInactivityTimeoutMs
     ) {
+      record({ type: 'focus.clear', ts: now, reason: 'timeout', conductorAgentId: focusSessionId });
       focusSessionId = undefined;
       focusLastInputAt = undefined;
+      deferred.clear();
       notify();
     }
   };
@@ -549,11 +589,19 @@ export function createOperatorDispatchQueue(
       orderReports(reports);
       const first = reports[0]!;
       if (requestedReports.has(id)) {
-        if (!first.frozenBatchId) readyHeads.add(first);
+        if (!first.frozenBatchId) {
+          if (!deadlineReasons.has(first)) deadlineReasons.set(first, 'unknown');
+          readyHeads.add(first);
+        }
         eligible.add(id);
         continue;
       }
-      if (focusSessionId) continue;
+      if (focusSessionId) {
+        for (const report of reports) {
+          recordDeferred(report, now);
+        }
+        continue;
+      }
       if (first.frozenBatchId) {
         eligible.add(id);
         continue;
@@ -571,6 +619,11 @@ export function createOperatorDispatchQueue(
       if (reachedAt === undefined) continue;
       const quietAt = Math.max(...reports.map((report) => report.readyAt));
       if (Math.min(quietAt, reachedAt + scheduling.batchMaxWaitMs) <= now) {
+        if (!deadlineReasons.has(first)) {
+          const capAt = reachedAt + scheduling.batchMaxWaitMs;
+          deadlineReasons.set(first, reports.some((report) => report.batchReadyAt !== undefined)
+            ? 'unknown' : quietAt === capAt ? 'tie' : quietAt < capAt ? 'quiet' : 'cap');
+        }
         readyHeads.add(first);
         eligible.add(id);
       }
@@ -595,7 +648,18 @@ export function createOperatorDispatchQueue(
         Math.min(...reports.map((event) =>
           (event.firstQueuedAt ?? event.readyAt) + scheduling.batchMaxWaitMs)),
       );
-      if (readyAt <= now) readyHeads.add(first);
+      if (readyAt <= now) {
+        const belowThreshold = scheduling.pushThreshold !== undefined && scheduling.reportWeights &&
+          reports.reduce((total, report) => total + (scheduling.reportWeights?.[report.reportType] ?? 0), 0) < scheduling.pushThreshold;
+        if (!belowThreshold && !deadlineReasons.has(first)) {
+          const quietAt = Math.max(...reports.map((event) => event.readyAt));
+          const capAt = Math.min(...reports.map((event) =>
+            (event.firstQueuedAt ?? event.readyAt) + scheduling.batchMaxWaitMs));
+          deadlineReasons.set(first, scheduling.pushThreshold !== undefined || reports.some((event) => event.batchReadyAt !== undefined)
+            ? 'unknown' : quietAt === capAt ? 'tie' : quietAt < capAt ? 'quiet' : 'cap');
+        }
+        readyHeads.add(first);
+      }
     }
   };
   const updateHold = (
@@ -905,6 +969,14 @@ export function createOperatorDispatchQueue(
       const previous = focusSessionId;
       const normalized = conductorAgentId?.trim();
       focusSessionId = normalized || undefined;
+      if (focusSessionId !== previous) {
+        deferred.clear();
+        if (focusSessionId) {
+          record({ type: 'focus.set', ts: now, conductorAgentId: focusSessionId });
+        } else if (previous) {
+          record({ type: 'focus.clear', ts: now, reason: 'manual', conductorAgentId: previous });
+        }
+      }
       if (!focusSessionId) {
         focusLastInputAt = undefined;
       } else if (!previous) {
@@ -965,19 +1037,32 @@ export function createOperatorDispatchQueue(
         scheduling,
         undefined,
         readyHeads,
+        deadlineReasons,
+        (event) => recordDeferred(event, now),
       );
+      if (selected?.batch.sourceKey.startsWith('session:')) {
+        const id = selected.batch.sourceKey.slice('session:'.length);
+        selected.batch.eligibility = selected.batch.batchId ? 'retry'
+          : requestedReports.has(id) ? 'request'
+          : scheduling.pushThreshold !== undefined && scheduling.reportWeights ? 'threshold'
+          : 'ungated';
+      }
       return selected?.batch;
     },
     isBatchCurrent(batch, state) {
       clearExpiredFocus(clock.now());
+      const eligible = eligibleReports(clock.now());
+      const selectionNow = clock.now();
       const selected = selectOperatorDispatchBatch(
-        eligibleReports(clock.now()),
+        eligible,
         { ...state, focusSessionId },
-        clock.now(),
+        selectionNow,
         CONDUCTOR_RECOVERY_INPUT_BYTE_LIMIT,
         scheduling,
         batch,
         readyHeads,
+        deadlineReasons,
+        (event) => recordDeferred(event, selectionNow),
       )?.batch;
       if (
         !selected ||
@@ -987,6 +1072,13 @@ export function createOperatorDispatchQueue(
         return false;
       }
       batch.usedContinuation = selected.usedContinuation;
+      batch.selectionReason = selected.selectionReason;
+      batch.deadlineReason = selected.deadlineReason;
+      const id = batch.sourceKey.startsWith('session:') ? batch.sourceKey.slice('session:'.length) : '';
+      batch.eligibility = selected.batchId ? 'retry'
+        : requestedReports.has(id) ? 'request'
+        : scheduling.pushThreshold !== undefined && scheduling.reportWeights ? 'threshold'
+        : 'ungated';
       return true;
     },
     commitBatch(batch, finalize) {

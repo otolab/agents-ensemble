@@ -357,3 +357,5 @@ Conductor send が未完了になった際、TTY では `/recovery list` と `/r
 | [Session usage と終了サマリ](https://github.com/otolab/agents-ensemble/blob/main/docs/session-metrics.md) | 終了時のモデル構成・開始時刻・経過時間と、TTY / JSON の token・cache・cost・compaction 表示および取得範囲 |
 
 GitHub 上の全ドキュメントは [docs/README.md](https://github.com/otolab/agents-ensemble/blob/main/docs/README.md) から参照できます。
+
+`ensemble session scheduling-stats [--profile <name>] [--since <date>] [--until <date>] [--json]` は operator-agent の scheduling 記録を読み取り専用で集計します。集計方法と記録の制約は [session metrics](../session-metrics.md#9-operator-agent-の-scheduling) を参照してください。

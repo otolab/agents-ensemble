@@ -1265,6 +1265,7 @@ describe('runOperatorAgent', () => {
       await status('待機中');
       input.write('hello\r');
       await vi.waitFor(() => expect(callbacks).toBeDefined());
+      expect(callbacks!.history).toEqual({ sendCount: 1, dispatchSource: 'user' });
       await status('処理中');
       callbacks!.onOutputPhase?.('writing');
       await status('writing');

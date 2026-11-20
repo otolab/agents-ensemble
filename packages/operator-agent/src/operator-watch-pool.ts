@@ -9,6 +9,7 @@ import {
   parseBoundedInteger,
 } from './operator-watch-validation.js';
 import { hash } from './operator-watch-hash.js';
+import { appendSchedulingEvent } from './operator-scheduling-events.js';
 import { collectReports, cursorFor } from './operator-watch-reports.js';
 import {
   emptyWatchState,
@@ -102,6 +103,45 @@ export async function createOperatorWatchPool(
 ): Promise<OperatorWatchPool> {
   const root = options.userEnsembleRoot ?? resolveUserEnsembleRoot();
   const profile = options.profile ?? 'default';
+  const pendingSchedulingEvents: Record<string, unknown>[] = [];
+  let eventFlush: Promise<void> | undefined;
+  let eventFlushScheduled = false;
+  const flushSchedulingEvents = async (): Promise<void> => {
+    if (eventFlush) {
+      await eventFlush;
+      if (pendingSchedulingEvents.length > 0) await flushSchedulingEvents();
+      return;
+    }
+    if (pendingSchedulingEvents.length === 0) return;
+    // Bound the work done under one profile lock so bursts do not monopolize it.
+    const events = pendingSchedulingEvents.splice(0, 16);
+    eventFlush = withWatchStateLock(root, profile, async () => {
+      for (const event of events) appendSchedulingEvent(root, profile, event, options.onError);
+    }).catch((error: unknown) => {
+      try {
+        options.onError?.(`scheduling event lock failed: ${error instanceof Error ? error.message : String(error)}`);
+      } catch { /* diagnostic only */ }
+    }).finally(() => { eventFlush = undefined; });
+    await eventFlush;
+    if (pendingSchedulingEvents.length > 0) {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      await flushSchedulingEvents();
+    }
+  };
+  const recordQueued = (report: {
+    reportId: string;
+    reportType: string;
+    priority?: string;
+    conductorAgentId: string;
+    firstQueuedAt?: number;
+    readyAt: number;
+  }, evidence?: { phase: 'idle' | 'running'; ageMs: number; thresholdMs: number }) => appendSchedulingEvent(root, profile, {
+    type: 'report.queued', ts: Date.now(), reportId: report.reportId,
+    reportType: report.reportType, priority: report.priority,
+    conductorAgentId: report.conductorAgentId,
+    firstQueuedAt: report.firstQueuedAt, readyAt: report.readyAt,
+    ...(evidence ? { evidence } : {}),
+  }, options.onError);
   await listOperatorWatchStatePaths(root, profile);
   const stores = (
     await listUserLocatedSessionResumeStoresPage(
@@ -1698,6 +1738,7 @@ export async function createOperatorWatchPool(
           }
           state.cursors[id] = next;
           if (reports.length > 0 || cursorChanged) await persist();
+          for (const report of reports) recordQueued(report);
           return reports.length;
         });
       } catch (error) {
@@ -1827,6 +1868,7 @@ export async function createOperatorWatchPool(
             state.pendingReports.push(...reports);
           }
           if (reports.length > 0 || nextCursor !== cursor) await persist();
+          for (const report of reports) recordQueued(report);
           if (readResult.responseSizeError) {
             throw readResult.responseSizeError;
           }
@@ -1837,6 +1879,21 @@ export async function createOperatorWatchPool(
       }
     },
     refreshPendingReports,
+    recordSchedulingEvent(event) {
+      if (pendingSchedulingEvents.length >= 1000) {
+        try { options.onError?.('scheduling event buffer is full'); } catch { /* diagnostic only */ }
+        return;
+      }
+      pendingSchedulingEvents.push(event);
+      if (!eventFlushScheduled) {
+        eventFlushScheduled = true;
+        setImmediate(() => {
+          eventFlushScheduled = false;
+          void flushSchedulingEvents();
+        });
+      }
+    },
+    flushSchedulingEvents,
     async acknowledge(events) {
       const acknowledged = new Set(
         events.flatMap((event) =>
@@ -1845,12 +1902,22 @@ export async function createOperatorWatchPool(
       );
       if (acknowledged.size === 0) return;
       await withStateLock(async () => {
+        const removed = state.pendingReports.filter(
+          (report) => acknowledged.has(report.reportId),
+        );
         const remaining = state.pendingReports.filter(
           (report) => !acknowledged.has(report.reportId),
         );
         if (remaining.length === state.pendingReports.length) return;
         state.pendingReports = remaining;
         await persist();
+        const ackedAt = Date.now();
+        for (const report of removed) {
+          appendSchedulingEvent(root, profile, {
+            type: 'report.acked', ts: ackedAt, reportId: report.reportId,
+            firstQueuedAt: report.firstQueuedAt, ackedAt,
+          }, options.onError);
+        }
       });
       options.dispatchQueue.discardQueuedReports?.([...acknowledged]);
     },
@@ -1913,6 +1980,7 @@ export async function createOperatorWatchPool(
           }
           throw error;
         }
+        recordQueued(state.pendingReports.find((report) => report.reportId === reportId)!, input.evidence);
         return true;
       });
       return admitted ? reportId : undefined;
@@ -1979,6 +2047,20 @@ export async function createOperatorWatchPool(
             saveWatchStateSync(path, retained ? mergeWatchStates(partition, retained) : partition);
             durable = true;
             statePaths.add(path);
+            appendSchedulingEvent(root, profile, {
+              type: 'batch.committed', ts: Date.now(), batchId: batch.batchId,
+              sourceKey: batch.sourceKey,
+              reportIds: reports.map((event) => event.reportId),
+              count: reports.length,
+              reportTypes: reports.map((event) => event.reportType),
+              oldestFirstQueuedAt: Math.min(...reports.map((event) => event.firstQueuedAt ?? event.readyAt)),
+              readyReason: batch.selectionReason === 'oq' || batch.selectionReason === 'continuation' || batch.selectionReason === 'aged_idle'
+                ? batch.selectionReason : batch.deadlineReason === 'cap' || batch.deadlineReason === 'quiet' ? batch.deadlineReason : 'unknown',
+              deadlineReason: batch.deadlineReason ?? 'unknown',
+              eligibility: batch.eligibility ?? 'unknown',
+              selectionReason: batch.selectionReason ?? 'unknown',
+              usedContinuation: batch.usedContinuation,
+            }, options.onError);
           });
         }, false);
       } catch (error) {

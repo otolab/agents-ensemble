@@ -497,3 +497,5 @@ conductor（SDK）子プロセスの stdio は本 Issue のスコープ外（fol
 | `packages/cli/src/issue-command.ts` | sink 購読と interactive 判定 |
 
 テスト: `session-logger.test.ts`, `session-sinks.test.ts`, `session-display-reducer.test.ts`, `select-session-display-backend.test.ts`, `acp-process.test.ts`
+
+operator-agent の scheduling イベントと統計の保存先、欠落や期間境界の扱いは [session metrics](session-metrics.md#9-operator-agent-の-scheduling) を参照してください。

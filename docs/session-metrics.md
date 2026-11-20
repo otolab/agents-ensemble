@@ -380,3 +380,13 @@ TUI 表示語彙 `WorkerDisplayStatus`（`sleep` / `idle` / `running` / `failed`
 | `packages/core/src/conductor/session/session-logger.ts` | exit report 蓄積 |
 | `packages/cli/src/format-session-summary.ts` | 終了 JSON / テキスト整形 |
 | `packages/cli/src/write-issue-session-summary.ts` | stdout / stderr への書き込み |
+
+## 9. operator-agent の scheduling
+
+`ensemble session scheduling-stats --profile default --since 2026-01-01 --until 2026-02-01 --json` は user root の `operator-agents/<profile>/scheduling-events.jsonl` と、その一世代前の `.1` を読みます。profile を省略すると全 profile が対象です。期間はイベント時刻の `--since` 以上、`--until` 未満です。期間外の report / batch も期間内の send との照合には使います。ファイルや不正行の修復は行いません。
+
+記録は report の queue / ack、batch の commit / send、focus の設定・解除・保留を扱い、本文を含みません。ファイルは 5 MiB を超える前に一世代だけローテーションします。記録失敗や buffer の上限、プロセス停止、ローテーションにより欠落し得るため、集計は完全な監査ログではありません。lock 外で生じたイベントは一時 buffer に入れ、非同期で profile lock を取得して速やかに追記します。通常終了時には書き込みを待ちますが、強制終了や lock 取得失敗などでは失われます。記録用の lock 取得は scheduling の lock と競合し得ます。
+
+queued は期間内の queue 件数、sends は期間内の送信試行件数です。再試行と複数 process の重複は別々に数えます。同一 ID の queue / commit 記録が重複した場合、照合には最初の記録を使い、重複件数を表示します。集約率は照合できた batch の report 件数の合計を全 send 件数で割るため、照合不能な send があると過小になります。待ち時間は照合できた各 send と report の `startedAt - firstQueuedAt` で、report type と focus による保留の観測有無ごとに nearest-rank の p50 / p95 / max を表示します。未観測は focus の影響がなかったことの証明ではありません。欠落・不正行は `correlation` に示します。
+
+eligibility（threshold / 明示要求 / retry）、deadline（quiet / cap）、選択経路（focus / OQ / continuation / FIFO / idle aging）は別の判断です。理由が復元できない場合は `unknown` とし、cap の割合は cap と quiet が判明した件数のみを分母とします。分母がない場合は null です。focus timeout の割合は期間内の focus clear を分母とし、idle は候補数と記録された phase・経過時間・threshold を示します。

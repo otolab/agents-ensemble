@@ -1,0 +1,98 @@
+import { readFile, readdir } from 'node:fs/promises';
+import { join } from 'node:path';
+import { resolveUserEnsembleRoot } from '@agents-ensemble/core/operator-runtime';
+
+type Event = Record<string, unknown> & { type: string; ts: number };
+
+export async function readSchedulingStats(options: { profile?: string; since?: string; until?: string; root?: string }) {
+  const root = join(options.root ?? resolveUserEnsembleRoot(), 'operator-agents');
+  const parseDate = (value: string | undefined, fallback: number) => {
+    if (value === undefined) return fallback;
+    const parsed = Date.parse(value);
+    if (!Number.isFinite(parsed)) throw new Error(`Invalid date: ${value}`);
+    return parsed;
+  };
+  const since = parseDate(options.since, -Infinity);
+  const until = parseDate(options.until, Infinity);
+  if (since >= until) throw new Error('--since must precede --until');
+  if (options.profile && (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(options.profile) || options.profile === '.' || options.profile === '..')) throw new Error('Invalid profile name');
+  let profiles: string[];
+  try { profiles = options.profile ? [options.profile] : (await readdir(root, { withFileTypes: true })).filter((entry) => entry.isDirectory()).map((entry) => entry.name); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; profiles = []; }
+  const all: Array<Event & { profile: string }> = [];
+  let malformed = 0;
+  for (const profile of profiles) {
+    for (const suffix of ['.1', '']) {
+      let text: string;
+      try { text = await readFile(join(root, profile, `scheduling-events.jsonl${suffix}`), 'utf8'); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue; throw error; }
+      for (const line of text.split('\n')) {
+        if (!line.trim()) continue;
+        try {
+          const value: unknown = JSON.parse(line);
+          if (!value || typeof value !== 'object' || typeof (value as Event).type !== 'string' || typeof (value as Event).ts !== 'number' || !Number.isFinite((value as Event).ts)) throw new Error('invalid');
+          all.push({ ...(value as Event), profile });
+        } catch { malformed++; }
+      }
+    }
+  }
+  const window = all.filter((event) => event.ts >= since && event.ts < until);
+  const key = (profile: string, id: unknown) => `${profile}\0${String(id)}`;
+  let duplicates = 0;
+  const indexById = (type: string, field: string) => {
+    const result = new Map<string, Event & { profile: string }>();
+    for (const event of all) {
+      if (event.type !== type || typeof event[field] !== 'string') continue;
+      const id = key(event.profile, event[field]);
+      if (result.has(id)) { duplicates++; continue; }
+      result.set(id, event);
+    }
+    return result;
+  };
+  const queued = indexById('report.queued', 'reportId');
+  const committed = indexById('batch.committed', 'batchId');
+  const deferred = new Map<string, number>();
+  for (const event of all) {
+    if (event.type !== 'report.deferred_by_focus' || typeof event.reportId !== 'string') continue;
+    const id = key(event.profile, event.reportId);
+    deferred.set(id, Math.min(deferred.get(id) ?? Infinity, event.ts));
+  }
+  const sends = window.filter((e) => e.type === 'batch.sent');
+  const reasons: Record<string, number> = {};
+  const deadlines: Record<string, number> = {};
+  const waits: Record<string, number[]> = {};
+  let matched = 0, missing = 0, members = 0;
+  for (const send of sends) {
+    const batch = committed.get(key(send.profile, send.batchId));
+    if (!batch || !Array.isArray(batch.reportIds)) { missing++; continue; }
+    reasons[String(batch.readyReason ?? 'unknown')] = (reasons[String(batch.readyReason ?? 'unknown')] ?? 0) + 1;
+    const deadline = String(batch.deadlineReason ?? 'unknown');
+    deadlines[deadline] = (deadlines[deadline] ?? 0) + 1;
+    members += batch.reportIds.length;
+    for (const id of batch.reportIds) {
+      const report = queued.get(key(send.profile, id));
+      if (!report || typeof report.firstQueuedAt !== 'number' || typeof send.startedAt !== 'number' || send.startedAt < report.firstQueuedAt) { missing++; continue; }
+      matched++;
+      const group = `${String(report.reportType ?? 'unknown')}/${(deferred.get(key(send.profile, id)) ?? Infinity) <= send.startedAt ? 'deferred' : 'not_observed_deferred'}`;
+      (waits[group] ??= []).push(send.startedAt - report.firstQueuedAt);
+    }
+  }
+  const latency = Object.fromEntries(Object.entries(waits).map(([group, values]) => {
+    values.sort((a, b) => a - b);
+    const percentile = (p: number) => values[Math.ceil(values.length * p) - 1];
+    return [group, { count: values.length, p50Ms: percentile(0.5), p95Ms: percentile(0.95), maxMs: values.at(-1) }];
+  }));
+  const clears = window.filter((e) => e.type === 'focus.clear');
+  const timeout = clears.filter((e) => e.reason === 'timeout').length;
+  const knownDeadline = (deadlines.cap ?? 0) + (deadlines.quiet ?? 0);
+  const idle = window.filter((e) => e.type === 'report.queued' && e.reportType === 'idle_candidate');
+  const evidenceDistribution: Record<string, number> = {};
+  for (const event of idle) {
+    const evidence = event.evidence;
+    const group = evidence && typeof evidence === 'object'
+      ? `${String((evidence as Record<string, unknown>).phase ?? 'unknown')}/${String((evidence as Record<string, unknown>).thresholdMs ?? 'unknown')}`
+      : 'unknown/unknown';
+    evidenceDistribution[group] = (evidenceDistribution[group] ?? 0) + 1;
+  }
+  return { profiles, since: options.since ?? null, until: options.until ?? null, queued: window.filter((e) => e.type === 'report.queued').length, sends: sends.length, aggregationRate: sends.length ? members / sends.length : null, readyReasons: reasons, deadlineReasons: deadlines, capFraction: knownDeadline ? (deadlines.cap ?? 0) / knownDeadline : null, latency, focus: { clears: clears.length, timeout, timeoutFraction: clears.length ? timeout / clears.length : null, deferred: window.filter((e) => e.type === 'report.deferred_by_focus').length }, idle: { count: idle.length, evidenceDistribution, evidence: idle.map((e) => e.evidence ?? null) }, correlation: { matched, missing, malformed, duplicates } };
+}
