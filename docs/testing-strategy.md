@@ -52,6 +52,7 @@ pnpm test:all          # test:run → test:integration → test:e2e
 `@agents-ensemble/operator-agent` は `@agents-ensemble/core` の package export を通じて `dist` を読み込む。package 単独で実行する場合は、先に `pnpm --filter @agents-ensemble/core build` を実行する。Vitest setup は `ENSEMBLE_USER_ROOT` と scratch filesystem probe を repository の無視対象 `.tmp/` 以下へ分離する。Node の `TMPDIR` は上書きしない。既定の絶対 temp path を保つことで、テストが作る一時 repository の path semantics を維持し、深い worktree から UDS socket を作る際の path 長超過も避ける。UDS probe はその `TMPDIR` 上で行う。
 
 operator-agent のテスト間で共有する fixture は `packages/operator-agent/test/support/` に置く。テスト本体は従来どおり `src/` または `test/` の Vitest の収集対象に置く。
+watch-pool の機能別テストは `packages/operator-agent/src/` に置く。`operator-watch-reports.test.ts` は report の順序と cursor（旧形式を含む）を、`operator-watch-state.test.ts` は state の merge・partition と session 削除を検証する。いずれも既存の `src/**/*.test.ts` で収集し、pool の統合的な挙動は引き続き `operator-watch-pool.test.ts` で検証する。
 dispatch queue の時刻依存は、既定では実時計を使い、テストでは clock を注入して期限とタイマーを制御できる。共有の待ち helper は期限切れを報告するものであり、待機対象の処理を停止するものではない。
 
 ## Vitest 設定
