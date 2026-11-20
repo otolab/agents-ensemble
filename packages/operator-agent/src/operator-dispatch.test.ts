@@ -1779,6 +1779,20 @@ describe('operator dispatch batching', () => {
 });
 
 describe('operator dispatch clock', () => {
+  it('reads focus at send time without clearing or emitting expiry', () => {
+    let now = 100;
+    const events: Record<string, unknown>[] = [];
+    const clock = { now: () => now, setTimeout, clearTimeout };
+    const queue = createOperatorDispatchQueue({ ...DEFAULT_OPERATOR_DISPATCH_SCHEDULING, focusInactivityTimeoutMs: 1_000 }, clock, (event) => events.push(event));
+    queue.setFocus('one');
+    expect(queue.focusSessionIdAt(1_099)).toBe('one');
+    expect(queue.focusSessionIdAt(1_100)).toBeUndefined();
+    expect(events.map((event) => event.type)).toEqual(['focus.set']);
+    now = 1_100;
+    expect(queue.focusSessionId).toBeUndefined();
+    expect(events.map((event) => event.type)).toEqual(['focus.set', 'focus.clear']);
+  });
+
   it('preserves held reports and frozen retry identity with an injected clock', () => {
     let now = 1_000;
     const clock = {

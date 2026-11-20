@@ -1,3 +1,4 @@
+import { readSchedulingStats } from '../../cli/src/session-scheduling-stats.js';
 import { createFakeAgent, createOutput, writeOperatorSettings } from '../test/support/operator-fixtures.js';
 import { waitForNotification } from '../test/support/wait.js';
 import { mkdtemp, mkdir, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
@@ -2521,6 +2522,53 @@ describe('runOperatorAgent', () => {
     }
   }, 20_000);
 
+  it.each([
+    ['off', undefined], ['focused_session', 'conductor-one'], ['other_session', 'conductor-other'],
+  ] as const)('records send-time focus %s through runner and statistics', async (expected, focused) => {
+    const root = join(repoRoot, '.ensemble');
+    const setupPool = await createOperatorWatchPool({ repoRoot, userEnsembleRoot: root, profile: 'smoke', dispatchQueue: createOperatorDispatchQueue() });
+    await setupPool.enqueueIdleCandidate!({ conductorAgentId: 'conductor-one', text: 'focus example', kind: 'idle_phase', fingerprint: `focus-${expected}`, eligibleAt: Date.now() });
+    await setupPool.flushSchedulingEvents?.();
+    setupPool.close();
+    await setupPool.flushSchedulingEvents?.();
+    const input = createInteractiveInput();
+    const output = createOutput();
+    let options: ConductorAgentCreateOptions | undefined;
+    let sends = 0;
+    const acknowledged = new Promise<void>((resolve) => { watchPollHarness.onAcknowledged = resolve; });
+    const agent = createFakeAgent({ send: async () => {
+      sends++;
+      if (sends === 1) {
+        if (focused) await options!.customTools!.set_session_focus!.execute({ conductorAgentId: focused });
+        await options!.customTools!.request_session_reports!.execute({ conductorAgentId: 'conductor-one' });
+      } else {
+        // A focus change during send must not change its start-time snapshot.
+        await options!.customTools!.set_session_focus!.execute(focused ? {} : { conductorAgentId: 'conductor-other' });
+      }
+      return { runId: 'focus-send', status: 'finished', result: 'done' };
+    } });
+    const run = runOperatorAgent({ repoRoot, newSession: true }, {
+      stdin: input, stdout: output,
+      agentFactory: { create: async (value) => { options = value; return agent; }, resume: async () => agent },
+    });
+    try {
+      await vi.waitFor(() => expect(output.capturedText()).toContain('user>'));
+      input.write('request report\n');
+      await waitForNotification(acknowledged, 'focus report acknowledgement', 10_000);
+    } finally {
+      watchPollHarness.onAcknowledged = undefined;
+      input.end();
+      await run;
+    }
+    const events = (await readFile(join(root, 'operator-agents', 'smoke', 'scheduling-events.jsonl'), 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
+    const sent = events.find((event) => event.type === 'batch.sent');
+    expect(sent).toMatchObject({ focusState: expected, schedulingInstanceId: expect.any(String) });
+    const stats = await readSchedulingStats({ root, profile: 'smoke' });
+    expect(stats.latencyByFocus[`idle_candidate/${expected}`]).toMatchObject({ count: 1 });
+    expect(stats.latencyByFocusPresence[`idle_candidate/${expected === 'off' ? 'off' : 'on'}`]).toMatchObject({ count: 1 });
+    expect(stats.latency['idle_candidate/unknown_deferred']).toMatchObject({ count: 1 });
+  }, 20_000);
+
   it('records an initial report attempt and its frozen replay after runner restart', async () => {
     const setupPool = await createOperatorWatchPool({
       repoRoot,
@@ -2575,7 +2623,7 @@ describe('runOperatorAgent', () => {
       await retryRun;
     }
     const path = join(repoRoot, '.ensemble', 'operator-agents', 'smoke', 'scheduling-events.jsonl');
-    const events = (await readFile(path, 'utf8')).trim().split('\n').map((line) => JSON.parse(line) as { type: string; batchId?: string; deliveryKind?: string; status?: string; schedulingInstanceId?: string });
+    const events = (await readFile(path, 'utf8')).trim().split('\n').map((line) => JSON.parse(line) as { type: string; batchId?: string; deliveryKind?: string; status?: string; schedulingInstanceId?: string; focusState?: string });
     const sent = events.filter((event) => event.type === 'batch.sent');
     expect(sent).toHaveLength(2);
     expect(sent[0]).toMatchObject({ deliveryKind: 'initial', status: 'cancelled' });
@@ -2583,6 +2631,9 @@ describe('runOperatorAgent', () => {
     expect(sent[0]!.schedulingInstanceId).toEqual(expect.any(String));
     expect(sent[1]!.schedulingInstanceId).toEqual(expect.any(String));
     expect(sent[1]!.schedulingInstanceId).not.toBe(sent[0]!.schedulingInstanceId);
+    expect(sent.map((event) => event.focusState)).toEqual(['off', 'off']);
+    const stats = await readSchedulingStats({ root: join(repoRoot, '.ensemble'), profile: 'smoke' });
+    expect(stats.latencyByFocus['idle_candidate/off']).toMatchObject({ count: 2 });
   }, 20_000);
 
   it.each([

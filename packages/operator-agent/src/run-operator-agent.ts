@@ -1342,6 +1342,15 @@ async function runTtyConversation(options: {
       automaticReconnectResult.current = undefined;
       let result: ConductorSendResult | undefined;
       const sendStartedAt = Date.now();
+      // Snapshot without expiring focus or recording events in the synchronous
+      // commit-to-send section; the snapshot belongs to this send attempt.
+      let focusState: 'focused_session' | 'other_session' | 'off' | 'unknown' = 'unknown';
+      try {
+        const focused = options.dispatchQueue.focusSessionIdAt(sendStartedAt);
+        if (batch.sourceKey.startsWith('session:') && batch.sourceKey.length > 'session:'.length) {
+          focusState = !focused ? 'off' : batch.sourceKey === `session:${focused}` ? 'focused_session' : 'other_session';
+        }
+      } catch { /* missing diagnostic state must not block delivery */ }
       try {
         result = await Promise.race([
           sendConductorWithReconnect(
@@ -1438,7 +1447,7 @@ async function runTtyConversation(options: {
         options.watchPool.recordSchedulingEvent?.({
           type: 'batch.sent', ts: completedAt, batchId: batch.batchId,
           sendCount: nextSendCount, status: result?.status ?? 'interrupted',
-          startedAt: sendStartedAt, completedAt, deliveryKind,
+          startedAt: sendStartedAt, completedAt, deliveryKind, focusState,
         });
       }
       if (!result) {

@@ -82,6 +82,8 @@ export async function readSchedulingStats(options: { profile?: string; since?: s
     deadlines[deadline] = (deadlines[deadline] ?? 0) + 1;
   }
   const waits: Record<string, number[]> = {};
+  const focusWaits: Record<string, number[]> = {};
+  const focusPresenceWaits: Record<string, number[]> = {};
   let matched = 0, missing = 0, members = 0;
   for (const send of sends) {
     const batch = committed.get(key(send.profile, send.batchId));
@@ -95,14 +97,24 @@ export async function readSchedulingStats(options: { profile?: string; since?: s
         (deferred.get(focusKey(send.profile, send.schedulingInstanceId, id)) ?? Infinity) <= send.startedAt
         ? 'deferred' : 'unknown_deferred';
       const group = `${String(report.reportType ?? 'unknown')}/${focusStatus}`;
-      (waits[group] ??= []).push(send.startedAt - report.firstQueuedAt);
+      const wait = send.startedAt - report.firstQueuedAt;
+      (waits[group] ??= []).push(wait);
+      const sendFocus = hasInstance(send) && (send.focusState === 'focused_session' || send.focusState === 'other_session' || send.focusState === 'off')
+        ? send.focusState : 'unknown';
+      const reportType = String(report.reportType ?? 'unknown');
+      (focusWaits[`${reportType}/${sendFocus}`] ??= []).push(wait);
+      const presence = sendFocus === 'focused_session' || sendFocus === 'other_session' ? 'on' : sendFocus;
+      (focusPresenceWaits[`${reportType}/${presence}`] ??= []).push(wait);
     }
   }
-  const latency = Object.fromEntries(Object.entries(waits).map(([group, values]) => {
+  const percentiles = (groups: Record<string, number[]>) => Object.fromEntries(Object.entries(groups).map(([group, values]) => {
     values.sort((a, b) => a - b);
     const percentile = (p: number) => values[Math.ceil(values.length * p) - 1];
     return [group, { count: values.length, p50Ms: percentile(0.5), p95Ms: percentile(0.95), maxMs: values.at(-1) }];
   }));
+  const latency = percentiles(waits);
+  const latencyByFocus = percentiles(focusWaits);
+  const latencyByFocusPresence = percentiles(focusPresenceWaits);
   const clears = window.filter((e) => e.type === 'focus.clear');
   const timeout = clears.filter((e) => e.reason === 'timeout').length;
   const knownDeadline = (deadlines.cap ?? 0) + (deadlines.quiet ?? 0);
@@ -115,5 +127,5 @@ export async function readSchedulingStats(options: { profile?: string; since?: s
       : 'unknown/unknown';
     evidenceDistribution[group] = (evidenceDistribution[group] ?? 0) + 1;
   }
-  return { profiles, since: options.since ?? null, until: options.until ?? null, queued: window.filter((e) => e.type === 'report.queued').length, sends: sends.length, deliveries, aggregationRate: sends.length ? members / sends.length : null, committedBatches: uniqueBatches.size, readyReasons: reasons, deadlineReasons: deadlines, capFraction: knownDeadline ? (deadlines.cap ?? 0) / knownDeadline : null, latency, focus: { clears: clears.length, timeout, timeoutFraction: clears.length ? timeout / clears.length : null, deferred: window.filter((e) => e.type === 'report.deferred_by_focus' && e.evidence === 'selection_counterfactual' && hasInstance(e)).length, unverified: window.filter((e) => e.type === 'report.deferred_by_focus' && (e.evidence !== 'selection_counterfactual' || !hasInstance(e))).length }, idle: { count: idle.length, evidenceDistribution, evidence: idle.map((e) => e.evidence ?? null) }, correlation: { matched, missing, malformed, duplicates } };
+  return { profiles, since: options.since ?? null, until: options.until ?? null, queued: window.filter((e) => e.type === 'report.queued').length, sends: sends.length, deliveries, aggregationRate: sends.length ? members / sends.length : null, committedBatches: uniqueBatches.size, readyReasons: reasons, deadlineReasons: deadlines, capFraction: knownDeadline ? (deadlines.cap ?? 0) / knownDeadline : null, latency, latencyByFocus, latencyByFocusPresence, focus: { clears: clears.length, timeout, timeoutFraction: clears.length ? timeout / clears.length : null, deferred: window.filter((e) => e.type === 'report.deferred_by_focus' && e.evidence === 'selection_counterfactual' && hasInstance(e)).length, unverified: window.filter((e) => e.type === 'report.deferred_by_focus' && (e.evidence !== 'selection_counterfactual' || !hasInstance(e))).length }, idle: { count: idle.length, evidenceDistribution, evidence: idle.map((e) => e.evidence ?? null) }, correlation: { matched, missing, malformed, duplicates } };
 }

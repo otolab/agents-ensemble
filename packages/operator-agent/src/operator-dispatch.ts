@@ -130,6 +130,7 @@ export interface OperatorDispatchQueue {
   readonly reportHold: boolean;
   readonly hold: boolean;
   readonly focusSessionId: string | undefined;
+  focusSessionIdAt(now: number): string | undefined;
   readonly batchMaxWaitMs: number;
 }
 
@@ -1301,6 +1302,11 @@ export function createOperatorDispatchQueue(
     },
     get hold() {
       return isHeld();
+    },
+    focusSessionIdAt(now) {
+      return focusSessionId && focusLastInputAt !== undefined &&
+        now - focusLastInputAt >= scheduling.focusInactivityTimeoutMs
+        ? undefined : focusSessionId;
     },
     get focusSessionId() {
       clearExpiredFocus(clock.now());
