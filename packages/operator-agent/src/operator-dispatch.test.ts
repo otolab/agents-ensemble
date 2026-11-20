@@ -33,6 +33,42 @@ function report(
 }
 
 describe('operator dispatch batching', () => {
+  it.each([
+    { focus: 'one', weight: 1, debounce: 0, request: false, expected: false },
+    { focus: 'other', weight: 1, debounce: 0, request: false, expected: false },
+    { focus: 'one', weight: 10, debounce: 1000, request: false, expected: false },
+    { focus: 'one', weight: 10, debounce: 0, request: false, expected: true },
+    { focus: 'other', weight: 10, debounce: 0, request: false, expected: true },
+    { focus: undefined, weight: 10, debounce: 0, request: false, expected: false },
+    { focus: 'one', weight: 1, debounce: 0, request: true, expected: false },
+  ])('records only a report selected without focus: $focus $weight $debounce $request', ({ focus, weight, debounce, request, expected }) => {
+    const now = vi.spyOn(Date, 'now').mockReturnValue(100);
+    try {
+      const events: Record<string, unknown>[] = [];
+      const queue = createOperatorDispatchQueue({ ...DEFAULT_OPERATOR_DISPATCH_SCHEDULING,
+        pushThreshold: 10, reportWeights: { session_state: weight, open_question: 10, conductor_message: 5, idle_candidate: 1 },
+      }, undefined, (event) => events.push(event));
+      queue.enqueueReport({ type: 'report', reportType: 'session_state', reportId: 'r', conductorAgentId: 'one', issueUrl: 'https://example.com/1', text: 'x' }, debounce);
+      if (focus) queue.setFocus(focus);
+      if (request) queue.requestReports('one');
+      queue.selectBatch({ continuationConsumed: false }, 100);
+      queue.selectBatch({ continuationConsumed: false }, 100);
+      expect(events.filter((event) => event.type === 'report.deferred_by_focus')).toHaveLength(expected ? 1 : 0);
+    } finally { now.mockRestore(); }
+  });
+
+  it('does not attribute normal priority or user selection to focus', () => {
+    const events: Record<string, unknown>[] = [];
+    const queue = createOperatorDispatchQueue(DEFAULT_OPERATOR_DISPATCH_SCHEDULING, undefined, (event) => events.push(event));
+    queue.enqueueReport({ type: 'report', reportType: 'open_question', reportId: 'focused', conductorAgentId: 'one', issueUrl: 'https://example.com/1', text: 'x' }, 0);
+    queue.enqueueReport({ type: 'report', reportType: 'session_state', reportId: 'other', conductorAgentId: 'two', issueUrl: 'https://example.com/2', text: 'x' }, 0);
+    queue.setFocus('one');
+    queue.selectBatch({ continuationConsumed: false });
+    queue.enqueueUser('hello');
+    queue.selectBatch({ continuationConsumed: false });
+    expect(events.filter((event) => event.type === 'report.deferred_by_focus')).toHaveLength(0);
+  });
+
   it('holds low weight reports until requested, including during focus', () => {
     const now = vi.spyOn(Date, 'now').mockReturnValue(1_000);
     try {
@@ -126,7 +162,7 @@ describe('operator dispatch batching', () => {
   it('records focus deferral once without changing the selected session', () => {
     const events: Record<string, unknown>[] = [];
     const queue = createOperatorDispatchQueue(DEFAULT_OPERATOR_DISPATCH_SCHEDULING, undefined, (event) => events.push(event));
-    for (const id of ['one', 'two']) {
+    for (const id of ['two', 'one']) {
       queue.enqueueReport({ type: 'report', reportType: 'session_state', reportId: id, conductorAgentId: id, issueUrl: `https://github.com/example/repo/issues/${id}`, text: 'private' }, 0);
     }
     queue.setFocus('one');

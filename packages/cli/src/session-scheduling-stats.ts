@@ -52,10 +52,12 @@ export async function readSchedulingStats(options: { profile?: string; since?: s
   const queued = indexById('report.queued', 'reportId');
   const committed = indexById('batch.committed', 'batchId');
   const deferred = new Map<string, number>();
+  const unverifiedDeferred = new Map<string, number>();
   for (const event of all) {
     if (event.type !== 'report.deferred_by_focus' || typeof event.reportId !== 'string') continue;
     const id = key(event.profile, event.reportId);
-    deferred.set(id, Math.min(deferred.get(id) ?? Infinity, event.ts));
+    const target = event.evidence === 'selection_counterfactual' ? deferred : unverifiedDeferred;
+    target.set(id, Math.min(target.get(id) ?? Infinity, event.ts));
   }
   const sends = window.filter((e) => e.type === 'batch.sent');
   const reasons: Record<string, number> = {};
@@ -87,7 +89,10 @@ export async function readSchedulingStats(options: { profile?: string; since?: s
       const report = queued.get(key(send.profile, id));
       if (!report || typeof report.firstQueuedAt !== 'number' || typeof send.startedAt !== 'number' || send.startedAt < report.firstQueuedAt) { missing++; continue; }
       matched++;
-      const group = `${String(report.reportType ?? 'unknown')}/${(deferred.get(key(send.profile, id)) ?? Infinity) <= send.startedAt ? 'deferred' : 'not_observed_deferred'}`;
+      const reportKey = key(send.profile, id);
+      const focusStatus = (deferred.get(reportKey) ?? Infinity) <= send.startedAt ? 'deferred'
+        : (unverifiedDeferred.get(reportKey) ?? Infinity) <= send.startedAt ? 'unknown_deferred' : 'not_observed_deferred';
+      const group = `${String(report.reportType ?? 'unknown')}/${focusStatus}`;
       (waits[group] ??= []).push(send.startedAt - report.firstQueuedAt);
     }
   }
@@ -108,5 +113,5 @@ export async function readSchedulingStats(options: { profile?: string; since?: s
       : 'unknown/unknown';
     evidenceDistribution[group] = (evidenceDistribution[group] ?? 0) + 1;
   }
-  return { profiles, since: options.since ?? null, until: options.until ?? null, queued: window.filter((e) => e.type === 'report.queued').length, sends: sends.length, deliveries, aggregationRate: sends.length ? members / sends.length : null, committedBatches: uniqueBatches.size, readyReasons: reasons, deadlineReasons: deadlines, capFraction: knownDeadline ? (deadlines.cap ?? 0) / knownDeadline : null, latency, focus: { clears: clears.length, timeout, timeoutFraction: clears.length ? timeout / clears.length : null, deferred: window.filter((e) => e.type === 'report.deferred_by_focus').length }, idle: { count: idle.length, evidenceDistribution, evidence: idle.map((e) => e.evidence ?? null) }, correlation: { matched, missing, malformed, duplicates } };
+  return { profiles, since: options.since ?? null, until: options.until ?? null, queued: window.filter((e) => e.type === 'report.queued').length, sends: sends.length, deliveries, aggregationRate: sends.length ? members / sends.length : null, committedBatches: uniqueBatches.size, readyReasons: reasons, deadlineReasons: deadlines, capFraction: knownDeadline ? (deadlines.cap ?? 0) / knownDeadline : null, latency, focus: { clears: clears.length, timeout, timeoutFraction: clears.length ? timeout / clears.length : null, deferred: window.filter((e) => e.type === 'report.deferred_by_focus' && e.evidence === 'selection_counterfactual').length, unverified: window.filter((e) => e.type === 'report.deferred_by_focus' && e.evidence !== 'selection_counterfactual').length }, idle: { count: idle.length, evidenceDistribution, evidence: idle.map((e) => e.evidence ?? null) }, correlation: { matched, missing, malformed, duplicates } };
 }

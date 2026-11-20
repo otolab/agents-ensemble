@@ -157,7 +157,6 @@ export function selectOperatorDispatchBatch(
   alreadyReady?: OperatorDispatchBatch,
   readyHeads?: WeakSet<OperatorDispatchEvent>,
   deadlineReasons?: WeakMap<OperatorDispatchEvent, NonNullable<OperatorDispatchBatch['deadlineReason']>>,
-  onFocusDeferred?: (event: Extract<OperatorDispatchEvent, { type: 'report' }>) => void,
 ): { batch: OperatorDispatchBatch; remaining: OperatorDispatchEvent[] } | undefined {
   const ordered = [...queue].sort(compareDispatchEvents);
   const readyUsers = ordered.filter(
@@ -277,11 +276,6 @@ export function selectOperatorDispatchBatch(
       .filter((candidate) => candidate.hasQuestion)
       .sort((left, right) => left.order - right.order)[0];
     selectedCandidate = focus ?? question;
-    if (focus && onFocusDeferred) {
-      for (const candidate of candidates) {
-        if (candidate !== focus) for (const event of candidate.events) onFocusDeferred(event);
-      }
-    }
     if (focus) selectionReason = 'focus';
     else if (question) selectionReason = 'oq';
     if (
@@ -550,7 +544,7 @@ export function createOperatorDispatchQueue(
   const recordDeferred = (event: Extract<OperatorDispatchEvent, { type: 'report' }>, now: number) => {
     if (!event.reportId || deferred.has(event.reportId)) return;
     deferred.add(event.reportId);
-    record({ type: 'report.deferred_by_focus', ts: now, reportId: event.reportId, conductorAgentId: event.conductorAgentId });
+    record({ type: 'report.deferred_by_focus', ts: now, reportId: event.reportId, conductorAgentId: event.conductorAgentId, evidence: 'selection_counterfactual' });
   };
   const isHeld = () => conversationHold || reportHold;
   const hasReport = (reportId: string) =>
@@ -575,7 +569,7 @@ export function createOperatorDispatchQueue(
   const orderReports = (
     reports: Extract<OperatorDispatchEvent, { type: 'report' }>[],
   ) => reports.sort(compareDispatchEvents);
-  const eligibleReports = (now: number): OperatorDispatchEvent[] => {
+  const eligibleReports = (now: number, ignoreFocus = false): OperatorDispatchEvent[] => {
     if (scheduling.pushThreshold === undefined || !scheduling.reportWeights) return pending;
     const groups = new Map<string, Extract<OperatorDispatchEvent, { type: 'report' }>[]>();
     for (const event of pending) {
@@ -589,19 +583,14 @@ export function createOperatorDispatchQueue(
       orderReports(reports);
       const first = reports[0]!;
       if (requestedReports.has(id)) {
-        if (!first.frozenBatchId) {
+        if (!ignoreFocus && !first.frozenBatchId) {
           if (!deadlineReasons.has(first)) deadlineReasons.set(first, 'unknown');
           readyHeads.add(first);
         }
         eligible.add(id);
         continue;
       }
-      if (focusSessionId) {
-        for (const report of reports) {
-          recordDeferred(report, now);
-        }
-        continue;
-      }
+      if (focusSessionId && !ignoreFocus) continue;
       if (first.frozenBatchId) {
         eligible.add(id);
         continue;
@@ -619,16 +608,33 @@ export function createOperatorDispatchQueue(
       if (reachedAt === undefined) continue;
       const quietAt = Math.max(...reports.map((report) => report.readyAt));
       if (Math.min(quietAt, reachedAt + scheduling.batchMaxWaitMs) <= now) {
-        if (!deadlineReasons.has(first)) {
+        if (!ignoreFocus && !deadlineReasons.has(first)) {
           const capAt = reachedAt + scheduling.batchMaxWaitMs;
           deadlineReasons.set(first, reports.some((report) => report.batchReadyAt !== undefined)
             ? 'unknown' : quietAt === capAt ? 'tie' : quietAt < capAt ? 'quiet' : 'cap');
         }
-        readyHeads.add(first);
+        if (!ignoreFocus) readyHeads.add(first);
         eligible.add(id);
       }
     }
     return pending.filter((event) => event.type === 'user' || eligible.has(event.conductorAgentId));
+  };
+  const recordFocusDeferral = (
+    state: OperatorDispatchState,
+    now: number,
+    selected: OperatorDispatchBatch | undefined,
+    alreadyReady?: OperatorDispatchBatch,
+  ) => {
+    if (!focusSessionId || !onSchedulingEvent) return;
+    // The counterfactual must not latch readiness or alter deadline metadata.
+    const hypotheticalReady = new WeakSet<OperatorDispatchEvent>();
+    for (const event of pending) if (readyHeads.has(event)) hypotheticalReady.add(event);
+    const candidate = selectOperatorDispatchBatch(
+      eligibleReports(now, true), { ...state, focusSessionId: undefined }, now,
+      CONDUCTOR_RECOVERY_INPUT_BYTE_LIMIT, scheduling, alreadyReady, hypotheticalReady,
+    )?.batch;
+    if (!candidate || candidate.sourceKey === selected?.sourceKey) return;
+    for (const event of candidate.events) if (event.type === 'report') recordDeferred(event, now);
   };
   const latchReadyBeforeUpdate = (sourceKeys: Set<string>, now: number) => {
     for (const sourceKey of sourceKeys) {
@@ -1038,8 +1044,8 @@ export function createOperatorDispatchQueue(
         undefined,
         readyHeads,
         deadlineReasons,
-        (event) => recordDeferred(event, now),
       );
+      try { recordFocusDeferral(state, now, selected?.batch); } catch { /* diagnostic only */ }
       if (selected?.batch.sourceKey.startsWith('session:')) {
         const id = selected.batch.sourceKey.slice('session:'.length);
         selected.batch.eligibility = selected.batch.batchId ? 'retry'
@@ -1062,8 +1068,8 @@ export function createOperatorDispatchQueue(
         batch,
         readyHeads,
         deadlineReasons,
-        (event) => recordDeferred(event, selectionNow),
       )?.batch;
+      try { recordFocusDeferral(state, selectionNow, selected, batch); } catch { /* diagnostic only */ }
       if (
         !selected ||
         selected.sourceKey !== batch.sourceKey ||

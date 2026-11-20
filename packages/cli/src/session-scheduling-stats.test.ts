@@ -1,6 +1,9 @@
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { readSchedulingStats } from './session-scheduling-stats.js';
 
@@ -14,7 +17,7 @@ describe('scheduling statistics', () => {
         { type: 'report.queued', ts: 1, reportId: 'r', reportType: 'session_state', firstQueuedAt: 1 },
         { type: 'report.queued', ts: 1, reportId: 'r', reportType: 'session_state', firstQueuedAt: 1 },
         { type: 'batch.committed', ts: 2, batchId: 'b', reportIds: ['r'], readyReason: 'oq', deadlineReason: 'cap' },
-        { type: 'report.deferred_by_focus', ts: 3, reportId: 'r' },
+        { type: 'report.deferred_by_focus', ts: 3, reportId: 'r', evidence: 'selection_counterfactual' },
         { type: 'batch.sent', ts: 4, batchId: 'b', startedAt: 4, deliveryKind: 'initial' },
         { type: 'batch.sent', ts: 5, batchId: 'b', startedAt: 5, deliveryKind: 'frozen_replay' },
         { type: 'batch.sent', ts: 6, batchId: 'missing', startedAt: 6 },
@@ -31,6 +34,32 @@ describe('scheduling statistics', () => {
       expect(stats.latency['session_state/deferred']).toEqual({ count: 2, p50Ms: 3, p95Ms: 4, maxMs: 4 });
       expect(stats.correlation).toEqual({ matched: 2, missing: 0, malformed: 1, duplicates: 1 });
       expect((await readSchedulingStats({ root, profile: 'default' })).correlation.missing).toBe(1);
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it('uses observed focus selections from separate processes and marks legacy evidence unknown', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'focus-stats-'));
+    try {
+      const fixture = fileURLToPath(new URL('../test/fixtures/focus-stats-child.mjs', import.meta.url));
+      const run = promisify(execFile);
+      const workers = await Promise.all([
+        run(process.execPath, [fixture, 'low', '1', 'yes']),
+        run(process.execPath, [fixture, 'ready', '10', 'yes']),
+        run(process.execPath, [fixture, 'no-focus', '10', 'no']),
+      ]);
+      const events = workers.flatMap(({ stdout }) => JSON.parse(stdout) as Record<string, unknown>[]);
+      events.push({ type: 'report.queued', ts: 100, reportId: 'old', reportType: 'session_state', firstQueuedAt: 100 },
+        { type: 'report.deferred_by_focus', ts: 100, reportId: 'old' },
+        { type: 'batch.committed', ts: 100, batchId: 'old', reportIds: ['old'] },
+        { type: 'batch.sent', ts: 100, batchId: 'old', startedAt: 100 });
+      const directory = join(root, 'operator-agents', 'default');
+      await mkdir(directory, { recursive: true });
+      await writeFile(join(directory, 'scheduling-events.jsonl'), events.map((event) => JSON.stringify(event)).join('\n'));
+      const stats = await readSchedulingStats({ root });
+      expect(stats.focus).toMatchObject({ deferred: 1, unverified: 1 });
+      expect(stats.latency['session_state/deferred']?.count).toBe(1);
+      expect(stats.latency['session_state/not_observed_deferred']?.count).toBe(2);
+      expect(stats.latency['session_state/unknown_deferred']?.count).toBe(1);
     } finally { await rm(root, { recursive: true, force: true }); }
   });
 
