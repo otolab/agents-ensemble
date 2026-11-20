@@ -1,3 +1,17 @@
+import {
+  readObservation,
+  readConductorMessageBaseline,
+  readConductorMessagePages,
+  formatConductorMessageReport,
+} from './operator-watch-observation.js';
+export {
+  createRegisterSessionWatchTool,
+  createUnregisterSessionWatchTool,
+  createRegisterRepositoryWatchTool,
+  createUnregisterRepositoryWatchTool,
+  createRegisterConductorMessageListenTool,
+  createUnregisterConductorMessageListenTool,
+} from './operator-watch-tools.js';
 import { loadWatchState, saveWatchState, saveWatchStateSync, withWatchStateLock } from './watch-state-store.js';
 import {
   DEFAULT_POLL_INTERVAL_MS,
@@ -7,6 +21,7 @@ import {
   DEFAULT_MESSAGE_DEBOUNCE_MS,
   MAX_MESSAGE_DEBOUNCE_MS,
   parseBoundedInteger,
+  requireNonEmptyString,
 } from './operator-watch-validation.js';
 import { hash } from './operator-watch-hash.js';
 import { collectReports, cursorFor } from './operator-watch-reports.js';
@@ -21,30 +36,21 @@ import {
   issueIdentity,
   type OperatorWatchState,
 } from './operator-watch-state.js';
-import { isEnoent, jsonToolResult as toolResult } from './operator-utils.js';
+import { isEnoent } from './operator-utils.js';
 import { randomUUID } from 'node:crypto';
 import { access } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
-  CONDUCTOR_MESSAGE_PAGE_DEFAULT_LIMIT,
   findUserSessionResumeStore,
-  loadOpenQuestionsStore,
-  loadSessionStateStore,
   listUserLocatedSessionResumeStoresPage,
   OPEN_QUESTION_CONTROL_METHODS,
-  OpenQuestionControlRemoteError,
   OpenQuestionControlTransportError,
   parseIssueUrl,
   resolveUserEnsembleRoot,
   sendOpenQuestionControlRequest,
-  userSessionSnapshotPaths,
-  type OpenQuestionControlConductorMessage,
-  type ConductorJsonValue,
-  type ConductorTool,
   type SessionObservationSnapshot,
   type SessionResumeStoreDuplicateDiagnostic,
   type LocatedSessionResumeStore,
-  type SessionResumeStore,
 } from '@agents-ensemble/core/operator-runtime';
 import {
   listOperatorWatchStatePaths,
@@ -2124,455 +2130,6 @@ export async function createOperatorWatchPool(
   return pool;
 }
 
-export function createRegisterSessionWatchTool(
-  pool: OperatorWatchPool,
-): ConductorTool {
-  return {
-    name: 'register_session_watch',
-    description:
-      'Register a persistent manual watch for a saved Issue session, independently of live automatic discovery and the repository-watch limit. Reports new open questions, open-to-answered transitions, and disappearance from the observed question list. Each report identifies whether it came from live harness UDS or saved SessionResumeStore/YAML. answeredBy: operator records the operator role and does not distinguish a human on the Issue TTY from operator-agent; only answeredBy: conductor means a conductor-side answer. A question disappearing from the list without answer data is unconfirmed, not resolved.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        conductorAgentId: { type: 'string' },
-        pollIntervalMs: {
-          type: 'integer',
-          minimum: MIN_POLL_INTERVAL_MS,
-          maximum: MAX_POLL_INTERVAL_MS,
-          description: 'Per-session polling interval in milliseconds (default 2000).',
-        },
-        debounceMs: {
-          type: 'integer',
-          minimum: 0,
-          maximum: MAX_DEBOUNCE_MS,
-          description:
-            'Watch report quiet window in milliseconds (default 250). When conductor-message listen is active, watch reports also wait for its messageDebounceMs window.',
-        },
-      },
-      required: ['conductorAgentId'],
-      additionalProperties: false,
-    },
-    execute: async (args) => {
-      const watch = await pool.register(
-        requireToolString(args.conductorAgentId, 'conductorAgentId'),
-        {
-          pollIntervalMs: optionalNumber(args.pollIntervalMs, 'pollIntervalMs'),
-          debounceMs: optionalNumber(args.debounceMs, 'debounceMs'),
-        },
-      );
-      return toolResult(watch as unknown as ConductorJsonValue);
-    },
-  };
-}
-
-export function createUnregisterSessionWatchTool(
-  pool: OperatorWatchPool,
-): ConductorTool {
-  return {
-    name: 'unregister_session_watch',
-    description: 'Remove the saved session watch registration. If it belongs to a repository watch, suppress its repository-driven automatic re-registration. removed is false when no saved registration exists, including a live-discovery-only watch. Independent live automatic discovery is not disabled: a live watch may remain active or resume on a later scan, even when removed is true. Do not report that all monitoring has stopped based on this result alone; inspect the session watch status.',
-    inputSchema: {
-      type: 'object',
-      properties: { conductorAgentId: { type: 'string' } },
-      required: ['conductorAgentId'],
-      additionalProperties: false,
-    },
-    execute: async (args) => {
-      const conductorAgentId = requireToolString(
-        args.conductorAgentId,
-        'conductorAgentId',
-      );
-      const removed = await pool.unregister(conductorAgentId);
-      return toolResult({ conductorAgentId, removed });
-    },
-  };
-}
-
-export function createRegisterRepositoryWatchTool(
-  pool: OperatorWatchPool,
-): ConductorTool {
-  return {
-    name: 'register_repository_watch',
-    description:
-      'Enable a profile-scoped watch for one exact GitHub owner/repo. A profile can register up to 20 repositories; registering a new repository beyond that limit fails, while registering an existing repository updates its settings. Separately, repository-driven automatic session watches are limited to 20 runs per profile; independent live automatic discovery and manual session watches are outside that limit. Existing saved runs become the baseline and are eligible for automatic watch; later runs are discovered on the repository scan interval. Registration and first-observed times survive operator-agent restarts.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        githubRepo: {
-          type: 'string',
-          description: 'Exact GitHub repository in owner/repo form.',
-        },
-        scanIntervalMs: {
-          type: 'integer',
-          minimum: MIN_REPOSITORY_SCAN_INTERVAL_MS,
-          maximum: MAX_REPOSITORY_SCAN_INTERVAL_MS,
-          description: 'Repository discovery interval (default 30000).',
-        },
-        pollIntervalMs: {
-          type: 'integer',
-          minimum: MIN_POLL_INTERVAL_MS,
-          maximum: MAX_POLL_INTERVAL_MS,
-          description: 'Repository-driven session watch polling interval in milliseconds (default 10000).',
-        },
-        debounceMs: {
-          type: 'integer',
-          minimum: 0,
-          maximum: MAX_DEBOUNCE_MS,
-          description: 'Watch report quiet window (default 250).',
-        },
-      },
-      required: ['githubRepo'],
-      additionalProperties: false,
-    },
-    execute: async (args) => {
-      const config = await pool.registerRepository(
-        requireToolString(args.githubRepo, 'githubRepo'),
-        {
-          scanIntervalMs: optionalNumber(args.scanIntervalMs, 'scanIntervalMs'),
-          pollIntervalMs: optionalNumber(args.pollIntervalMs, 'pollIntervalMs'),
-          debounceMs: optionalNumber(args.debounceMs, 'debounceMs'),
-        },
-      );
-      return toolResult({
-        ...config,
-        baselineRunCount: config.managedSessionIds.length +
-          config.manualSessionIds.length,
-        autoWatchLimit: MAX_REPOSITORY_AUTO_WATCHES,
-      } as unknown as ConductorJsonValue);
-    },
-  };
-}
-
-export function createUnregisterRepositoryWatchTool(
-  pool: OperatorWatchPool,
-): ConductorTool {
-  return {
-    name: 'unregister_repository_watch',
-    description:
-      'Remove the repository watch registration, stopping its scans and repository-managed session watches. Explicit manual watches and independent live automatic discovery are unaffected; a live watch may remain active or resume, even when removed is true. Do not report that all monitoring has stopped based on this result alone; inspect the session watch status. First-observed history is retained for future registration.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        githubRepo: {
-          type: 'string',
-          description: 'Exact GitHub repository in owner/repo form.',
-        },
-      },
-      required: ['githubRepo'],
-      additionalProperties: false,
-    },
-    execute: async (args) => {
-      const githubRepo = requireToolString(args.githubRepo, 'githubRepo');
-      const removed = await pool.unregisterRepository(githubRepo);
-      return toolResult({ githubRepo, removed });
-    },
-  };
-}
-
-export function createRegisterConductorMessageListenTool(
-  pool: OperatorWatchPool,
-): ConductorTool {
-  return {
-    name: 'register_conductor_message_listen',
-    description:
-      'Listen for new successful conductor responses from a running Issue session. The first live poll establishes a baseline; subsequent messages are polled over UDS and debounced into one report. Related watch reports for the same session share this quiet window. No offline fallback is used.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        conductorAgentId: { type: 'string' },
-        messageDebounceMs: {
-          type: 'integer',
-          minimum: 0,
-          maximum: MAX_MESSAGE_DEBOUNCE_MS,
-          description:
-            'Quiet period in milliseconds before nearby conductor responses are reported (default 10000).',
-        },
-      },
-      required: ['conductorAgentId'],
-      additionalProperties: false,
-    },
-    execute: async (args) => {
-      const listener = await pool.registerConductorMessageListen(
-        requireToolString(args.conductorAgentId, 'conductorAgentId'),
-        {
-          messageDebounceMs: optionalNumber(
-            args.messageDebounceMs,
-            'messageDebounceMs',
-          ),
-        },
-      );
-      return toolResult(listener as unknown as ConductorJsonValue);
-    },
-  };
-}
-
-export function createUnregisterConductorMessageListenTool(
-  pool: OperatorWatchPool,
-): ConductorTool {
-  return {
-    name: 'unregister_conductor_message_listen',
-    description: 'Stop listening for conductor responses from an Issue session.',
-    inputSchema: {
-      type: 'object',
-      properties: { conductorAgentId: { type: 'string' } },
-      required: ['conductorAgentId'],
-      additionalProperties: false,
-    },
-    execute: async (args) => {
-      const conductorAgentId = requireToolString(
-        args.conductorAgentId,
-        'conductorAgentId',
-      );
-      const removed = await pool.unregisterConductorMessageListen(
-        conductorAgentId,
-      );
-      return toolResult({ conductorAgentId, removed });
-    },
-  };
-}
-
-async function readConductorMessages(
-  socketPath: string,
-  params: {
-    limit: number;
-    order: 'asc' | 'desc';
-    after?: number;
-  },
-): Promise<{
-  messages: OpenQuestionControlConductorMessage[];
-  hasMore: boolean;
-}> {
-  return sendOpenQuestionControlRequest(socketPath, {
-    method: OPEN_QUESTION_CONTROL_METHODS.conductorMessagesList,
-    params,
-  });
-}
-
-async function readConductorMessageBaseline(socketPath: string): Promise<number> {
-  try {
-    const baseline = await readConductorMessages(socketPath, {
-      limit: 1,
-      order: 'desc',
-    });
-    return baseline.messages[0]?.sendCount ?? 0;
-  } catch (error) {
-    const oversizedSendCount = oversizedConductorMessageSendCount(error);
-    if (oversizedSendCount !== undefined) return oversizedSendCount;
-    throw error;
-  }
-}
-
-async function readConductorMessagePages(
-  socketPath: string,
-  cursor: number,
-): Promise<{
-  messages: OpenQuestionControlConductorMessage[];
-  oversizedSendCounts: number[];
-  cursor: number;
-  responseSizeError?: OpenQuestionControlRemoteError;
-}> {
-  const messages: OpenQuestionControlConductorMessage[] = [];
-  const oversizedSendCounts: number[] = [];
-  let after = cursor;
-  let limit = CONDUCTOR_MESSAGE_PAGE_DEFAULT_LIMIT;
-
-  while (true) {
-    let page: Awaited<ReturnType<typeof readConductorMessages>>;
-    try {
-      page = await readConductorMessages(socketPath, {
-        limit,
-        order: 'asc',
-        after,
-      });
-    } catch (error) {
-      if (!isConductorMessageResponseTooLarge(error)) throw error;
-      if (limit === 1) {
-        const oversizedSendCount =
-          oversizedConductorMessageSendCount(error);
-        if (
-          oversizedSendCount === undefined ||
-          oversizedSendCount <= after
-        ) {
-          return {
-            messages,
-            oversizedSendCounts,
-            cursor: after,
-            responseSizeError: error,
-          };
-        }
-        oversizedSendCounts.push(oversizedSendCount);
-        after = oversizedSendCount;
-        limit = CONDUCTOR_MESSAGE_PAGE_DEFAULT_LIMIT;
-        continue;
-      }
-      limit = Math.max(1, Math.floor(limit / 2));
-      continue;
-    }
-
-    const nextMessages = page.messages
-      .filter((message) => message.sendCount > after)
-      .sort((left, right) => left.sendCount - right.sendCount);
-    if (nextMessages.length === 0) {
-      return { messages, oversizedSendCounts, cursor: after };
-    }
-    messages.push(...nextMessages);
-    after = nextMessages.at(-1)!.sendCount;
-    if (!page.hasMore) {
-      return { messages, oversizedSendCounts, cursor: after };
-    }
-  }
-}
-
-function isConductorMessageResponseTooLarge(
-  error: unknown,
-): error is OpenQuestionControlRemoteError {
-  return (
-    error instanceof OpenQuestionControlRemoteError &&
-    error.rpcCode === -32603 &&
-    error.message === 'Response is too large.'
-  );
-}
-
-function oversizedConductorMessageSendCount(
-  error: unknown,
-): number | undefined {
-  if (
-    !isConductorMessageResponseTooLarge(error) ||
-    !error.data ||
-    !('oversizedSendCount' in error.data)
-  ) {
-    return undefined;
-  }
-  return error.data.oversizedSendCount;
-}
-
-function formatConductorMessageReport(
-  resumeStore: SessionResumeStore,
-  message: OpenQuestionControlConductorMessage,
-): string {
-  return [
-    `対象: ${resumeStore.issueUrl} (${resumeStore.conductorAgentId})`,
-    `sendCount: ${message.sendCount}`,
-    `at: ${new Date(message.at).toISOString()}`,
-    ...(message.dispatchSource
-      ? [`dispatchSource: ${message.dispatchSource}`]
-      : []),
-    '',
-    '#### inbound',
-    '',
-    message.inbound,
-    '',
-    '#### response',
-    '',
-    message.text,
-  ].join('\n');
-}
-
-async function readObservation(
-  repoRoot: string,
-  located: LocatedSessionResumeStore,
-): Promise<{
-  snapshot: SessionObservationSnapshot;
-  source: 'uds' | 'resume_store';
-  connectivity: OperatorSessionLiveStatus['connectivity'];
-  checkedAt: number;
-}> {
-  // The snapshot can already be old when the response or later store reads
-  // finish. Use the request start as a conservative freshness boundary.
-  const checkedAt = Date.now();
-  const { resumeStore } = located;
-  if (resumeStore.harnessSocketPath) {
-    try {
-      return {
-        snapshot: await sendOpenQuestionControlRequest<SessionObservationSnapshot>(
-          resumeStore.harnessSocketPath,
-          { method: OPEN_QUESTION_CONTROL_METHODS.observe },
-        ),
-        source: 'uds',
-        connectivity: 'reachable',
-        checkedAt,
-      };
-    } catch (error) {
-      if (
-        !(error instanceof OpenQuestionControlTransportError) &&
-        !(
-          error instanceof OpenQuestionControlRemoteError &&
-          error.rpcCode === -32601
-        )
-      ) {
-        throw error;
-      }
-      // A recorded socket path is only an index. When it is stale/unreachable,
-      // or an older server does not implement snapshots, mark persisted data
-      // as the observation source instead of presenting it as live.
-      const connectivity =
-        error instanceof OpenQuestionControlTransportError && error.reason === 'connection'
-          ? 'unreachable'
-          : 'unknown';
-      const questions = await loadPersistedOpenQuestions(
-        repoRoot,
-        located,
-      );
-      const sessionState = await loadPersistedSessionState(
-        repoRoot,
-        located,
-      );
-      return {
-        snapshot: {
-          sequence: questions?.sequence ?? resumeStore.sequence,
-          openQuestions: questions?.openQuestions ?? resumeStore.openQuestions,
-          ...(sessionState ? { sessionState } : {}),
-        },
-        source: 'resume_store',
-        connectivity,
-        checkedAt,
-      };
-    }
-  }
-  const questions = await loadPersistedOpenQuestions(
-    repoRoot,
-    located,
-  );
-  const sessionState = await loadPersistedSessionState(
-    repoRoot,
-    located,
-  );
-  return {
-    snapshot: {
-      sequence: questions?.sequence ?? resumeStore.sequence,
-      openQuestions: questions?.openQuestions ?? resumeStore.openQuestions,
-      ...(sessionState ? { sessionState } : {}),
-    },
-    source: 'resume_store',
-    connectivity: 'unknown',
-    checkedAt,
-  };
-}
-
-async function loadPersistedOpenQuestions(
-  repoRoot: string,
-  located: LocatedSessionResumeStore,
-) {
-  const paths = userSessionSnapshotPaths(repoRoot, located, 'open-questions');
-  for (const path of paths) {
-    const snapshot = await loadOpenQuestionsStore(path);
-    if (snapshot) return snapshot;
-  }
-  return undefined;
-}
-
-async function loadPersistedSessionState(
-  repoRoot: string,
-  located: LocatedSessionResumeStore,
-) {
-  const paths = userSessionSnapshotPaths(repoRoot, located, 'session-state');
-  for (const path of paths) {
-    const state = await loadSessionStateStore(path);
-    if (state) return state;
-  }
-  return undefined;
-}
-
 async function pathExists(path: string): Promise<boolean> {
   try {
     await access(path);
@@ -2611,30 +2168,6 @@ function isAmbiguousResumeStoreError(error: unknown): boolean {
     error.message.includes('is ambiguous across saved Issues')
   );
 }
-
-function optionalNumber(
-  value: ConductorJsonValue | undefined,
-  name: string,
-): number | undefined {
-  if (value === undefined) return undefined;
-  if (typeof value !== 'number') throw new Error(`${name} must be an integer.`);
-  return value;
-}
-
-function requireToolString(
-  value: ConductorJsonValue | undefined,
-  name: string,
-): string {
-  if (typeof value !== 'string') throw new Error(`${name} must be a string.`);
-  return requireNonEmptyString(value, name);
-}
-
-function requireNonEmptyString(value: string, name: string): string {
-  const result = value.trim();
-  if (!result) throw new Error(`${name} must not be empty.`);
-  return result;
-}
-
 
 async function firstExistingPath(paths: readonly string[]): Promise<string | undefined> {
   for (const path of paths) {

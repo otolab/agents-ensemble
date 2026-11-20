@@ -18,3 +18,9 @@ export function parseBoundedInteger(
   }
   return value;
 }
+
+export function requireNonEmptyString(value: string, name: string): string {
+  const result = value.trim();
+  if (!result) throw new Error(`${name} must not be empty.`);
+  return result;
+}
