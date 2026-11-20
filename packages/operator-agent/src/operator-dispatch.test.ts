@@ -1698,3 +1698,99 @@ describe('operator dispatch batching', () => {
     }
   });
 });
+
+describe('operator dispatch clock', () => {
+  it('preserves held reports and frozen retry identity with an injected clock', () => {
+    let now = 1_000;
+    const clock = {
+      now: () => now,
+      setTimeout: (callback: () => void, delayMs: number) => setTimeout(callback, delayMs),
+      clearTimeout: (timer: NodeJS.Timeout) => clearTimeout(timer),
+    };
+    const queue = createOperatorDispatchQueue(undefined, clock);
+    const state = { continuationConsumed: false };
+    queue.setHold(true);
+    queue.enqueueReport({
+      type: 'report', reportType: 'open_question', reportId: 'held',
+      conductorAgentId: 'one', issueUrl: 'https://github.com/example/repo/issues/1', text: 'hello',
+    }, 100);
+    now = 1_100;
+    expect(queue.selectBatch(state)).toBeUndefined();
+    queue.setHold(false);
+    const first = queue.selectBatch(state)!;
+    expect(queue.commitBatch(first)).toBe(true);
+    queue.requeue(first.events[0]!, 5_000);
+    now = 6_099;
+    expect(queue.selectBatch(state)).toBeUndefined();
+    now = 6_100;
+    const retry = queue.selectBatch(state)!;
+    expect(retry.batchId).toBe(first.batchId);
+    expect(retry.events[0]).toMatchObject({ reportId: 'held', readyAt: 1_100, retryReadyAt: 6_100 });
+  });
+
+  it('uses the injected clock for deadlines and honors explicit times', () => {
+    let now = 1_000;
+    const clock = {
+      now: () => now,
+      setTimeout: (callback: () => void, delayMs: number) => setTimeout(callback, delayMs),
+      clearTimeout: (timer: NodeJS.Timeout) => clearTimeout(timer),
+    };
+    const queue = createOperatorDispatchQueue(undefined, clock);
+    queue.enqueueReport({
+      type: 'report', reportType: 'open_question', reportId: 'clock-report',
+      conductorAgentId: 'one', issueUrl: 'https://github.com/example/repo/issues/1', text: 'hello',
+    }, 500);
+    expect(queue.nextReadyAt()).toBe(1_500);
+    expect(queue.selectBatch({ continuationConsumed: false }, 1_499)).toBeUndefined();
+    expect(queue.selectBatch({ continuationConsumed: false }, 1_500)?.events).toHaveLength(1);
+    now = 1_500;
+    expect(queue.selectBatch({ continuationConsumed: false })?.events).toHaveLength(1);
+    queue.setFocus('one', 2_000);
+    queue.noteOperatorInput(2_100);
+    expect(queue.focusSessionId).toBe('one');
+    now = 2_100 + DEFAULT_OPERATOR_DISPATCH_SCHEDULING.focusInactivityTimeoutMs;
+    expect(queue.focusSessionId).toBeUndefined();
+  });
+
+  it('unrefs and clears injected timers on wake and on timeout', async () => {
+    let callback: (() => void) | undefined;
+    const unref = vi.fn();
+    const timer = { unref } as unknown as NodeJS.Timeout;
+    const clock = {
+      now: () => 0,
+      setTimeout: vi.fn((next: () => void, _delayMs: number) => { callback = next; return timer; }),
+      clearTimeout: vi.fn(),
+    };
+    const queue = createOperatorDispatchQueue(undefined, clock);
+    const wake = queue.waitForChange(25);
+    expect(clock.setTimeout).toHaveBeenLastCalledWith(expect.any(Function), 25);
+    expect(unref).toHaveBeenCalledTimes(1);
+    queue.wake();
+    await wake;
+    expect(clock.clearTimeout).toHaveBeenCalledWith(timer);
+    const timeout = queue.waitForChange(-1);
+    expect(clock.setTimeout).toHaveBeenLastCalledWith(expect.any(Function), 0);
+    callback!();
+    await timeout;
+    expect(unref).toHaveBeenCalledTimes(2);
+    expect(clock.clearTimeout).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps using real clock functions by default', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(10_000);
+      const queue = createOperatorDispatchQueue();
+      queue.enqueueReport({
+        type: 'report', reportType: 'open_question', conductorAgentId: 'one',
+        issueUrl: 'https://github.com/example/repo/issues/1', text: 'hello',
+      }, 100);
+      expect(queue.nextReadyAt()).toBe(10_100);
+      const waiting = queue.waitForChange(50);
+      await vi.advanceTimersByTimeAsync(50);
+      await waiting;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

@@ -483,8 +483,21 @@ export function formatOversizedConductorMessageWarning(
   ].join('\n');
 }
 
+export interface OperatorClock {
+  now(): number;
+  setTimeout(callback: () => void, delayMs: number): NodeJS.Timeout;
+  clearTimeout(timer: NodeJS.Timeout): void;
+}
+
+const realOperatorClock: OperatorClock = {
+  now: () => Date.now(),
+  setTimeout: (callback, delayMs) => setTimeout(callback, delayMs),
+  clearTimeout: (timer) => clearTimeout(timer),
+};
+
 export function createOperatorDispatchQueue(
   scheduling: OperatorDispatchScheduling = DEFAULT_OPERATOR_DISPATCH_SCHEDULING,
+  clock: OperatorClock = realOperatorClock,
 ): OperatorDispatchQueue {
   let arrival = 0;
   let held: Extract<OperatorDispatchEvent, { type: 'report' }>[] = [];
@@ -641,7 +654,7 @@ export function createOperatorDispatchQueue(
     },
     enqueueReports(events, debounceMs) {
       if (events.length === 0) return;
-      const now = Date.now();
+      const now = clock.now();
       latchReadyBeforeUpdate(new Set(events.map(reportSourceKey)), now);
       const readyAt = now + Math.max(0, debounceMs);
       let added = false;
@@ -673,7 +686,7 @@ export function createOperatorDispatchQueue(
     },
     enqueueDebouncedReports(events, debounceMs) {
       if (events.length === 0) return;
-      const now = Date.now();
+      const now = clock.now();
       const readyAt = now + Math.max(0, debounceMs);
       const sourceKeys = new Set(events.map(reportSourceKey));
       latchReadyBeforeUpdate(sourceKeys, now);
@@ -803,8 +816,8 @@ export function createOperatorDispatchQueue(
       if (changed) notify();
     },
     deferWatchReports(conductorAgentId, debounceMs) {
-      const readyAt = Date.now() + Math.max(0, debounceMs);
-      latchReadyBeforeUpdate(new Set([`session:${conductorAgentId}`]), Date.now());
+      const readyAt = clock.now() + Math.max(0, debounceMs);
+      latchReadyBeforeUpdate(new Set([`session:${conductorAgentId}`]), clock.now());
       for (const event of [...pending, ...held]) {
         if (
           event.type === 'report' &&
@@ -847,9 +860,9 @@ export function createOperatorDispatchQueue(
     },
     requeue(event, delayMs) {
       if (event.type === 'user') {
-        pending.push({ ...event, arrival: arrival++, readyAt: Date.now() });
+        pending.push({ ...event, arrival: arrival++, readyAt: clock.now() });
       } else {
-        const readyAt = Date.now() + Math.max(0, delayMs);
+        const readyAt = clock.now() + Math.max(0, delayMs);
         const reportId = event.reportId;
         if (reportId) {
           inFlightReportIds.delete(reportId);
@@ -888,7 +901,7 @@ export function createOperatorDispatchQueue(
       reportHold = nextHold;
       return updateHold(previousHold);
     },
-    setFocus(conductorAgentId, now = Date.now()) {
+    setFocus(conductorAgentId, now = clock.now()) {
       const previous = focusSessionId;
       const normalized = conductorAgentId?.trim();
       focusSessionId = normalized || undefined;
@@ -905,7 +918,7 @@ export function createOperatorDispatchQueue(
       notify();
       return previous;
     },
-    noteOperatorInput(now = Date.now()) {
+    noteOperatorInput(now = clock.now()) {
       lastOperatorInputAt = now;
       if (!focusSessionId) return;
       focusLastInputAt = now;
@@ -942,7 +955,7 @@ export function createOperatorDispatchQueue(
       }
       return [...counts].map(([conductorAgentId, count]) => ({ conductorAgentId, count }));
     },
-    selectBatch(state, now = Date.now()) {
+    selectBatch(state, now = clock.now()) {
       clearExpiredFocus(now);
       const selected = selectOperatorDispatchBatch(
         eligibleReports(now),
@@ -956,11 +969,11 @@ export function createOperatorDispatchQueue(
       return selected?.batch;
     },
     isBatchCurrent(batch, state) {
-      clearExpiredFocus(Date.now());
+      clearExpiredFocus(clock.now());
       const selected = selectOperatorDispatchBatch(
-        eligibleReports(Date.now()),
+        eligibleReports(clock.now()),
         { ...state, focusSessionId },
-        Date.now(),
+        clock.now(),
         CONDUCTOR_RECOVERY_INPUT_BYTE_LIMIT,
         scheduling,
         batch,
@@ -1054,13 +1067,13 @@ export function createOperatorDispatchQueue(
       delete batch.payload;
       notify();
     },
-    takeBatch(state, now = Date.now()) {
+    takeBatch(state, now = clock.now()) {
       const batch = this.selectBatch(state, now);
       if (!batch) return undefined;
       this.commitBatch(batch);
       return batch;
     },
-    nextReadyAt(now = Date.now()) {
+    nextReadyAt(now = clock.now()) {
       let nextUserReadyAt: number | undefined;
       const nextCandidateTimes: number[] = [];
       clearExpiredFocus(now);
@@ -1162,12 +1175,12 @@ export function createOperatorDispatchQueue(
         let timer: NodeJS.Timeout | undefined;
         const finish = () => {
           listeners.delete(finish);
-          if (timer) clearTimeout(timer);
+          if (timer) clock.clearTimeout(timer);
           resolve();
         };
         listeners.add(finish);
         if (timeoutMs !== undefined) {
-          timer = setTimeout(finish, Math.max(0, timeoutMs));
+          timer = clock.setTimeout(finish, Math.max(0, timeoutMs));
           timer.unref();
         }
       });
@@ -1192,7 +1205,7 @@ export function createOperatorDispatchQueue(
       return isHeld();
     },
     get focusSessionId() {
-      clearExpiredFocus(Date.now());
+      clearExpiredFocus(clock.now());
       return focusSessionId;
     },
     get batchMaxWaitMs() {
