@@ -12,7 +12,7 @@ import { profilePromptModule } from './modules/shared/profile-prompt-module.js';
 import { renderCompiledPrompt } from './render-compiled-prompt.js';
 import { parseWorkspaceSessionUrl } from '../workspace-run/session-url.js';
 import { workspaceEnsembleContext } from './contexts/workspace-kind.js';
-import { runBaseModule } from './modules/ensemble/run-base-module.js';
+import { mergeRunWorkerSystemPrompt } from './modules/ensemble/run-ensemble-index.js';
 
 export interface WorkerAttachPromptOptions {
   issueUrl: string;
@@ -55,7 +55,7 @@ export function buildWorkerAttachPrompt(
   });
   const workspace = parseWorkspaceSessionUrl(options.issueUrl);
   if (workspace) {
-    const module = merge(runBaseModule, profileModule ?? {}, {
+    const module = merge(mergeRunWorkerSystemPrompt(profileModule), {
       instructions: [
         `作業ディレクトリ: ${options.workspacePath ?? options.worktreePath ?? ''}`,
         'conductor からの作業指示を待つ。',
