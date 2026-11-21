@@ -182,6 +182,30 @@ describe('session resume integration', () => {
     const options = { repoRoot, conductorCwd: cwd, name: 'run-test', maxTurns: 3 };
     expect((await executeRunCommand({ ...options, briefPath }, deps)).stopReason).toBe('completed');
     expect(noteId).toBeTruthy();
+    const paths = resolveEnsemblePaths({ repoRoot });
+    const saved = await loadSessionResumeStore(
+      paths.workspaceSessionResumeStorePath('run-test', RESUME_AGENT_ID),
+    );
+    expect(saved).toBeDefined();
+    const olderId = 'agent-older';
+    const otherId = 'agent-other-slug';
+    await saveSessionResumeStore(paths.workspaceSessionResumeStorePath('run-test', olderId), {
+      ...saved!,
+      conductorAgentId: olderId,
+      harnessPhase: 'close',
+      modifiedAt: saved!.updatedAt - 10_000,
+    });
+    await saveSessionResumeStore(paths.workspaceSessionResumeStorePath('other-slug', otherId), {
+      ...saved!,
+      conductorAgentId: otherId,
+      issueUrl: 'workspace://other-slug',
+      harnessPhase: 'close',
+      modifiedAt: saved!.updatedAt + 10_000,
+    });
+    const older = await loadSessionResumeStore(paths.workspaceSessionResumeStorePath('run-test', olderId));
+    const other = await loadSessionResumeStore(paths.workspaceSessionResumeStorePath('other-slug', otherId));
+    expect(older!.updatedAt).toBeLessThan(saved!.updatedAt);
+    expect(other!.updatedAt).toBeGreaterThan(saved!.updatedAt);
     phase = 'continue';
     expect((await executeRunCommand({ ...options, continue: true }, deps)).stopReason).toBe('completed');
     expect(runSession).toHaveBeenLastCalledWith(expect.objectContaining({
