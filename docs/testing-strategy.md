@@ -53,10 +53,11 @@ pnpm test:all          # test:run → test:integration → test:e2e
 `@agents-ensemble/operator-agent` は `@agents-ensemble/core` の package export を通じて `dist` を読み込む。package 単独で実行する場合は、先に `pnpm --filter @agents-ensemble/core build` を実行する。Vitest setup は `ENSEMBLE_USER_ROOT` と scratch filesystem probe を repository の無視対象 `.tmp/` 以下へ分離する。Node の `TMPDIR` は上書きしない。既定の絶対 temp path を保つことで、テストが作る一時 repository の path semantics を維持し、深い worktree から UDS socket を作る際の path 長超過も避ける。UDS probe はその `TMPDIR` 上で行う。
 
 operator-agent のテスト間で共有する fixture は `packages/operator-agent/test/support/` に置く。テスト本体は従来どおり `src/` または `test/` の Vitest の収集対象に置く。
-watch-pool の機能別テストは `packages/operator-agent/src/` に置く。`operator-watch-reports.test.ts` は report の順序と cursor（旧形式を含む）を、`operator-watch-state.test.ts` は state の merge・partition と session 削除を検証する。pool の統合テストは `operator-watch-pool-{registration,observation,persistence,poll,messages}.test.ts` に分け、登録、観測、永続化・複数 process、poll、message 配送を検証する。共通の setup / teardown は `test/support/watch-pool-suite.ts` に置く。いずれも既存の `src/**/*.test.ts` で収集する。
+watch-pool の機能別テストは `packages/operator-agent/src/watch/` に置く。`operator-watch-reports.test.ts` は report の順序と cursor（旧形式を含む）を、`operator-watch-state.test.ts` は state の merge・partition と session 削除を検証する。pool の統合テストは `operator-watch-pool-{registration,observation,persistence,poll,messages}.test.ts` に分け、登録、観測、永続化・複数 process、poll、message 配送を検証する。共通の setup / teardown は `test/support/watch-pool-suite.ts` に置く。いずれも既存の `src/**/*.test.ts` で収集する。
 `operator-watch-repository.test.ts` は refresh で state が置き換わった後も repository 処理が最新の state を参照することを検証する。正しい Open Question report の共通 fixture は `test/support/watch-state-fixture.ts` に置き、旧形式や不正な state は検証対象となる形を各テストに明示する。
-`operator-watch-tools.test.ts` は同じ `src/` にあり、6つの watch tool factory の既存 export、入力検証、pool への委譲と結果を検証する。UDS 観測や message の配送経路は pool の統合テストで検証する。
-`watch-state-store.test.ts` は同じ `src/` にあり、watch state の同期・非同期保存、旧形式の読み込み、SQLite transaction の commit / rollback を検証する。
+`operator-watch-tools.test.ts` は同じ `src/watch/` にあり、6つの watch tool factory の既存 export、入力検証、pool への委譲と結果を検証する。UDS 観測や message の配送経路は pool の統合テストで検証する。
+`watch-state-store.test.ts` は同じ `src/watch/` にあり、watch state の同期・非同期保存、旧形式の読み込み、SQLite transaction の commit / rollback を検証する。
+runner のテストは `src/run/` に置き、起動設定、TTY、watch 配送、recovery、ack retry に分ける。共通の一時環境と終了処理は `test/support/runner-suite.ts` で管理する。
 dispatch queue の時刻依存は、既定では実時計を使い、テストでは clock を注入して期限とタイマーを制御できる。共有の待ち helper は期限切れを報告するものであり、待機対象の処理を停止するものではない。
 
 ## Vitest 設定
