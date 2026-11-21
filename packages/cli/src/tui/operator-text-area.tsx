@@ -88,7 +88,13 @@ export function OperatorTextArea({
   onCursorChange,
   cursorStart,
 }: OperatorTextAreaProps) {
-  const promptWidth = stringWidth(promptPrefix);
+  const promptLimit = Math.max(0, contentWidth - 1);
+  let visiblePrompt = '';
+  for (const { segment } of new Intl.Segmenter('en', { granularity: 'grapheme' }).segment(promptPrefix)) {
+    if (stringWidth(visiblePrompt + segment) > promptLimit) break;
+    visiblePrompt += segment;
+  }
+  const promptWidth = stringWidth(visiblePrompt);
 
   const displayLineCount = useMemo(
     () => computeTextAreaDisplayLineCount(value, contentWidth, promptWidth, cursorPosition, focus),
@@ -101,12 +107,12 @@ export function OperatorTextArea({
 
   const linePrefix = useCallback(
     ({ lineNumber, isContinuationLine }: TLinePrefixProps) => {
-      if (lineNumber === 0 && !isContinuationLine && promptPrefix.length > 0) {
-        return <Text color={INPUT_PANE_PROMPT_COLOR}>{promptPrefix}</Text>;
+      if (lineNumber === 0 && !isContinuationLine && visiblePrompt.length > 0) {
+        return <Text color={INPUT_PANE_PROMPT_COLOR}>{visiblePrompt}</Text>;
       }
       return null;
     },
-    [promptPrefix],
+    [visiblePrompt],
   );
 
   // Keep all text boxes equally wide, including when the first row scrolls out
@@ -122,7 +128,7 @@ export function OperatorTextArea({
   const textAreaCursorStart =
     focus && cursorStart !== undefined
       ? {
-          x: (cursorStart.x ?? 0) - promptWidth,
+          x: (cursorStart.x ?? 0) - stringWidth(promptPrefix),
           y: cursorStart.y,
         }
       : undefined;
@@ -145,8 +151,8 @@ export function OperatorTextArea({
         keybindings={keybindings}
         cursorPosition={cursorPosition}
         onCursorChange={onCursorChange}
-        linePrefix={promptPrefix ? linePrefix : undefined}
-        lineSuffix={promptPrefix ? lineSuffix : undefined}
+        linePrefix={visiblePrompt ? linePrefix : undefined}
+        lineSuffix={visiblePrompt ? lineSuffix : undefined}
         viewportLines={maxDisplayLines}
         initialLineCount={1}
         cursorStart={textAreaCursorStart}
