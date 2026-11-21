@@ -16,7 +16,7 @@ conductor は `create_note` で summary 必須のノートを作り、`push_memo
 
 同じノートへの更新はプロセス間で排他し、一時ファイルから置き換えます。更新途中のプロセス終了では、完了前の更新は失われる場合があります。電源断やストレージ障害後の保存は保証されません。
 
-既定の team profile は Issue / PR を前提とする materials を含みます。Issue に依存しない run 用 profile は [#827](https://github.com/otolab/agents-ensemble/issues/827)、共通プロンプトの分離は [#828](https://github.com/otolab/agents-ensemble/issues/828) で扱います。run に適した materials を持つ profile を指定してください。
+既定の team profile は Issue / PR を前提とする materials を含むため、run では上記の `workspace-research` など、run に適した materials を持つ profile を指定してください。共通プロンプトの分離は [#828](https://github.com/otolab/agents-ensemble/issues/828) で扱います。
 
 ## インストール
 
