@@ -62,11 +62,14 @@ export interface ProfileWorkerEntry {
   resolvedWorkspacePath?: string;
 }
 
+export type ProfileMode = 'issue' | 'run';
+
 /** team-profile 選択・一覧用メタデータ（[#176](https://github.com/otolab/agents-ensemble/issues/176)）。 */
 export interface ProfileMeta {
   id?: string;
   title?: string;
   summary?: string;
+  modes?: ProfileMode[];
 }
 
 /**

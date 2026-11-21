@@ -1,4 +1,5 @@
 meta:
+  modes: [run]
   title: workspace-research
   summary: conductor / explore / librarian — 作業場での調査と資料整理
 

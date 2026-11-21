@@ -120,6 +120,21 @@ describe('executeIssueCommand CLI version wiring', () => {
   });
 });
 
+describe('profile modes compatibility', () => {
+  it.each([undefined, ['run']])('does not restrict issue for modes %j', async (modes) => {
+    const profile = { workers: [], ...(modes ? { meta: { modes } } : {}) };
+    const runIssueSession = vi.fn().mockResolvedValue({ stopReason: 'completed' });
+    await executeIssueCommand(issueUrl, baseOptions, {
+      isOperatorInputInteractive: () => false,
+      isOperatorInputTty: () => false,
+      runIssueSession,
+      loadProfile: vi.fn().mockResolvedValue({ profile, profilePath: '/tmp/profile.yaml' }),
+      SessionLogger: vi.fn().mockImplementation(() => ({ subscribe: vi.fn() })),
+    });
+    expect(runIssueSession).toHaveBeenCalledWith(expect.objectContaining({ profile }));
+  });
+});
+
 describe('resolveResumeAgentIdFromOptions', () => {
   it('returns explicit --resume agent id', async () => {
     const result = await resolveResumeAgentIdFromOptions(

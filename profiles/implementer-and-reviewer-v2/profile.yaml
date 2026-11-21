@@ -3,6 +3,7 @@
 # harness 接続は core base-module、チーム運用は team-common.md。
 
 meta:
+  modes: [issue]
   title: implementer-and-reviewer-v2
   summary: conductor / implementer / reviewer — 役割別 materials 分割版（#288 作業中）
 

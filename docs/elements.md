@@ -64,7 +64,8 @@ harness 横断設定（profile 既定・**ACP（preset・env・model catalog / t
 
 ### フィールド
 
-- `meta` … 任意。一覧・選択 UI 向け（`id` / `title` / `summary`）。未指定時はディレクトリ名等でフォールバック
+- `meta` … 任意。一覧・選択 UI 向け（`id` / `title` / `summary` / `modes`）。未指定時はディレクトリ名等でフォールバック
+- `meta.modes` … 任意。対象とする入口を `[issue]`、`[run]`、`[issue, run]` のように宣言する。空配列、重複、未知の値は無効。省略は対応範囲が未指定であり、両対応を意味しない。`ensemble profiles list` は text と JSON で宣言済み・未指定・不正を区別する（JSON は `modesStatus`）。これは選択の目安であり、宣言と異なる入口からの起動を制限しない。既存 profile の省略時の起動動作も変わらない。
 - `agents.<kind>` … agent の modular-prompt 拡張（`prompt` インライン / `promptFile` 外部 YAML）。未指定時は ensemble base のみ
 - `workers` … セッションに登録する worker（`name` + `kind`）。ACP attach は `session.lazyWorkers` によりセッション開始時または初回指示時に行う。`- ping` は name=kind の省略形
 - `workers[].workspace` … **任意**。その worker の ACP 起動 cwd（`agent acp` の `session/new` / `session/load`）。**Issue worktree（`--repo-root` + Issue から導出）とは別概念**。省略時はセッション共通の Issue worktree を使う。`~` / `~/...` は homedir() で展開。相対パスは profile ディレクトリ（`./` / `../`）または repo-root 基準

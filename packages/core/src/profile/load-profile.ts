@@ -1,3 +1,4 @@
+import { parseProfileModes } from './profile-modes.js';
 import { readFile } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join } from 'node:path';
 import yaml from 'js-yaml';
@@ -79,6 +80,7 @@ export function parseProfile(source: unknown, label: string): Profile {
   const raw = source as { workers: unknown[]; acp?: unknown } & Omit<Profile, 'workers'>;
   const workers = normalizeProfileWorkers(raw.workers, label);
   const conductor = parseProfileConductorConfig(raw.conductor, label);
+  parseProfileModes(raw.meta?.modes, label);
 
   if (raw.acp !== undefined) {
     throw new Error(`Invalid profile ${label}: ${PROFILE_ACP_REMOVED_ERROR}`);

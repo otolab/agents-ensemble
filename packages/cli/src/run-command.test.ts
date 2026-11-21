@@ -36,6 +36,24 @@ describe('run-command', () => {
     }));
   });
 
+  it.each([undefined, ['issue']])('does not restrict run for modes %j', async (modes) => {
+    const profile = { workers: [], ...(modes ? { meta: { modes } } : {}) };
+    const runConductorSession = vi.fn().mockResolvedValue({ stopReason: 'complete' });
+    const SessionLogger = vi.fn().mockImplementation(() => ({ subscribe: vi.fn(), emit: vi.fn() }));
+    await executeRunCommand({ repoRoot: '/tmp', conductorCwd: '/tmp', briefPath: 'brief.md' }, {
+      resolveWorkspaceSlugKey: vi.fn().mockResolvedValue('smoke'),
+      readBriefFile: vi.fn().mockResolvedValue('brief'),
+      loadEnsembleConfig: vi.fn().mockResolvedValue(DEFAULT_ENSEMBLE_CONFIG),
+      loadProfile: vi.fn().mockResolvedValue({ profile, profilePath: '/tmp/profile.yaml' }),
+      isOperatorInputInteractive: () => false,
+      isOperatorInputTty: () => false,
+      isOperatorRecoveryInspectionTty: () => false,
+      runConductorSession,
+      SessionLogger,
+    });
+    expect(runConductorSession).toHaveBeenCalledWith(expect.objectContaining({ profile }));
+  });
+
   it('maps stopReason to exit code', () => {
     expect(runCommandExitCode({ stopReason: 'complete' })).toBe(0);
     expect(runCommandExitCode({ stopReason: 'error' })).toBe(2);
