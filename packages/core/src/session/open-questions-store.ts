@@ -6,6 +6,10 @@ import type {
   OpenQuestionRegistrySnapshot,
 } from '../escalation/open-question.js';
 import { resolveEnsemblePaths } from '../ensemble-paths.js';
+import {
+  openQuestionsPathForScope,
+  resolveSessionPersistenceScope,
+} from './session-persistence-scope.js';
 import type { SessionResumeStoreLocation } from './session-resume-store.js';
 
 export const OPEN_QUESTIONS_STORE_VERSION = 1;
@@ -21,11 +25,15 @@ export function openQuestionsStorePath(input: {
   issueUrl: string;
   location?: SessionResumeStoreLocation;
 }): string {
-  const paths = resolveEnsemblePaths({ repoRoot: input.repoRoot });
   if (!input.issueUrl) {
     throw new Error('issueUrl is required for a canonical open questions path.');
   }
-  return paths.canonicalOpenQuestionsPath(input.issueUrl, input.conductorAgentId);
+  const scope = resolveSessionPersistenceScope(input.issueUrl);
+  return openQuestionsPathForScope(
+    input.repoRoot,
+    scope,
+    input.conductorAgentId,
+  );
 }
 
 export function legacyOpenQuestionsStorePath(input: {

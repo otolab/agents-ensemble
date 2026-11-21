@@ -7,6 +7,8 @@ export * from './config/index.js';
 export * from './mcp/index.js';
 export * from './acp/index.js';
 export * from './workspace/index.js';
+export * from './workspace-run/index.js';
+export * from './notes/index.js';
 export * from './profile/index.js';
 export * from './prompt/index.js';
 export * from './dispatch/index.js';

@@ -224,6 +224,13 @@ import {
 import { createRegisterGitHubWatchTool } from '../github/register-github-watch-tool.js';
 import { createUnregisterGitHubWatchTool } from '../github/unregister-github-watch-tool.js';
 import { compileConductorSystemPrompt } from '../prompt/compile-system-prompt.js';
+import {
+  compileWorkspaceConductorSystemPrompt,
+  createWorkspacePiKickoffPrompt,
+} from '../prompt/compile-workspace-system-prompt.js';
+import { parseWorkspaceSessionUrl } from '../workspace-run/session-url.js';
+import { resolveWorkspaceIssueRef } from '../workspace-run/issue-ref.js';
+import { createWorkspaceNotesTools } from '../notes/workspace-notes-tools.js';
 import { loadUserInstructions } from '../prompt/load-user-instructions.js';
 
 export type { OperatorInputContext } from './operator-input-binding.js';
@@ -235,6 +242,8 @@ export type {
 export interface RunConductorSessionOptions {
   issueUrl: string;
   repoRoot: string;
+  /** `ensemble run` brief ファイル本文（workspace セッション用）。 */
+  briefText?: string;
   conductorCwd?: string;
   /** 呼び出し元で解決済みの config。未指定時は loadEnsembleConfig(repoRoot) で解決する。 */
   ensembleConfig?: EnsembleConfig;
@@ -434,6 +443,7 @@ async function runConductorSessionWithStartupGuard(
   options: RunConductorSessionOptions,
   startupCleanup: StartupCleanupGuard,
 ): Promise<ConductorSessionResult> {
+  const workspaceSession = parseWorkspaceSessionUrl(options.issueUrl);
   const userInstructions = await loadUserInstructions({
     userEnsembleRoot: options.mcpConfigOptions?.userEnsembleRoot,
   });
@@ -808,28 +818,40 @@ async function runConductorSessionWithStartupGuard(
   const conductorAgentFactory =
     options.conductorAgentFactory ?? createConductorAgentFactory(conductorBackend);
 
-  const githubAuth = await resolveGitHubAuthToken({ config: ensembleConfig });
-  if (!githubAuth.token) {
-    sessionLogger.emit({
-      type: 'harness.warning',
-      message: GITHUB_AUTH_HINT,
-    });
+  if (!workspaceSession) {
+    const githubAuth = await resolveGitHubAuthToken({ config: ensembleConfig });
+    if (!githubAuth.token) {
+      sessionLogger.emit({
+        type: 'harness.warning',
+        message: GITHUB_AUTH_HINT,
+      });
+    }
   }
 
   let systemPrompt: string;
-  try {
-    const issueContext = await fetchIssueContext(options.issueUrl, {
-      ensembleConfig,
-    });
-    systemPrompt = compileConductorSystemPrompt({
-      issueUrl: options.issueUrl,
+  if (workspaceSession) {
+    systemPrompt = compileWorkspaceConductorSystemPrompt({
+      workspaceSlugKey: workspaceSession.slugKey,
       profile: activeProfile,
       agentModule: resolveAgentPromptModule('conductor', activeProfile.agents),
-      issueContext,
       userInstructions,
+      briefText: options.briefText,
     });
-  } catch (error) {
-    throw new Error(formatGitHubErrorMessage(error, ensembleConfig));
+  } else {
+    try {
+      const issueContext = await fetchIssueContext(options.issueUrl, {
+        ensembleConfig,
+      });
+      systemPrompt = compileConductorSystemPrompt({
+        issueUrl: options.issueUrl,
+        profile: activeProfile,
+        agentModule: resolveAgentPromptModule('conductor', activeProfile.agents),
+        issueContext,
+        userInstructions,
+      });
+    } catch (error) {
+      throw new Error(formatGitHubErrorMessage(error, ensembleConfig));
+    }
   }
 
   const ownsShutdownController = !options.shutdownSignal;
@@ -928,7 +950,9 @@ async function runConductorSessionWithStartupGuard(
 
   const sessionState = sessionStateFromProfile(activeProfile);
 
-  const issue = parseIssueUrl(options.issueUrl);
+  const issue = workspaceSession
+    ? resolveWorkspaceIssueRef(workspaceSession.slugKey)
+    : parseIssueUrl(options.issueUrl);
   const spawnBase: SpawnAcpProcessOptions = {
     onProcessStdioLine: ({ stream, line, workerName }) => {
       if (stream !== 'stderr') return;
@@ -948,7 +972,9 @@ async function runConductorSessionWithStartupGuard(
     defaultAcp: options.defaultAcp,
     spawnBase,
     repoRoot: options.repoRoot,
-    issueNumber: issue.number,
+    ...(workspaceSession
+      ? { workspaceSlugKey: workspaceSession.slugKey }
+      : { issueNumber: issue.number }),
     ...(piAgentDir ? { piAgentDir } : {}),
     onWarning: (message) =>
       sessionLogger.emit({ type: 'harness.warning', message }),
@@ -968,6 +994,7 @@ async function runConductorSessionWithStartupGuard(
       issue.number,
       options.defaultAcp,
       piAgentDir,
+      workspaceSession?.slugKey,
     );
   }
   const workerAcpFingerprints = new Map(
@@ -977,15 +1004,17 @@ async function runConductorSessionWithStartupGuard(
   const workerWorktree =
     options.workerWorktree ??
     (workers.length > 0
-      ? await resolveWorkerWorkspace(
-          options.repoRoot,
-          issue,
-          options.workerWorktreeMode ?? 'isolated',
-          {
-            resume: Boolean(options.resumeAgentId),
-            onNotice: reportResumeNotice,
-          },
-        )
+      ? workspaceSession
+        ? { path: resolvePath(conductorCwd), branch: '', issue, inRepo: true }
+        : await resolveWorkerWorkspace(
+            options.repoRoot,
+            issue,
+            options.workerWorktreeMode ?? 'isolated',
+            {
+              resume: Boolean(options.resumeAgentId),
+              onNotice: reportResumeNotice,
+            },
+          )
       : undefined);
 
   if (options.resumeAgentId) {
@@ -1452,9 +1481,20 @@ async function runConductorSessionWithStartupGuard(
     .registerAll(resolvePermissionTools)
     .registerAll(getToolCallTools)
     .registerAll(promptWorkerTools)
-    .registerAll(workerStatusTools)
-    .registerAll(registerGitHubWatchTools)
-    .registerAll(unregisterGitHubWatchTools)
+    .registerAll(workerStatusTools);
+  if (!workspaceSession) {
+    conductorToolRegistry
+      .registerAll(registerGitHubWatchTools)
+      .registerAll(unregisterGitHubWatchTools);
+  } else {
+    conductorToolRegistry.registerAll(
+      createWorkspaceNotesTools({
+        repoRoot: options.repoRoot,
+        slugKey: workspaceSession.slugKey,
+      }),
+    );
+  }
+  conductorToolRegistry
     .registerAll(sessionUsageTools)
     .registerAll(reportSessionStateTool)
     .registerAll(dispatchHoldTools);
@@ -1902,6 +1942,7 @@ async function runConductorSessionWithStartupGuard(
 
   const monitorDefaults = ensembleConfig.github.monitor;
   if (
+    !workspaceSession &&
     resolveGitHubMonitorEnabled({
       cliDisabled: options.disableGitHubMonitor,
       config: ensembleConfig,
@@ -2503,7 +2544,12 @@ async function runConductorSessionWithStartupGuard(
       issueUrl: options.issueUrl,
       initialPrompt:
         conductorBackend === 'pi'
-          ? createPiKickoffPrompt(options.issueUrl)
+          ? workspaceSession
+            ? createWorkspacePiKickoffPrompt(
+                workspaceSession.slugKey,
+                options.briefText,
+              )
+            : createPiKickoffPrompt(options.issueUrl)
           : systemPrompt,
       conductorHandle,
       sendReconnect,
@@ -3196,6 +3242,7 @@ function finalizeSessionWorkerSpecs(
   issueNumber: number,
   defaultAcp?: DefaultAcpResolutionOptions,
   piAgentDir?: string,
+  workspaceSlugKey?: string,
 ): void {
   const resolvedPiAgentDir =
     piAgentDir ??
@@ -3214,8 +3261,10 @@ function finalizeSessionWorkerSpecs(
       resolved.piRuntime === 'builtin'
         ? configurePiWorkerRuntime(resolved, {
             repoRoot,
-            issueNumber,
             workerName: worker.name,
+            ...(workspaceSlugKey
+              ? { workspaceSlugKey }
+              : { issueNumber }),
             ...(resolvedPiAgentDir
               ? { agentDir: resolvedPiAgentDir }
               : {}),
