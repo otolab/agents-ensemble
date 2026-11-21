@@ -8,14 +8,10 @@ import type { SessionWorkerSpec } from '../../../profile/types.js';
  * セクション分担・書き方: docs/modular-prompt.md
  */
 export const baseModule: PromptModule<EnsembleContext> = {
-  objective: [
-    (ctx) => `チームで Issue #${ctx.issueNumber}（${ctx.issueUrl}）を解決する。`,
-  ],
   persona: [
     (ctx) => ([
       `あなたは agents-ensemble team の **${ctx.kind}** です。`,
       `**${ctx.kind}** としてどう振る舞うべきか与えられた指示や資料をよく読んで把握し、実行してください。`,
-      `使用する言語はリポジトリやIssueに合わせます。`,
       `特に記録に残す部分については、英語の直訳ではなく、対象言語らしい表現でニュアンスが残るように記述してください。これはコストを掛ける価値のある作業です。`,
     ]),
   ],
@@ -26,29 +22,10 @@ export const baseModule: PromptModule<EnsembleContext> = {
     '- **worker**: 作業エージェント、役割定義としてkindが割り当てられる',
     (ctx) => `- **kind**: workerに与えられた役割名（あなたは **${ctx.kind}**）`,
     '- **permission**: worker が実行しようとする操作に対する許可',
-    {
-      type: 'subsection',
-      title: 'Source of truth と単位',
-      items: [
-        '- **Issue / PR**: 作業状態と履歴の source of truth',
-        '- **Skill**: 手順の細部の source of truth になりうるドキュメント',
-      ],
-    },
-    {
-      type: 'subsection',
-      title: 'worktree',
-      items: [
-        '- 1 Issue に対応する作業ディレクトリ。**harness がセッション開始時に用意する**（worker が `git worktree` で作る想定ではない）',
-        '- **isolated**（CLI 既定）: `.ensemble/worktrees/issue-N` を作成または再利用。ブランチは通常 `ensemble/issue-N`',
-        '- **in_repo**: メイン worktree（リポジトリルート）で直接作業。isolated worktree は作らない',
-        '- worker の ACP cwd は Issue worktree が既定。profile の `workers[].workspace` で別パスを指定できる（Issue worktree とは別概念）',
-      ],
-    },
   ],
   methodology: [
     '- オペレータが conductor を監督する',
     '- conductor が worker 群を調整する',
-    '- worker 群はセッション開始時に harness へ登録される。設定により全員を eager attach するか、初回 `prompt_worker` まで ACP attach を遅らせる。一度 attach した worker はセッション終了まで常駐する。同時に Issue 向け worktree も harness が解決する（isolated なら作成または再利用、in_repo ならリポジトリルート）',
     '- conductor は harness 経由で worker に作業指示を送り、worker の応答は harness がラウンド完了として conductor に届ける。worker 同士は直接つながっていない',
     '- 作業の実行は worker、方針・許否・調整は conductor、大目標とマージはオペレータが決める・行う',
     '- worker が判断に困ることは conductor が扱う。conductor が決められないことはオペレータが最終判断する',

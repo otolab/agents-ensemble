@@ -10,6 +10,9 @@ import { ensembleContext } from './contexts/kind.js';
 import { mergeWorkerSystemPrompt } from './modules/ensemble/index.js';
 import { profilePromptModule } from './modules/shared/profile-prompt-module.js';
 import { renderCompiledPrompt } from './render-compiled-prompt.js';
+import { parseWorkspaceSessionUrl } from '../workspace-run/session-url.js';
+import { workspaceEnsembleContext } from './contexts/workspace-kind.js';
+import { mergeRunWorkerSystemPrompt } from './modules/ensemble/run-ensemble-index.js';
 
 export interface WorkerPromptOptions {
   issueUrl: string;
@@ -35,6 +38,15 @@ export function buildWorkerPrompt(options: WorkerPromptOptions): string {
       ...filterMaterialsForKind(options.sessionState.materials, options.kind),
     ],
   });
+  const workspace = parseWorkspaceSessionUrl(options.issueUrl);
+  if (workspace) {
+    const module = merge(mergeRunWorkerSystemPrompt(profileModule), {
+      instructions: options.worktreePath ? [`作業ディレクトリ: ${options.worktreePath}`] : [],
+    });
+    return renderCompiledPrompt(
+      compile(module, workspaceEnsembleContext(options.kind, workspace.slugKey, options.sessionState)),
+    );
+  }
   const module = merge(mergeWorkerSystemPrompt(profileModule), workerDispatchModule);
   return renderCompiledPrompt(
     compile(module, {
