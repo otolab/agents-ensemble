@@ -1,5 +1,5 @@
-import { createOperatorDispatchQueue } from '../../dist/operator-dispatch.js';
-import { createOperatorWatchPool } from '../../dist/operator-watch-pool.js';
+import { createOperatorDispatchQueue } from '../../dist/dispatch/operator-dispatch.js';
+import { createOperatorWatchPool } from '../../dist/watch/operator-watch-pool.js';
 
 const [root, producer] = process.argv.slice(2);
 const pool = await createOperatorWatchPool({ userEnsembleRoot: root, profile: 'default', autoDiscoverSessions: false, dispatchQueue: createOperatorDispatchQueue() });

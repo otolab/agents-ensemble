@@ -1,4 +1,4 @@
-import type { OperatorWatchState } from '../../src/operator-watch-state.js';
+import type { OperatorWatchState } from '../../src/watch/operator-watch-state.js';
 
 type PendingReport = OperatorWatchState['pendingReports'][number];
 
