@@ -48,6 +48,7 @@ pnpm test:all          # test:run → test:integration → test:e2e
 ```
 
 `pnpm test:all` にはビルドが含まれない。CLI の dist を使う unit / e2e も通す場合は、先に `pnpm build` を実行する。
+`session-resume.integration.test.ts` も CLI の run command と core harness を接続するため、単独実行前に `pnpm build` が必要。
 
 `@agents-ensemble/operator-agent` は `@agents-ensemble/core` の package export を通じて `dist` を読み込む。package 単独で実行する場合は、先に `pnpm --filter @agents-ensemble/core build` を実行する。Vitest setup は `ENSEMBLE_USER_ROOT` と scratch filesystem probe を repository の無視対象 `.tmp/` 以下へ分離する。Node の `TMPDIR` は上書きしない。既定の絶対 temp path を保つことで、テストが作る一時 repository の path semantics を維持し、深い worktree から UDS socket を作る際の path 長超過も避ける。UDS probe はその `TMPDIR` 上で行う。
 
