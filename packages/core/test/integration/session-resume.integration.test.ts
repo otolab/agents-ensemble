@@ -20,6 +20,7 @@ import {
 } from '../../src/dispatch/attach-worker.js';
 import { closeWorkerAcpSession } from '../../src/dispatch/worker-acp-session.js';
 import * as issueContextModule from '../../src/github/issue-context.js';
+import * as githubMonitorModule from '../../src/github/github-monitor.js';
 import { PermissionPipeline } from '../../src/permission/permission-pipeline.js';
 import type { Profile } from '../../src/profile/types.js';
 import type { EnsembleConfig } from '../../src/config/types.js';
@@ -55,6 +56,7 @@ import { toolCallSnapshotHistoryPath } from '../../src/session/tool-call-snapsho
 import { TOOL_CALL_SNAPSHOT_HISTORY_TTL_MS } from '../../src/runtime/tool-call-snapshot-registry.js';
 import { permissionRequestFixtures } from '../fixtures/permission-request-fixtures.js';
 import { readWorkspaceNote } from '../../src/notes/workspace-notes-store.js';
+import { executeRunCommand } from '../../../cli/src/run-command.js';
 
 const RESUME_AGENT_ID = 'agent-resume-test';
 
@@ -126,6 +128,73 @@ describe('session resume integration', () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
+  });
+
+  it('continues a workspace through the run command with notes and no GitHub monitor', async () => {
+    const cwd = join(repoRoot, 'run-workspace');
+    await mkdir(cwd);
+    const briefPath = join(cwd, 'brief.md');
+    await writeFile(briefPath, 'Investigate this workspace');
+    const bridge = await createInProcessAcpBridge();
+    const newSession = vi.spyOn(bridge, 'newSession');
+    const loadSession = vi.spyOn(bridge, 'loadSession');
+    const monitor = vi.spyOn(githubMonitorModule, 'createGitHubMonitor');
+    const fetchIssue = vi.mocked(issueContextModule.fetchIssueContext);
+    let noteId = '';
+    let resumedMemo = '';
+    let phase: 'initial' | 'continue' = 'initial';
+    let operatorApi: OperatorInputBindingApi | undefined;
+
+    mockSend.mockImplementation(async () => {
+      if (phase === 'initial') {
+        const result = await conductorTools.create_note!.execute({ summary: 'Workspace note' });
+        noteId = JSON.parse(result.content[0]!.text).noteId;
+        await conductorTools.push_memo!.execute({ noteId, body: 'Remember this' });
+      } else {
+        const result = await conductorTools.read_note!.execute({ noteId });
+        resumedMemo = JSON.parse(result.content[0]!.text).memos[0].body;
+      }
+      return { runId: phase, status: 'finished', result: 'ok' };
+    });
+
+    const runSession = vi.fn<typeof runConductorSession>((options) =>
+      runConductorSession({
+        ...options,
+        defaultAcp: IN_PROCESS_DEFAULT_ACP,
+        connectAcp: async () => bridge,
+        ownsWorkerAcpConnections: false,
+        ...(phase === 'initial'
+          ? {
+              waitForOperatorExit: true,
+              bindOperatorInput: (api: OperatorInputBindingApi) => { operatorApi = api; },
+              onPostLoopWait: () => { operatorApi!.submit('/close'); },
+            }
+          : {}),
+      }));
+    const deps = {
+      runConductorSession: runSession,
+      loadProfile: async () => ({ profile: PING_PROFILE_BASE, profilePath: '' }),
+      isOperatorInputInteractive: () => false,
+      isOperatorInputTty: () => false,
+      isOperatorRecoveryInspectionTty: () => false,
+      writeStderr: () => {},
+    };
+    const options = { repoRoot, conductorCwd: cwd, name: 'run-test', maxTurns: 3 };
+    expect((await executeRunCommand({ ...options, briefPath }, deps)).stopReason).toBe('completed');
+    expect(noteId).toBeTruthy();
+    phase = 'continue';
+    expect((await executeRunCommand({ ...options, continue: true }, deps)).stopReason).toBe('completed');
+    expect(runSession).toHaveBeenLastCalledWith(expect.objectContaining({
+      issueUrl: 'workspace://run-test',
+      resumeAgentId: RESUME_AGENT_ID,
+      disableGitHubMonitor: true,
+      workerWorktreeMode: 'in_repo',
+    }));
+    expect(resumedMemo).toBe('Remember this');
+    expect(newSession).toHaveBeenCalledWith(cwd);
+    expect(loadSession).toHaveBeenCalledOnce();
+    expect(fetchIssue).not.toHaveBeenCalled();
+    expect(monitor).not.toHaveBeenCalled();
   });
 
   it('starts a workspace outside git, closes and resumes with its notes and worker cwd', async () => {
