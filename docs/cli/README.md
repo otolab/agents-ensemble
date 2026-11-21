@@ -6,6 +6,8 @@
 
 GitHub を正本にしない作業には **`ensemble run <brief>`** を使います。brief はプロンプト用ファイルのパス、`--conductor-cwd` で slug をアンカーする cwd、状態は `~/.ensemble/workspaces/<slug-key>/` に保存します。`ensemble run list` で workspace 一覧、`--continue` で同一 slug の最新 run を再開します。詳細は [ADR 0085](../adr/0085-ensemble-run-workspaces-and-notes.md)。
 
+調査と資料整理には同梱の team profile を `ensemble run brief.md --profile workspace-research` で指定できます。conductor が調整と Notes への記録を担い、explore と librarian が作業します。同名の profile がある場合、project、user、bundled の順に優先されます。
+
 `ensemble run brief.md --name investigation` は指定名を cwd の `.ensemble/workspace.json` に記録します。以後は同じ cwd から `ensemble run --continue` で再開できます。すでに別の slug が記録された cwd では別名を指定できません。名前の変更用 CLI は [#826](https://github.com/otolab/agents-ensemble/issues/826) で扱います。
 
 worker は既定で conductor と同じ cwd を共有し、isolated worktree は作りません。profile の `workers[].workspace` を指定した worker はそのディレクトリを使います。GitHub Issue の取得や monitor は使いません。

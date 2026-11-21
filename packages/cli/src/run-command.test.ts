@@ -1,7 +1,41 @@
 import { describe, expect, it, vi } from 'vitest';
-import { resolveRunResumeAgentId, runCommandExitCode } from './run-command.js';
+import { DEFAULT_ENSEMBLE_CONFIG } from '@agents-ensemble/core';
+import { executeRunCommand, resolveRunResumeAgentId, runCommandExitCode } from './run-command.js';
 
 describe('run-command', () => {
+  it('passes the selected bundled profile to the workspace session', async () => {
+    const runConductorSession = vi.fn().mockResolvedValue({ stopReason: 'complete' });
+    const SessionLogger = vi.fn().mockImplementation(() => ({
+      subscribe: vi.fn(),
+      emit: vi.fn(),
+    }));
+    await executeRunCommand({
+      repoRoot: '/tmp', conductorCwd: '/tmp', briefPath: 'brief.md',
+      profile: 'workspace-research',
+    }, {
+      resolveWorkspaceSlugKey: vi.fn().mockResolvedValue('smoke'),
+      readBriefFile: vi.fn().mockResolvedValue('調査する'),
+      loadEnsembleConfig: vi.fn().mockResolvedValue(DEFAULT_ENSEMBLE_CONFIG),
+      isOperatorInputInteractive: () => false,
+      isOperatorInputTty: () => false,
+      isOperatorRecoveryInspectionTty: () => false,
+      runConductorSession,
+      SessionLogger,
+    });
+    expect(runConductorSession).toHaveBeenCalledWith(expect.objectContaining({
+      issueUrl: 'workspace://smoke',
+      workerWorktreeMode: 'in_repo',
+      disableGitHubMonitor: true,
+      profile: expect.objectContaining({
+        workers: expect.arrayContaining([
+          expect.objectContaining({ kind: 'explore' }),
+          expect.objectContaining({ kind: 'librarian' }),
+        ]),
+      }),
+      profilePath: expect.stringContaining('workspace-research'),
+    }));
+  });
+
   it('maps stopReason to exit code', () => {
     expect(runCommandExitCode({ stopReason: 'complete' })).toBe(0);
     expect(runCommandExitCode({ stopReason: 'error' })).toBe(2);
