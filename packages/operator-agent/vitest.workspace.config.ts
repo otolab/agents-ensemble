@@ -5,9 +5,9 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig({
   test: {
     include: [
-      'src/operator-workspace-lock.test.ts',
-      'src/operator-workspace-maintenance.test.ts',
-      'src/operator-workspace-tools.test.ts',
+      'src/workspace/operator-workspace-lock.test.ts',
+      'src/workspace/operator-workspace-maintenance.test.ts',
+      'src/workspace/operator-workspace-tools.test.ts',
     ],
   },
 });
