@@ -3,6 +3,10 @@ import { chmod, mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promi
 import { dirname } from 'node:path';
 import yaml from 'js-yaml';
 import { resolveEnsemblePaths } from '../ensemble-paths.js';
+import {
+  resolveSessionPersistenceScope,
+  sessionStatePathForScope,
+} from './session-persistence-scope.js';
 import type { SessionResumeStoreLocation } from './session-resume-store.js';
 
 export const SESSION_STATE_STORE_VERSION = 2;
@@ -31,11 +35,15 @@ export interface SessionStateStore {
 export function sessionStateStorePath(
   options: SessionStatePathOptions,
 ): string {
-  const paths = resolveEnsemblePaths({ repoRoot: options.repoRoot });
   if (!options.issueUrl) {
     throw new Error('issueUrl is required for a canonical session state path.');
   }
-  return paths.canonicalSessionStatePath(options.issueUrl, options.conductorAgentId);
+  const scope = resolveSessionPersistenceScope(options.issueUrl);
+  return sessionStatePathForScope(
+    options.repoRoot,
+    scope,
+    options.conductorAgentId,
+  );
 }
 
 export function legacySessionStateStorePath(

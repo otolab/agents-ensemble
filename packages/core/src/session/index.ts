@@ -24,6 +24,8 @@ export {
   canonicalSessionResumeStorePath,
   findSessionResumeStoreBySelector,
   findLatestSessionResumeStoreForIssue,
+  findLatestSessionResumeStoreForWorkspace,
+  listWorkspaceSlugEntries,
   findSessionResumeStore,
   harnessPhaseFromLegacyLifecycle,
   listLocatedSessionResumeStoresPage,
@@ -41,6 +43,8 @@ export {
 export type {
   EnsembleConfigDigestScheme,
   FindLatestSessionResumeStoreInput,
+  FindLatestWorkspaceSessionResumeStoreInput,
+  WorkspaceSlugListEntry,
   HarnessPhase,
   LocatedSessionResumeStore,
   SessionLifecycle,

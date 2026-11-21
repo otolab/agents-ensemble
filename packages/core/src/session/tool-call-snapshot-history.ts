@@ -17,6 +17,10 @@ import {
   type StoredToolCallSnapshot,
 } from '../runtime/tool-call-snapshot-registry.js';
 import { resolveEnsemblePaths } from '../ensemble-paths.js';
+import {
+  resolveSessionPersistenceScope,
+  toolCallHistoryPathForScope,
+} from './session-persistence-scope.js';
 
 const TOOL_CALL_SNAPSHOT_HISTORY_VERSION = 1;
 const TOOL_CALL_SNAPSHOT_HISTORY_SUFFIX = '.tool-calls';
@@ -38,9 +42,10 @@ export function toolCallSnapshotHistoryPath(input: {
   conductorAgentId: string;
   issueUrl: string;
 }): string {
-  const paths = resolveEnsemblePaths({ repoRoot: input.repoRoot });
-  return paths.canonicalToolCallHistoryPath(
-    input.issueUrl,
+  const scope = resolveSessionPersistenceScope(input.issueUrl);
+  return toolCallHistoryPathForScope(
+    input.repoRoot,
+    scope,
     input.conductorAgentId,
   );
 }

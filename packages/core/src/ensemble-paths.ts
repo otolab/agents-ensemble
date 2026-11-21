@@ -34,6 +34,7 @@ export function resolveEnsemblePaths(
   const projectRoot = join(repoRoot, '.ensemble');
   const repoKey = createHash('sha256').update(repoRoot).digest('hex');
   const sessionsRoot = join(userRoot, 'sessions');
+  const workspacesRoot = join(userRoot, 'workspaces');
   const legacyHashSessionsDir = join(sessionsRoot, repoKey);
   const piUserDir = join(userRoot, 'pi');
   const piWorkerRoot = join(piUserDir, 'worker', repoKey);
@@ -58,6 +59,22 @@ export function resolveEnsemblePaths(
       piWorkerDirectoryName(workerName),
     );
   };
+  const piWorkspaceWorkerDirectory = (
+    workerName: string,
+    workspaceSlugKey: string,
+  ) =>
+    join(
+      piWorkerRoot,
+      'workspace',
+      workspaceSlugKey,
+      piWorkerDirectoryName(workerName),
+    );
+  const workspaceSlugDirectory = (slugKey: string) =>
+    join(workspacesRoot, slugKey);
+  const workspaceSessionDataDir = (
+    slugKey: string,
+    conductorAgentId: string,
+  ) => join(workspaceSlugDirectory(slugKey), conductorAgentId);
   const legacyHashSessionDataDir = (conductorAgentId: string) =>
     join(legacyHashSessionsDir, conductorAgentId);
   const canonicalRepoSlug = (issueUrl: string) => {
@@ -114,6 +131,52 @@ export function resolveEnsemblePaths(
         'session-map.json',
       ),
     sessionsRoot,
+    workspacesRoot,
+    workspaceSlugDir: workspaceSlugDirectory,
+    workspaceNotesDir: (slugKey: string) =>
+      join(workspaceSlugDirectory(slugKey), 'notes'),
+    workspaceSessionDataDir,
+    workspaceSessionResumeStorePath: (
+      slugKey: string,
+      conductorAgentId: string,
+    ) =>
+      join(
+        workspaceSlugDirectory(slugKey),
+        `${conductorAgentId}.json`,
+      ),
+    workspaceOpenQuestionsPath: (
+      slugKey: string,
+      conductorAgentId: string,
+    ) =>
+      join(
+        workspaceSessionDataDir(slugKey, conductorAgentId),
+        'open-questions.yaml',
+      ),
+    workspaceSessionStatePath: (
+      slugKey: string,
+      conductorAgentId: string,
+    ) =>
+      join(
+        workspaceSessionDataDir(slugKey, conductorAgentId),
+        'session-state.yaml',
+      ),
+    workspaceToolCallHistoryPath: (
+      slugKey: string,
+      conductorAgentId: string,
+    ) =>
+      join(
+        workspaceSlugDirectory(slugKey),
+        `${conductorAgentId}.tool-calls`,
+      ),
+    piWorkspaceWorkerDir: piWorkspaceWorkerDirectory,
+    piWorkspaceWorkerSessionsDir: (
+      workerName: string,
+      workspaceSlugKey: string,
+    ) =>
+      join(
+        piWorkspaceWorkerDirectory(workerName, workspaceSlugKey),
+        'sessions',
+      ),
     legacyHashSessionsDir,
     canonicalRepoSessionsDir,
     canonicalSessionResumeStorePath: (

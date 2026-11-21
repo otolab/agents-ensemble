@@ -12,6 +12,14 @@ import type { AcpModelTag, ConductorBackend } from '../config/types.js';
 import type { ResolvedProfile } from '../profile/types.js';
 import { parseIssueUrl } from '../issue/issue-ref.js';
 import { resolveEnsemblePaths } from '../ensemble-paths.js';
+import {
+  parseWorkspaceSessionUrl,
+  workspaceSessionUrl,
+} from '../workspace-run/session-url.js';
+import {
+  resolveSessionPersistenceScope,
+  sessionResumeStorePathForScope,
+} from './session-persistence-scope.js';
 import { resolveUserEnsembleRoot } from '../resolve-user-ensemble-root.js';
 import { writeFileIfMissing } from './persisted-file.js';
 
@@ -154,7 +162,7 @@ export interface SessionResumeStoreDirOptions {
   issueUrl: string;
 }
 
-export type SessionResumeStoreLocation = 'canonical-slug';
+export type SessionResumeStoreLocation = 'canonical-slug' | 'workspace-slug';
 
 export interface LocatedSessionResumeStore {
   resumeStore: SessionResumeStore;
@@ -232,8 +240,12 @@ export function canonicalSessionResumeStorePath(input: {
   issueUrl: string;
   conductorAgentId: string;
 }): string {
-  return resolveEnsemblePaths({ repoRoot: input.repoRoot })
-    .canonicalSessionResumeStorePath(input.issueUrl, input.conductorAgentId);
+  const scope = resolveSessionPersistenceScope(input.issueUrl);
+  return sessionResumeStorePathForScope(
+    input.repoRoot,
+    scope,
+    input.conductorAgentId,
+  );
 }
 
 export async function loadSessionResumeStore(
@@ -457,12 +469,24 @@ export async function listLocatedSessionResumeStoresPage(
   } = {},
 ): Promise<SessionResumeStorePage<LocatedSessionResumeStore>> {
   const scope = resolveSessionResumeStoreScope(query);
-  const stores = (
-    await listSessionResumeStoreLocations(repoRoot, {
+  const workspaceSlug =
+    scope.issueKey?.startsWith('workspace:') === true
+      ? scope.issueKey.slice('workspace:'.length)
+      : undefined;
+  const stores = [
+    ...(await listSessionResumeStoreLocations(repoRoot, {
       ...options,
-      githubRepo: scope.githubRepo,
-    })
-  )
+      githubRepo:
+        scope.githubRepo === 'workspace' ? undefined : scope.githubRepo,
+    })),
+    ...(workspaceSlug
+      ? await listWorkspaceSessionResumeStoreLocations(
+          repoRoot,
+          workspaceSlug,
+          options,
+        )
+      : []),
+  ]
     .filter(({ resumeStore }) => {
       const identity = sessionIssueIdentity(resumeStore.issueUrl);
       return (
@@ -810,11 +834,54 @@ function canonicalSessionDirectory(
   paths: ReturnType<typeof resolveEnsemblePaths>,
   issueUrl: string,
 ): string | undefined {
+  const workspace = parseWorkspaceSessionUrl(issueUrl);
+  if (workspace) {
+    return paths.workspaceSlugDir(workspace.slugKey);
+  }
   try {
     return paths.canonicalRepoSessionsDir(issueUrl);
   } catch {
     return undefined;
   }
+}
+
+async function listWorkspaceSessionResumeStoreLocations(
+  repoRoot: string,
+  slugKey: string,
+  options: {
+    userEnsembleRoot?: string;
+    onDuplicate?: (diagnostic: SessionResumeStoreDuplicateDiagnostic) => void;
+  } = {},
+): Promise<LocatedSessionResumeStore[]> {
+  const paths = resolveEnsemblePaths({
+    repoRoot,
+    ...(options.userEnsembleRoot
+      ? { userEnsembleRoot: options.userEnsembleRoot }
+      : {}),
+  });
+  const slugRoot = paths.workspaceSlugDir(slugKey);
+  const candidates: LocatedSessionResumeStore[] = [];
+  const visited = new Set<string>();
+  let entries: Dirent[];
+  try {
+    entries = await readdir(slugRoot, { withFileTypes: true });
+  } catch (error) {
+    if (isEnoent(error)) return [];
+    throw error;
+  }
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
+    const path = join(slugRoot, entry.name);
+    if (visited.has(path)) continue;
+    visited.add(path);
+    const resumeStore = await loadSessionResumeStore(path);
+    if (!resumeStore) continue;
+    if (parseWorkspaceSessionUrl(resumeStore.issueUrl)?.slugKey !== slugKey) {
+      continue;
+    }
+    candidates.push({ resumeStore, path, location: 'workspace-slug' });
+  }
+  return candidates;
 }
 
 interface SessionResumeStorePageCursor {
@@ -834,12 +901,15 @@ function resolveSessionResumeStoreScope(input: {
       : normalizeGitHubRepo(input.githubRepo);
   let issue: ReturnType<typeof sessionIssueIdentity> | undefined;
   if (input.issueUrl !== undefined) {
-    parseIssueUrl(input.issueUrl);
+    if (!parseWorkspaceSessionUrl(input.issueUrl)) {
+      parseIssueUrl(input.issueUrl);
+    }
     issue = sessionIssueIdentity(input.issueUrl);
   }
   if (
     githubRepo !== undefined &&
     issue !== undefined &&
+    issue.repository !== 'workspace' &&
     githubRepo !== issue.repository
   ) {
     throw new Error(
@@ -877,6 +947,13 @@ function sessionIssueIdentity(issueUrl: string): {
   repository: string;
   key: string;
 } {
+  const workspace = parseWorkspaceSessionUrl(issueUrl);
+  if (workspace) {
+    return {
+      repository: 'workspace',
+      key: `workspace:${workspace.slugKey}`,
+    };
+  }
   try {
     const issue = parseIssueUrl(issueUrl);
     const repository = `${issue.owner.toLowerCase()}/${issue.repo.toLowerCase()}`;
@@ -977,6 +1054,26 @@ export const listSessionSidecars = listSessionResumeStores;
  * 同一 Issue では close / abort を優先し、exit を除外したうえで
  * updatedAt が最も新しい SessionResumeStore を返す。
  */
+export interface FindLatestWorkspaceSessionResumeStoreInput {
+  repoRoot: string;
+  slugKey: string;
+  home?: string;
+  userEnsembleRoot?: string;
+}
+
+export async function findLatestSessionResumeStoreForWorkspace(
+  input: FindLatestWorkspaceSessionResumeStoreInput,
+): Promise<SessionResumeStore | undefined> {
+  return findLatestSessionResumeStoreForIssue({
+    repoRoot: input.repoRoot,
+    issueUrl: workspaceSessionUrl(input.slugKey),
+    ...(input.home !== undefined ? { home: input.home } : {}),
+    ...(input.userEnsembleRoot !== undefined
+      ? { userEnsembleRoot: input.userEnsembleRoot }
+      : {}),
+  });
+}
+
 export async function findLatestSessionResumeStoreForIssue(
   input: FindLatestSessionResumeStoreInput,
 ): Promise<SessionResumeStore | undefined> {
@@ -1470,4 +1567,56 @@ function parseAcpSpawnFingerprint(
     ...(modelProviderDigest !== undefined ? { modelProviderDigest } : {}),
     ...(envDigest ? { envDigest } : {}),
   };
+}
+
+export interface WorkspaceSlugListEntry {
+  slugKey: string;
+  latestUpdatedAt?: number;
+  latestConductorAgentId?: string;
+}
+
+export async function listWorkspaceSlugEntries(input: {
+  repoRoot: string;
+  userEnsembleRoot?: string;
+}): Promise<WorkspaceSlugListEntry[]> {
+  const paths = resolveEnsemblePaths({
+    repoRoot: input.repoRoot,
+    ...(input.userEnsembleRoot
+      ? { userEnsembleRoot: input.userEnsembleRoot }
+      : {}),
+  });
+  let slugDirs: Dirent[];
+  try {
+    slugDirs = await readdir(paths.workspacesRoot, { withFileTypes: true });
+  } catch (error) {
+    if (isEnoent(error)) return [];
+    throw error;
+  }
+  const entries: WorkspaceSlugListEntry[] = [];
+  for (const dirent of slugDirs) {
+    if (!dirent.isDirectory()) continue;
+    const slugKey = dirent.name;
+    const latest = await findLatestSessionResumeStoreForWorkspace({
+      repoRoot: input.repoRoot,
+      slugKey,
+      ...(input.userEnsembleRoot
+        ? { userEnsembleRoot: input.userEnsembleRoot }
+        : {}),
+    });
+    entries.push({
+      slugKey,
+      ...(latest
+        ? {
+            latestUpdatedAt: latest.updatedAt,
+            latestConductorAgentId: latest.conductorAgentId,
+          }
+        : {}),
+    });
+  }
+  entries.sort(
+    (left, right) =>
+      (right.latestUpdatedAt ?? 0) - (left.latestUpdatedAt ?? 0) ||
+      left.slugKey.localeCompare(right.slugKey),
+  );
+  return entries;
 }

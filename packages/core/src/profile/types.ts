@@ -259,6 +259,7 @@ export function profileWorkersToSessionSpecs(
     spawnBase?: SpawnAcpProcessOptions;
     repoRoot?: string;
     issueNumber?: number;
+    workspaceSlugKey?: string;
     piAgentDir?: string;
     onWarning?: (message: string) => void;
   },
@@ -278,9 +279,9 @@ export function profileWorkersToSessionSpecs(
           'repoRoot is required for the builtin Pi worker runtime.',
         );
       }
-      if (!options.issueNumber) {
+      if (!options.issueNumber && !options.workspaceSlugKey) {
         throw new Error(
-          'issueNumber is required for the builtin Pi worker runtime.',
+          'issueNumber or workspaceSlugKey is required for the builtin Pi worker runtime.',
         );
       }
       const agentDir =
@@ -292,7 +293,9 @@ export function profileWorkersToSessionSpecs(
         }).agentDir;
       sessionSpawn = configurePiWorkerRuntime(resolved, {
         repoRoot: options.repoRoot,
-        issueNumber: options.issueNumber,
+        ...(options.workspaceSlugKey
+          ? { workspaceSlugKey: options.workspaceSlugKey }
+          : { issueNumber: options.issueNumber! }),
         workerName: worker.name,
         ...(agentDir ? { agentDir } : {}),
       });

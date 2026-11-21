@@ -1,6 +1,6 @@
 # ADR 0085: `ensemble run`、workspaces 永続化、Notes
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-11-21
 - Related: [Issue #821](https://github.com/otolab/agents-ensemble/issues/821)
 

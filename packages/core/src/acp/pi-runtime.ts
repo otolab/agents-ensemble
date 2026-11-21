@@ -229,7 +229,8 @@ export function configurePiWorkerRuntime(
   spawn: ResolvedAcpSpawn,
   input: {
     repoRoot: string;
-    issueNumber: number;
+    issueNumber?: number;
+    workspaceSlugKey?: string;
     workerName: string;
     agentDir?: string;
   },
@@ -238,7 +239,9 @@ export function configurePiWorkerRuntime(
 
   assertBuiltinPiNodeVersionSupported();
   const paths = resolveEnsemblePaths({ repoRoot: input.repoRoot });
-  const workerHome = paths.piWorkerDir(input.workerName, input.issueNumber);
+  const workerHome = input.workspaceSlugKey
+    ? paths.piWorkspaceWorkerDir(input.workerName, input.workspaceSlugKey)
+    : paths.piWorkerDir(input.workerName, input.issueNumber!);
   const legacyWorkerHome = paths.legacyPiWorkerDir(input.workerName);
   const piCliHome = resolvePiCliHome(spawn);
   const env = { ...(spawn.env ?? {}) };
@@ -257,10 +260,12 @@ export function configurePiWorkerRuntime(
       USERPROFILE: workerHome,
       ENSEMBLE_PI_LEGACY_WORKER_HOME: legacyWorkerHome,
       PI_CODING_AGENT_DIR: input.agentDir ?? paths.piUserDir,
-      PI_CODING_AGENT_SESSION_DIR: paths.piWorkerSessionsDir(
-        input.workerName,
-        input.issueNumber,
-      ),
+      PI_CODING_AGENT_SESSION_DIR: input.workspaceSlugKey
+        ? paths.piWorkspaceWorkerSessionsDir(
+            input.workerName,
+            input.workspaceSlugKey,
+          )
+        : paths.piWorkerSessionsDir(input.workerName, input.issueNumber!),
       PI_ACP_PI_COMMAND: resolveBuiltinPiCliEnvWrapperPath(),
     },
   };

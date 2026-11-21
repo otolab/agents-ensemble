@@ -17,6 +17,7 @@
 手順が明確な GitHub Issue を起点に、**conductor が演奏せず** worker を起動・制御し、作業を進める CLI（`ensemble`）。作業とプロセスは **1 Issue + worktree** に紐づく。
 
 - **最小ユースケース**: `ensemble issue <url>` → worker 起動 → Issue / PR 上で作業
+- **Issue 非連動**: `ensemble run <brief>` → 起動 cwd・brief ファイルを正本とし、永続化は `~/.ensemble/workspaces/<slug-key>/`（GitHub monitor / Issue context なし、[ADR 0085](adr/0085-ensemble-run-workspaces-and-notes.md)）
 - **backend 選択**: `conductor.backend` は `pi`（既定）または `cursor`。backend によって system prompt・認証・resume の扱いは異なるが、選択後も harness → worker ACP の経路と `ensemble issue <url>` の利用フローは共通（詳細は [ADR 0025](adr/0025-conductor-agent-backend-sdk-and-pi.md) / [ADR 0075](adr/0075-pi-conductor-default-and-model-selection.md)、設定は [settings.md](settings.md)）。
 - **スコープ**: 小さな作業単位の Issue ベースフロー
 - **対象外（初期）**: 汎用タスクオーケ、IDE 内 Agent の代替

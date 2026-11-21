@@ -4,6 +4,8 @@
 
 `@agents-ensemble/cli` は、GitHub Issue を起点に conductor が worker を起動・制御する CLI です。conductor は Pi（既定）または Cursor SDK を使います。worker は ACP preset に従って、それぞれの CLI / runtime と認証を使います。
 
+GitHub を正本にしない作業には **`ensemble run <brief>`** を使います。brief はプロンプト用ファイルのパス、`--conductor-cwd` で slug をアンカーする cwd、状態は `~/.ensemble/workspaces/<slug-key>/` に保存します。`ensemble run list` で workspace 一覧、`--continue` で同一 slug の最新 run を再開します。詳細は [ADR 0085](../adr/0085-ensemble-run-workspaces-and-notes.md)。
+
 ## インストール
 
 Node.js 22.19.0 以上を用意し、npm または pnpm でインストールします。Pi 依存の要件に合わせて最低バージョンを引き上げたため、22.13〜22.18 を使用している場合は Node.js を更新してください。
