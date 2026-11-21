@@ -96,7 +96,7 @@ GitHub Issue コメント・description に相当する時系列と一覧用要�
 
 - slug-key の cwd ハッシュはパス変更で変わり得る。アンカーファイルと明示名が運用上の正本になる。
 - worktree 隔離がないため、オペレータと worker が同一 cwd の作業ツリーを共有する。
-- Notes 用 API・tool・CLI・移行は新規実装が必要。本 ADR は設計のみであり、挙動は未実装。
+- Notes 用 API と conductor tool の保守が必要になる。
 
 ### フォローアップ（実装の目安）
 

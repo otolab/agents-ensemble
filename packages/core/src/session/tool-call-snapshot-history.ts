@@ -251,7 +251,10 @@ export async function pruneExpiredToolCallSnapshotHistoryFiles(
   let failedCount = 0;
   const cutoff = now - TOOL_CALL_SNAPSHOT_HISTORY_TTL_MS;
   const paths = resolveEnsemblePaths({ repoRoot: input.repoRoot });
-  const dir = paths.canonicalRepoSessionsDir(input.issueUrl);
+  const scope = resolveSessionPersistenceScope(input.issueUrl);
+  const dir = scope.kind === 'workspace'
+    ? paths.workspaceSlugDir(scope.slugKey)
+    : paths.canonicalRepoSessionsDir(scope.issueUrl);
   {
     let entries: string[];
     try {

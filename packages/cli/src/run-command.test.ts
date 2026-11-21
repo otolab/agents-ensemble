@@ -23,4 +23,14 @@ describe('run-command', () => {
       slugKey: 'abc',
     });
   });
+
+  it('reports a missing session and rejects conflicting resume options', async () => {
+    const context = { slugKey: 'abc', repoRoot: '/tmp/repo' };
+    await expect(resolveRunResumeAgentId(
+      { continue: true }, context,
+      { findLatestSessionResumeStoreForWorkspace: vi.fn().mockResolvedValue(undefined) },
+    )).rejects.toThrow('No saved session resume store');
+    await expect(resolveRunResumeAgentId({ continue: true, resume: 'id' }, context))
+      .rejects.toThrow('Cannot use --continue and --resume together');
+  });
 });

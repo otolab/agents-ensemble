@@ -90,6 +90,7 @@ export function createWorkspaceNotesTools(
           includeHistory: { type: 'boolean' },
           historyOffset: { type: 'number' },
           historyLimit: { type: 'number' },
+          includeArchived: { type: 'boolean' },
         },
         required: ['noteId'],
       },
@@ -98,6 +99,7 @@ export function createWorkspaceNotesTools(
           ...ctx,
           noteId: String(args.noteId ?? ''),
           includeHistory: args.includeHistory === true,
+          includeArchived: args.includeArchived === true,
           ...(typeof args.historyOffset === 'number'
             ? { historyOffset: args.historyOffset }
             : {}),

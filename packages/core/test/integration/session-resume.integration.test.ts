@@ -25,6 +25,8 @@ import {
   loadSessionResumeStore,
   saveSessionResumeStore,
   SESSION_RESUME_STORE_VERSION,
+  findLatestSessionResumeStoreForWorkspace,
+  listWorkspaceSlugEntries,
 } from '../../src/session/session-resume-store.js';
 import {
   loadOpenQuestionsStore,
@@ -121,6 +123,83 @@ describe('session resume integration', () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
+  });
+
+  it('starts a workspace outside git, closes and resumes with its notes and worker cwd', async () => {
+    const cwd = join(repoRoot, 'workspace');
+    await mkdir(cwd);
+    const bridge = await createInProcessAcpBridge();
+    const newSession = vi.spyOn(bridge, 'newSession');
+    const loadSession = vi.spyOn(bridge, 'loadSession');
+    const promptSession = vi.spyOn(bridge, 'promptSession');
+    let noteId = '';
+    let phase = 'initial';
+    mockCreate.mockImplementation(async (options, resumeOptions) => {
+      if (phase === 'failure') throw new Error('backend unavailable');
+      conductorTools = (resumeOptions ?? options).customTools ?? {};
+      return {
+        agentId: RESUME_AGENT_ID,
+        send: mockSend,
+        close: mockClose,
+        closeForResume: mockClose,
+        getUsage: createMockConductorGetUsage(),
+      };
+    });
+    mockSend.mockImplementation(async () => {
+      if (phase === 'initial' && !noteId) {
+        const result = await conductorTools.create_note!.execute({ summary: 'test' });
+        noteId = JSON.parse(result.content[0]!.text).noteId;
+        await conductorTools.push_memo!.execute({ noteId, body: 'saved memo' });
+      } else if (phase === 'resume') {
+        const result = await conductorTools.read_note!.execute({ noteId });
+        expect(JSON.parse(result.content[0]!.text).memos[0].body).toBe('saved memo');
+      }
+      return { runId: phase, status: 'finished', result: 'ok' };
+    });
+    let operatorApi: OperatorInputBindingApi | undefined;
+    const postLoop = vi.fn();
+    const common = {
+      issueUrl: 'workspace://test-workspace',
+      repoRoot,
+      conductorCwd: cwd,
+      profile: PING_PROFILE_BASE,
+      defaultAcp: IN_PROCESS_DEFAULT_ACP,
+      maxTurns: 3,
+      connectAcp: async () => bridge,
+      ownsWorkerAcpConnections: false,
+    };
+    const first = runConductorSession({
+      ...common,
+      briefText: 'Investigate',
+      waitForOperatorExit: true,
+      onPostLoopWait: postLoop,
+      bindOperatorInput: (api) => { operatorApi = api; },
+    });
+    await vi.waitFor(() => expect(postLoop).toHaveBeenCalledOnce());
+    expect(operatorApi!.submit('/close')).toBe(false);
+    expect((await first).stopReason).toBe('completed');
+    expect(newSession).toHaveBeenCalledWith(cwd);
+    expect(promptSession).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.stringContaining('test-workspace'),
+      expect.anything(),
+    );
+    expect(noteId).toBeTruthy();
+    const resumePath = resolveEnsemblePaths({ repoRoot })
+      .workspaceSessionResumeStorePath('test-workspace', RESUME_AGENT_ID);
+    const beforeFailure = await readFile(resumePath, 'utf8');
+    expect((await findLatestSessionResumeStoreForWorkspace({ repoRoot, slugKey: 'test-workspace' }))?.conductorAgentId)
+      .toBe(RESUME_AGENT_ID);
+    expect(await listWorkspaceSlugEntries({ repoRoot })).toContainEqual(
+      expect.objectContaining({ slugKey: 'test-workspace', latestConductorAgentId: RESUME_AGENT_ID }),
+    );
+    phase = 'failure';
+    await expect(runConductorSession({ ...common, resumeAgentId: RESUME_AGENT_ID }))
+      .rejects.toThrow('backend unavailable');
+    expect(await readFile(resumePath, 'utf8')).toBe(beforeFailure);
+    phase = 'resume';
+    expect((await runConductorSession({ ...common, resumeAgentId: RESUME_AGENT_ID })).stopReason).toBe('completed');
+    expect(loadSession).toHaveBeenCalled();
   });
 
   it('uses the current profile while restoring open questions and worker session/load', async () => {

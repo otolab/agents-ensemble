@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
+import { lock } from 'proper-lockfile';
 import { resolveEnsemblePaths } from '../ensemble-paths.js';
 
 export const NOTE_MEMO_LIST_PREVIEW_CHARS = 300;
@@ -46,7 +47,33 @@ async function saveNoteFile(
   note: WorkspaceNoteRecord,
 ): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, `${JSON.stringify(note, null, 2)}\n`, 'utf8');
+  const temporary = `${path}.${randomUUID()}.tmp`;
+  try {
+    await writeFile(temporary, `${JSON.stringify(note, null, 2)}\n`, 'utf8');
+    await rename(temporary, path);
+  } finally {
+    await rm(temporary, { force: true });
+  }
+}
+
+async function updateNote<T>(
+  path: string,
+  noteId: string,
+  update: (note: WorkspaceNoteRecord) => T,
+): Promise<T> {
+  const release = await lock(path, {
+    realpath: false,
+    retries: { retries: 100, minTimeout: 10, maxTimeout: 100 },
+  });
+  try {
+    const note = await loadNoteFile(path);
+    if (!note) throw new Error(`Note not found: ${noteId}`);
+    const result = update(note);
+    await saveNoteFile(path, note);
+    return result;
+  } finally {
+    await release();
+  }
 }
 
 export async function createWorkspaceNote(input: {
@@ -85,20 +112,17 @@ export async function pushWorkspaceMemo(input: {
     throw new Error('Memo body must be non-empty.');
   }
   const path = notePath(input.repoRoot, input.slugKey, input.noteId);
-  const note = await loadNoteFile(path);
-  if (!note) {
-    throw new Error(`Note not found: ${input.noteId}`);
-  }
   const memo: WorkspaceMemoRecord = {
     id: randomUUID(),
     body,
     archived: false,
     createdAt: Date.now(),
   };
-  note.memos.push(memo);
-  note.updatedAt = memo.createdAt;
-  await saveNoteFile(path, note);
-  return memo;
+  return updateNote(path, input.noteId, (note) => {
+    note.memos.push(memo);
+    note.updatedAt = memo.createdAt;
+    return memo;
+  });
 }
 
 export async function readWorkspaceNote(input: {
@@ -108,8 +132,9 @@ export async function readWorkspaceNote(input: {
   includeHistory?: boolean;
   historyOffset?: number;
   historyLimit?: number;
+  includeArchived?: boolean;
 }): Promise<{
-  note: WorkspaceNoteRecord;
+  note: Omit<WorkspaceNoteRecord, 'memos'>;
   memos: WorkspaceMemoRecord[];
 }> {
   const path = notePath(input.repoRoot, input.slugKey, input.noteId);
@@ -117,17 +142,20 @@ export async function readWorkspaceNote(input: {
   if (!note) {
     throw new Error(`Note not found: ${input.noteId}`);
   }
-  const activeMemos = note.memos.filter((memo) => !memo.archived);
+  const { memos: allMemos, ...metadata } = note;
+  const activeMemos = allMemos.filter(
+    (memo) => input.includeArchived || !memo.archived,
+  );
   if (input.includeHistory) {
     const offset = Math.max(0, input.historyOffset ?? 0);
     const limit = Math.min(100, Math.max(1, input.historyLimit ?? 20));
     return {
-      note,
+      note: metadata,
       memos: activeMemos.slice(offset, offset + limit),
     };
   }
   const latest = activeMemos.at(-1);
-  return { note, memos: latest ? [latest] : [] };
+  return { note: metadata, memos: latest ? [latest] : [] };
 }
 
 export async function listWorkspaceNotes(input: {
@@ -193,11 +221,10 @@ export async function archiveWorkspaceNote(input: {
   archived: boolean;
 }): Promise<void> {
   const path = notePath(input.repoRoot, input.slugKey, input.noteId);
-  const note = await loadNoteFile(path);
-  if (!note) throw new Error(`Note not found: ${input.noteId}`);
-  note.archived = input.archived;
-  note.updatedAt = Date.now();
-  await saveNoteFile(path, note);
+  await updateNote(path, input.noteId, (note) => {
+    note.archived = input.archived;
+    note.updatedAt = Date.now();
+  });
 }
 
 export async function archiveWorkspaceMemo(input: {
@@ -208,13 +235,12 @@ export async function archiveWorkspaceMemo(input: {
   archived: boolean;
 }): Promise<void> {
   const path = notePath(input.repoRoot, input.slugKey, input.noteId);
-  const note = await loadNoteFile(path);
-  if (!note) throw new Error(`Note not found: ${input.noteId}`);
-  const memo = note.memos.find((entry) => entry.id === input.memoId);
-  if (!memo) throw new Error(`Memo not found: ${input.memoId}`);
-  memo.archived = input.archived;
-  note.updatedAt = Date.now();
-  await saveNoteFile(path, note);
+  await updateNote(path, input.noteId, (note) => {
+    const memo = note.memos.find((entry) => entry.id === input.memoId);
+    if (!memo) throw new Error(`Memo not found: ${input.memoId}`);
+    memo.archived = input.archived;
+    note.updatedAt = Date.now();
+  });
 }
 
 function isEnoent(error: unknown): boolean {

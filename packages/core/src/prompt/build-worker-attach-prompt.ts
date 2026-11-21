@@ -10,6 +10,9 @@ import { ensembleContext } from './contexts/kind.js';
 import { mergeWorkerSystemPrompt } from './modules/ensemble/index.js';
 import { profilePromptModule } from './modules/shared/profile-prompt-module.js';
 import { renderCompiledPrompt } from './render-compiled-prompt.js';
+import { parseWorkspaceSessionUrl } from '../workspace-run/session-url.js';
+import { workspaceEnsembleContext } from './contexts/workspace-kind.js';
+import { runBaseModule } from './modules/ensemble/run-base-module.js';
 
 export interface WorkerAttachPromptOptions {
   issueUrl: string;
@@ -50,6 +53,21 @@ export function buildWorkerAttachPrompt(
       ...filterMaterialsForKind(options.sessionState.materials, options.kind),
     ],
   });
+  const workspace = parseWorkspaceSessionUrl(options.issueUrl);
+  if (workspace) {
+    const module = merge(runBaseModule, profileModule ?? {}, {
+      instructions: [
+        `作業ディレクトリ: ${options.workspacePath ?? options.worktreePath ?? ''}`,
+        'conductor からの作業指示を待つ。',
+      ],
+    });
+    return renderCompiledPrompt(
+      compile(
+        module,
+        workspaceEnsembleContext(options.kind, workspace.slugKey, options.sessionState),
+      ),
+    );
+  }
   const module = merge(mergeWorkerSystemPrompt(profileModule), workerAttachModule);
   return renderCompiledPrompt(
     compile(module, {

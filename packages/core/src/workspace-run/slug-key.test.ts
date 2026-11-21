@@ -34,4 +34,13 @@ describe('workspace slug-key', () => {
     const url = workspaceSessionUrl(slug);
     expect(parseWorkspaceSessionUrl(url)?.slugKey).toBe(slug);
   });
+
+  it('persists explicit names and rejects replacing another anchor', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'ensemble-ws-'));
+    temps.push(root);
+    expect(await resolveWorkspaceSlugKey({ cwd: root, explicitName: 'named' })).toBe('named');
+    expect(await resolveWorkspaceSlugKey({ cwd: root })).toBe('named');
+    await expect(resolveWorkspaceSlugKey({ cwd: root, explicitName: 'other' })).rejects.toThrow('already anchored');
+    expect((await readWorkspaceAnchor(root))?.slug).toBe('named');
+  });
 });

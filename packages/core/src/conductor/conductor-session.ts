@@ -818,12 +818,14 @@ async function runConductorSessionWithStartupGuard(
   const conductorAgentFactory =
     options.conductorAgentFactory ?? createConductorAgentFactory(conductorBackend);
 
-  const githubAuth = await resolveGitHubAuthToken({ config: ensembleConfig });
-  if (!githubAuth.token) {
-    sessionLogger.emit({
-      type: 'harness.warning',
-      message: GITHUB_AUTH_HINT,
-    });
+  if (!workspaceSession) {
+    const githubAuth = await resolveGitHubAuthToken({ config: ensembleConfig });
+    if (!githubAuth.token) {
+      sessionLogger.emit({
+        type: 'harness.warning',
+        message: GITHUB_AUTH_HINT,
+      });
+    }
   }
 
   let systemPrompt: string;
@@ -1002,15 +1004,17 @@ async function runConductorSessionWithStartupGuard(
   const workerWorktree =
     options.workerWorktree ??
     (workers.length > 0
-      ? await resolveWorkerWorkspace(
-          options.repoRoot,
-          issue,
-          options.workerWorktreeMode ?? 'isolated',
-          {
-            resume: Boolean(options.resumeAgentId),
-            onNotice: reportResumeNotice,
-          },
-        )
+      ? workspaceSession
+        ? { path: resolvePath(conductorCwd), branch: '', issue, inRepo: true }
+        : await resolveWorkerWorkspace(
+            options.repoRoot,
+            issue,
+            options.workerWorktreeMode ?? 'isolated',
+            {
+              resume: Boolean(options.resumeAgentId),
+              onNotice: reportResumeNotice,
+            },
+          )
       : undefined);
 
   if (options.resumeAgentId) {

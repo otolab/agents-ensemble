@@ -100,6 +100,11 @@ export async function resolveWorkspaceSlugKey(input: {
 }): Promise<string> {
   if (input.explicitName !== undefined) {
     assertValidSlugKey(input.explicitName);
+    const anchor = await readWorkspaceAnchor(input.cwd);
+    if (anchor && anchor.slug !== input.explicitName) {
+      throw new Error(`Workspace is already anchored to "${anchor.slug}".`);
+    }
+    if (!anchor) await writeWorkspaceAnchor(input.cwd, input.explicitName);
     return input.explicitName;
   }
   const anchor = await readWorkspaceAnchor(input.cwd);

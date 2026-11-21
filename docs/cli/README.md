@@ -6,6 +6,14 @@
 
 GitHub を正本にしない作業には **`ensemble run <brief>`** を使います。brief はプロンプト用ファイルのパス、`--conductor-cwd` で slug をアンカーする cwd、状態は `~/.ensemble/workspaces/<slug-key>/` に保存します。`ensemble run list` で workspace 一覧、`--continue` で同一 slug の最新 run を再開します。詳細は [ADR 0085](../adr/0085-ensemble-run-workspaces-and-notes.md)。
 
+`ensemble run brief.md --name investigation` は指定名を cwd の `.ensemble/workspace.json` に記録します。以後は同じ cwd から `ensemble run --continue` で再開できます。すでに別の slug が記録された cwd では別名を指定できません。名前の変更用 CLI は [#826](https://github.com/otolab/agents-ensemble/issues/826) で扱います。
+
+worker は既定で conductor と同じ cwd を共有し、isolated worktree は作りません。profile の `workers[].workspace` を指定した worker はそのディレクトリを使います。GitHub Issue の取得や monitor は使いません。
+
+conductor は `create_note` で summary 必須のノートを作り、`push_memo` でメモを追加できます。`list_notes` は summary と最新メモの冒頭を一覧し、`read_note` は既定で最新メモを返します。履歴は `includeHistory` と `historyOffset` / `historyLimit`、archive 済みメモは `includeArchived` で読めます。`archive_note` / `archive_memo` で非表示にした内容も読取可能です。Notes は workspace ごとに共有され、再開後も残ります。
+
+既定の team profile は Issue / PR を前提とする materials を含みます。Issue に依存しない run 用 profile は [#827](https://github.com/otolab/agents-ensemble/issues/827)、共通プロンプトの分離は [#828](https://github.com/otolab/agents-ensemble/issues/828) で扱います。run に適した materials を持つ profile を指定してください。
+
 ## インストール
 
 Node.js 22.19.0 以上を用意し、npm または pnpm でインストールします。Pi 依存の要件に合わせて最低バージョンを引き上げたため、22.13〜22.18 を使用している場合は Node.js を更新してください。
