@@ -3,7 +3,7 @@ import { Box, Text } from 'ink';
 import stringWidth from 'string-width';
 import { TextArea, type TKeybindings, type TLinePrefixProps } from 'react-ink-textarea';
 import {
-  computeOperatorInputLayout,
+  computeTextAreaDisplayLineCount,
   isCursorAtVisualBoundary,
 } from './operator-input-layout.js';
 import { INPUT_PANE_PROMPT_COLOR } from './tui-layout-constants.js';
@@ -90,14 +90,14 @@ export function OperatorTextArea({
 }: OperatorTextAreaProps) {
   const promptWidth = stringWidth(promptPrefix);
 
-  const layout = useMemo(
-    () => computeOperatorInputLayout(value, contentWidth, promptWidth),
-    [value, contentWidth, promptWidth],
+  const displayLineCount = useMemo(
+    () => computeTextAreaDisplayLineCount(value, contentWidth, promptWidth, cursorPosition, focus),
+    [value, contentWidth, promptWidth, cursorPosition, focus],
   );
 
   useEffect(() => {
-    onDisplayLineCountChange?.(layout.displayLines.length);
-  }, [layout.displayLines.length, onDisplayLineCountChange]);
+    onDisplayLineCountChange?.(displayLineCount);
+  }, [displayLineCount, onDisplayLineCountChange]);
 
   const linePrefix = useCallback(
     ({ lineNumber, isContinuationLine }: TLinePrefixProps) => {
@@ -107,6 +107,16 @@ export function OperatorTextArea({
       return null;
     },
     [promptPrefix],
+  );
+
+  // Keep all text boxes equally wide, including when the first row scrolls out
+  // of view. TextArea otherwise falls back to a wider off-screen measurement.
+  const lineSuffix = useCallback(
+    ({ lineNumber, isContinuationLine }: TLinePrefixProps) =>
+      lineNumber === 0 && !isContinuationLine
+        ? null
+        : <Text>{' '.repeat(promptWidth)}</Text>,
+    [promptWidth],
   );
 
   const textAreaCursorStart =
@@ -136,6 +146,7 @@ export function OperatorTextArea({
         cursorPosition={cursorPosition}
         onCursorChange={onCursorChange}
         linePrefix={promptPrefix ? linePrefix : undefined}
+        lineSuffix={promptPrefix ? lineSuffix : undefined}
         viewportLines={maxDisplayLines}
         initialLineCount={1}
         cursorStart={textAreaCursorStart}

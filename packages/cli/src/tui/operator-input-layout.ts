@@ -44,7 +44,7 @@ export function isCursorAtVisualBoundary(
   const cursorLine = prefix.split('\n').length - 1;
   const cursorLineStart = prefix.lastIndexOf('\n') + 1;
   const cursorColumn = clampedCursorOffset - cursorLineStart;
-  const visualRows = buildTextAreaVisualRows(value, contentWidth, promptWidth, {
+  const visualRows = buildTextAreaVisualRows(value, Math.max(1, contentWidth - promptWidth), 0, {
     line: cursorLine,
     column: cursorColumn,
   });
@@ -123,6 +123,25 @@ function buildTextAreaVisualRows(
   }
 
   return rows;
+}
+
+/** TextArea と同じ折り返しとカーソル行末の追加行を含む表示行数。 */
+export function computeTextAreaDisplayLineCount(
+  value: string,
+  contentWidth: number,
+  promptWidth: number,
+  cursorPosition: readonly [number, number] | undefined,
+  focus: boolean,
+): number {
+  const lines = value.split('\n');
+  const requestedLine = cursorPosition?.[0] ?? lines.length - 1;
+  const line = Math.max(0, Math.min(requestedLine, lines.length - 1));
+  const lineLength = lines[line]?.length ?? 0;
+  const column = Math.max(0, Math.min(cursorPosition?.[1] ?? lineLength, lineLength));
+  return buildTextAreaVisualRows(value, Math.max(1, contentWidth - promptWidth), 0, {
+    line: focus ? line : -1,
+    column,
+  }).length;
 }
 
 /** 先頭・末尾の空白行のみ除去。行内空白と本文中の改行は保持する。 */

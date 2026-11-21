@@ -3,6 +3,7 @@ import {
   computeMaxInputDisplayLines,
   computeOperatorInputDisplayLines,
   computeOperatorInputLayout,
+  computeTextAreaDisplayLineCount,
   isCursorAtVisualBoundary,
   mapCursorOffsetToDisplayPosition,
   mapDisplayPositionToCursorOffset,
@@ -46,6 +47,15 @@ describe('computeOperatorInputDisplayLines', () => {
       OPERATOR_INPUT_PROMPT.length,
     );
     expect(lines).toEqual(['line1', 'line2']);
+  });
+});
+
+describe('computeTextAreaDisplayLineCount', () => {
+  it('counts the extra cursor row only at a focused full line end', () => {
+    const value = 'a'.repeat(16) + 'あ\nnext';
+    expect(computeTextAreaDisplayLineCount(value, 20, 2, [0, 17], true)).toBe(3);
+    expect(computeTextAreaDisplayLineCount(value, 20, 2, [0, 16], true)).toBe(2);
+    expect(computeTextAreaDisplayLineCount(value, 20, 2, [0, 17], false)).toBe(2);
   });
 });
 
@@ -94,6 +104,12 @@ describe('isCursorAtVisualBoundary', () => {
     const value = 'first\nmiddle\nlast';
     expect(isCursorAtVisualBoundary(value, [1, 2], 40, 0, 'up')).toBe(false);
     expect(isCursorAtVisualBoundary(value, [1, 2], 40, 0, 'down')).toBe(false);
+  });
+
+  it('uses the reserved prompt width on continuation rows', () => {
+    const value = 'abcdefghijklmnopqr' + 'abcdefghijklmnopqr';
+    expect(isCursorAtVisualBoundary(value, [0, value.length], 20, 2, 'down')).toBe(true);
+    expect(isCursorAtVisualBoundary(value, [0, 19], 20, 2, 'up')).toBe(false);
   });
 });
 
