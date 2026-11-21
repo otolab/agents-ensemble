@@ -156,6 +156,7 @@ ADR は**合意された設計判断の履歴**を残すもの。一度 `accepte
 | [0082](0082-operator-watch-acknowledgement-retry.md) | operator-agent の watch report ack を send retry から分離 | accepted |
 | [0083](0083-operator-agent-session-report-scheduling.md) | operator-agent の session report 調停と利用機能の境界 | proposed |
 | [0084](0084-conductor-mcp-selection.md) | conductor MCP server の明示選択 | accepted |
+| [0085](0085-ensemble-run-workspaces-and-notes.md) | `ensemble run`、workspaces 永続化、Notes | proposed |
 
 ## 追加するとき
 
