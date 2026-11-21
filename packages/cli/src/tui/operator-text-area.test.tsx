@@ -74,6 +74,7 @@ describe('OperatorTextArea (production wrapper)', () => {
     expect(textAreaSpy).toHaveBeenCalled();
     const props = textAreaSpy.mock.calls.at(-1)?.[0];
     expect(props?.viewportLines).toBe(4);
+    expect(props?.tabWidth).toBe(4);
     expect(props?.initialLineCount).toBe(1);
     expect(props?.linePrefix).toBeUndefined();
     expect(props?.onChange).toBe(onChange);

@@ -8,6 +8,9 @@ import {
 
 const inputGraphemeSegmenter = new Intl.Segmenter('en', { granularity: 'grapheme' });
 
+/** TextArea と共有する、タブ 1 文字の表示幅。 */
+export const OPERATOR_INPUT_TAB_WIDTH = 4;
+
 export interface OperatorInputDisplayPosition {
   readonly displayLineIndex: number;
   readonly columnInLine: number;
@@ -96,7 +99,7 @@ function buildTextAreaVisualRows(
     for (const { segment } of inputGraphemeSegmenter.segment(text)) {
       const segmentWidth =
         segment === '\t'
-          ? 1
+          ? OPERATOR_INPUT_TAB_WIDTH
           : segment.length === 1 && segment.charCodeAt(0) < 0x20
             ? 0
             : stringWidth(segment);

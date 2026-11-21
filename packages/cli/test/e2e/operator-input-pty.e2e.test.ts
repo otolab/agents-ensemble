@@ -53,6 +53,11 @@ try:
         check('start', 'a' * 30)
         os.write(master, b'\x05')  # Ctrl-E: logical line end, first row hidden
         check('end', '終')
+    if sys.argv[5] == 'tab':
+        os.write(master, b'\x01')
+        check('tab start', 'a' * 30)
+        os.write(master, b'\x05')
+        check('tab end', 'a' * 30)
     os.write(master, b'Z')
     check('edit', '終Z' if sys.argv[5] == 'move' else 'Z')
 
@@ -66,6 +71,7 @@ describe('operator input in a real TUI', () => {
   it.skipIf(process.platform === 'win32').each([
     ['reported input', 'https://github.com/otolab/agents-ensemble/pull/823#issuecomment-7058075556ここにある', 'ここにある', 'stay'],
     ['full first line', 'a'.repeat(74), 'a'.repeat(30), 'stay'],
+    ['pasted tab at line end', 'a'.repeat(70) + '\t', 'a'.repeat(30), 'tab'],
     ['viewport height limit', 'a'.repeat(74) + '日'.repeat(38 * 7 - 1) + '終', '終', 'move'],
   ])('settles with %s', (_label, value, marker, mode) => {
     const fixture = fileURLToPath(new URL('../process-fixtures/operator-input-pty.mjs', import.meta.url));

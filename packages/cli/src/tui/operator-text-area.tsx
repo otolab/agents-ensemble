@@ -5,6 +5,7 @@ import { TextArea, type TKeybindings, type TLinePrefixProps } from 'react-ink-te
 import {
   computeTextAreaDisplayLineCount,
   isCursorAtVisualBoundary,
+  OPERATOR_INPUT_TAB_WIDTH,
 } from './operator-input-layout.js';
 import { INPUT_PANE_PROMPT_COLOR } from './tui-layout-constants.js';
 
@@ -153,6 +154,7 @@ export function OperatorTextArea({
         onCursorChange={onCursorChange}
         linePrefix={visiblePrompt ? linePrefix : undefined}
         lineSuffix={visiblePrompt ? lineSuffix : undefined}
+        tabWidth={OPERATOR_INPUT_TAB_WIDTH}
         viewportLines={maxDisplayLines}
         initialLineCount={1}
         cursorStart={textAreaCursorStart}

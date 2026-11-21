@@ -2,6 +2,8 @@ import React, { useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render } from 'ink-testing-library';
 import { OperatorTextArea } from './operator-text-area.js';
+import { computeTextAreaDisplayLineCount, isCursorAtVisualBoundary } from './operator-input-layout.js';
+import { loadForkKeyboardModules } from './operator-text-area-keyboard-harness.js';
 
 function Harness({ value, cursor, width = 20 }: { value: string; cursor: [number, number]; width?: number }) {
   const [lines, setLines] = useState(1);
@@ -51,5 +53,36 @@ describe('OperatorTextArea convergence', () => {
     await new Promise((resolve) => setTimeout(resolve, 300));
     expect(normalize(screen.lastFrame())).toContain('c');
     expect(errors.mock.calls.flat().join(' ')).not.toContain('Maximum update depth');
+  });
+
+  it('matches real TextArea rows and cursor boundaries for pasted tabs', async () => {
+    const { buildVisualRows } = await loadForkKeyboardModules();
+    const value = 'aaaa\t';
+    const count = vi.fn();
+    const show = (column: number) => (
+      <OperatorTextArea
+        value={value}
+        onChange={() => {}}
+        contentWidth={10}
+        promptPrefix="> "
+        maxDisplayLines={2}
+        cursorPosition={[0, column]}
+        onDisplayLineCountChange={count}
+      />
+    );
+    const screen = render(show(5));
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const rows = buildVisualRows([value], 8, 0, 5, 1, 4) as readonly { absStart: number }[];
+    expect(rows).toHaveLength(2);
+    expect(count).toHaveBeenLastCalledWith(rows.length);
+    expect(computeTextAreaDisplayLineCount(value, 10, 2, [0, 5], true)).toBe(rows.length);
+    expect(isCursorAtVisualBoundary(value, [0, 5], 10, 2, 'up')).toBe(false);
+    expect(isCursorAtVisualBoundary(value, [0, 5], 10, 2, 'down')).toBe(true);
+    screen.rerender(show(4));
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const movedRows = buildVisualRows([value], 8, 0, 4, 1, 4);
+    expect(movedRows).toHaveLength(1);
+    expect(count).toHaveBeenLastCalledWith(movedRows.length);
+    expect(isCursorAtVisualBoundary(value, [0, 4], 10, 2, 'up')).toBe(true);
   });
 });
