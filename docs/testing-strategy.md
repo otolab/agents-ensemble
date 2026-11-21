@@ -28,7 +28,7 @@
 | `@agents-ensemble/core` | e2e | なし | なし | 現在 core に e2e suite はない。Vitest e2e config と package script は設けない |
 | `@agents-ensemble/cli` | unit | `pnpm --filter @agents-ensemble/cli test:run` | はい。root の `pnpm test:run` に含まれる | Node.js 22.19 以上、Git、一時ディレクトリ、ローカル UDS。ビルド済み CLI を起動するテストがあるため、単独実行前に `pnpm build` が必要 |
 | `@agents-ensemble/cli` | e2e | `pnpm --filter @agents-ensemble/cli test:e2e` | 一部のみ。PTY suites を個別に実行 | 先に `pnpm build` が必要。PTY suites は POSIX と Python 3 の標準 `pty` モジュールが必要。Pi TTY suites は localhost bind と Git も使う。Issue workflow suite は `test-acp.yaml`、Issue URL、repo、conductor 認証、利用可能な ACP 実行環境が必要 |
-| `@agents-ensemble/operator-agent` | unit | `pnpm --filter @agents-ensemble/operator-agent test:run` | はい。root の `pnpm test:run` に含まれる | Node.js 22.19 以上、事前の core build、書き込み可能な repository `.tmp/`、ローカル UDS。watch-state の stale owner / pending handoff は別 Node process fixture で検証し、外部 agent / service は不要 |
+| `@agents-ensemble/operator-agent` | unit | `pnpm --filter @agents-ensemble/operator-agent test:run` | はい。root の `pnpm test:run` に含まれる | Node.js 22.19 以上、事前の core と operator-agent の build、書き込み可能な repository `.tmp/`、ローカル UDS。watch-state の stale owner / pending handoff は別 Node process fixture で検証し、外部 agent / service は不要 |
 | Builtin Pi storage ACL (Windows) | unit / filesystem smoke | `pnpm --filter @agents-ensemble/core exec vitest run src/acp/pi-session-map.test.ts` | はい。`windows-latest` の専用 job | `icacls.exe` による現在の account の ACL 更新と .NET での読み戻し、temp directory。実 Pi CLI / provider は起動しない |
 | `.github/scripts` | Node test | `pnpm test:release-workflow` | はい | Node.js 22 と Git。テスト用の一時 Git repository を使い、GitHub には接続しない |
 | `scripts/remote-ensemble-issue.test.mjs` | 補助 Node test | `node --test scripts/remote-ensemble-issue.test.mjs` | はい。root の `pnpm test:run` に含まれる | Node.js 22、Bash 3.2+、POSIX shell、fake SSH / gcloud / tmux fixture。Python 3 の標準 `pty` module があれば TTY 経路も実行する。実 SSH / gcloud 接続・認証は行わない |
@@ -50,7 +50,15 @@ pnpm test:all          # test:run → test:integration → test:e2e
 `pnpm test:all` にはビルドが含まれない。CLI の dist を使う unit / e2e も通す場合は、先に `pnpm build` を実行する。
 `session-resume.integration.test.ts` も CLI の run command と core harness を接続するため、単独実行前に `pnpm build` が必要。
 
-`@agents-ensemble/operator-agent` は `@agents-ensemble/core` の package export を通じて `dist` を読み込む。package 単独で実行する場合は、先に `pnpm --filter @agents-ensemble/core build` を実行する。Vitest setup は `ENSEMBLE_USER_ROOT` と scratch filesystem probe を repository の無視対象 `.tmp/` 以下へ分離する。Node の `TMPDIR` は上書きしない。既定の絶対 temp path を保つことで、テストが作る一時 repository の path semantics を維持し、深い worktree から UDS socket を作る際の path 長超過も避ける。UDS probe はその `TMPDIR` 上で行う。
+`@agents-ensemble/operator-agent` は `@agents-ensemble/core` の package export を通じて `dist` を読み込む。また、テスト中の scheduling event writer は operator-agent の `dist` から起動され、子 process fixture も同じ `dist` を import する。package 単独でテストする前に、現在の source を次の順序で build する。
+
+```bash
+pnpm --filter @agents-ensemble/core build
+pnpm --filter @agents-ensemble/operator-agent build
+pnpm --filter @agents-ensemble/operator-agent test:run
+```
+
+Vitest setup は `ENSEMBLE_USER_ROOT` と scratch filesystem probe を repository の無視対象 `.tmp/` 以下へ分離する。Node の `TMPDIR` は上書きしない。既定の絶対 temp path を保つことで、テストが作る一時 repository の path semantics を維持し、深い worktree から UDS socket を作る際の path 長超過も避ける。UDS probe はその `TMPDIR` 上で行う。
 
 operator-agent のテスト間で共有する fixture は `packages/operator-agent/test/support/` に置く。テスト本体は従来どおり `src/` または `test/` の Vitest の収集対象に置く。
 watch-pool の機能別テストは `packages/operator-agent/src/watch/` に置く。`operator-watch-reports.test.ts` は report の順序と cursor（旧形式を含む）を、`operator-watch-state.test.ts` は state の merge・partition と session 削除を検証する。pool の統合テストは `operator-watch-pool-{registration,observation,persistence,poll,messages}.test.ts` に分け、登録、観測、永続化・複数 process、poll、message 配送を検証する。共通の setup / teardown は `test/support/watch-pool-suite.ts` に置く。いずれも既存の `src/**/*.test.ts` で収集する。
