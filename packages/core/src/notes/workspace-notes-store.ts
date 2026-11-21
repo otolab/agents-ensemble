@@ -27,6 +27,9 @@ function notesDir(repoRoot: string, slugKey: string): string {
 }
 
 function notePath(repoRoot: string, slugKey: string, noteId: string): string {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(noteId)) {
+    throw new Error('Invalid note ID.');
+  }
   return join(notesDir(repoRoot, slugKey), `${noteId}.json`);
 }
 

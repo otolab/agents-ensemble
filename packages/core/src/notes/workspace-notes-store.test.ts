@@ -11,6 +11,7 @@ import {
   archiveWorkspaceMemo,
   archiveWorkspaceNote,
 } from './workspace-notes-store.js';
+import { createWorkspaceNotesTools } from './workspace-notes-tools.js';
 
 describe('workspace notes store', () => {
   const temps: string[] = [];
@@ -74,5 +75,44 @@ describe('workspace notes store', () => {
     await archiveWorkspaceNote({ repoRoot, slugKey, noteId: note.id, archived: true });
     expect((await listWorkspaceNotes({ repoRoot, slugKey })).total).toBe(0);
     expect((await readWorkspaceNote({ repoRoot, slugKey, noteId: note.id })).note.archived).toBe(true);
+  });
+
+  it('rejects path-like and malformed note IDs before reading or updating another workspace', async () => {
+    const repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-note-boundary-'));
+    temps.push(repoRoot);
+    vi.stubEnv('HOME', repoRoot);
+    const other = await createWorkspaceNote({ repoRoot, slugKey: 'other', summary: 'private' });
+    const original = await pushWorkspaceMemo({
+      repoRoot, slugKey: 'other', noteId: other.id, body: 'original',
+    });
+    const scope = { repoRoot, slugKey: 'current' };
+    await createWorkspaceNote({ ...scope, summary: 'current' });
+    const tools = createWorkspaceNotesTools(scope);
+    const badIds = [
+      `../../other/notes/${other.id}`,
+      `..\\..\\other\\notes\\${other.id}`,
+      `/other/notes/${other.id}`,
+      `${other.id}/..`,
+      `${other.id}.json`,
+      other.id.toUpperCase(),
+      '', '.', '..', 'a'.repeat(500), '00000000-0000-0000-0000-000000000000',
+    ];
+    for (const noteId of badIds) {
+      await expect(readWorkspaceNote({ ...scope, noteId })).rejects.toThrow('Invalid note ID');
+      await expect(pushWorkspaceMemo({ ...scope, noteId, body: 'tampered' })).rejects.toThrow('Invalid note ID');
+      await expect(archiveWorkspaceNote({ ...scope, noteId, archived: true })).rejects.toThrow('Invalid note ID');
+      await expect(archiveWorkspaceMemo({ ...scope, noteId, memoId: original.id, archived: true })).rejects.toThrow('Invalid note ID');
+      await expect(tools.read_note!.execute({ noteId })).rejects.toThrow('Invalid note ID');
+      await expect(tools.push_memo!.execute({ noteId, body: 'tampered' })).rejects.toThrow('Invalid note ID');
+      await expect(tools.archive_note!.execute({ noteId, archived: true })).rejects.toThrow('Invalid note ID');
+      await expect(tools.archive_memo!.execute({ noteId, memoId: original.id, archived: true })).rejects.toThrow('Invalid note ID');
+    }
+    await expect(readWorkspaceNote({ ...scope, noteId: other.id })).rejects.toThrow('Note not found');
+    await expect(pushWorkspaceMemo({ ...scope, noteId: other.id, body: 'tampered' })).rejects.toThrow('Note not found');
+    await expect(archiveWorkspaceNote({ ...scope, noteId: other.id, archived: true })).rejects.toThrow('Note not found');
+    await expect(archiveWorkspaceMemo({ ...scope, noteId: other.id, memoId: original.id, archived: true })).rejects.toThrow('Note not found');
+    const preserved = await readWorkspaceNote({ repoRoot, slugKey: 'other', noteId: other.id });
+    expect(preserved.note.archived).toBe(false);
+    expect(preserved.memos).toMatchObject([{ id: original.id, body: 'original', archived: false }]);
   });
 });

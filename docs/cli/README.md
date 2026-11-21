@@ -12,6 +12,8 @@ worker は既定で conductor と同じ cwd を共有し、isolated worktree は
 
 conductor は `create_note` で summary 必須のノートを作り、`push_memo` でメモを追加できます。`list_notes` は summary と最新メモの冒頭を一覧し、`read_note` は既定で最新メモを返します。履歴は `includeHistory` と `historyOffset` / `historyLimit`、archive 済みメモは `includeArchived` で読めます。`archive_note` / `archive_memo` で非表示にした内容も読取可能です。Notes は workspace ごとに共有され、再開後も残ります。
 
+同じノートへの更新はプロセス間で排他し、一時ファイルから置き換えます。更新途中のプロセス終了では、完了前の更新は失われる場合があります。電源断やストレージ障害後の保存は保証されません。
+
 既定の team profile は Issue / PR を前提とする materials を含みます。Issue に依存しない run 用 profile は [#827](https://github.com/otolab/agents-ensemble/issues/827)、共通プロンプトの分離は [#828](https://github.com/otolab/agents-ensemble/issues/828) で扱います。run に適した materials を持つ profile を指定してください。
 
 ## インストール
