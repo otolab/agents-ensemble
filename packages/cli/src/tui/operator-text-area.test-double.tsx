@@ -1,6 +1,7 @@
 /**
  * ink-testing-library では `react-ink-textarea` の measureElement 連鎖が安定しないため、
  * IssueSessionTui の縦切りテストでは本番の OperatorTextArea の契約だけを再現する。
+ * 折り返しは本番と異なるため、実際の行幅や viewport の収束は PTY テストで検証する。
  */
 import React, { useEffect, useMemo, useState } from 'react';
 import { Text, useCursor, useInput, usePaste } from 'ink';
