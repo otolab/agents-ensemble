@@ -2,6 +2,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { openQuestionReport } from '../test/support/watch-state-fixture.js';
 import { emptyWatchState } from './operator-watch-state.js';
 import { loadWatchState, saveWatchState, saveWatchStateSync, withWatchStateLock } from './watch-state-store.js';
 
@@ -16,7 +17,7 @@ describe('watch state store', () => {
     root = await mkdtemp(join(tmpdir(), 'watch-store-'));
     const path = join(root, 'nested', 'state.json');
     const state = emptyWatchState();
-    state.pendingReports.push({ reportId: 'id', reportType: 'open_question', conductorAgentId: 'one', issueUrl: 'https://github.com/example/repo/issues/1', text: 'question', debounceMs: 3, readyAt: 100, arrivalOrder: 101, firstQueuedAt: 90, priority: 'open_question' });
+    state.pendingReports.push(openQuestionReport({ reportId: 'id', conductorAgentId: 'one', issueUrl: 'https://github.com/example/repo/issues/1', text: 'question', debounceMs: 3, readyAt: 100, arrivalOrder: 101, firstQueuedAt: 90 }));
     expect(await loadWatchState(path)).toEqual(emptyWatchState());
     await saveWatchState(path, state);
     expect(await loadWatchState(path)).toEqual(state);

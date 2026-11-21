@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { openQuestionReport } from '../test/support/watch-state-fixture.js';
 import {
   emptyWatchState,
   extractWatchStateForSession,
@@ -9,10 +10,10 @@ import {
   type OperatorWatchState,
 } from './operator-watch-state.js';
 
-const report = (reportId: string, conductorAgentId: string, readyAt: number): OperatorWatchState['pendingReports'][number] => ({
+const report = (reportId: string, conductorAgentId: string, readyAt: number): OperatorWatchState['pendingReports'][number] => openQuestionReport({
   reportId, conductorAgentId, readyAt,
-  reportType: 'open_question', issueUrl: 'https://github.com/example/repo/issues/1',
-  text: reportId, debounceMs: 5, arrivalOrder: readyAt, firstQueuedAt: 1, priority: 'open_question',
+  issueUrl: 'https://github.com/example/repo/issues/1',
+  text: reportId, debounceMs: 5, arrivalOrder: readyAt, firstQueuedAt: 1,
 });
 
 describe('watch state transformations', () => {
