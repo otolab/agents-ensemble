@@ -30,6 +30,7 @@
 
 ```yaml
 meta:
+  modes: [issue]
   title: 実装 + レビュー（ユーザ共通）
   summary: 小さめの PR 向け 2 者体制
 workers:
@@ -71,6 +72,8 @@ ensemble issue 42 --profile my-pair
 ensemble profiles list
 ensemble profiles list --json
 ```
+
+`meta.modes` は対応する入口を `[issue]`、`[run]` または `[issue, run]` で宣言します。省略は未指定であり、既存 profile の起動動作は変わりません。宣言は選択の目安で、異なる入口からの実行を制限しません。空配列、重複、未知の値は不正で load 時に拒否されます。一覧 text の `modes` と JSON の `modesStatus` は宣言済み・未指定・不正を区別します。
 
 各エントリの `id` は `name@source` 形式（例: `my-pair@user`）です。`workers[].workspace` が存在しない（またはディレクトリでない）profile は `availability: unusable` として表示され、`--profile` では起動できません。
 

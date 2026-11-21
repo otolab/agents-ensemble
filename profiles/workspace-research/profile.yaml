@@ -1,0 +1,34 @@
+meta:
+  modes: [run]
+  title: workspace-research
+  summary: conductor / explore / librarian — 作業場での調査と資料整理
+
+agents:
+  conductor: {}
+  explore: {}
+  librarian: {}
+
+workers:
+  - name: explore
+    kind: explore
+    modelTag: default
+  - name: librarian
+    kind: librarian
+    modelTag: default
+
+materials:
+  - id: team-common
+    title: 作業場チーム（共通）
+    file: team-common.md
+  - id: team-conductor
+    title: conductor の役割
+    file: team-conductor.md
+    kinds: [conductor]
+  - id: team-explore
+    title: explore の役割
+    file: team-explore.md
+    kinds: [explore]
+  - id: team-librarian
+    title: librarian の役割
+    file: team-librarian.md
+    kinds: [librarian]
