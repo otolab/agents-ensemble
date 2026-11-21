@@ -1,7 +1,9 @@
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
+import { fork } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SDKCustomTool } from '@cursor/sdk';
 import yaml from 'js-yaml';
@@ -52,6 +54,7 @@ import { resolveEnsemblePaths } from '../../src/ensemble-paths.js';
 import { toolCallSnapshotHistoryPath } from '../../src/session/tool-call-snapshot-history.js';
 import { TOOL_CALL_SNAPSHOT_HISTORY_TTL_MS } from '../../src/runtime/tool-call-snapshot-registry.js';
 import { permissionRequestFixtures } from '../fixtures/permission-request-fixtures.js';
+import { readWorkspaceNote } from '../../src/notes/workspace-notes-store.js';
 
 const RESUME_AGENT_ID = 'agent-resume-test';
 
@@ -200,6 +203,92 @@ describe('session resume integration', () => {
     phase = 'resume';
     expect((await runConductorSession({ ...common, resumeAgentId: RESUME_AGENT_ID })).stopReason).toBe('completed');
     expect(loadSession).toHaveBeenCalled();
+  });
+
+  it.skipIf(process.platform === 'win32')('restores an attached worker and workspace state after a process receives SIGINT', async () => {
+    const userRoot = join(repoRoot, 'user');
+    vi.stubEnv('ENSEMBLE_USER_ROOT', userRoot);
+    const fixture = fileURLToPath(new URL('./helpers/workspace-sigint-child.mjs', import.meta.url));
+    const childOptions = { env: { ...process.env, HOME: repoRoot, ENSEMBLE_USER_ROOT: userRoot }, silent: true };
+    const first = fork(fixture, ['initial', repoRoot], childOptions);
+    const children = [first];
+    const stderr: string[] = [];
+    const watchErrors = (child: typeof first) => {
+      child.stderr!.on('data', (chunk) => stderr.push(String(chunk)));
+    };
+    watchErrors(first);
+    type ChildMessage = {
+      type: string;
+      noteId: string;
+      prompts: string[];
+      stopReason: string;
+      readMemo: string;
+      loads: Array<{ sessionId: string; cwd: string }>;
+    };
+    const waitMessage = (child: typeof first, type: string): Promise<ChildMessage> => new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        child.off('message', onMessage);
+        child.off('exit', onExit);
+        reject(new Error(`timed out waiting for ${type}\n${stderr.join('')}`));
+      }, 20_000);
+      const onMessage = (value: unknown) => {
+        const message = value as ChildMessage;
+        if (message.type !== type) return;
+        clearTimeout(timeout);
+        child.off('exit', onExit);
+        child.off('message', onMessage);
+        resolve(message);
+      };
+      const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
+        clearTimeout(timeout);
+        child.off('message', onMessage);
+        reject(new Error(`child exited before ${type}: ${code}/${signal}\n${stderr.join('')}`));
+      };
+      child.on('message', onMessage);
+      child.once('exit', onExit);
+    });
+    const waitExit = (child: typeof first) => new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) =>
+      child.once('exit', (code, signal) => resolve({ code, signal })));
+    try {
+      const ready = await waitMessage(first, 'ready');
+      expect(ready.noteId).toBeTruthy();
+      expect(ready.prompts).toHaveLength(1);
+      const firstResult = waitMessage(first, 'result');
+      const firstExit = waitExit(first);
+      expect(first.kill('SIGINT')).toBe(true);
+      expect((await firstResult).stopReason).toBe('interrupted');
+      expect(await firstExit).toEqual({ code: 0, signal: null });
+
+      const path = resolveEnsemblePaths({ repoRoot })
+        .workspaceSessionResumeStorePath('sigint-workspace', 'sigint-test-agent');
+      const saved = await loadSessionResumeStore(path);
+      expect(saved).toMatchObject({
+        conductorAgentId: 'sigint-test-agent',
+        issueUrl: 'workspace://sigint-workspace',
+        lifecycle: 'interrupted',
+        harnessPhase: 'abort',
+        workers: { 'ping-1': { acpSessionId: ready.prompts[0], acpCwd: repoRoot } },
+      });
+      expect(saved!.harnessSocketPath).toBeUndefined();
+      const resumed = fork(fixture, ['resume', repoRoot, ready.noteId, ready.prompts[0]], childOptions);
+      children.push(resumed);
+      watchErrors(resumed);
+      const resumedResult = waitMessage(resumed, 'result');
+      const resumedExit = waitExit(resumed);
+      const result = await resumedResult;
+      expect(await resumedExit).toEqual({ code: 0, signal: null });
+      expect(result.stopReason).toBe('completed');
+      expect(result.readMemo).toBe('before SIGINT');
+      expect(result.loads).toContainEqual(expect.objectContaining({ sessionId: ready.prompts[0], cwd: repoRoot }));
+      const note = await readWorkspaceNote({
+        repoRoot, slugKey: 'sigint-workspace', noteId: ready.noteId, includeHistory: true,
+      });
+      expect(note.memos.map((memo) => memo.body)).toEqual(['before SIGINT', 'after resume']);
+      const after = await loadSessionResumeStore(path);
+      expect(after!.workers['ping-1']!.acpSessionId).toBe(ready.prompts[0]);
+    } finally {
+      for (const child of children) if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+    }
   });
 
   it('uses the current profile while restoring open questions and worker session/load', async () => {
