@@ -1,4 +1,5 @@
 import type { PromptModule } from '@modular-prompt/core';
+import { parseWorkspaceSessionUrl } from '../workspace-run/session-url.js';
 import type { SessionUpdateHandler } from '../acp/acp-client.js';
 import type { SpawnAcpProcessOptions } from '../acp/acp-process.js';
 import type { AcpSpawnFingerprint } from '../acp/resolve-acp-spawn.js';
@@ -80,7 +81,9 @@ export function buildWorkerAttachPrompt(
   session: WorkerAcpSession,
 ): string {
   if (session.resumed) {
-    return WORKER_RESUME_PROMPT;
+    return parseWorkspaceSessionUrl(options.issueUrl)
+      ? '前回の続きです。作業ディレクトリの最新状態を踏まえ、中断していた作業を再開してください。'
+      : WORKER_RESUME_PROMPT;
   }
   return compileWorkerAttachPrompt({
     issueUrl: session.issue.url,

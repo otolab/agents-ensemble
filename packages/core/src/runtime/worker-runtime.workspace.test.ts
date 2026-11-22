@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ConductorInbox } from '../../src/runtime/conductor-inbox.js';
 import { WorkerRuntime } from '../../src/runtime/worker-runtime.js';
+import { resolveWorkspaceIssueRef } from '../workspace-run/issue-ref.js';
 
 describe('WorkerRuntime workspace', () => {
   let repoRoot = '';
@@ -16,6 +17,35 @@ describe('WorkerRuntime workspace', () => {
       docsWorkspace = '';
     }
     vi.restoreAllMocks();
+  });
+
+  it.each([false, true])('keeps workspace attach and dispatch independent of Issue defaults (resume=%s)', async (resume) => {
+    repoRoot = mkdtempSync(join(tmpdir(), 'ensemble-workspace-worker-'));
+    const issue = resolveWorkspaceIssueRef('research');
+    const promptSession = vi.fn().mockResolvedValue({ stopReason: 'end_turn', responseText: 'ok' });
+    const runtime = new WorkerRuntime({
+      inbox: new ConductorInbox(),
+      repoRoot,
+      connectAcp: async () => ({
+        newSession: vi.fn().mockResolvedValue('sess-1'),
+        loadSession: vi.fn().mockResolvedValue(undefined),
+        promptSession,
+        close: vi.fn().mockResolvedValue(undefined),
+      }) as never,
+    });
+    runtime.start({
+      name: 'explore', kind: 'explore', issueUrl: issue.url,
+      worktree: { path: repoRoot, branch: '', issue, inRepo: true },
+      sessionState: { workers: [{ name: 'explore', kind: 'explore' }], kinds: ['explore'] },
+      ...(resume ? { resumeAcpSessionId: 'previous' } : {}),
+    });
+    await runtime.waitForIdle();
+    expect(promptSession).toHaveBeenCalledTimes(1);
+    expect(promptSession.mock.calls[0][1]).not.toMatch(/Issue|\bPR\b/);
+    expect(runtime.sendWorkerMessage('explore', '調査してください')).toMatchObject({ status: 'sent' });
+    await runtime.waitForIdle();
+    expect(promptSession.mock.calls[1][1]).toBe('調査してください');
+    await runtime.shutdown();
   });
 
   it('exposes summarized workspacePath in worker status', async () => {

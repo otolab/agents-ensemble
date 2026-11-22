@@ -26,6 +26,16 @@ describe('buildWorkerAttachPrompt', () => {
     expect(prompt).not.toContain('### User instructions (~/.ensemble/AGENTS.md)');
   });
 
+  it('builds workspace attach without Issue defaults', () => {
+    const prompt = buildWorkerAttachPrompt({
+      issueUrl: 'workspace://research', kind: 'explore', workspacePath: '/repo',
+      sessionState: { workers: [{ name: 'explore', kind: 'explore' }], kinds: ['explore'] },
+    });
+    expect(prompt).toContain('作業ディレクトリ: /repo');
+    expect(prompt).toContain('permission を要求する');
+    expect(prompt).not.toMatch(/Issue|\bPR\b/);
+  });
+
   it('places user instructions before kind-filtered profile materials', () => {
     const prompt = buildWorkerAttachPrompt({
       issueUrl: 'https://github.com/org/repo/issues/1',

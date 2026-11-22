@@ -28,7 +28,7 @@ export const runBaseModule: PromptModule<WorkspaceEnsembleContext> = {
       title: 'Source of truth',
       items: [
         '- **brief ファイルとオペレータ指示**: 初期ゴールの正本',
-        '- **Notes（ノートとメモ）**: 作業の時系列と一覧用要約（GitHub コメントの代替）',
+        '- **Notes（ノートとメモ）**: 作業の時系列と一覧用要約',
         '- **Skill**: 手順の細部の source of truth になりうるドキュメント',
       ],
     },
@@ -44,7 +44,6 @@ export const runBaseModule: PromptModule<WorkspaceEnsembleContext> = {
   methodology: [
     '- オペレータが conductor を監督する',
     '- conductor が worker 群を調整する',
-    '- GitHub Issue / PR 監視は使わない（必要ならオペレータが指示する）',
   ],
   state: [
     {
