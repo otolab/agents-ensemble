@@ -1,3 +1,4 @@
+import Ensemble.AsIs.OperatorDispatch
 import Ensemble.AsIs.ConductorQueue
 import Ensemble.AsIs.ConductorDispatchLifecycle
 
