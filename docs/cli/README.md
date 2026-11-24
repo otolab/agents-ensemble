@@ -6,6 +6,10 @@
 
 GitHub を正本にしない作業には **`ensemble run <brief>`** を使います。brief はプロンプト用ファイルのパス、`--conductor-cwd` で slug をアンカーする cwd、状態は `~/.ensemble/workspaces/<slug-key>/` に保存します。`ensemble run list` で workspace 一覧、`--continue` で同一 slug の最新 run を再開します。詳細は [ADR 0085](../adr/0085-ensemble-run-workspaces-and-notes.md)。
 
+`run` の conductor は Pi が既定で、Cursor SDK は **experimental** です。Cursor は Notes tools と選択した MCP 設定を SDK に渡しますが、実 Cursor を使う Notes・MCP・resume の一連の動作は通常 CI で検証していません。MCP は SDK と接続先に依存し、resume は現在の設定で backend 側の復元を試みるため、設定変更や保存 session の状態によって失敗し得ます。Notes は会話の復元とは別に workspace に残ります。詳細は [architecture の run backend](../architecture.md#ensemble-run-の-conductor-backend) を参照してください。
+
+`ensemble setup` で Cursor を選べても、この run の位置付けは変わりません。`ensemble doctor check` の通常の設定・認証チェックも run の動作確認ではなく、自然言語 request は Cursor backend に対応していません。profile の対応入口の宣言は backend の動作保証ではありません。
+
 同じ session は一度に一つのプロセスで実行します。別プロセスが同じ session を `--resume` / `--continue` しようとするとエラーになります。実行中のプロセスを終了してから再試行してください。異常終了した場合も、プロセス終了時に OS が lock を解放します。SQLite の file locking が機能するローカル filesystem が必要です。
 
 ライブラリから実行する場合、後始末や保存の完了を確認できなかった session の lock は、そのプロセスが終了するまで保持されます。強制停止時に worker の接続・load・再作成や close が進行中、または close が失敗した場合も、旧 worker の停止を確認できないため保持します。強制停止時の close は最長 1 秒で待機を打ち切り、完了を確認できない場合は同様に保持します。同じ session を再開するにはプロセスを再起動してください。旧バージョンや直接ファイルを書き換える外部ツールは lock に参加しません。これらのツールは session の停止中に実行してください。
@@ -82,9 +86,9 @@ Pi は headless の `createAgentSession` を使い、Pi CLI の `<cwd>/.pi/` 設
 
 headless conductor の設定キーと create / reload / resume の適用範囲は [config.md の headless 対応範囲](https://github.com/otolab/agents-ensemble/blob/main/docs/config.md#settingsjson-の-headless-対応範囲) を参照してください。
 
-Pi の MCP transport、OAuth、resource tools、resume 時の制約は [ADR 0025](https://github.com/otolab/agents-ensemble/blob/main/docs/adr/0025-conductor-agent-backend-sdk-and-pi.md) にまとめています。
+Pi の MCP transport、OAuth、resource tools と現行の resume 動作は [architecture](../architecture.md) を参照してください。
 
-backend はセッション開始時に選択され、resume の途中では切り替えられません。system prompt の渡し方、認証、resume の差分は [ADR 0025](../adr/0025-conductor-agent-backend-sdk-and-pi.md) にまとまっています。
+resume は現在の backend 設定で復元を試みます。保存時と backend が異なる場合は通知されますが、backend 間の session 互換性は保証されません。system prompt と認証の差分は [ADR 0025](../adr/0025-conductor-agent-backend-sdk-and-pi.md)、現行の resume 動作は [architecture](../architecture.md) を参照してください。
 
 backend を選んだ後の主経路は共通です。リポジトリのディレクトリで、対象 Issue を同じ `ensemble issue <url>` コマンドに渡します。
 
