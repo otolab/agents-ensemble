@@ -1,8 +1,52 @@
 import { describe, expect, it, vi } from 'vitest';
 import { DEFAULT_ENSEMBLE_CONFIG } from '@agents-ensemble/core';
 import { executeRunCommand, resolveRunResumeAgentId, runCommandExitCode } from './run-command.js';
+import { DatabaseSync } from 'node:sqlite';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 describe('run-command', () => {
+  it('holds the migration gate from slug resolution through session startup', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'ensemble-run-gate-'));
+    vi.stubEnv('ENSEMBLE_USER_ROOT', root);
+    let gateWasHeld = false;
+    try {
+      await executeRunCommand({ repoRoot: root, conductorCwd: root, briefPath: 'brief.md' }, {
+        resolveWorkspaceSlugKey: vi.fn().mockImplementation(async () => {
+          const database = new DatabaseSync(join(root, 'session-locks', 'migration.sqlite'));
+          try {
+            database.exec('PRAGMA busy_timeout = 0');
+            expect(() => database.exec('BEGIN EXCLUSIVE')).toThrow();
+            gateWasHeld = true;
+          } finally {
+            database.close();
+          }
+          return 'old';
+        }),
+        readBriefFile: vi.fn().mockResolvedValue('brief'),
+        loadEnsembleConfig: vi.fn().mockResolvedValue(DEFAULT_ENSEMBLE_CONFIG),
+        loadProfile: vi.fn().mockResolvedValue({ profile: { workers: [] }, profilePath: '/tmp/profile.yaml' }),
+        isOperatorInputInteractive: () => false,
+        isOperatorInputTty: () => false,
+        isOperatorRecoveryInspectionTty: () => false,
+        runConductorSession: vi.fn().mockResolvedValue({ stopReason: 'complete' }),
+        SessionLogger: vi.fn().mockImplementation(() => ({ subscribe: vi.fn(), emit: vi.fn() })),
+      });
+      expect(gateWasHeld).toBe(true);
+      const database = new DatabaseSync(join(root, 'session-locks', 'migration.sqlite'));
+      try {
+        database.exec('BEGIN EXCLUSIVE');
+        database.exec('ROLLBACK');
+      } finally {
+        database.close();
+      }
+    } finally {
+      vi.unstubAllEnvs();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('passes the selected bundled profile to the workspace session', async () => {
     const runConductorSession = vi.fn().mockResolvedValue({ stopReason: 'complete' });
     const SessionLogger = vi.fn().mockImplementation(() => ({

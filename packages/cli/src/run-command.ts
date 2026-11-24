@@ -16,6 +16,7 @@ import {
   type ConductorSessionResult,
   type EnsembleConfig,
   listWorkspaceSlugEntries,
+  acquireSessionMigrationReadLock,
 } from '@agents-ensemble/core';
 import { bindAsyncOperatorInput, notifyOperatorInputReprompt } from './async-operator-input.js';
 import {
@@ -138,6 +139,18 @@ export async function resolveRunResumeAgentId(
 export async function executeRunCommand(
   options: RunCommandOptions,
   deps: RunCommandDeps = {},
+): Promise<ConductorSessionResult> {
+  const release = await acquireSessionMigrationReadLock();
+  try {
+    return await executeRunCommandWithGate(options, deps);
+  } finally {
+    release();
+  }
+}
+
+async function executeRunCommandWithGate(
+  options: RunCommandOptions,
+  deps: RunCommandDeps,
 ): Promise<ConductorSessionResult> {
   const isInteractive =
     deps.isOperatorInputInteractive ?? isOperatorInputInteractive;

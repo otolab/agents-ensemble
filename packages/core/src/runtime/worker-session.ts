@@ -42,6 +42,7 @@ export interface WorkerSessionOptions {
         acpCwd?: string;
         acpSpawn?: AcpSpawnFingerprint;
         handoffPending?: boolean;
+        recreateRequired?: boolean;
       }
   >;
   connectAcp?: ConnectWorkerAcpFn;
@@ -161,6 +162,7 @@ export class WorkerSession {
         expectedResumeAcpSpawn,
         resumeAcpSessionId,
         handoffPending: typeof restored === 'object' && restored?.handoffPending === true,
+        recreateRequired: typeof restored === 'object' && restored?.recreateRequired === true,
         spawn: worker.spawn,
         acpFingerprint: worker.acpFingerprint,
       }, {
