@@ -31,6 +31,7 @@ Lean 名はすべて `Ensemble.AsIs.OperatorDispatch` の配下。共有 settle 
 - report type は、選択に使う `question`、priority、weight に射影する。priority の 0 / 1 / 2 は open question / normal / idle。enqueue 時に TS が決定する既定 priority、report type ごとの weight、focus の期限切れ後の値は呼び出し側が与える。本文は選択に使わないため保持せず、UTF-8 byte 数、空白判定、batch ID、整形済み payload を与える。payload は凍結後に保持する。
 - selection reason、deadline reason、eligibility は scheduling event の診断出力に使われ、後続の選択や hold・retry の制御には使われないため省略する。`usedContinuation` は次の選択に影響するため保持し、`isBatchCurrent` の成功時も更新する。focus 操作と timeout の時計は対象 queue 操作の外から反映する。
 - `/recovery` の構文解析、本文表示、snapshot 容量・期限の計算は外部に置く。list で表示した attempt と continue の原子的照合、clear が attention を解除しないことはモデル化する。snapshot の固定 prefix は共有 inbox モデルと同じく attempt ID に射影する。
+- send 後の共有 settle が例外を返した場合は、それまでの inbox / lifecycle の状態を保持し runner を終了する。停止後の send・reconnect の開始や recovery 操作は進まない。commit 待ちの停止・例外、send 待ちの中断、retry 保存待ちの停止・例外、ack の停止・枯渇もそれぞれの時点で終了する。
 - ack の保存が成功したときだけ、同じ ID の pending / held / request / in-flight / retry index を取り除く。停止・枯渇では再 send や conversation hold の解除を行わない。durable state の内容と再起動後の重複配信は別 process の扱いとして抽象化する。
 
 `#guard` は主な分岐の期待値を検査し、`#eval` は user 入力と send 完了、`/resume-watch`、手動 hold の併用、send 失敗後の reconnect を評価する。性質全体の検査と反例記録は #859 の対象である。
