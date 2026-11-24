@@ -1207,7 +1207,7 @@ export const sessionSidecarPath = sessionResumeStorePath;
 /** @deprecated Use loadSessionResumeStore; supported for one release only. */
 export const loadSessionSidecar = loadSessionResumeStore;
 
-function parseSessionResumeStore(value: unknown): SessionResumeStore {
+export function parseSessionResumeStore(value: unknown): SessionResumeStore {
   if (!value || typeof value !== 'object') {
     throw new Error('Invalid session resume store: not an object');
   }

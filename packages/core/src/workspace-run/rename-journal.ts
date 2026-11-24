@@ -1,11 +1,12 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { lstat, mkdir, open, readFile, readdir, rename, rm } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
-import { loadSessionResumeStore, WORKSPACE_RENAME_SESSION_RESUME_STORE_VERSION } from '../session/session-resume-store.js';
+import { parseSessionResumeStore, WORKSPACE_RENAME_SESSION_RESUME_STORE_VERSION } from '../session/session-resume-store.js';
 import { assertValidSlugKey, workspaceAnchorPath } from './slug-key.js';
 
 interface Entry { name: string; before: string; after: string }
 interface Journal { version: 1; from: string; to: string; cwd: string; anchorBefore: string | null; anchorAfter: string; stores: Entry[] }
+interface JournalEnvelope { journal: Journal; sha256: string }
 
 export function renameJournalPath(userRoot: string): string {
   return join(userRoot, 'session-locks', 'workspace-rename.json');
@@ -49,6 +50,46 @@ function checkKeys(value: Record<string, unknown>, allowed: Set<string>, descrip
   for (const key of Object.keys(value)) if (!allowed.has(key)) throw new Error(`Unknown ${description} field "${key}"; rename refused.`);
 }
 
+function migratedStore(before: string, name: string, from: string, to: string): string {
+  const value: unknown = JSON.parse(before);
+  const parsed = parseSessionResumeStore(value);
+  if (parsed.issueUrl !== `workspace://${from}` || name !== `${parsed.conductorAgentId}.json` || basename(parsed.conductorAgentId) !== parsed.conductorAgentId) {
+    throw new Error(`Session identity does not match workspace: ${name}`);
+  }
+  const raw = value as Record<string, unknown>;
+  checkKeys(raw, rootKeys, 'session store');
+  const workers = raw.workers as Record<string, Record<string, unknown>>;
+  for (const worker of Object.values(workers)) {
+    checkKeys(worker, workerKeys, 'worker');
+    if (typeof worker.acpSessionId !== 'string' || !worker.acpSessionId.trim()) {
+      throw new Error(`Session ${name} has an invalid worker session ID.`);
+    }
+    for (const key of ['repoRoot', 'issueUrl', 'acpCwd', 'originAcpCwd'] as const) {
+      if (worker[key] !== undefined && (typeof worker[key] !== 'string' || !worker[key].trim())) {
+        throw new Error(`Session ${name} has an invalid worker ${key}.`);
+      }
+    }
+    for (const key of ['acpSpawn', 'originAcpSpawn'] as const) {
+      const spawn = worker[key];
+      if (spawn && typeof spawn === 'object') checkKeys(spawn as Record<string, unknown>, spawnKeys, 'ACP spawn');
+    }
+    for (const generation of (worker.generations as Record<string, unknown>[] | undefined) ?? []) {
+      checkKeys(generation, generationKeys, 'worker generation');
+      if (generation.acpSpawn && typeof generation.acpSpawn === 'object') checkKeys(generation.acpSpawn as Record<string, unknown>, spawnKeys, 'ACP spawn');
+    }
+    if (worker.handoffPending === true) throw new Error(`Session ${name} has a pending worker handoff; finish it before rename.`);
+    worker.repoRoot ??= raw.repoRoot;
+    worker.issueUrl ??= raw.issueUrl;
+    worker.recreateRequired = true;
+  }
+  raw.version = WORKSPACE_RENAME_SESSION_RESUME_STORE_VERSION;
+  raw.issueUrl = `workspace://${to}`;
+  const after = `${JSON.stringify(raw, null, 2)}\n`;
+  const migrated = parseSessionResumeStore(JSON.parse(after));
+  if (migrated.issueUrl !== `workspace://${to}` || migrated.conductorAgentId !== parsed.conductorAgentId) throw new Error(`Invalid migrated session identity: ${name}`);
+  return after;
+}
+
 export async function prepareRenameJournal(input: { userRoot: string; cwd: string; from: string; to: string }): Promise<Journal> {
   await assertNoRenameJournal(input.userRoot);
   const source = join(input.userRoot, 'workspaces', input.from);
@@ -58,41 +99,14 @@ export async function prepareRenameJournal(input: { userRoot: string; cwd: strin
   for (const entry of await readdir(source, { withFileTypes: true })) {
     if (!entry.name.endsWith('.json')) continue;
     if (!entry.isFile()) throw new Error(`Unsupported workspace session store: ${entry.name}`);
-    const path = join(source, entry.name);
-    const before = await readFile(path, 'utf8');
-    const parsed = await loadSessionResumeStore(path);
-    if (!parsed || parsed.issueUrl !== `workspace://${input.from}` || entry.name !== `${parsed.conductorAgentId}.json` || basename(parsed.conductorAgentId) !== parsed.conductorAgentId) {
-      throw new Error(`Session identity does not match workspace: ${entry.name}`);
+    const before = await readFile(join(source, entry.name), 'utf8');
+    let after: string;
+    try {
+      after = migratedStore(before, entry.name, input.from, input.to);
+    } catch (error) {
+      throw new Error(`Invalid session resume store: ${entry.name}: ${String(error)}`, { cause: error });
     }
-    const raw = JSON.parse(before) as Record<string, unknown>;
-    checkKeys(raw, rootKeys, 'session store');
-    const workers = raw.workers as Record<string, Record<string, unknown>>;
-    for (const worker of Object.values(workers)) {
-      checkKeys(worker, workerKeys, 'worker');
-      if (typeof worker.acpSessionId !== 'string' || !worker.acpSessionId.trim()) {
-        throw new Error(`Session ${entry.name} has an invalid worker session ID.`);
-      }
-      for (const key of ['repoRoot', 'issueUrl', 'acpCwd', 'originAcpCwd'] as const) {
-        if (worker[key] !== undefined && (typeof worker[key] !== 'string' || !worker[key].trim())) {
-          throw new Error(`Session ${entry.name} has an invalid worker ${key}.`);
-        }
-      }
-      for (const key of ['acpSpawn', 'originAcpSpawn'] as const) {
-        const spawn = worker[key];
-        if (spawn && typeof spawn === 'object') checkKeys(spawn as Record<string, unknown>, spawnKeys, 'ACP spawn');
-      }
-      for (const generation of (worker.generations as Record<string, unknown>[] | undefined) ?? []) {
-        checkKeys(generation, generationKeys, 'worker generation');
-        if (generation.acpSpawn && typeof generation.acpSpawn === 'object') checkKeys(generation.acpSpawn as Record<string, unknown>, spawnKeys, 'ACP spawn');
-      }
-      if (worker.handoffPending === true) throw new Error(`Session ${entry.name} has a pending worker handoff; finish it before rename.`);
-      worker.repoRoot ??= raw.repoRoot;
-      worker.issueUrl ??= raw.issueUrl;
-      worker.recreateRequired = true;
-    }
-    raw.version = WORKSPACE_RENAME_SESSION_RESUME_STORE_VERSION;
-    raw.issueUrl = `workspace://${input.to}`;
-    stores.push({ name: entry.name, before, after: `${JSON.stringify(raw, null, 2)}\n` });
+    stores.push({ name: entry.name, before, after });
   }
   const anchorPath = workspaceAnchorPath(input.cwd);
   const anchorInfo = await lstat(anchorPath).catch((error: NodeJS.ErrnoException) => { if (error.code === 'ENOENT') return undefined; throw error; });
@@ -106,7 +120,9 @@ export async function prepareRenameJournal(input: { userRoot: string; cwd: strin
 }
 
 export async function publishRenameJournal(userRoot: string, journal: Journal): Promise<void> {
-  await atomicWrite(renameJournalPath(userRoot), `${JSON.stringify(journal)}\n`);
+  const serialized = JSON.stringify(journal);
+  const envelope: JournalEnvelope = { journal, sha256: createHash('sha256').update(serialized).digest('hex') };
+  await atomicWrite(renameJournalPath(userRoot), `${JSON.stringify(envelope)}\n`);
 }
 
 export async function applyRenameJournal(userRoot: string, journal: Journal): Promise<void> {
@@ -121,10 +137,36 @@ export async function applyRenameJournal(userRoot: string, journal: Journal): Pr
 export async function rollbackRenameJournal(userRoot: string): Promise<void> {
   const path = renameJournalPath(userRoot);
   const raw = await readFile(path, 'utf8');
-  const journal = JSON.parse(raw) as Journal;
+  const envelope = JSON.parse(raw) as JournalEnvelope;
+  if (!envelope || typeof envelope !== 'object' || Object.keys(envelope).sort().join(',') !== 'journal,sha256' ||
+      typeof envelope.sha256 !== 'string' || !/^[a-f0-9]{64}$/u.test(envelope.sha256) ||
+      createHash('sha256').update(JSON.stringify(envelope.journal) ?? '').digest('hex') !== envelope.sha256) {
+    throw new Error('Rename journal integrity check failed; manual inspection required.');
+  }
+  const journal = envelope.journal;
   if (!journal || journal.version !== 1 || typeof journal.from !== 'string' || typeof journal.to !== 'string' || typeof journal.cwd !== 'string' || !isAbsolute(journal.cwd) || !Array.isArray(journal.stores) || (journal.anchorBefore !== null && typeof journal.anchorBefore !== 'string') || typeof journal.anchorAfter !== 'string') throw new Error('Invalid rename journal; manual inspection required.');
   assertValidSlugKey(journal.from); assertValidSlugKey(journal.to);
   if (journal.from === journal.to || journal.anchorAfter !== `${JSON.stringify({ slug: journal.to }, null, 2)}\n`) throw new Error('Invalid rename journal identity.');
+  if (Object.keys(journal).sort().join(',') !== 'anchorAfter,anchorBefore,cwd,from,stores,to,version') throw new Error('Invalid rename journal fields.');
+  if (journal.anchorBefore !== null) {
+    const anchorBefore: unknown = JSON.parse(journal.anchorBefore);
+    if (!anchorBefore || typeof anchorBefore !== 'object' || Array.isArray(anchorBefore) ||
+        Object.keys(anchorBefore).join(',') !== 'slug' || (anchorBefore as { slug?: unknown }).slug !== journal.from) {
+      throw new Error('Invalid rename journal anchor snapshot.');
+    }
+  }
+  const names = new Set<string>();
+  for (const entry of journal.stores) {
+    if (!entry || typeof entry !== 'object' || Object.keys(entry).sort().join(',') !== 'after,before,name' ||
+        typeof entry.name !== 'string' || basename(entry.name) !== entry.name || !entry.name.endsWith('.json') ||
+        names.has(entry.name) || typeof entry.before !== 'string' || typeof entry.after !== 'string') {
+      throw new Error('Invalid rename journal store entry.');
+    }
+    names.add(entry.name);
+    if (migratedStore(entry.before, entry.name, journal.from, journal.to) !== entry.after) {
+      throw new Error(`Invalid rename journal migration snapshots: ${entry.name}`);
+    }
+  }
   const source = join(userRoot, 'workspaces', journal.from);
   const target = join(userRoot, 'workspaces', journal.to);
   const sourceInfo = await lstat(source).catch((error: NodeJS.ErrnoException) => { if (error.code === 'ENOENT') return undefined; throw error; });

@@ -1,10 +1,11 @@
 import { mkdtemp, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { acquireSessionMigrationReadLock } from '../session/session-owner-lock.js';
 import { loadSessionResumeStore } from '../session/session-resume-store.js';
-import { applyRenameJournal, prepareRenameJournal, publishRenameJournal, rollbackRenameJournal } from './rename-journal.js';
+import { applyRenameJournal, prepareRenameJournal, publishRenameJournal, renameJournalPath, rollbackRenameJournal } from './rename-journal.js';
 import { readWorkspaceAnchor, writeWorkspaceAnchor } from './slug-key.js';
 
 const temps: string[] = [];
@@ -54,6 +55,100 @@ describe('workspace rename journal', () => {
     await expect(rollbackRenameJournal(f.userRoot)).rejects.toThrow('automatic recovery refused');
     expect(await readFile(join(f.source, 'a.json'), 'utf8')).toBe(journal.stores.find((s) => s.name === 'a.json')!.before);
     expect(await readFile(join(f.source, 'b.json'), 'utf8')).toBe('external edit');
+  });
+
+  it.each([
+    'before corrupt',
+    'after corrupt',
+    'before identity',
+    'after identity',
+    'anchor before',
+    'anchor after',
+    'inventory',
+    'duplicate inventory',
+  ])('rejects invalid journal %s without changing any data', async (kind) => {
+    const f = await fixture(); const journal = await prepareRenameJournal(f.input);
+    await publishRenameJournal(f.userRoot, journal);
+    // Exercise the reviewer's reproduction: the current store is the after snapshot.
+    await writeFile(join(f.source, 'a.json'), journal.stores[0]!.after);
+    const path = renameJournalPath(f.userRoot);
+    const envelope = JSON.parse(await readFile(path, 'utf8'));
+    const saved = envelope.journal;
+    switch (kind) {
+      case 'before corrupt': saved.stores[0].before = 'not-json'; break;
+      case 'after corrupt': saved.stores[0].after = 'not-json'; break;
+      case 'before identity': {
+        const before = JSON.parse(saved.stores[0].before); before.issueUrl = 'workspace://other';
+        saved.stores[0].before = JSON.stringify(before); break;
+      }
+      case 'after identity': {
+        const after = JSON.parse(saved.stores[0].after); after.conductorAgentId = 'other';
+        saved.stores[0].after = `${JSON.stringify(after, null, 2)}\n`; break;
+      }
+      case 'anchor before': saved.anchorBefore = '{"slug":"other"}'; break;
+      case 'anchor after': saved.anchorAfter = '{"slug":"other"}'; break;
+      case 'inventory': saved.stores.pop(); break;
+      case 'duplicate inventory': saved.stores.push(saved.stores[0]); break;
+    }
+    // A valid checksum does not replace schema, identity, or inventory validation.
+    envelope.sha256 = createHash('sha256').update(JSON.stringify(saved)).digest('hex');
+    const damaged = JSON.stringify(envelope);
+    await writeFile(path, damaged);
+    const beforeA = await readFile(join(f.source, 'a.json'), 'utf8');
+    const beforeB = await readFile(join(f.source, 'b.json'), 'utf8');
+    const anchor = await readFile(join(f.cwd, '.ensemble', 'workspace.json'), 'utf8');
+    await expect(rollbackRenameJournal(f.userRoot)).rejects.toThrow();
+    expect(await readFile(join(f.source, 'a.json'), 'utf8')).toBe(beforeA);
+    expect(await readFile(join(f.source, 'b.json'), 'utf8')).toBe(beforeB);
+    expect(await readFile(join(f.cwd, '.ensemble', 'workspace.json'), 'utf8')).toBe(anchor);
+    expect(await readFile(path, 'utf8')).toBe(damaged);
+  });
+
+  it('rejects a modified backup with an unchanged checksum', async () => {
+    const f = await fixture(); const journal = await prepareRenameJournal(f.input);
+    await publishRenameJournal(f.userRoot, journal);
+    await writeFile(join(f.source, 'a.json'), journal.stores[0]!.after);
+    const path = renameJournalPath(f.userRoot);
+    const envelope = JSON.parse(await readFile(path, 'utf8'));
+    envelope.journal.stores[0].before = 'not-json';
+    const damaged = JSON.stringify(envelope);
+    await writeFile(path, damaged);
+    await expect(rollbackRenameJournal(f.userRoot)).rejects.toThrow('integrity check failed');
+    expect(await readFile(join(f.source, 'a.json'), 'utf8')).toBe(journal.stores[0]!.after);
+    expect(await readFile(path, 'utf8')).toBe(damaged);
+  });
+
+  it('preserves an older journal without a checksum for manual inspection', async () => {
+    const f = await fixture(); const journal = await prepareRenameJournal(f.input);
+    await publishRenameJournal(f.userRoot, journal);
+    const path = renameJournalPath(f.userRoot);
+    const legacy = JSON.stringify(journal);
+    await writeFile(path, legacy);
+    await expect(rollbackRenameJournal(f.userRoot)).rejects.toThrow('integrity check failed');
+    expect(await readFile(path, 'utf8')).toBe(legacy);
+    for (const entry of journal.stores) expect(await readFile(join(f.source, entry.name), 'utf8')).toBe(entry.before);
+  });
+
+  it('retries recovery after some original snapshots have already been restored', async () => {
+    const f = await fixture(); const journal = await prepareRenameJournal(f.input);
+    await publishRenameJournal(f.userRoot, journal);
+    await writeFile(join(f.source, 'b.json'), journal.stores[1]!.after);
+    await rollbackRenameJournal(f.userRoot);
+    for (const entry of journal.stores) expect(await readFile(join(f.source, entry.name), 'utf8')).toBe(entry.before);
+  });
+
+  it('recovers a workspace that had no anchor before the rename', async () => {
+    const f = await fixture();
+    const anchor = join(f.cwd, '.ensemble', 'workspace.json');
+    await rm(anchor);
+    const journal = await prepareRenameJournal(f.input);
+    await publishRenameJournal(f.userRoot, journal);
+    for (const entry of journal.stores) await writeFile(join(f.source, entry.name), entry.after);
+    await rename(f.source, f.target);
+    await writeFile(anchor, journal.anchorAfter);
+    await rollbackRenameJournal(f.userRoot);
+    await expect(readFile(anchor, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    for (const entry of journal.stores) expect(await readFile(join(f.source, entry.name), 'utf8')).toBe(entry.before);
   });
 
   it('refuses an unsupported field and pending handoff before publishing anything', async () => {
