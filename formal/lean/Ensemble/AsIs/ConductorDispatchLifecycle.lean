@@ -12,7 +12,7 @@
 | `settleSend`, `settleReconnect`, `setAgentAvailable`, `confirmRecovery`, `wake` | `Lifecycle.settleSend`, `Lifecycle.settleReconnect`, `Lifecycle.setAgentAvailable`, `Lifecycle.confirmRecovery`, `Lifecycle.wake` |
 | `settleConductorDispatch` | `settleConductorDispatch` |
 
-本文や metadata は lifecycle の分岐に影響しないため保持しない。容量・時刻・予約管理・snapshot の詳細は inbox の責務なので、release の試行と commit の結果を表し、snapshot の存在を表す結果と更新を区別する。release が実際に予約を削除したか、commit 内の期限切れ snapshot の削除は inbox の責務として扱う。失敗分類は classifyConductorRecoveryFailure の結果を入力として受け取る。入力の有無と byte 上限超過も外部入力とする。これらの入力は実際の inbox と整合するよう呼び出し側が与える必要がある。通知 listener の実行と例外はモデル化せず、`wake` は状態を変えない。token は一意な自然数として表し、呼び出し側が新しい token を供給する。TS の symbol の同一性は id とは別に照合する。
+本文と metadata は lifecycle の分岐に影響しないため保持しない。inbox は snapshot の recovery ID を attempt ID で表した一覧として保持する。固定 prefix の付加は単射なので重複判定に必要な区別は失われない。複数件の存在を保持し、期限切れ・明示削除は外部から指定した ID を取り除く。commit は予約の検証成功後に期限切れを削除し、重複を検査する TS の順序を再現する。時刻・容量・本文・予約の詳細は inbox の責務として抽象化し、呼び出し側は期限切れ ID と commit の予約検証結果を実際の inbox に整合させる。release が予約を削除したかは追跡しない。失敗分類、入力の有無、byte 上限超過も外部入力とする。通知 listener の実行と例外はモデル化せず、`wake` は状態を変えない。token は一意な自然数として表し、呼び出し側が新しい token を供給する。TS の symbol の同一性は id とは別に照合する。
 -/
 
 namespace Ensemble.AsIs.ConductorDispatchLifecycle
@@ -136,10 +136,17 @@ inductive SendStatus where
   | finished | completed | running | other
   deriving Repr, DecidableEq, BEq
 
-/-- inbox commit の外部結果。duplicate は commit 内で例外になる。 -/
-inductive CommitResult where
-  | committed | rejected | duplicate
-  deriving Repr, DecidableEq, BEq
+/-- snapshot の attempt ID を保持する inbox の抽象状態。 -/
+structure Inbox where
+  snapshots : List String := []
+  deriving Repr, DecidableEq, BEq, Inhabited
+
+/-- 期限切れまたは明示削除された ID を外部から反映する。 -/
+def Inbox.remove (inbox : Inbox) (ids : List String) : Inbox :=
+  { snapshots := inbox.snapshots.filter (fun id => !ids.contains id) }
+
+/-- snapshot が一件以上残っているかを返す。 -/
+def Inbox.hasSnapshot (inbox : Inbox) : Bool := !inbox.snapshots.isEmpty
 
 /-- 共通 settle が inbox に対して行った操作。 -/
 inductive InboxEffect where
@@ -162,7 +169,8 @@ structure SettlementInput where
   hasOperatorInput : Bool := false
   inputTooLarge : Bool := false
   captureFailure : Bool := true
-  commitResult : CommitResult := .committed
+  commitValid : Bool := true
+  expired : List String := []
   agentAvailable : Option Bool := none
   requiresConfirmation : Option Bool := none
   deriving Repr, DecidableEq, BEq
@@ -171,32 +179,37 @@ structure SettlementInput where
 structure SettlementResult where
   lifecycle : Lifecycle
   inboxEffect : InboxEffect
+  inbox : Inbox
   result : Except SettlementError Bool
   failureClass : Option FailureClass := none
+  /-- 正常 return に snapshot summary が含まれるか。保持状態は inbox にある。 -/
   snapshot : Bool := false
   deriving Repr
 
 /-- 共通 settle の inbox 操作と lifecycle 更新を TS の順序で実行する。 -/
-def settleConductorDispatch (s : Lifecycle) (i : SettlementInput) : SettlementResult := Id.run do
+def settleConductorDispatch (s : Lifecycle) (i : SettlementInput) (initialInbox : Inbox := {}) : SettlementResult := Id.run do
   let completed := i.status == .finished || i.status == .completed ||
     (i.workflow == .issue && i.status == .running)
   let mut effect := InboxEffect.none
+  let mut inbox := initialInbox
   if completed then
     if i.hasInbox && i.hasReservation then effect := .releaseAttempted
   else if i.captureFailure && i.hasOperatorInput then
     if !i.hasInbox || !i.hasReservation then
-      return ⟨s, effect, .error .missingReservation, none, false⟩
-    if i.inputTooLarge then return ⟨s, effect, .error .inputTooLarge, none, false⟩
-    match i.commitResult with
-    | .rejected => return ⟨s, effect, .error .commitRejected, none, false⟩
-    | .duplicate => return ⟨s, effect, .error .duplicateSnapshot, none, false⟩
-    | .committed => effect := .committed
+      return ⟨s, effect, inbox, .error .missingReservation, none, false⟩
+    if i.inputTooLarge then return ⟨s, effect, inbox, .error .inputTooLarge, none, false⟩
+    if !i.commitValid then return ⟨s, effect, inbox, .error .commitRejected, none, false⟩
+    inbox := inbox.remove i.expired
+    if inbox.snapshots.contains i.lease.attemptId then
+      return ⟨s, effect, inbox, .error .duplicateSnapshot, none, false⟩
+    inbox := { snapshots := inbox.snapshots ++ [i.lease.attemptId] }
+    effect := .committed
   else if i.hasInbox && i.hasReservation then effect := .releaseAttempted
   let outcome : SendOutcome := if completed then ⟨true, none, none, none⟩ else
     ⟨false, some i.failureClass, i.agentAvailable, i.requiresConfirmation⟩
   match s.settleSend i.lease outcome with
-  | .error _ => return ⟨s, effect, .error .inactiveLease, none, false⟩
-  | .ok next => return ⟨next, effect, .ok completed,
+  | .error _ => return ⟨s, effect, inbox, .error .inactiveLease, none, false⟩
+  | .ok next => return ⟨next, effect, inbox, .ok completed,
       if completed then none else some i.failureClass, effect == .committed⟩
 
 /-! 代表的な操作列。`decide` は実行可能な定義の結果をカーネルで確認する。 -/
@@ -301,6 +314,43 @@ def settleConductorDispatch (s : Lifecycle) (i : SettlementInput) : SettlementRe
     let i : SettlementInput := { lease := { lease.get! with token := 2 }, workflow := .issue, status := .other, failureClass := .transport, hasInbox := true, hasReservation := true, hasOperatorInput := true }
     let result := settleConductorDispatch s i
     (result.inboxEffect, result.lifecycle.state) = (.committed, .inFlight)
+))
+
+/- 失敗時の snapshot は確認後も、次の send 成功後も inbox に残る。 -/
+#guard (decide (
+  let (s, lease) := ({} : Lifecycle).beginSend 1
+  let failed := settleConductorDispatch s { lease := lease.get!, workflow := .issue, status := .other, failureClass := .transport, hasInbox := true, hasReservation := true, hasOperatorInput := true }
+  let (confirmed, ok) := failed.lifecycle.confirmRecovery (some "1")
+  let (next, nextLease) := confirmed.beginSend 2
+  let completed := settleConductorDispatch next { lease := nextLease.get!, workflow := .issue, status := .completed, failureClass := .transport, hasInbox := true, hasReservation := true } failed.inbox
+  (ok, completed.lifecycle.canDispatch, completed.inbox.snapshots) = (true, true, ["1"])
+))
+
+/- stale lease による例外後も commit 済み snapshot は次の操作に渡る。 -/
+#guard (decide (
+  let (s, lease) := ({} : Lifecycle).beginSend 1
+  let stale := { lease.get! with token := 2 }
+  let failed := settleConductorDispatch s { lease := stale, workflow := .issue, status := .other, failureClass := .transport, hasInbox := true, hasReservation := true, hasOperatorInput := true }
+  let completed := settleConductorDispatch failed.lifecycle { lease := lease.get!, workflow := .issue, status := .completed, failureClass := .transport } failed.inbox
+  (failed.inbox.hasSnapshot, completed.inbox.snapshots, completed.lifecycle.canDispatch,
+    match failed.result with | .error .inactiveLease => true | _ => false) = (true, ["1"], true, true)
+))
+
+/- 複数件のうち期限切れだけを prune し、duplicate 例外後も結果を保持する。 -/
+#guard (decide (
+  let (s, lease) := ({} : Lifecycle).beginSend 1
+  let input : SettlementInput := { lease := lease.get!, workflow := .issue, status := .other, failureClass := .transport, hasInbox := true, hasReservation := true, hasOperatorInput := true, expired := ["old"] }
+  let failed := settleConductorDispatch s input { snapshots := ["old", "1", "other"] }
+  let remaining := failed.inbox.remove ["1"]
+  (failed.inbox.snapshots, remaining.hasSnapshot, (remaining.remove ["other"]).hasSnapshot,
+    match failed.result with | .error .duplicateSnapshot => true | _ => false) = (["1", "other"], true, false, true)
+))
+
+/- commit の予約検証失敗は prune より前なので既存 snapshot を変えない。 -/
+#guard (decide (
+  let (s, lease) := ({} : Lifecycle).beginSend 1
+  let failed := settleConductorDispatch s { lease := lease.get!, workflow := .issue, status := .other, failureClass := .transport, hasInbox := true, hasReservation := true, hasOperatorInput := true, commitValid := false, expired := ["old"] } { snapshots := ["old"] }
+  failed.inbox.snapshots = ["old"]
 ))
 
 /- 初期状態を評価できることを確認する。 -/
