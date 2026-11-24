@@ -263,7 +263,7 @@ resume 時に legacy 情報を除去する `requireSessionResumeStoreForResume` 
 
 Pi conductor history は Issue の canonical slug または workspace の保存先を読み、resume・history list・export で同じ確定済み transcript を参照します。legacy hash / project transcript は runtime で探索・コピーせず、migration tool が特定できたものだけを明示的に copy します。
 
-Pi conductor の workspace transcript は `~/.ensemble/workspaces/<slug>/pi/` に保存します（`ENSEMBLE_USER_ROOT` 指定時はその配下）。Issue の保存先は従来どおりです。旧 v1 transcript は最初の履歴取得・export・再開時に原本を残して移行済みコピーを確定し、以後の履歴 cursor と再開で同じ entry ID を使います。再開の初期化が失敗した場合は、原本と直前の確定先を維持します。保存先に同じ session ID が重複する場合や、破損・cwd 不一致を検出した場合は処理を中止します。
+Pi conductor の workspace transcript は `~/.ensemble/workspaces/<slug>/pi/` に保存します（`ENSEMBLE_USER_ROOT` 指定時はその配下）。Issue の保存先は従来どおりです。旧 v1 transcript は最初の履歴取得・export・再開時に原本を残して移行済みコピーを確定し、以後の履歴 cursor と再開で同じ entry ID を使います。再開の初期化が失敗した場合は、原本と直前の確定先を維持します。保存先に同じ session ID が重複する場合や、対象の破損・cwd 不一致を検出した場合は処理を中止します。Pi 標準の timestamp と session ID を含むファイル名から別 session と識別できる破損ファイルは、正常な session の処理を妨げません。header が破損したファイルは名前に含まれる session ID を手掛かりにするため、標準名が手動で別の ID に変更されていた場合、その中身の ID や重複は確認できません。破損ファイルが標準外の名前などでどの session に属するか判別できない場合は、安全のため処理を中止します。表示された path の原本を保全し、バックアップを取ってから保存先の外へ退避し、必要な session の再開・履歴・export を再試行してください。退避前のファイル名と内容から session を特定できない場合は、自動的に別 session と判断せず調査してください。
 
 中断後は次の操作時に既知の一時 staging を片付けます。確定済み・未参照の generation と想定外のファイルは自動削除しません。稼働中の履歴・export は検証できた時点の snapshot です。追記中の不完全な状態や読み取り中の変更を検出した場合は失敗するため、再試行してください。workspace rename は協調ロックで再開・snapshot と排他します。旧バージョンや外部プロセスとの非協調競合、電源断時の耐久性は保証しません。
 

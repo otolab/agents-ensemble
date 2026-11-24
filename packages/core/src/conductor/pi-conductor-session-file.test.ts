@@ -46,6 +46,50 @@ describe('Pi transcript identity validation', () => {
     for (const path of paths) expect(await readFile(path, 'utf8')).toBe(header());
   });
 
+  it('ignores an unrelated corrupt SDK-named transcript while preserving both files', async () => {
+    const target = join(dir, '2026-01-02T03-04-05-678Z_session-1.jsonl');
+    const other = join(dir, '2026-01-02T03-04-05-678Z_session-2.jsonl');
+    await writeFile(target, header());
+    await writeFile(other, '{broken');
+    expect(find()).toBe(target);
+    expect(await readFile(target, 'utf8')).toBe(header());
+    expect(await readFile(other, 'utf8')).toBe('{broken');
+  });
+
+  it('fails closed when a corrupt header cannot be associated with another session', async () => {
+    const target = join(dir, '2026-01-02T03-04-05-678Z_session-1.jsonl');
+    await writeFile(target, header());
+    for (const name of ['2026-01-02T03-04-05-678Z_session-1.jsonl', 'unknown.jsonl']) {
+      const path = join(dir, name);
+      const original = await readFile(path, 'utf8').catch(() => undefined);
+      await writeFile(path, '{broken');
+      expect(find).toThrow(/header/);
+      if (original !== undefined) await writeFile(path, original); else await rm(path);
+    }
+  });
+
+  it('still detects matching IDs in a differently named valid transcript', async () => {
+    const first = join(dir, '2026-01-02T03-04-05-678Z_session-1.jsonl');
+    const second = join(dir, '2026-01-02T03-04-05-678Z_session-2.jsonl');
+    await writeFile(first, header());
+    await writeFile(second, header());
+    expect(find).toThrow(/Multiple Pi transcripts/);
+  });
+
+  it('does not confuse a longer session ID ending in the requested ID', async () => {
+    const first = join(dir, '2026-01-02T03-04-05-678Z_session-1.jsonl');
+    const second = join(dir, '2026-01-02T03-04-05-678Z_other_session-1.jsonl');
+    await writeFile(first, header());
+    await writeFile(second, header('other_session-1'));
+    expect(find()).toBe(first);
+  });
+
+  it.skipIf(process.platform !== 'win32')('accepts a Windows cwd with different letter case', async () => {
+    const path = join(dir, 'session-1.jsonl');
+    await writeFile(path, header(id, dir.toUpperCase()));
+    expect(findValidatedPiSessionFile({ sessionDir: dir, conductorAgentId: id, cwds: [dir.toLowerCase()] })).toBe(path);
+  });
+
   it.each([1, 2, 3])('accepts a valid version %i transcript', async (version) => {
     const path = join(dir, 'first.jsonl');
     const sessionHeader = { type: 'session', id, cwd, version };

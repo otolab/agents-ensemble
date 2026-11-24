@@ -35,7 +35,7 @@ const {
   mockGetProviders: vi.fn(),
   mockResumeWork: vi.fn(),
   mockPointerLock: vi.fn(),
-  resumeFixture: { id: '', path: '' },
+  resumeFixture: { id: '', path: '', useActualFinder: false },
 }));
 
 vi.mock('@earendil-works/pi-ai/compat', () => ({
@@ -75,7 +75,7 @@ vi.mock('./pi-conductor-session-file.js', async () => {
     findValidatedPiSessionFile: (input: {
       sessionDir: string; conductorAgentId: string; cwds: readonly string[];
     }) => {
-      if (input.sessionDir.includes('.ensemble-transcripts')) {
+      if (resumeFixture.useActualFinder || input.sessionDir.includes('.ensemble-transcripts')) {
         return actual.findValidatedPiSessionFile(input);
       }
       resumeFixture.id = input.conductorAgentId;
@@ -173,6 +173,7 @@ describe('PiConductorAgent', () => {
 
   beforeEach(async () => {
     cwd = await mkdtemp(join(tmpdir(), 'pi-conductor-project-'));
+    resumeFixture.useActualFinder = false;
     vi.stubEnv('HOME', cwd);
     vi.stubEnv('ENSEMBLE_USER_ROOT', join(cwd, '.ensemble'));
     agentDir = join(cwd, 'user-pi');
@@ -359,6 +360,7 @@ describe('PiConductorAgent', () => {
   );
 
   it('keeps migrated v1 history stable through actual resume, append, and resume again', async () => {
+    resumeFixture.useActualFinder = true;
     const sdk = await vi.importActual<typeof import('@earendil-works/pi-coding-agent')>('@earendil-works/pi-coding-agent');
     const workModule = await vi.importActual<typeof import('./pi-resume-work-copy.js')>('./pi-resume-work-copy.js');
     const lockModule = await vi.importActual<typeof import('./pi-transcript-lock.js')>('./pi-transcript-lock.js');
@@ -372,9 +374,12 @@ describe('PiConductorAgent', () => {
     const sessionDir = join(cwd, '.ensemble', 'workspaces', 'legacy', 'pi');
     await mkdir(sessionDir, { recursive: true });
     const source = join(sessionDir, 'legacy-agent.jsonl');
-    const original = `${JSON.stringify({ type: 'session', id: 'legacy-agent', cwd })}\n` +
+    const savedCwd = process.platform === 'win32' ? cwd.toUpperCase() : cwd;
+    const original = `${JSON.stringify({ type: 'session', id: 'legacy-agent', cwd: savedCwd })}\n` +
       `${JSON.stringify({ type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'legacy' }], timestamp: 1 } })}\n`;
     await writeFile(source, original);
+    const unrelated = join(sessionDir, '2026-01-02T03-04-05-678Z_other-agent.jsonl');
+    await writeFile(unrelated, '{broken');
     mockSessionManagerFindById.mockReturnValue(source);
     const issueUrl = 'workspace://legacy';
     const query = { limit: 20, order: 'desc' as const };
@@ -412,6 +417,7 @@ describe('PiConductorAgent', () => {
     expect(exported.manifest.sources.find((item) => item.id === 'conductor.piTranscript')?.status).toBe('copied');
     expect(await readFile(join(outputDirectory, 'conductor/pi-transcript.jsonl'))).toEqual(snapshot!.contents);
     expect(await readFile(source, 'utf8')).toBe(original);
+    expect(await readFile(unrelated, 'utf8')).toBe('{broken');
     await again.close();
   });
 

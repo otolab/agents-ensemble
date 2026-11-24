@@ -10,6 +10,16 @@ export interface PiConductorSessionFile {
 /** A safe diagnostic that never includes transcript contents. */
 export class PiTranscriptValidationError extends Error {}
 
+function cwdComparisonKey(cwd: string): string {
+  const absolute = resolve(cwd);
+  return process.platform === 'win32' ? absolute.toLowerCase() : absolute;
+}
+
+/** Only the SDK's timestamped name provides evidence of another session. */
+function namedSdkSessionId(name: string): string | undefined {
+  return /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z_([A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?)\.jsonl$/.exec(name)?.[1];
+}
+
 /** Inspect a transcript before passing it to Pi, whose reader can rewrite files. */
 export function findValidatedPiSessionFile(input: {
   sessionDir: string;
@@ -26,22 +36,27 @@ export function findValidatedPiSessionFile(input: {
   const matches: { path: string; cwd: string }[] = [];
   for (const name of names) {
     const path = join(input.sessionDir, name);
+    const namedId = namedSdkSessionId(name);
+    const namedForSession = namedId !== undefined
+      ? namedId === input.conductorAgentId
+      : name === `${input.conductorAgentId}.jsonl`;
+    const definitelyOther = namedId !== undefined && namedId !== input.conductorAgentId;
     let lines: string[];
     let header: unknown;
     try {
       lines = readFileSync(path, 'utf8').split('\n').filter((line) => line.trim());
       header = JSON.parse(lines[0] ?? '');
     } catch (error) {
+      if (definitelyOther) continue;
       throw new PiTranscriptValidationError(`Cannot inspect Pi transcript header: ${path}`, { cause: error });
     }
     if (!header || typeof header !== 'object' || Array.isArray(header) ||
         (header as Record<string, unknown>).type !== 'session' ||
         typeof (header as Record<string, unknown>).id !== 'string') {
+      if (definitelyOther) continue;
       throw new PiTranscriptValidationError(`Invalid Pi transcript header: ${path}`);
     }
     const record = header as Record<string, unknown>;
-    const namedForSession = name === `${input.conductorAgentId}.jsonl` ||
-      name.endsWith(`_${input.conductorAgentId}.jsonl`);
     if (record.id !== input.conductorAgentId) {
       if (namedForSession) throw new PiTranscriptValidationError(`Pi transcript session ID mismatch: ${path}`);
       continue;
@@ -88,7 +103,7 @@ export function findValidatedPiSessionFile(input: {
   }
   const match = matches[0];
   if (!match) return undefined;
-  if (!input.cwds.some((cwd) => resolve(cwd) === resolve(match.cwd))) {
+  if (!input.cwds.some((cwd) => cwdComparisonKey(cwd) === cwdComparisonKey(match.cwd))) {
     throw new PiTranscriptValidationError(`Pi transcript cwd mismatch: ${match.path}`);
   }
   return match.path;
