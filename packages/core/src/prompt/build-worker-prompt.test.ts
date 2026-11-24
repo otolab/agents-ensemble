@@ -24,6 +24,16 @@ describe('buildWorkerPrompt', () => {
     expect(prompt).not.toContain('### User instructions (~/.ensemble/AGENTS.md)');
   });
 
+  it('builds workspace dispatch without Issue defaults', () => {
+    const prompt = buildWorkerPrompt({
+      issueUrl: 'workspace://research', kind: 'explore', worktreePath: '/repo',
+      sessionState: { workers: [{ name: 'explore', kind: 'explore' }], kinds: ['explore'] },
+    });
+    expect(prompt).toContain('作業ディレクトリ: /repo');
+    expect(prompt).toContain('conductor からの作業指示を待つ');
+    expect(prompt).not.toMatch(/Issue|\bPR\b/);
+  });
+
   it('includes profile materials from session state', () => {
     const prompt = buildWorkerPrompt({
       issueUrl: 'https://github.com/org/repo/issues/1',

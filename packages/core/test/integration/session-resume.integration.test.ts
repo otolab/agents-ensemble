@@ -1,7 +1,9 @@
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
+import { fork } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SDKCustomTool } from '@cursor/sdk';
 import yaml from 'js-yaml';
@@ -18,6 +20,7 @@ import {
 } from '../../src/dispatch/attach-worker.js';
 import { closeWorkerAcpSession } from '../../src/dispatch/worker-acp-session.js';
 import * as issueContextModule from '../../src/github/issue-context.js';
+import * as githubMonitorModule from '../../src/github/github-monitor.js';
 import { PermissionPipeline } from '../../src/permission/permission-pipeline.js';
 import type { Profile } from '../../src/profile/types.js';
 import type { EnsembleConfig } from '../../src/config/types.js';
@@ -25,6 +28,8 @@ import {
   loadSessionResumeStore,
   saveSessionResumeStore,
   SESSION_RESUME_STORE_VERSION,
+  findLatestSessionResumeStoreForWorkspace,
+  listWorkspaceSlugEntries,
 } from '../../src/session/session-resume-store.js';
 import {
   loadOpenQuestionsStore,
@@ -50,6 +55,8 @@ import { resolveEnsemblePaths } from '../../src/ensemble-paths.js';
 import { toolCallSnapshotHistoryPath } from '../../src/session/tool-call-snapshot-history.js';
 import { TOOL_CALL_SNAPSHOT_HISTORY_TTL_MS } from '../../src/runtime/tool-call-snapshot-registry.js';
 import { permissionRequestFixtures } from '../fixtures/permission-request-fixtures.js';
+import { readWorkspaceNote } from '../../src/notes/workspace-notes-store.js';
+import { executeRunCommand } from '../../../cli/src/run-command.js';
 
 const RESUME_AGENT_ID = 'agent-resume-test';
 
@@ -121,6 +128,260 @@ describe('session resume integration', () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
+  });
+
+  it('continues a workspace through the run command with notes and no GitHub monitor', async () => {
+    const cwd = join(repoRoot, 'run-workspace');
+    await mkdir(cwd);
+    const briefPath = join(cwd, 'brief.md');
+    await writeFile(briefPath, 'Investigate this workspace');
+    const bridge = await createInProcessAcpBridge();
+    const newSession = vi.spyOn(bridge, 'newSession');
+    const loadSession = vi.spyOn(bridge, 'loadSession');
+    const monitor = vi.spyOn(githubMonitorModule, 'createGitHubMonitor');
+    const fetchIssue = vi.mocked(issueContextModule.fetchIssueContext);
+    let noteId = '';
+    let resumedMemo = '';
+    let phase: 'initial' | 'continue' = 'initial';
+    let operatorApi: OperatorInputBindingApi | undefined;
+
+    mockSend.mockImplementation(async () => {
+      if (phase === 'initial') {
+        const result = await conductorTools.create_note!.execute({ summary: 'Workspace note' });
+        noteId = JSON.parse(result.content[0]!.text).noteId;
+        await conductorTools.push_memo!.execute({ noteId, body: 'Remember this' });
+      } else {
+        const result = await conductorTools.read_note!.execute({ noteId });
+        resumedMemo = JSON.parse(result.content[0]!.text).memos[0].body;
+      }
+      return { runId: phase, status: 'finished', result: 'ok' };
+    });
+
+    const runSession = vi.fn<typeof runConductorSession>((options) =>
+      runConductorSession({
+        ...options,
+        defaultAcp: IN_PROCESS_DEFAULT_ACP,
+        connectAcp: async () => bridge,
+        ownsWorkerAcpConnections: false,
+        ...(phase === 'initial'
+          ? {
+              waitForOperatorExit: true,
+              bindOperatorInput: (api: OperatorInputBindingApi) => { operatorApi = api; },
+              onPostLoopWait: () => { operatorApi!.submit('/close'); },
+            }
+          : {}),
+      }));
+    const deps = {
+      runConductorSession: runSession,
+      loadProfile: async () => ({ profile: PING_PROFILE_BASE, profilePath: '' }),
+      isOperatorInputInteractive: () => false,
+      isOperatorInputTty: () => false,
+      isOperatorRecoveryInspectionTty: () => false,
+      writeStderr: () => {},
+    };
+    const options = { repoRoot, conductorCwd: cwd, name: 'run-test', maxTurns: 3 };
+    expect((await executeRunCommand({ ...options, briefPath }, deps)).stopReason).toBe('completed');
+    expect(noteId).toBeTruthy();
+    const paths = resolveEnsemblePaths({ repoRoot });
+    const saved = await loadSessionResumeStore(
+      paths.workspaceSessionResumeStorePath('run-test', RESUME_AGENT_ID),
+    );
+    expect(saved).toBeDefined();
+    const olderId = 'agent-older';
+    const otherId = 'agent-other-slug';
+    await saveSessionResumeStore(paths.workspaceSessionResumeStorePath('run-test', olderId), {
+      ...saved!,
+      conductorAgentId: olderId,
+      harnessPhase: 'close',
+      modifiedAt: saved!.updatedAt - 10_000,
+    });
+    await saveSessionResumeStore(paths.workspaceSessionResumeStorePath('other-slug', otherId), {
+      ...saved!,
+      conductorAgentId: otherId,
+      issueUrl: 'workspace://other-slug',
+      harnessPhase: 'close',
+      modifiedAt: saved!.updatedAt + 10_000,
+    });
+    const older = await loadSessionResumeStore(paths.workspaceSessionResumeStorePath('run-test', olderId));
+    const other = await loadSessionResumeStore(paths.workspaceSessionResumeStorePath('other-slug', otherId));
+    expect(older!.updatedAt).toBeLessThan(saved!.updatedAt);
+    expect(other!.updatedAt).toBeGreaterThan(saved!.updatedAt);
+    phase = 'continue';
+    expect((await executeRunCommand({ ...options, continue: true }, deps)).stopReason).toBe('completed');
+    expect(runSession).toHaveBeenLastCalledWith(expect.objectContaining({
+      issueUrl: 'workspace://run-test',
+      resumeAgentId: RESUME_AGENT_ID,
+      disableGitHubMonitor: true,
+      workerWorktreeMode: 'in_repo',
+    }));
+    expect(resumedMemo).toBe('Remember this');
+    expect(newSession).toHaveBeenCalledWith(cwd);
+    expect(loadSession).toHaveBeenCalledOnce();
+    expect(fetchIssue).not.toHaveBeenCalled();
+    expect(monitor).not.toHaveBeenCalled();
+  });
+
+  it('starts a workspace outside git, closes and resumes with its notes and worker cwd', async () => {
+    const cwd = join(repoRoot, 'workspace');
+    await mkdir(cwd);
+    const bridge = await createInProcessAcpBridge();
+    const newSession = vi.spyOn(bridge, 'newSession');
+    const loadSession = vi.spyOn(bridge, 'loadSession');
+    const promptSession = vi.spyOn(bridge, 'promptSession');
+    let noteId = '';
+    let phase = 'initial';
+    mockCreate.mockImplementation(async (options, resumeOptions) => {
+      if (phase === 'failure') throw new Error('backend unavailable');
+      conductorTools = (resumeOptions ?? options).customTools ?? {};
+      return {
+        agentId: RESUME_AGENT_ID,
+        send: mockSend,
+        close: mockClose,
+        closeForResume: mockClose,
+        getUsage: createMockConductorGetUsage(),
+      };
+    });
+    mockSend.mockImplementation(async () => {
+      if (phase === 'initial' && !noteId) {
+        const result = await conductorTools.create_note!.execute({ summary: 'test' });
+        noteId = JSON.parse(result.content[0]!.text).noteId;
+        await conductorTools.push_memo!.execute({ noteId, body: 'saved memo' });
+      } else if (phase === 'resume') {
+        const result = await conductorTools.read_note!.execute({ noteId });
+        expect(JSON.parse(result.content[0]!.text).memos[0].body).toBe('saved memo');
+      }
+      return { runId: phase, status: 'finished', result: 'ok' };
+    });
+    let operatorApi: OperatorInputBindingApi | undefined;
+    const postLoop = vi.fn();
+    const common = {
+      issueUrl: 'workspace://test-workspace',
+      repoRoot,
+      conductorCwd: cwd,
+      profile: PING_PROFILE_BASE,
+      defaultAcp: IN_PROCESS_DEFAULT_ACP,
+      maxTurns: 3,
+      connectAcp: async () => bridge,
+      ownsWorkerAcpConnections: false,
+    };
+    const first = runConductorSession({
+      ...common,
+      briefText: 'Investigate',
+      waitForOperatorExit: true,
+      onPostLoopWait: postLoop,
+      bindOperatorInput: (api) => { operatorApi = api; },
+    });
+    await vi.waitFor(() => expect(postLoop).toHaveBeenCalledOnce());
+    expect(operatorApi!.submit('/close')).toBe(false);
+    expect((await first).stopReason).toBe('completed');
+    expect(newSession).toHaveBeenCalledWith(cwd);
+    expect(promptSession).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.stringContaining('test-workspace'),
+      expect.anything(),
+    );
+    expect(noteId).toBeTruthy();
+    const resumePath = resolveEnsemblePaths({ repoRoot })
+      .workspaceSessionResumeStorePath('test-workspace', RESUME_AGENT_ID);
+    const beforeFailure = await readFile(resumePath, 'utf8');
+    expect((await findLatestSessionResumeStoreForWorkspace({ repoRoot, slugKey: 'test-workspace' }))?.conductorAgentId)
+      .toBe(RESUME_AGENT_ID);
+    expect(await listWorkspaceSlugEntries({ repoRoot })).toContainEqual(
+      expect.objectContaining({ slugKey: 'test-workspace', latestConductorAgentId: RESUME_AGENT_ID }),
+    );
+    phase = 'failure';
+    await expect(runConductorSession({ ...common, resumeAgentId: RESUME_AGENT_ID }))
+      .rejects.toThrow('backend unavailable');
+    expect(await readFile(resumePath, 'utf8')).toBe(beforeFailure);
+    phase = 'resume';
+    expect((await runConductorSession({ ...common, resumeAgentId: RESUME_AGENT_ID })).stopReason).toBe('completed');
+    expect(loadSession).toHaveBeenCalled();
+  });
+
+  it.skipIf(process.platform === 'win32')('restores an attached worker and workspace state after a process receives SIGINT', async () => {
+    const userRoot = join(repoRoot, 'user');
+    vi.stubEnv('ENSEMBLE_USER_ROOT', userRoot);
+    const fixture = fileURLToPath(new URL('./helpers/workspace-sigint-child.mjs', import.meta.url));
+    const childOptions = { env: { ...process.env, HOME: repoRoot, ENSEMBLE_USER_ROOT: userRoot }, silent: true };
+    const first = fork(fixture, ['initial', repoRoot], childOptions);
+    const children = [first];
+    const stderr: string[] = [];
+    const watchErrors = (child: typeof first) => {
+      child.stderr!.on('data', (chunk) => stderr.push(String(chunk)));
+    };
+    watchErrors(first);
+    type ChildMessage = {
+      type: string;
+      noteId: string;
+      prompts: string[];
+      stopReason: string;
+      readMemo: string;
+      loads: Array<{ sessionId: string; cwd: string }>;
+    };
+    const waitMessage = (child: typeof first, type: string): Promise<ChildMessage> => new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        child.off('message', onMessage);
+        child.off('exit', onExit);
+        reject(new Error(`timed out waiting for ${type}\n${stderr.join('')}`));
+      }, 20_000);
+      const onMessage = (value: unknown) => {
+        const message = value as ChildMessage;
+        if (message.type !== type) return;
+        clearTimeout(timeout);
+        child.off('exit', onExit);
+        child.off('message', onMessage);
+        resolve(message);
+      };
+      const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
+        clearTimeout(timeout);
+        child.off('message', onMessage);
+        reject(new Error(`child exited before ${type}: ${code}/${signal}\n${stderr.join('')}`));
+      };
+      child.on('message', onMessage);
+      child.once('exit', onExit);
+    });
+    const waitExit = (child: typeof first) => new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) =>
+      child.once('exit', (code, signal) => resolve({ code, signal })));
+    try {
+      const ready = await waitMessage(first, 'ready');
+      expect(ready.noteId).toBeTruthy();
+      expect(ready.prompts).toHaveLength(1);
+      const firstResult = waitMessage(first, 'result');
+      const firstExit = waitExit(first);
+      expect(first.kill('SIGINT')).toBe(true);
+      expect((await firstResult).stopReason).toBe('interrupted');
+      expect(await firstExit).toEqual({ code: 0, signal: null });
+
+      const path = resolveEnsemblePaths({ repoRoot })
+        .workspaceSessionResumeStorePath('sigint-workspace', 'sigint-test-agent');
+      const saved = await loadSessionResumeStore(path);
+      expect(saved).toMatchObject({
+        conductorAgentId: 'sigint-test-agent',
+        issueUrl: 'workspace://sigint-workspace',
+        lifecycle: 'interrupted',
+        harnessPhase: 'abort',
+        workers: { 'ping-1': { acpSessionId: ready.prompts[0], acpCwd: repoRoot } },
+      });
+      expect(saved!.harnessSocketPath).toBeUndefined();
+      const resumed = fork(fixture, ['resume', repoRoot, ready.noteId, ready.prompts[0]], childOptions);
+      children.push(resumed);
+      watchErrors(resumed);
+      const resumedResult = waitMessage(resumed, 'result');
+      const resumedExit = waitExit(resumed);
+      const result = await resumedResult;
+      expect(await resumedExit).toEqual({ code: 0, signal: null });
+      expect(result.stopReason).toBe('completed');
+      expect(result.readMemo).toBe('before SIGINT');
+      expect(result.loads).toContainEqual(expect.objectContaining({ sessionId: ready.prompts[0], cwd: repoRoot }));
+      const note = await readWorkspaceNote({
+        repoRoot, slugKey: 'sigint-workspace', noteId: ready.noteId, includeHistory: true,
+      });
+      expect(note.memos.map((memo) => memo.body)).toEqual(['before SIGINT', 'after resume']);
+      const after = await loadSessionResumeStore(path);
+      expect(after!.workers['ping-1']!.acpSessionId).toBe(ready.prompts[0]);
+    } finally {
+      for (const child of children) if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+    }
   });
 
   it('uses the current profile while restoring open questions and worker session/load', async () => {

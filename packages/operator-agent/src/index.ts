@@ -1,4 +1,4 @@
-export { maintainOperatorWorkspace } from './operator-workspace-maintenance.js';
+export { maintainOperatorWorkspace } from './workspace/operator-workspace-maintenance.js';
 export { runOperatorAgent } from './run-operator-agent.js';
 export type {
   OperatorAgentInput,
@@ -9,11 +9,11 @@ export type {
 export {
   createListOperatorSessionsTool,
   LIST_OPERATOR_SESSIONS_TOOL,
-} from './list-operator-sessions-tool.js';
+} from './tools/list-operator-sessions-tool.js';
 export {
   createListWorkerMessagesTool,
   LIST_WORKER_MESSAGES_TOOL,
-} from './worker-session-tools.js';
+} from './tools/worker-session-tools.js';
 export {
   createOperatorWorkspaceFileTools,
   LIST_OPERATOR_WORKSPACE_FILES_TOOL,
@@ -24,9 +24,9 @@ export {
   READ_OPERATOR_WORKSPACE_FILE_TOOL,
   resolveOperatorWorkspaceRoot,
   WRITE_OPERATOR_WORKSPACE_FILE_TOOL,
-} from './operator-workspace-tools.js';
-export { operatorBaseModule } from './operator-base-module.js';
-export type { OperatorPromptContext } from './operator-base-module.js';
+} from './workspace/operator-workspace-tools.js';
+export { operatorBaseModule } from './run/operator-base-module.js';
+export type { OperatorPromptContext } from './run/operator-base-module.js';
 export {
   ANSWER_LIVE_OPEN_QUESTION_TOOL,
   createAnswerLiveOpenQuestionTool,
@@ -40,23 +40,23 @@ export {
   SEND_OPERATOR_MESSAGE_TOOL,
   createShutdownIssueSessionTool,
   SHUTDOWN_ISSUE_SESSION_TOOL,
-} from './open-question-control-tools.js';
+} from './tools/open-question-control-tools.js';
 export {
   createReleaseReportsTool,
   createSetReportHoldTool,
-} from './operator-control-tools.js';
+} from './tools/operator-control-tools.js';
 export {
   createOperatorDispatchQueue,
   formatOperatorDispatchBatch,
   operatorEventSourceKey,
   selectOperatorDispatchBatch,
-} from './operator-dispatch.js';
+} from './dispatch/operator-dispatch.js';
 export type {
   OperatorDispatchBatch,
   OperatorDispatchEvent,
   OperatorDispatchQueue,
   OperatorDispatchState,
-} from './operator-dispatch.js';
+} from './dispatch/operator-dispatch.js';
 export {
   createOperatorWatchPool,
   createRegisterConductorMessageListenTool,
@@ -64,8 +64,8 @@ export {
   createUnregisterConductorMessageListenTool,
   createUnregisterSessionWatchTool,
   operatorWatchStatePath,
-} from './operator-watch-pool.js';
+} from './watch/operator-watch-pool.js';
 export type {
   ConductorMessageListenConfig,
   OperatorWatchPool,
-} from './operator-watch-pool.js';
+} from './watch/operator-watch-pool.js';

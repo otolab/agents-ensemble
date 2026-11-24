@@ -28,6 +28,7 @@ export function formatProfilesListText(entries: TeamProfileListEntry[]): string 
       `  source: ${entry.source}`,
       `  title: ${title}`,
       `  workers: ${workers}`,
+      `  modes: ${entry.modesStatus === 'declared' ? entry.meta?.modes?.join(', ') : entry.modesStatus}`,
       ...issueLines,
       `  path: ${entry.path}`,
     ].join('\n');

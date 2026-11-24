@@ -30,6 +30,7 @@ export type {
   ProfileConductorConfig,
   ProfileMaterial,
   ProfileMeta,
+  ProfileMode,
   ResolvedProfile,
   AgentDefinition,
   ProfileWorkerEntry,

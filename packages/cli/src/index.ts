@@ -19,6 +19,12 @@ import {
 } from '@agents-ensemble/core/operator-runtime';
 import { readCliPackageVersion } from './cli-version.js';
 import { executeIssueCommand, issueCommandExitCode } from './issue-command.js';
+import {
+  executeRunCommand,
+  formatRunWorkspaceListText,
+  listRunWorkspaces,
+  runCommandExitCode,
+} from './run-command.js';
 import { formatModelsListJson, formatModelsListNote, formatModelsListText } from './format-models-list.js';
 import { formatModelDetailsJson, formatModelDetailsText } from './format-model-details.js';
 import { isOperatorInputTty } from './prompt-operator-input.js';
@@ -650,6 +656,105 @@ program
         });
 
         const exitCode = issueCommandExitCode(result);
+        if (exitCode !== 0) {
+          process.exit(exitCode);
+        }
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : error);
+        process.exit(1);
+      }
+    },
+  );
+
+program
+  .command('run [command-or-brief]')
+  .description(
+    'Start conductor orchestration from a brief file (workspace mode, no GitHub Issue). Use `ensemble run list` to list workspaces.',
+  )
+  .argument('[message...]', 'Initial operator message words')
+  .option('--repo-root <path>', 'Path to the local git clone', process.cwd())
+  .option(
+    '--conductor-cwd <path>',
+    'Workspace directory for slug anchor and in-repo workers',
+    process.cwd(),
+  )
+  .option('--config <path>', 'Use this file instead of ~/.ensemble/config.yaml')
+  .option('--resume <agentId>', 'Resume a previous conductor agent in this workspace')
+  .option('--continue', 'Resume the latest session for this workspace slug')
+  .option('--name <slug>', 'Explicit workspace slug-key (default: cwd hash or anchor file)')
+  .option('--profile <name>', 'Team profile name or path')
+  .option('--model <id>', 'Conductor model id')
+  .option('--reasoning <level>', 'Conductor reasoning level')
+  .option('--verbose', 'Show detailed harness telemetry')
+  .option(
+    '--max-turns <n>',
+    'Maximum conductor autonomous turns',
+    (value) => Number.parseInt(value, 10),
+  )
+  .option('--no-max-turns', 'Disable autonomous turn limit')
+  .option('--no-wait', 'Exit when the autonomous loop completes')
+  .option('--default-acp-cli <preset>', 'Default ACP CLI preset for workers')
+  .option('--default-acp-command <cmd>', 'Default custom ACP command')
+  .option(
+    '--default-acp-arg <arg>',
+    'Additional arg for --default-acp-command',
+    (value: string, previous: string[] | undefined) => [...(previous ?? []), value],
+  )
+  .option(
+    '--summary-format <format>',
+    'Exit summary format: auto, json, or text',
+    'auto',
+  )
+  .option('--include-full-response-text', 'Include full worker responseText in JSON summary')
+  .action(
+    async (
+      commandOrBrief: string | undefined,
+      messageParts: string[],
+      options: {
+        repoRoot: string;
+        conductorCwd: string;
+        config?: string;
+        resume?: string;
+        continue?: boolean;
+        name?: string;
+        profile?: string;
+        model?: string;
+        reasoning?: string;
+        verbose?: boolean;
+        maxTurns?: number;
+        noMaxTurns?: boolean;
+        noWait?: boolean;
+        defaultAcpCli?: string;
+        defaultAcpCommand?: string;
+        defaultAcpArg?: string[];
+        summaryFormat?: string;
+        includeFullResponseText?: boolean;
+      },
+    ) => {
+      try {
+        if (commandOrBrief === 'list') {
+          const result = await listRunWorkspaces(options.repoRoot);
+          console.log(formatRunWorkspaceListText(result));
+          return;
+        }
+        const result = await executeRunCommand({
+          ...options,
+          configPath: options.config,
+          briefPath: commandOrBrief,
+          initialOperatorMessage: normalizeInitialOperatorMessage(messageParts),
+          defaultAcpArgs: options.defaultAcpArg,
+          secretCliEntrypoint: cliEntrypoint,
+        });
+        writeIssueSessionSummary(result, {
+          format: resolveIssueSummaryFormat({
+            summaryFormat: options.summaryFormat,
+            isTty: isOperatorInputTty(),
+          }),
+          jsonOptions: {
+            includeFullResponseText: options.includeFullResponseText,
+          },
+        });
+        const exitCode = runCommandExitCode(result);
         if (exitCode !== 0) {
           process.exit(exitCode);
         }

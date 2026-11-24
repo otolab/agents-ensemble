@@ -8,6 +8,7 @@ import {
   ENSEMBLE_DEFAULT_PROFILE_ENV,
   loadProfile,
   loadProfileFromFile,
+  parseProfile,
   profileDirectoryPath,
   resolveDefaultProfilePath,
   resolveProfilePath,
@@ -22,6 +23,22 @@ import { parseEnsembleConfig } from '../config/parse-config.js';
 import type { EnsembleConfig } from '../config/types.js';
 import { compileConductorSystemPrompt } from '../prompt/compile-system-prompt.js';
 import { loadUserInstructions } from '../prompt/load-user-instructions.js';
+
+describe('profile modes', () => {
+  it.each([['issue'], ['run'], ['issue', 'run']])('accepts %j', (...modes) => {
+    expect(parseProfile({ workers: [], meta: { modes } }, 'test').meta?.modes).toEqual(modes);
+  });
+
+  it('keeps omitted modes unspecified', () => {
+    expect(parseProfile({ workers: [] }, 'test').meta?.modes).toBeUndefined();
+  });
+
+  it.each([null, 'issue', [], ['issue', 'issue'], ['other'], ['run', 1]])(
+    'rejects invalid modes %j', (modes) => {
+      expect(() => parseProfile({ workers: [], meta: { modes } }, 'test')).toThrow(/meta\.modes/);
+    },
+  );
+});
 
 describe('normalizeProfileWorker', () => {
   it('expands kind string to name=kind', () => {

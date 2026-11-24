@@ -162,6 +162,27 @@ describe('listTeamProfiles', () => {
     });
   });
 
+  it('reports declared, unspecified and invalid modes without hiding entries', async () => {
+    for (const [name, modes] of [
+      ['issue', '[issue]'], ['run', '[run]'], ['both', '[issue, run]'],
+      ['bad', '[run, other]'],
+    ]) {
+      await writeTeamProfile(join(repoRoot, '.ensemble', 'teams', name!), '  - worker\n',
+        `meta:\n  modes: ${modes}\n`);
+    }
+    await writeTeamProfile(join(repoRoot, '.ensemble', 'teams', 'old'), '  - worker\n');
+    const entries = await listTeamProfiles({ repoRoot, userEnsembleRoot });
+    const byId = Object.fromEntries(entries.map((entry) => [entry.id, entry]));
+    expect(byId['issue@project']).toMatchObject({ modesStatus: 'declared', meta: { modes: ['issue'] } });
+    expect(byId['run@project']).toMatchObject({ modesStatus: 'declared', meta: { modes: ['run'] } });
+    expect(byId['both@project']).toMatchObject({ modesStatus: 'declared', meta: { modes: ['issue', 'run'] } });
+    expect(byId['bad@project']).toMatchObject({ modesStatus: 'invalid' });
+    expect(byId['old@project']).toMatchObject({ modesStatus: 'unspecified' });
+    expect(byId['implementer-and-reviewer@bundled']).toMatchObject({ meta: { modes: ['issue'] } });
+    expect(byId['implementer-and-reviewer-v2@bundled']).toMatchObject({ meta: { modes: ['issue'] } });
+    expect(byId['workspace-research@bundled']).toMatchObject({ meta: { modes: ['run'] } });
+  });
+
   it('marks profile unusable when workspace is missing', async () => {
     await writeTeamProfile(
       join(repoRoot, '.ensemble', 'teams', 'broken'),

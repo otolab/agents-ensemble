@@ -18,7 +18,7 @@ import {
 
 describe('ensemble prompt modules', () => {
   it('exports Base, ConductorBase, WorkerBase as the three foundations', () => {
-    expect(baseModule.objective).toBeDefined();
+    expect(baseModule.persona).toBeDefined();
     expect(baseModule.methodology).toBeDefined();
     expect(baseModule.state).toBeDefined();
     expect(conductorBaseModule.objective).toBeDefined();
@@ -75,6 +75,10 @@ describe('ensemble prompt modules', () => {
     expect(prompt).toContain('**reviewer**: `reviewer`');
     expect(prompt).toContain('作業の実行は worker');
     expect(prompt).toContain('permission を要求する');
+    expect(prompt).toContain('手順の細部は Skill（指示があれば）と Issue / PR を source of truth とする');
+    expect(prompt).toContain('気づき・違和感・未解決は解決できなくても Issue に残す');
+    expect(prompt).toContain('1 Issue に対応する作業ディレクトリ');
+    expect(prompt).toContain('使用する言語はリポジトリやIssueに合わせます。');
   });
 
   it('appends profile objective after ensemble objectives', () => {
@@ -127,8 +131,8 @@ describe('ensemble prompt modules', () => {
       ),
     );
 
-    expect(prompt).toContain('Issue / PR');
-    expect(prompt).toContain('Issue #42');
+    expect(prompt).not.toContain('Issue / PR');
+    expect(prompt).not.toContain('Issue #42');
     expect(prompt).not.toContain('ask_human');
   });
 });

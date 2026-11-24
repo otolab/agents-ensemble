@@ -14,7 +14,8 @@ import {
   PROFILES_DIR,
   TEAMS_DIR,
 } from './profile-paths.js';
-import type { Profile } from './types.js';
+import type { Profile, ProfileMode } from './types.js';
+import { parseProfileModes } from './profile-modes.js';
 import { normalizeProfileWorkers } from './types.js';
 import {
   validateTeamProfileWorkspaces,
@@ -30,6 +31,7 @@ export interface TeamProfileMeta {
   id?: string;
   title?: string;
   summary?: string;
+  modes?: ProfileMode[];
 }
 
 export interface TeamProfileListEntry {
@@ -43,6 +45,7 @@ export interface TeamProfileListEntry {
   meta?: TeamProfileMeta;
   /** Worker kind or name preview for catalog display. */
   workersPreview: string[];
+  modesStatus: 'declared' | 'unspecified' | 'invalid';
   availability: TeamProfileAvailability;
   issues?: TeamProfileValidationIssue[];
 }
@@ -199,24 +202,33 @@ function workerPreview(entry: unknown): string {
 async function readTeamProfileMeta(
   filePath: string,
   fallbackName: string,
-): Promise<{ meta?: TeamProfileMeta; workersPreview: string[] }> {
+): Promise<{ meta?: TeamProfileMeta; workersPreview: string[]; modesStatus: TeamProfileListEntry['modesStatus'] }> {
   try {
     const raw = yaml.load(await readFile(filePath, 'utf8')) as Profile | undefined;
     const workersPreview = (raw?.workers ?? []).map(workerPreview);
+    let modes: ProfileMode[] | undefined;
+    let modesStatus: TeamProfileListEntry['modesStatus'] = 'unspecified';
+    try {
+      modes = parseProfileModes(raw?.meta?.modes, filePath);
+      if (modes) modesStatus = 'declared';
+    } catch {
+      modesStatus = 'invalid';
+    }
     const meta = raw?.meta
       ? {
           id: raw.meta.id ?? fallbackName,
           title: raw.meta.title,
           summary: raw.meta.summary,
+          ...(modes ? { modes } : {}),
         }
       : {
           id: fallbackName,
           title: fallbackName,
         };
 
-    return { meta, workersPreview };
+    return { meta, workersPreview, modesStatus };
   } catch {
-    return { workersPreview: [] };
+    return { workersPreview: [], modesStatus: 'invalid' };
   }
 }
 
@@ -252,7 +264,7 @@ async function listProfilesInRoot(
     }
 
     const name = nameMapper ? nameMapper(dirName) : dirName;
-    const { meta, workersPreview } = await readTeamProfileMeta(filePath, name);
+    const { meta, workersPreview, modesStatus } = await readTeamProfileMeta(filePath, name);
     const validation = await readTeamProfileWorkspaceValidation(filePath, repoRoot);
 
     entries.push({
@@ -262,6 +274,7 @@ async function listProfilesInRoot(
       path: filePath,
       meta,
       workersPreview,
+      modesStatus,
       availability: validation.availability,
       ...(validation.issues ? { issues: validation.issues } : {}),
     });
