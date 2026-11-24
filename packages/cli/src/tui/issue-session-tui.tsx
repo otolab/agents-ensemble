@@ -70,6 +70,8 @@ import {
 import { computeWorkerPaneHeight, resolvePaneHeights } from './pane-layout.js';
 import {
   computeMaxInputDisplayLines,
+  computeTextAreaDisplayLineCount,
+  getVisibleOperatorPrompt,
   isCursorAtVisualBoundary,
   trimBlankLinesOnly,
 } from './operator-input-layout.js';
@@ -454,7 +456,7 @@ export function OpenQuestionsPane({
   const scrollIndicators = `${viewport.canScrollUp ? '↑' : ''}${viewport.canScrollDown ? '↓' : ''}`;
   const scrollHint =
     viewport.maxLinesFromTop > 0
-      ? `Shift+PgUp/PgDnで本文スクロール ${scrollIndicators}`
+      ? `Shift/Alt+PgUp/PgDnでスクロール ${scrollIndicators}`
       : undefined;
   const titleSuffixParts = [layout.titleSuffix, scrollHint].filter(Boolean);
   const titleSuffix =
@@ -504,7 +506,6 @@ export function IssueSessionTui({
   const [queueOffset, setQueueOffset] = useState(0);
   const [inputCursorPosition, setInputCursorPosition] = useState<[number, number]>([0, 0]);
   const inputHistoryRef = useRef(new OperatorInputHistory());
-  const [inputDisplayLineCount, setInputDisplayLineCount] = useState(1);
   const [linesFromBottom, setLinesFromBottom] = useState(0);
   const [recoveryLinesFromBottom, setRecoveryLinesFromBottom] = useState(0);
   const [selectedCommandIndex, setSelectedCommandIndex] = useState(0);
@@ -577,6 +578,10 @@ export function IssueSessionTui({
   const hintLines = operatorInputDisplay.hintLines.flatMap((line) =>
     wrapTextToWidth(line, contentWidth));
   const suggestionLines = [...commandSuggestionLines, ...answerSuggestionLines];
+  const inputDisplayLineCount = computeTextAreaDisplayLineCount(
+    inputValue, contentWidth, stringWidth(getVisibleOperatorPrompt(operatorPrompt, contentWidth)),
+    inputCursorPosition, !snapshot.shuttingDown,
+  );
   const desiredInputLines = Math.min(inputDisplayLineCount, maxInputDisplayLines);
   const inputPaneHeight = computeInputPaneHeight({
     hintLineCount: hintLines.length + suggestionLines.length + desiredQueueRows,
@@ -650,9 +655,6 @@ export function IssueSessionTui({
       cursorLineOffset: 0,
     }),
   };
-  const handleDisplayLineCountChange = useCallback((lineCount: number) => {
-    setInputDisplayLineCount(Math.max(1, lineCount));
-  }, []);
 
   useEffect(() => {
     const previousActivityLog = previousActivityLogRef.current;
@@ -768,7 +770,7 @@ export function IssueSessionTui({
       moveQueue(input === 't' ? 'previous' : 'next', input === 'o');
       return;
     }
-    if (openQuestions.length > 0 && key.shift && !key.ctrl && !key.meta) {
+    if (openQuestions.length > 0 && !key.ctrl && (key.meta || key.shift)) {
       if (key.pageUp) {
         setOpenQuestionLinesFromTop((current) =>
           advanceOpenQuestionsScrollOffset(
@@ -936,7 +938,6 @@ export function IssueSessionTui({
     setInputCursorPosition([0, selectedSuggestion.value.length]);
     setHiddenAnswerSuggestionQuestionId(selectedQuestion.id);
     setSelectedAnswerSuggestionIndex(0);
-    setInputDisplayLineCount(1);
   };
 
   const handleSubmit = (value: string) => {
@@ -966,7 +967,6 @@ export function IssueSessionTui({
     setSelectedCommandIndex(0);
     setSelectedAnswerSuggestionIndex(0);
     setHiddenAnswerSuggestionQuestionId(undefined);
-    setInputDisplayLineCount(1);
   };
 
   const handleInputChange = (value: string) => {
@@ -1082,7 +1082,6 @@ export function IssueSessionTui({
               contentWidth={contentWidth}
               promptPrefix={operatorPrompt}
               maxDisplayLines={visibleInputDisplayLineCount}
-              onDisplayLineCountChange={handleDisplayLineCountChange}
               suggestionsActive={
                 suggestionsVisible
               }

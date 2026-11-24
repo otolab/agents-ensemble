@@ -19,6 +19,7 @@
 | 認証トークンの全体解決 | [settings.md](settings.md) | Pi の利用者向け導線は [pi-conductor-setup.md](pi-conductor-setup.md)、`config.yaml` の認証関連キーは [config.md](config.md) |
 | conductor send の再接続・失敗後の recovery 設計 | [conductor-auth-reconnect.md](conductor-auth-reconnect.md) | 認証設定そのものの正本ではない |
 | 現行の技術構成 | [architecture.md](architecture.md) | 判断の履歴は ADR |
+| 形式モデル | [作業規約](../formal/lean/README.md)、[抽象仕様](../formal/lean/Ensemble/Flow/Spec.lean) | Lean による dispatch フローのモデル |
 | テスト分類・実行方針 | [testing-strategy.md](testing-strategy.md) | unittest / integration / e2e |
 | 開発環境・テスト実行 | [development.md](development.md) | worktree・pnpm・ブランチ運用の注意 |
 | 文書の更新ルール | [documentation-policy.md](documentation-policy.md) | ADR 不変性・索引の役割 |

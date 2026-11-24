@@ -74,6 +74,7 @@ describe('OperatorTextArea (production wrapper)', () => {
     expect(textAreaSpy).toHaveBeenCalled();
     const props = textAreaSpy.mock.calls.at(-1)?.[0];
     expect(props?.viewportLines).toBe(4);
+    expect(props?.tabWidth).toBe(4);
     expect(props?.initialLineCount).toBe(1);
     expect(props?.linePrefix).toBeUndefined();
     expect(props?.onChange).toBe(onChange);
@@ -150,6 +151,23 @@ describe('OperatorTextArea (production wrapper)', () => {
       isLastChunkOfLine: true,
     });
     expect(isValidElement(prefixNode)).toBe(true);
+  });
+
+  it.each([1, 2])('reserves an input column at width %i', (contentWidth) => {
+    render(
+      <OperatorTextArea
+        value="x"
+        onChange={() => {}}
+        contentWidth={contentWidth}
+        promptPrefix="> "
+        maxDisplayLines={2}
+        cursorPosition={[0, 1]}
+        cursorStart={{ x: 4, y: 10 }}
+      />,
+    );
+    const props = textAreaSpy.mock.calls.at(-1)?.[0];
+    expect(props?.cursorStart).toEqual({ x: 2, y: 10 });
+    expect(Boolean(props?.linePrefix)).toBe(contentWidth === 2);
   });
 
   it('moves cursor up across explicit newlines via arrow keys', async () => {

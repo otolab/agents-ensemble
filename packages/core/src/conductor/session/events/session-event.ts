@@ -56,6 +56,8 @@ export interface WorkerSessionRecoveredEvent
   name: string;
   kind: string;
   reason: WorkerSessionRecoveryReason;
+  /** A rename requires recreation; no replacement has been started yet. */
+  recreateRequired?: boolean;
 }
 
 export interface PermissionPendingEvent

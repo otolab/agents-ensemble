@@ -18,6 +18,19 @@ const TEST_WORKTREE = {
 };
 
 describe('formatSessionEventForConductor', () => {
+  it('tells the conductor to recreate a worker after a workspace rename', () => {
+    const message = formatSessionEventForConductor({
+      type: 'worker.session.recovered',
+      name: 'implementer',
+      kind: 'implementer',
+      reason: 'explicit',
+      recreateRequired: true,
+    });
+    expect(message).toContain('recreation_required');
+    expect(message).toContain('recreate_worker');
+    expect(message).not.toContain('started_new_session');
+  });
+
   it('formats operator.message as plain text', () => {
     expect(
       formatSessionEventForConductor({

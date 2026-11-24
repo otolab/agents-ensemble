@@ -12,6 +12,8 @@ import {
   resolvePiModelDetails,
   resolveIssueUrl,
   escapeTerminalControlCharacters,
+  renameWorkspaceSlug,
+  recoverWorkspaceRename,
 } from '@agents-ensemble/core';
 import {
   exportSessionBundle,
@@ -68,6 +70,7 @@ import {
   type PiModelsSyncTarget,
 } from './pi-model-catalog-command.js';
 import { runSecretExec, runSecretPush } from './secret-command.js';
+import { registerNotesCommand } from './notes-command.js';
 import { readSchedulingStats } from './session-scheduling-stats.js';
 
 const program = new Command();
@@ -77,6 +80,8 @@ program
   .name('ensemble')
   .description('Issue-based agent orchestration')
   .version(readCliPackageVersion());
+
+registerNotesCommand(program);
 
 const secret = program
   .command('secret')
@@ -692,6 +697,40 @@ program
       }
     },
   );
+
+program
+  .command('workspace-rename-recover')
+  .description('Roll back an interrupted workspace rename')
+  .option('--repo-root <path>', 'Repository root', process.cwd())
+  .action(async (options: { repoRoot: string }) => {
+    try {
+      await recoverWorkspaceRename({ repoRoot: resolve(options.repoRoot) });
+      console.log('Interrupted workspace rename rolled back.');
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : error);
+      process.exitCode = 1;
+    }
+  });
+
+program
+  .command('workspace-rename <from> <to>')
+  .description('Rename a stopped workspace and update its cwd anchor')
+  .option('--repo-root <path>', 'Repository root', process.cwd())
+  .option('--conductor-cwd <path>', 'Directory containing the workspace anchor', process.cwd())
+  .action(async (from: string, to: string, options: { repoRoot: string; conductorCwd: string }) => {
+    try {
+      await renameWorkspaceSlug({
+        repoRoot: resolve(options.repoRoot),
+        cwd: resolve(options.conductorCwd),
+        fromSlug: from,
+        toSlug: to,
+      });
+      console.log(`Workspace renamed from "${from}" to "${to}".`);
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : error);
+      process.exitCode = 1;
+    }
+  });
 
 program
   .command('run [command-or-brief]')

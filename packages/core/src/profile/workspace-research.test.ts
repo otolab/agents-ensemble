@@ -26,6 +26,7 @@ describe('workspace-research bundled profile', () => {
         issueUrl: 'workspace://smoke', kind, worktreePath: '/workspace', sessionState,
       });
       expect(prompt).toContain(`${kind} の役割`);
+      expect(prompt).toContain('ensemble notes push');
       expect(prompt).not.toContain(kind === 'explore' ? 'librarian の役割' : 'explore の役割');
       prompts.push(prompt);
     }

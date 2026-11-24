@@ -1,7 +1,8 @@
 import { conductorFailureLogPath, createConductorFailureLog } from '../session/conductor-failure-log.js';
 import { SessionOwnership, type SessionWriteLease } from '../session/session-ownership.js';
 import { resolveUserEnsembleRoot } from '../resolve-user-ensemble-root.js';
-import { acquireSessionOwnerLock } from '../session/session-owner-lock.js';
+import { acquireSessionMigrationReadLock, acquireSessionOwnerLock } from '../session/session-owner-lock.js';
+import { readWorkspaceAnchor } from '../workspace-run/slug-key.js';
 import { stat } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
 import { isAbsolute, resolve as resolvePath } from 'node:path';
@@ -143,6 +144,7 @@ import {
   requireLocatedSessionResumeStoreForResume,
   saveSessionResumeStore,
   SESSION_RESUME_STORE_VERSION,
+  WORKSPACE_RENAME_SESSION_RESUME_STORE_VERSION,
   type HarnessPhase,
   type SessionLifecycle,
   type EnsembleConfigDigestScheme,
@@ -444,7 +446,16 @@ export async function runConductorSession(
   let providerOwner: SessionOwnership | undefined;
   let safeToRelease = false;
   let releaseGlobalOwner: (() => void) | undefined;
+  let releaseWorkspaceGate: (() => void) | undefined;
   try {
+    const workspace = parseWorkspaceSessionUrl(options.issueUrl);
+    if (workspace) {
+      releaseWorkspaceGate = await acquireSessionMigrationReadLock();
+      const anchor = await readWorkspaceAnchor(options.conductorCwd ?? process.cwd());
+      if (anchor && anchor.slug !== workspace.slugKey) {
+        throw new Error(`Workspace anchor changed to "${anchor.slug}"; retry the session.`);
+      }
+    }
     if (options.resumeAgentId) {
       releaseGlobalOwner = await acquireSessionOwnerLock(options.resumeAgentId);
       owner = await SessionOwnership.acquire(canonicalSessionResumeStorePath({
@@ -483,11 +494,16 @@ export async function runConductorSession(
     const owners = [providerOwner, owner].filter((item): item is SessionOwnership => item !== undefined);
     if (safeToRelease) {
       await Promise.all(owners.map((item) => item.closeWritesAndDrain()));
-      for (const item of owners) item.release();
-      releaseGlobalOwner?.();
+      try {
+        for (const item of owners) item.release();
+        releaseGlobalOwner?.();
+      } finally {
+        releaseWorkspaceGate?.();
+      }
     } else {
       for (const item of owners) item.retainUntilProcessExit();
       if (releaseGlobalOwner) retainedGlobalSessionOwners.add(releaseGlobalOwner);
+      if (releaseWorkspaceGate) retainedGlobalSessionOwners.add(releaseWorkspaceGate);
     }
   }
 }
@@ -640,6 +656,7 @@ async function runConductorSessionWithStartupGuard(
   let githubMonitor: GitHubMonitor | undefined;
   let activeResumeStorePath: string | undefined;
   let activeLocatedResumeStore: LocatedSessionResumeStore | undefined;
+  let activeResumeStoreVersion: SessionResumeStore['version'] = SESSION_RESUME_STORE_VERSION;
   let createdHarnessCliVersion = options.cliPackageVersion;
   let drainStartupResumeStoreWrites = async () => {};
   const pendingGitHubRecoveries: number[] = [];
@@ -668,6 +685,7 @@ async function runConductorSessionWithStartupGuard(
       lease,
     }));
     const loadedResumeStore = locatedResumeStore.resumeStore;
+    activeResumeStoreVersion = loadedResumeStore.version;
     activeLocatedResumeStore = locatedResumeStore;
     // A resume keeps its origin version; a legacy store stays without one.
     createdHarnessCliVersion = loadedResumeStore.createdHarnessCliVersion;
@@ -1909,7 +1927,10 @@ async function runConductorSessionWithStartupGuard(
       ? cursorBootstrapCompleteForStore(cursorBootstrapState)
       : undefined;
     return {
-      version: SESSION_RESUME_STORE_VERSION,
+      version: activeResumeStoreVersion === WORKSPACE_RENAME_SESSION_RESUME_STORE_VERSION ||
+        Object.values(workers).some((worker) => worker.recreateRequired)
+        ? WORKSPACE_RENAME_SESSION_RESUME_STORE_VERSION
+        : SESSION_RESUME_STORE_VERSION,
       conductorAgentId: conductorHandle.conductor.agentId,
       conductorBackend,
       ...(createdHarnessCliVersion !== undefined
@@ -2599,13 +2620,24 @@ async function runConductorSessionWithStartupGuard(
       socketPath: oneTimeSecretControlServer?.socketPath,
       cliEntrypoint: options.secretCliEntrypoint,
     });
+    for (const worker of workers) {
+      const env = worker.spawn!.env!;
+      delete env.ENSEMBLE_WORKSPACE_SLUG;
+      delete env.ENSEMBLE_WORKSPACE_REPO_ROOT;
+      delete env.ENSEMBLE_WORKSPACE_CONDUCTOR_CWD;
+      if (workspaceSession) {
+        env.ENSEMBLE_WORKSPACE_SLUG = workspaceSession.slugKey;
+        env.ENSEMBLE_WORKSPACE_REPO_ROOT = resolvePath(options.repoRoot);
+        env.ENSEMBLE_WORKSPACE_CONDUCTOR_CWD = resolvePath(conductorCwd);
+      }
+    }
     // Keep startup cleanup active through startup logging and the final
     // shutdown check. No await follows this check before workers start.
     shutdownSignal.throwIfAborted();
     startupCleanup.handoff();
     workerSession.startWorkers();
     for (const [name, saved] of workerSessions) {
-      if (!saved.handoffPending) continue;
+      if (!saved.handoffPending && !saved.recreateRequired) continue;
       const worker = activeProfile.workers.find((entry) => entry.name === name);
       if (!worker) continue;
       eventQueue.enqueue({
@@ -2613,6 +2645,7 @@ async function runConductorSessionWithStartupGuard(
         name,
         kind: worker.kind,
         reason: saved.generations?.at(-1)?.reason ?? 'explicit',
+        ...(saved.recreateRequired ? { recreateRequired: true } : {}),
       });
     }
     if (resumeToolCallSnapshots.length > 0) {

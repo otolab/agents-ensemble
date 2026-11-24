@@ -99,6 +99,25 @@ describe('SessionResumeStore', () => {
     return directory;
   }
 
+  it('preserves the rename recreation gate in the versioned store', async () => {
+    tempDir = await createHome('ensemble-session-rename-');
+    const path = join(tempDir, 'session.json');
+    await saveSessionResumeStore(path, baseResumeStore({
+      version: 2,
+      conductorAgentId: 'agent-1',
+      workers: { worker: { acpSessionId: 'old', recreateRequired: true } },
+    }));
+    expect(await loadSessionResumeStore(path)).toMatchObject({
+      version: 2,
+      workers: { worker: { acpSessionId: 'old', recreateRequired: true } },
+    });
+    await writeFile(path, JSON.stringify(baseResumeStore({
+      conductorAgentId: 'agent-1',
+      workers: { worker: { acpSessionId: 'old', recreateRequired: true } },
+    })));
+    await expect(loadSessionResumeStore(path)).rejects.toThrow('Invalid session resume store');
+  });
+
   it('round-trips through the filesystem and sets updatedAt on save', async () => {
     tempDir = await createHome('ensemble-session-resume-store-');
     const path = sessionResumeStorePath({

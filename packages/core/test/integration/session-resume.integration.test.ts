@@ -57,6 +57,7 @@ import { TOOL_CALL_SNAPSHOT_HISTORY_TTL_MS } from '../../src/runtime/tool-call-s
 import { permissionRequestFixtures } from '../fixtures/permission-request-fixtures.js';
 import { readWorkspaceNote } from '../../src/notes/workspace-notes-store.js';
 import { executeRunCommand } from '../../../cli/src/run-command.js';
+import { renameWorkspaceSlug, writeWorkspaceAnchor } from '../../src/workspace-run/slug-key.js';
 
 import { SessionOwnership } from '../../src/session/session-ownership.js';
 
@@ -249,7 +250,7 @@ describe('session resume integration', () => {
     expect(monitor).not.toHaveBeenCalled();
   });
 
-  it('starts a workspace outside git, closes and resumes with its notes and worker cwd', async () => {
+  it('renames and resumes a non-Pi workspace with its notes and a new worker generation', async () => {
     const cwd = join(repoRoot, 'workspace');
     await mkdir(cwd);
     const bridge = await createInProcessAcpBridge();
@@ -258,6 +259,7 @@ describe('session resume integration', () => {
     const promptSession = vi.spyOn(bridge, 'promptSession');
     let noteId = '';
     let phase = 'initial';
+    let recreated = false;
     mockCreate.mockImplementation(async (options, resumeOptions) => {
       if (phase === 'failure') throw new Error('backend unavailable');
       conductorTools = (resumeOptions ?? options).customTools ?? {};
@@ -277,6 +279,14 @@ describe('session resume integration', () => {
       } else if (phase === 'resume') {
         const result = await conductorTools.read_note!.execute({ noteId });
         expect(JSON.parse(result.content[0]!.text).memos[0].body).toBe('saved memo');
+        if (!recreated) {
+          recreated = true;
+          await conductorTools.recreate_worker!.execute({ worker: 'ping-1' });
+          const handoff = await conductorTools.inspect_worker_handoff!.execute({ worker: 'ping-1' });
+          const token = /Confirmation token: (.+)/u.exec(handoff.content[0]!.text)?.[1];
+          expect(token).toBeTruthy();
+          await conductorTools.confirm_worker_handoff!.execute({ worker: 'ping-1', token });
+        }
       }
       return { runId: phase, status: 'finished', result: 'ok' };
     });
@@ -321,9 +331,18 @@ describe('session resume integration', () => {
     await expect(runConductorSession({ ...common, resumeAgentId: RESUME_AGENT_ID }))
       .rejects.toThrow('backend unavailable');
     expect(await readFile(resumePath, 'utf8')).toBe(beforeFailure);
+    const oldStore = await loadSessionResumeStore(resumePath);
+    await writeWorkspaceAnchor(cwd, 'test-workspace');
+    await renameWorkspaceSlug({ repoRoot, cwd, fromSlug: 'test-workspace', toSlug: 'renamed' });
     phase = 'resume';
-    expect((await runConductorSession({ ...common, resumeAgentId: RESUME_AGENT_ID })).stopReason).toBe('completed');
-    expect(loadSession).toHaveBeenCalled();
+    expect((await runConductorSession({ ...common, issueUrl: 'workspace://renamed', resumeAgentId: RESUME_AGENT_ID })).stopReason).toBe('completed');
+    expect(loadSession).not.toHaveBeenCalled();
+    expect(recreated).toBe(true);
+    const migrated = await loadSessionResumeStore(resolveEnsemblePaths({ repoRoot }).workspaceSessionResumeStorePath('renamed', RESUME_AGENT_ID));
+    expect(migrated?.workers['ping-1']?.generations?.at(-1)).toMatchObject({
+      acpSessionId: oldStore?.workers['ping-1']?.acpSessionId,
+      issueUrl: 'workspace://test-workspace',
+    });
   });
 
   it.skipIf(process.platform === 'win32')('restores an attached worker and workspace state after a process receives SIGINT', async () => {

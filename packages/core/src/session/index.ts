@@ -163,3 +163,4 @@ export {
   SessionOwnershipUnavailableError,
   type SessionWriteLease,
 } from './session-ownership.js';
+export { acquireSessionMigrationReadLock } from './session-owner-lock.js';
