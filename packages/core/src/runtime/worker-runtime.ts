@@ -108,6 +108,7 @@ export class WorkerRuntime {
   private readonly failedWorkers = new Map<string, FailedWorker>();
   private readonly recreating = new Map<string, AttachedWorker | undefined>();
   private readonly handoffPending = new Set<string>();
+  private readonly recreationRequired = new Set<string>();
   private readonly handoffReports = new Map<string, { sessionId: string; report: string }>();
   private readonly handoffTokens = new Map<string, { sessionId: string; token: string }>();
   private readonly confirmingHandoffs = new Set<string>();
@@ -241,6 +242,12 @@ export class WorkerRuntime {
     const workerId = randomUUID();
     const started: WorkerStartedInfo = { workerId, ...params };
     this.configuredWorkers.set(params.name, started);
+    if (params.recreateRequired) {
+      this.recreationRequired.add(params.name);
+      this.sleeping.set(params.name, started);
+      this.emitWorkerState(workerId, params.name, params.kind, 'sleeping');
+      return workerId;
+    }
     if (params.handoffPending) this.handoffPending.add(params.name);
     if (options?.lazy && !params.handoffPending) {
       this.sleeping.set(params.name, started);
@@ -257,6 +264,9 @@ export class WorkerRuntime {
     instruction: string,
     options?: SendWorkerMessageOptions,
   ): SendWorkerMessageResult {
+    if (this.recreationRequired.has(name)) {
+      return { status: 'error', worker: name, message: `Worker "${name}" must be recreated before receiving instructions.` };
+    }
     if (this.recreating.has(name)) {
       return { status: 'error', worker: name, message: `Worker "${name}" is being recreated; retry after it finishes.` };
     }
@@ -495,6 +505,7 @@ export class WorkerRuntime {
       commitAttempted = true;
       await this.completeWorkerSessionRecovery(resident, bootstrap);
       committed = true;
+      this.recreationRequired.delete(name);
       this.handoffReports.set(name, { sessionId: candidate.session.sessionId, report: bootstrap.promptResult.responseText!.trim() });
       this.handoffTokens.delete(name);
       if (this.forceShutdownRequested) {

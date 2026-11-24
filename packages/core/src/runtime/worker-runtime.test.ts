@@ -151,6 +151,32 @@ describe('WorkerRuntime', () => {
     },
   );
 
+  it('does not load or dispatch a worker awaiting recreation after a rename', async () => {
+    const bridge = createMockBridge(vi.fn().mockResolvedValue(undefined));
+    const connect = vi.fn().mockResolvedValue(bridge);
+    const committed = vi.fn().mockResolvedValue(undefined);
+    const runtime = new WorkerRuntime({
+      inbox: new ConductorInbox(), connectAcp: connect,
+      onWorkerSessionRecovered: committed,
+    });
+    runtime.start({
+      name: 'ping-1', issueUrl: TEST_WORKTREE.issue.url, kind: 'ping',
+      worktree: TEST_WORKTREE, resumeAcpSessionId: 'old-id', recreateRequired: true,
+      sessionState: { workers: [{ name: 'ping-1', kind: 'ping' }], kinds: ['ping'] },
+    });
+    await runtime.waitForIdle();
+    expect(connect).not.toHaveBeenCalled();
+    expect(runtime.sendWorkerMessage('ping-1', 'work').status).toBe('error');
+    await runtime.recreateWorker('ping-1', 'old-id');
+    expect(bridge.loadSession).not.toHaveBeenCalled();
+    expect(bridge.newSession).toHaveBeenCalledOnce();
+    expect(committed).toHaveBeenCalledWith(expect.objectContaining({
+      previousSessionId: 'old-id', reason: 'explicit',
+    }));
+    expect(runtime.sendWorkerMessage('ping-1', 'work').status).toBe('error');
+    await runtime.shutdown();
+  });
+
   it('restores a pending handoff and blocks instructions until confirmation', async () => {
     const bridge = createMockBridge(vi.fn().mockResolvedValue(undefined));
     const confirm = vi.fn().mockResolvedValue(undefined);

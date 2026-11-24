@@ -2,6 +2,7 @@ export {
   assertValidSlugKey,
   defaultSlugKeyFromCwd,
   readWorkspaceAnchor,
+  recoverWorkspaceRename,
   renameWorkspaceSlug,
   resolveWorkspaceSlugKey,
   writeWorkspaceAnchor,

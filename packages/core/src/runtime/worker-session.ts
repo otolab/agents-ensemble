@@ -45,6 +45,7 @@ export interface WorkerSessionOptions {
         acpSpawn?: AcpSpawnFingerprint;
         handoffPending?: boolean;
         workspacePromptVersion?: number;
+        recreateRequired?: boolean;
       }
   >;
   connectAcp?: ConnectWorkerAcpFn;
@@ -165,6 +166,7 @@ export class WorkerSession {
         resumeAcpSessionId,
         migrateWorkspacePrompt: Boolean(resumeAcpSessionId && parseWorkspaceSessionUrl(this.options.issueUrl) && (typeof restored === 'string' || restored?.workspacePromptVersion !== WORKSPACE_WORKER_PROMPT_VERSION)),
         handoffPending: typeof restored === 'object' && restored?.handoffPending === true,
+        recreateRequired: typeof restored === 'object' && restored?.recreateRequired === true,
         spawn: worker.spawn,
         acpFingerprint: worker.acpFingerprint,
       }, {

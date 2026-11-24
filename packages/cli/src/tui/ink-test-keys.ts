@@ -30,6 +30,9 @@ export const INK_TEST_KEYS = {
   altY: '\x1by',
   pageUp: '\u001B[5~',
   pageDown: '\u001B[6~',
+  /** iTerm2 + tmux -CC: Alt+PageUp / Alt+PageDown */
+  altPageUp: '\u001B\u001B[5~',
+  altPageDown: '\u001B\u001B[6~',
   end: '\u001B[F',
   home: '\u001B[H',
   leftArrow: '\u001B[D',

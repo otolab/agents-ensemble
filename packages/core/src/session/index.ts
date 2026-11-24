@@ -158,3 +158,4 @@ export type {
   SessionModelsSummary,
   SessionWorkerModelSummary,
 } from './build-session-models-summary.js';
+export { acquireSessionMigrationReadLock } from './session-owner-lock.js';

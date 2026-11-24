@@ -22,6 +22,7 @@ export interface WorkerStartParams {
   resumeAcpSessionId?: string;
   handoffPending?: boolean;
   migrateWorkspacePrompt?: boolean;
+  recreateRequired?: boolean;
   spawn?: SpawnAcpProcessOptions;
   acpFingerprint?: AcpSpawnFingerprint;
 }

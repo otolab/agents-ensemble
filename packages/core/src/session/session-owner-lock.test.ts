@@ -4,7 +4,23 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { expect, it } from 'vitest';
-import { acquireSessionOwnerLock } from './session-owner-lock.js';
+import { acquireSessionMigrationLock, acquireSessionOwnerLock } from './session-owner-lock.js';
+
+it('excludes migration and cooperating session owners in both directions', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'ensemble-migration-lock-'));
+  try {
+    const owner = await acquireSessionOwnerLock('session', root);
+    await expect(acquireSessionMigrationLock(root)).rejects.toThrow('Stop active sessions');
+    owner();
+    const migration = await acquireSessionMigrationLock(root);
+    await expect(acquireSessionOwnerLock('session', root)).rejects.toThrow('migration is running');
+    migration();
+    const after = await acquireSessionOwnerLock('session', root);
+    after();
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 it.skipIf(process.platform === 'win32')('excludes another process while stopped and releases ownership after death', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ensemble-owner-lock-'));

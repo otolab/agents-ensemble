@@ -8,7 +8,17 @@ GitHub を正本にしない作業には **`ensemble run <brief>`** を使いま
 
 調査と資料整理には同梱の team profile を `ensemble run brief.md --profile workspace-research` で指定できます。conductor が調整と Notes への記録を担い、explore と librarian が作業します。同名の profile がある場合、project、user、bundled の順に優先されます。`ensemble profiles list` では対応する入口の宣言と未指定・不正を区別できます。宣言は選択の目安であり、起動を制限しません。
 
-`ensemble run brief.md --name investigation` は指定名を cwd の `.ensemble/workspace.json` に記録します。以後は同じ cwd から `ensemble run --continue` で再開できます。すでに別の slug が記録された cwd では別名を指定できません。名前の変更用 CLI は [#826](https://github.com/otolab/agents-ensemble/issues/826) で扱います。
+`ensemble run brief.md --name investigation` は指定名を cwd の `.ensemble/workspace.json` に記録します。以後は同じ cwd から `ensemble run --continue` で再開できます。すでに別の slug が記録された cwd では別名を指定できません。
+
+名前を変更するときは、すべての Ensemble セッションと対象 workspace の Notes などの操作を停止し、その cwd で `ensemble workspace-rename investigation new-name` を実行します。別の cwd を指定する場合は `--conductor-cwd <path>` を使います。保存ディレクトリとセッションの参照先を移行し、アンカーを更新します。移動先が存在する場合は空ディレクトリでも拒否します。未対応の session resume store や引き継ぎ確認待ちの worker がある場合も、変更前に拒否します。外部ツールが独自に保存した slug の参照は移行できません。
+
+変更後の `ensemble run --continue` では保存済み worker を直接読み込まず、新しい worker session を作ります。conductor は引き継ぎ報告を確認してから次の指示を出します。以前の session ID と保存先は世代履歴に残りますが、以前の会話自体が新しい session に復元されるわけではありません。Pi conductor の workspace 再開には別途 [Issue #850](https://github.com/otolab/agents-ensemble/issues/850) の問題があります。
+
+rename 中のエラーでは元に戻すことを試みます。強制終了や巻き戻し失敗後は、すべての操作を停止したまま `ensemble workspace-rename-recover` を実行してください。記録された内容と実際のファイルが異なる場合は自動復旧を拒否するため、データを保全してから状況を確認してください。復旧記録が残っている間はセッションの起動も拒否します。
+
+復旧前には journal の SHA-256 と、保存前後の session・アンカーの形式と対応関係を検査します。SHA-256 は偶発的な破損の検出用であり、journal とハッシュをともに書き換えられる相手に対する認証ではありません。破損した journal や checksum のない旧形式は自動復旧できません。削除や編集をせず保全して調査してください。
+
+対応するバージョンのセッションと rename は排他しますが、旧バージョンや外部プロセス、Notes などの非協調操作は排他できません。移行中はそれらを起動しないでください。移行後のセッション記録は旧バージョンでは読めません。journal はプロセスの中断に備えるもので、電源断やストレージ障害後の整合性は保証しません。
 
 worker は既定で conductor と同じ cwd を共有し、isolated worktree は作りません。profile の `workers[].workspace` を指定した worker はそのディレクトリを使います。GitHub Issue の取得や monitor は使いません。
 
@@ -16,7 +26,24 @@ worker は既定で conductor と同じ cwd を共有し、isolated worktree は
 
 conductor は `create_note` で summary 必須のノートを作り、`push_memo` でメモを追加できます。`list_notes` は summary と最新メモの冒頭を一覧し、`read_note` は既定で最新メモを返します。履歴は `includeHistory` と `historyOffset` / `historyLimit`、archive 済みメモは `includeArchived` で読めます。`archive_note` / `archive_memo` で非表示にした内容も読取可能です。Notes は workspace ごとに共有され、再開後も残ります。
 
-同じノートへの更新はプロセス間で排他し、一時ファイルから置き換えます。更新途中のプロセス終了では、完了前の更新は失われる場合があります。電源断やストレージ障害後の保存は保証されません。
+`ensemble notes` は operator や run worker から同じ workspace Notes を操作します。例えば、operator は slug を明示し、worker は harness が渡す環境変数を利用できます。
+
+```bash
+# create の出力から得た ID を NOTE_ID に設定する
+ensemble notes create --slug investigation --summary '調査の記録' --json
+printf '%s\n' '確認した内容' | ensemble notes push --slug investigation --note "$NOTE_ID"
+# ensemble run の worker 内（slug、repo root、conductor cwd は harness が注入）
+printf '%s\n' 'worker の調査結果' | ensemble notes push --note "$NOTE_ID"
+ensemble notes list --include-archived
+ensemble notes show "$NOTE_ID" --history --offset 0 --limit 20
+ensemble notes show "$NOTE_ID" --history --include-archived
+ensemble notes archive "$NOTE_ID"
+ensemble notes archive-memo --note "$NOTE_ID" --memo "$MEMO_ID" --archived false
+```
+
+各コマンドは `--repo-root`、`--slug`、`--conductor-cwd`、`--json` を受け付けます。slug は明示指定、`ENSEMBLE_WORKSPACE_SLUG`、conductor cwd の `.ensemble/workspace.json` の順に解決します。暗黙解決では既存 anchor だけを読み、新しい anchor は作りません。anchor がない場合は終了コード 2 です。Issue session 向けの Notes はなく、Issue worker には workspace 環境変数を注入しません。明示 slug での手動利用はセッション外でも可能です。repo root は明示指定、注入された `ENSEMBLE_WORKSPACE_REPO_ROOT`、git root の順に解決します。conductor cwd は明示指定、注入された `ENSEMBLE_WORKSPACE_CONDUCTOR_CWD`、現在の cwd の順です。
+
+本文は前後の空白を除いて非空、UTF-8 で最大 512 KiB です。終了コードは成功 0、実行エラー 1、引数やコンテキストのエラー 2 です。`--json` 指定時、stdout には JSON のみを出力します。store は同じ note の更新をファイルロックで直列化し、一時ファイルから rename して保存します。ロックに参加しない外部の直接編集や、ファイルシステムのロック・rename の信頼性は保証しません。更新途中のプロセス終了では、完了前の更新は失われる場合があります。電源断やストレージ障害後の保存も保証されません。同じ slug を使う人は誰でも読み書きできます。
 
 `ensemble run` の共通プロンプトには Issue / PR を正本とする既定は含まれません。ただし、既定の team profile は Issue / PR を前提とする materials を含むため、run では上記の `workspace-research` など、run に適した materials を持つ profile を指定してください。
 

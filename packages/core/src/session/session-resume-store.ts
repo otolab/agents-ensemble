@@ -24,6 +24,7 @@ import { resolveUserEnsembleRoot } from '../resolve-user-ensemble-root.js';
 import { writeFileIfMissing } from './persisted-file.js';
 
 export const SESSION_RESUME_STORE_VERSION = 1;
+export const WORKSPACE_RENAME_SESSION_RESUME_STORE_VERSION = 2;
 
 export type EnsembleConfigDigestScheme = 'full' | 'resume-feasibility';
 
@@ -100,6 +101,8 @@ export interface WorkerSessionResumeStore {
   issueUrl?: string;
   handoffPending?: boolean;
   workspacePromptVersion?: number;
+  /** A workspace rename requires an explicit new worker session before dispatch. */
+  recreateRequired?: boolean;
   generations?: WorkerSessionGeneration[];
 }
 
@@ -143,7 +146,7 @@ function parseWorkerSessionGenerations(value: unknown, name: string): WorkerSess
 }
 
 export interface SessionResumeStore {
-  version: typeof SESSION_RESUME_STORE_VERSION;
+  version: typeof SESSION_RESUME_STORE_VERSION | typeof WORKSPACE_RENAME_SESSION_RESUME_STORE_VERSION;
   conductorAgentId: string;
   /** 起動時に選択した conductor backend。旧形式の欠落値は cursor。 */
   conductorBackend?: ConductorBackend;
@@ -1205,12 +1208,12 @@ export const sessionSidecarPath = sessionResumeStorePath;
 /** @deprecated Use loadSessionResumeStore; supported for one release only. */
 export const loadSessionSidecar = loadSessionResumeStore;
 
-function parseSessionResumeStore(value: unknown): SessionResumeStore {
+export function parseSessionResumeStore(value: unknown): SessionResumeStore {
   if (!value || typeof value !== 'object') {
     throw new Error('Invalid session resume store: not an object');
   }
   const record = value as Record<string, unknown>;
-  if (record.version !== SESSION_RESUME_STORE_VERSION) {
+  if (record.version !== SESSION_RESUME_STORE_VERSION && record.version !== WORKSPACE_RENAME_SESSION_RESUME_STORE_VERSION) {
     throw new Error(`Unsupported session resume store version: ${record.version}`);
   }
   if (typeof record.conductorAgentId !== 'string') {
@@ -1357,6 +1360,10 @@ function parseSessionResumeStore(value: unknown): SessionResumeStore {
     if (worker.workspacePromptVersion !== undefined && (!Number.isSafeInteger(worker.workspacePromptVersion) || (worker.workspacePromptVersion as number) < 1)) {
       throw new Error(`Invalid session resume store worker workspacePromptVersion: ${name}`);
     }
+    if (worker.recreateRequired !== undefined &&
+        (record.version !== WORKSPACE_RENAME_SESSION_RESUME_STORE_VERSION || typeof worker.recreateRequired !== 'boolean')) {
+      throw new Error(`Invalid session resume store worker recreateRequired: ${name}`);
+    }
     workers[name] = {
       ...(typeof worker.workspacePromptVersion === 'number' ? { workspacePromptVersion: worker.workspacePromptVersion } : {}),
       acpSessionId: worker.acpSessionId,
@@ -1364,6 +1371,7 @@ function parseSessionResumeStore(value: unknown): SessionResumeStore {
       ...(typeof worker.repoRoot === 'string' ? { repoRoot: worker.repoRoot } : {}),
       ...(typeof worker.issueUrl === 'string' ? { issueUrl: worker.issueUrl } : {}),
       ...(worker.handoffPending === true ? { handoffPending: true } : {}),
+      ...(worker.recreateRequired === true ? { recreateRequired: true } : {}),
       ...(typeof worker.originAcpCwd === 'string' ? { originAcpCwd: worker.originAcpCwd } : {}),
       ...(parseAcpSpawnFingerprint(worker.originAcpSpawn, name)
         ? { originAcpSpawn: parseAcpSpawnFingerprint(worker.originAcpSpawn, name) }
@@ -1378,7 +1386,7 @@ function parseSessionResumeStore(value: unknown): SessionResumeStore {
   }
 
   return {
-    version: SESSION_RESUME_STORE_VERSION,
+    version: record.version as SessionResumeStore['version'],
     conductorAgentId: record.conductorAgentId,
     conductorBackend,
     ...(typeof record.createdHarnessCliVersion === 'string'

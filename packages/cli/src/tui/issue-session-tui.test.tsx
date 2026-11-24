@@ -472,6 +472,88 @@ describe('IssueSessionTui', () => {
     expect(onSubmit).toHaveBeenCalledWith('/ex', undefined);
   });
 
+  it.each([
+    ['Alt', INK_TEST_KEYS.altPageUp],
+    ['Shift', INK_TEST_KEYS.shiftPageUp],
+  ])('scrolls recovery before the hidden question with %s+PgUp', async (_modifier, pageUp) => {
+    const source = new ResizeSource();
+    const terminalSizeStore = createTuiTerminalSizeStore(
+      source as unknown as Pick<NodeJS.WriteStream, 'columns' | 'rows' | 'on' | 'off'>,
+    );
+    const viewModel = createTuiViewModel();
+    viewModel.setDisplayState({
+      workers: {}, conductorOutput: null,
+      openQuestions: [createOpenQuestion({ id: 'inq-recovery', question: 'Question?', context: LONG_QUESTION_CONTEXT })],
+      dispatchHold: { hold: false, heldEventCount: 0 },
+    });
+    const { stdin, lastFrame } = render(
+      <IssueSessionTui viewModel={viewModel} terminalSizeStore={terminalSizeStore} onSubmit={vi.fn()} />,
+    );
+    await flushInkStdin();
+    stdin.write(INK_TEST_KEYS.shiftPageDown.repeat(10));
+    await flushInkStdin();
+    const questionPane = (frame: string) => frame.slice(frame.indexOf('╭─ Open questions')).split('╰')[0];
+    const questionBefore = questionPane(lastFrame() ?? '');
+    expect(questionBefore).toContain('context-line-05');
+    expect(questionBefore).not.toContain('context-line-00');
+    viewModel.setRecoveryInspection({
+      title: 'Recovery',
+      text: Array.from({ length: 40 }, (_, index) => `recovery-line-${String(index).padStart(2, '0')}`).join('\n'),
+      recoveryId: 'recovery-test', expiresAt: Date.now() + 60_000, sensitive: true,
+    });
+    source.rows = 6;
+    source.emit('resize');
+    await flushInkStdin(TUI_RESIZE_SETTLE_MS + 50);
+    expect(lastFrame() ?? '').toContain('recovery-line-39');
+    expect(lastFrame() ?? '').not.toContain('recovery-line-00');
+    stdin.write(pageUp);
+    await flushInkStdin();
+    expect(lastFrame() ?? '').not.toContain('recovery-line-39');
+    stdin.write('\u001b');
+    await flushInkStdin();
+    source.rows = 24;
+    source.emit('resize');
+    await flushInkStdin(TUI_RESIZE_SETTLE_MS + 50);
+    expect(questionPane(lastFrame() ?? '')).toBe(questionBefore);
+    terminalSizeStore.dispose();
+  });
+
+  it.each([
+    ['Alt', INK_TEST_KEYS.altPageDown],
+    ['Shift', INK_TEST_KEYS.shiftPageDown],
+  ])('scrolls the visible question before recovery with %s+PgDn in a normal pane', async (_modifier, pageDown) => {
+    const source = new ResizeSource();
+    source.rows = 40;
+    const terminalSizeStore = createTuiTerminalSizeStore(
+      source as unknown as Pick<NodeJS.WriteStream, 'columns' | 'rows' | 'on' | 'off'>,
+    );
+    const viewModel = createTuiViewModel();
+    viewModel.setDisplayState({
+      workers: {}, conductorOutput: null,
+      openQuestions: [createOpenQuestion({ id: 'inq-recovery', question: 'Question?', context: LONG_QUESTION_CONTEXT })],
+      dispatchHold: { hold: false, heldEventCount: 0 },
+    });
+    viewModel.setRecoveryInspection({
+      title: 'Recovery',
+      text: Array.from({ length: 40 }, (_, index) => `recovery-line-${String(index).padStart(2, '0')}`).join('\n'),
+      recoveryId: 'recovery-test', expiresAt: Date.now() + 60_000, sensitive: true,
+    });
+    const { stdin, lastFrame } = render(<IssueSessionTui viewModel={viewModel} terminalSizeStore={terminalSizeStore} onSubmit={vi.fn()} />);
+    await flushInkStdin();
+    expect(lastFrame() ?? '').toContain('context-line-00');
+    expect(lastFrame() ?? '').toContain('recovery-line-39');
+    stdin.write(pageDown.repeat(2));
+    await flushInkStdin();
+    expect(lastFrame() ?? '').not.toContain('context-line-00');
+    expect(lastFrame() ?? '').toContain('context-line-01');
+    expect(lastFrame() ?? '').toContain('recovery-line-39');
+    stdin.write(INK_TEST_KEYS.pageUp);
+    await flushInkStdin();
+    expect(lastFrame() ?? '').not.toContain('recovery-line-39');
+    expect(lastFrame() ?? '').toContain('context-line-01');
+    terminalSizeStore.dispose();
+  });
+
   it('shows recovery content outside the activity log and hides it with Escape', async () => {
     const viewModel = createTuiViewModel();
     viewModel.setRecoveryInspection({
@@ -2448,11 +2530,11 @@ describe('IssueSessionTui', () => {
       const initialFrame = lastFrame() ?? '';
       expect(initialFrame).toContain('context-line-00');
       expect(initialFrame).not.toContain('context-line-39');
-      expect(initialFrame).toContain('Shift+PgUp/PgDnで本文スクロール');
-      expect(initialFrame).toContain('で選択) · Shift+PgUp/PgDn');
+      expect(initialFrame).toContain('Shift/Alt+PgUp/PgDnでスクロール');
+      expect(initialFrame).toContain('で選択) · Shift/Alt+PgUp/PgDn');
       expect(initialFrame).toContain('› safe: Safe mode');
 
-      stdin.write(INK_TEST_KEYS.shiftPageDown.repeat(2));
+      stdin.write(INK_TEST_KEYS.altPageDown.repeat(2));
       await flushInkStdin();
       const scrolledFrame = lastFrame() ?? '';
       expect(scrolledFrame).not.toContain('context-line-00');
@@ -2487,11 +2569,18 @@ describe('IssueSessionTui', () => {
       stdin.write(INK_TEST_KEYS.shiftPageDown.repeat(200));
       await flushInkStdin();
       expect(lastFrame() ?? '').toContain('context-line-39');
-      stdin.write(INK_TEST_KEYS.shiftPageUp.repeat(200));
+      stdin.write(INK_TEST_KEYS.altPageUp.repeat(200));
       await flushInkStdin();
       const topFrame = lastFrame() ?? '';
       expect(topFrame).toContain('context-line-00');
       expect(topFrame).not.toContain('context-line-39');
+
+      stdin.write(INK_TEST_KEYS.shiftPageDown.repeat(200));
+      await flushInkStdin();
+      stdin.write(INK_TEST_KEYS.shiftPageUp.repeat(200));
+      await flushInkStdin();
+      expect(lastFrame() ?? '').toContain('context-line-00');
+      expect(lastFrame() ?? '').not.toContain('context-line-39');
     });
 
     it('cycles selection with Shift+arrow keys', async () => {
@@ -2690,7 +2779,7 @@ describe('IssueSessionTui', () => {
   });
 
   describe('orchestration pane scroll (stdin integration)', () => {
-    it('scrolls to older lines on PgUp when input is empty and shows scroll hint', async () => {
+    it.each([INK_TEST_KEYS.pageUp, INK_TEST_KEYS.altPageUp])('scrolls activity with page input %j when no question is open', async (pageUp) => {
       const viewModel = createTuiViewModel();
       fillScrollableHarnessLog(viewModel);
 
@@ -2703,7 +2792,7 @@ describe('IssueSessionTui', () => {
       expect(pinnedFrame).not.toContain('[harness] line-14');
       expect(pinnedFrame).not.toContain(SCROLL_HINT);
 
-      stdin.write(INK_TEST_KEYS.pageUp);
+      stdin.write(pageUp);
       await flushInkStdin();
 
       const scrolledFrame = lastFrame() ?? '';
