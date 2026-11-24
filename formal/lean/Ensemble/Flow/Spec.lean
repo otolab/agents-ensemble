@@ -48,6 +48,8 @@ structure State where
   retry : Retry
   frozen : EventId → Prop
   items : EventId → Option Item
+  lastAttempt : EventId → Option AttemptId
+  completed : AttemptId → Prop
   now : Time
 /-- 解除操作と通常入力。別の意図で再入力する場合は新しい ID を使う。 -/
 inductive Operation where
@@ -115,19 +117,25 @@ def Eligible (s : State) (id : EventId) : Prop :=
 /--
 状態と観測を両方向に対応させる。新しい ID の出現は受理観測を要し、保留からの
 状態変更は dispatch または破棄を要する。dispatch 済み watch report の再投入だけを
-明示的な requeue 観測で許し、operator input の再投入は許さない。再投入は未完了
-send の結果に限る（ack-only retry は再投入しない）。各観測は同じ遷移の
+明示的な requeue 観測で許し、operator input の再投入は許さない。再投入はその report
+を含む未完了 attempt の結果に限る。成功済み attempt では ack のみを retry し、
+再投入しない。同一 process の履歴を対象とし、再起動後の replay は対象外。各観測は同じ遷移の
 状態変化に対応する。ID の再利用、永続化、配信成功は保証しない。
 -/
 def ObservationConsistent (step : Transition) : Prop :=
   ∀ s e obs t, step s e obs t →
     (∀ id kind, .accepted id kind ∈ obs ↔ s.items id = none ∧ t.items id = some ⟨kind, .pending⟩) ∧
     (∀ id attempt, .dispatched id attempt ∈ obs →
-      ∃ kind, Pending s id kind ∧ t.items id = some ⟨kind, .dispatched⟩) ∧
+      ∃ kind, Pending s id kind ∧ t.items id = some ⟨kind, .dispatched⟩ ∧
+        t.lastAttempt id = some attempt ∧ ¬ s.completed attempt) ∧
     (∀ id, .discarded id ∈ obs ↔ ∃ kind, Pending s id kind ∧ t.items id = some ⟨kind, .discarded⟩) ∧
     (∀ id, .requeued id ∈ obs ↔ s.items id = some ⟨.watchReport, .dispatched⟩ ∧
       t.items id = some ⟨.watchReport, .pending⟩) ∧
-    (∀ id, .requeued id ∈ obs → ∃ attempt result, e = .sendResult attempt result ∧ result ≠ .completed) ∧
+    (∀ id, .requeued id ∈ obs → ∃ attempt result, e = .sendResult attempt result ∧
+      result ≠ .completed ∧ s.lastAttempt id = some attempt ∧ ¬ s.completed attempt) ∧
+    (∀ attempt, t.completed attempt ↔ s.completed attempt ∨ e = .sendResult attempt .completed) ∧
+    (∀ id, s.lastAttempt id = t.lastAttempt id ∨
+      (∃ attempt, .dispatched id attempt ∈ obs ∧ t.lastAttempt id = some attempt)) ∧
     (∀ id, (s.items id = none ∧ t.items id = none) ∨
       (∃ kind, s.items id = none ∧ t.items id = some ⟨kind, .pending⟩ ∧ .accepted id kind ∈ obs) ∨
       (∃ item, s.items id = some item ∧ t.items id = some item) ∨
@@ -237,12 +245,19 @@ def ReconnectResumes (step : Transition) : Prop :=
 def ResumeWatchPreservesReportHold (step : Transition) : Prop :=
   ∀ s t obs, step s (.operation .resumeWatch) obs t → t.reportHold = s.reportHold
 /--
-解除操作は列挙された対象外の hold・availability・attention を変えない。lease、
-pending reconnect、retry、held、frozen と、結果イベントによる変更は対象外。
-解除操作自身が成功することも保証しない。
+各解除操作は対象外の停止要因を変更しない。すべての操作で retry と frozen を保持し、
+`setDispatchHold(false)` 以外は held を保持する。reconnect 要求以外は lease と
+pending reconnect も保持する。reconnect はその開始・待機を変更しうる。dispatch hold
+解除は保留イベントを戻せるため held の変更を許す。対象 hold や attention 自体の解除成功、
+操作後の別イベントで起こる回復、項目の配信は保証しない。
 -/
 def ReleaseIndependent (step : Transition) : Prop :=
   ∀ s t obs op, step s (.operation op) obs t →
+    (op = .resumeWatch ∨ op = .recoveryContinue ∨ op = .reconnect ∨
+      op = .setDispatchHold false ∨ op = .setReportHold false) →
+    t.retry = s.retry ∧ t.frozen = s.frozen ∧
+    (op ≠ .setDispatchHold false → t.held = s.held) ∧
+    (op ≠ .reconnect → t.lease = s.lease ∧ t.pendingReconnects = s.pendingReconnects) ∧
     (op = .resumeWatch → t.reportHold = s.reportHold ∧ t.dispatchHold = s.dispatchHold ∧
       t.available = s.available ∧ t.attention = s.attention) ∧
     (op = .recoveryContinue → t.reportHold = s.reportHold ∧ t.conversationHold = s.conversationHold ∧
@@ -253,4 +268,5 @@ def ReleaseIndependent (step : Transition) : Prop :=
       t.available = s.available ∧ t.attention = s.attention) ∧
     (op = .reconnect → t.reportHold = s.reportHold ∧ t.conversationHold = s.conversationHold ∧
       t.dispatchHold = s.dispatchHold ∧ t.attention = s.attention)
+
 end Ensemble.Flow
