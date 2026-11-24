@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -54,6 +54,27 @@ describe('listConductorProviderHistory', () => {
     }
     process.env[ENSEMBLE_USER_ROOT_ENV] = userRoot;
   }
+
+  it('reads current Pi history without repairing the original transcript', async () => {
+    tempDir = await mkdtemp(join(tmpdir(), 'ensemble-pi-history-readonly-'));
+    setUserRoot(join(tempDir, 'user-ensemble'));
+    const sessionDir = resolveEnsemblePaths({ repoRoot: tempDir }).canonicalPiSessionsDir(ISSUE_URL);
+    const manager = SessionManager.create(tempDir, sessionDir, { id: 'readonly-agent' });
+    appendPiTurn(manager, {
+      inbound: 'question', response: 'answer', sendCount: 1, dispatchSource: 'operator',
+    });
+    const file = manager.getSessionFile();
+    const original = (await readFile(file, 'utf8')).trimEnd();
+    await writeFile(file, original);
+    const input = {
+      backend: 'pi' as const, conductorAgentId: 'readonly-agent', cwd: tempDir,
+      repoRoot: tempDir, issueUrl: ISSUE_URL, query: { limit: 1, order: 'desc' as const },
+    };
+    const first = await listConductorProviderHistory(input);
+    const second = await listConductorProviderHistory(input);
+    expect(first.messages[0]?.providerId).toBe(second.messages[0]?.providerId);
+    expect(await readFile(file, 'utf8')).toBe(original);
+  });
 
   it('reads only active Pi branch user/final-response entries after restart', async () => {
     tempDir = await mkdtemp(join(tmpdir(), 'ensemble-pi-history-'));
@@ -199,11 +220,7 @@ describe('listConductorProviderHistory', () => {
         text: 'repo-root response',
       },
     ]);
-    expect(openSpy).toHaveBeenCalledWith(
-      userManager.getSessionFile(),
-      paths.canonicalPiSessionsDir(ISSUE_URL),
-      conductorCwd,
-    );
+    expect(openSpy).not.toHaveBeenCalled();
     expect(JSON.stringify(result)).not.toContain('legacy transcript');
   });
 

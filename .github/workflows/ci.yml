@@ -28,6 +28,9 @@ jobs:
       - name: Verify builtin Pi storage ACLs
         run: pnpm --filter @agents-ensemble/core exec vitest run src/acp/pi-session-map.test.ts
 
+      - name: Verify Pi conductor transcript cwd and resume on Windows
+        run: pnpm --filter @agents-ensemble/core exec vitest run src/conductor/pi-conductor-session-file.test.ts src/conductor/pi-conductor-agent.test.ts -t "accepts a Windows cwd|keeps migrated v1 history stable"
+
       - name: Verify session ownership acquisition, conflict and release
         run: pnpm --filter @agents-ensemble/core exec vitest run src/session/session-ownership.test.ts -t "rejects late writes|drains an accepted delayed file write|releases the lock when the owning process is killed"
 

@@ -12,7 +12,8 @@ import {
 import { dirname, join, resolve, sep } from 'node:path';
 import { Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
-import { findPiConductorSessionFile } from '../conductor/pi-conductor-session-file.js';
+import { PiTranscriptValidationError } from '../conductor/pi-conductor-session-file.js';
+import { readPiTranscriptSnapshot } from '../conductor/pi-transcript-snapshot.js';
 import { readCursorConductorRunSnapshots } from '../conductor/cursor-run-snapshots.js';
 import {
   resolveEnsemblePaths,
@@ -416,9 +417,10 @@ async function exportPiConductorTranscript(input: {
   warnings: string[];
 }): Promise<void> {
   const cwd = input.resumeStore.conductorCwd ?? input.resumeStore.repoRoot;
-  let location: ReturnType<typeof findPiConductorSessionFile>;
+  let location: Awaited<ReturnType<typeof readPiTranscriptSnapshot>>;
+  let resolutionFailure: string | undefined;
   try {
-    location = findPiConductorSessionFile({
+    location = await readPiTranscriptSnapshot({
       conductorAgentId: input.conductorAgentId,
       cwd,
       repoRoot: input.repoRoot,
@@ -428,11 +430,12 @@ async function exportPiConductorTranscript(input: {
         input.resumeStore.repoRoot,
       ].filter((savedCwd): savedCwd is string => Boolean(savedCwd)),
     });
-  } catch {
+  } catch (error) {
     location = undefined;
+    resolutionFailure = error instanceof PiTranscriptValidationError ? error.message : undefined;
   }
   if (!location) {
-    const reason = 'Pi transcript を保存先から解決できませんでした。';
+    const reason = `Pi transcript を保存先から解決できませんでした。${resolutionFailure ? ` ${resolutionFailure}` : ''}`;
     input.sources.push({
       id: 'conductor.piTranscript',
       status: 'unavailable',
@@ -444,15 +447,15 @@ async function exportPiConductorTranscript(input: {
     return;
   }
 
-  await copyRawSource({
-    id: 'conductor.piTranscript',
-    sourcePath: location.sessionFile,
-    bundlePath: 'conductor/pi-transcript.jsonl',
-    outputDirectory: input.outputDirectory,
-    raceSensitive: true,
-    files: input.files,
-    sources: input.sources,
-    warnings: input.warnings,
+  const bundlePath = 'conductor/pi-transcript.jsonl';
+  await writeBundleJsonFile(bundleFilePath(input.outputDirectory, bundlePath), location.contents);
+  input.files.push({
+    path: bundlePath, kind: 'raw', sizeBytes: location.contents.length,
+    sha256: createHash('sha256').update(location.contents).digest('hex'),
+    sourcePaths: [location.sessionFile],
+  });
+  input.sources.push({
+    id: 'conductor.piTranscript', status: 'copied', sourcePaths: [location.sessionFile], bundlePaths: [bundlePath],
   });
 }
 

@@ -1,8 +1,8 @@
 import { existsSync } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ModelsError } from '@earendil-works/pi-ai/models';
 
@@ -18,6 +18,9 @@ const {
   mockGetModel,
   mockGetModels,
   mockGetProviders,
+  mockResumeWork,
+  mockPointerLock,
+  resumeFixture,
 } = vi.hoisted(() => ({
   mockCreateAgentSession: vi.fn(),
   mockCreateMcpExtension: vi.fn(),
@@ -30,6 +33,9 @@ const {
   mockGetModel: vi.fn(),
   mockGetModels: vi.fn(),
   mockGetProviders: vi.fn(),
+  mockResumeWork: vi.fn(),
+  mockPointerLock: vi.fn(),
+  resumeFixture: { id: '', path: '', useActualFinder: false },
 }));
 
 vi.mock('@earendil-works/pi-ai/compat', () => ({
@@ -55,13 +61,45 @@ vi.mock('@earendil-works/pi-coding-agent', async () => {
       create: mockSessionManagerCreate,
       findById: mockSessionManagerFindById,
       open: mockSessionManagerOpen,
+      inMemory: actual.SessionManager.inMemory.bind(actual.SessionManager),
     },
   };
 });
 
+vi.mock('./pi-conductor-session-file.js', async () => {
+  const actual = await vi.importActual<typeof import('./pi-conductor-session-file.js')>(
+    './pi-conductor-session-file.js',
+  );
+  return {
+    ...actual,
+    findValidatedPiSessionFile: (input: {
+      sessionDir: string; conductorAgentId: string; cwds: readonly string[];
+    }) => {
+      if (resumeFixture.useActualFinder || input.sessionDir.includes('.ensemble-transcripts')) {
+        return actual.findValidatedPiSessionFile(input);
+      }
+      resumeFixture.id = input.conductorAgentId;
+      for (const cwd of [...new Set(input.cwds)]) {
+        const result = mockSessionManagerFindById(cwd, input.conductorAgentId, input.sessionDir);
+        if (result) return result;
+      }
+      return undefined;
+    },
+  };
+});
+
+vi.mock('./pi-resume-work-copy.js', () => ({
+  createPiResumeWorkCopy: mockResumeWork,
+}));
+
+vi.mock('./pi-transcript-lock.js', () => ({
+  withPiTranscriptPointerLock: mockPointerLock,
+}));
+
 import {
   createPiConductorAgentFactory,
   PiConductorAgent,
+  PI_CONDUCTOR_MESSAGE_HISTORY_ENTRY_TYPE,
   resolvePiModelDetails,
   resolvePiModelConfig,
 } from './pi-conductor-agent.js';
@@ -84,6 +122,9 @@ import * as piResourceLoaderModule from './pi-resource-loader.js';
 import * as issueContextModule from '../github/issue-context.js';
 import * as resolveGitHubAuthTokenModule from '../github/resolve-github-auth-token.js';
 import { sendConductorWithReconnect } from './conductor-send-reconnect.js';
+import { listConductorProviderHistory } from './conductor-history.js';
+import { readPiTranscriptSnapshot } from './pi-transcript-snapshot.js';
+import { exportSessionBundle } from '../session/export-session-bundle.js';
 
 const PI_TEST_ISSUE_URL = 'https://github.com/org/repo/issues/1';
 
@@ -132,7 +173,9 @@ describe('PiConductorAgent', () => {
 
   beforeEach(async () => {
     cwd = await mkdtemp(join(tmpdir(), 'pi-conductor-project-'));
+    resumeFixture.useActualFinder = false;
     vi.stubEnv('HOME', cwd);
+    vi.stubEnv('ENSEMBLE_USER_ROOT', join(cwd, '.ensemble'));
     agentDir = join(cwd, 'user-pi');
     await mkdir(agentDir, { recursive: true });
     await writeFile(
@@ -156,7 +199,17 @@ describe('PiConductorAgent', () => {
     fakeSessionManager = {
       getBranch: vi.fn(() => []),
       appendCustomEntry: vi.fn(),
+      setSessionFile: vi.fn((path: string) => { resumeFixture.path = path; }),
+      getSessionFile: vi.fn(() => resumeFixture.path),
+      getSessionId: vi.fn(() => resumeFixture.id),
     };
+    mockResumeWork.mockImplementation(async ({ sourceFile }: { sourceFile: string }) => ({
+      workFile: sourceFile,
+      commit: async () => ({ path: sourceFile, cleanupPending: false }),
+      discard: async () => {},
+    }));
+    mockPointerLock.mockImplementation(async (_input, action) =>
+      action({ read: () => undefined, publish: () => {} }));
     fakeSession.sessionManager = fakeSessionManager;
     mockSessionManagerCreate.mockReset();
     mockSessionManagerCreate.mockReturnValue(fakeSessionManager);
@@ -200,6 +253,172 @@ describe('PiConductorAgent', () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
+  });
+
+  it('creates and resumes a workspace Pi session in the workspace directory', async () => {
+    const issueUrl = 'workspace://alpha';
+    const sessionDir = join(cwd, '.ensemble', 'workspaces', 'alpha', 'pi');
+    const options = {
+      cwd,
+      issueUrl,
+      pi: { agentDir },
+      modelId: 'anthropic/model-1',
+      systemPrompt: 'system',
+    };
+    const created = await createPiAgent(options);
+    expect(mockSessionManagerCreate).toHaveBeenCalledWith(
+      cwd, sessionDir, expect.objectContaining({ id: expect.any(String) }),
+    );
+    await created.close();
+
+    const sessionFile = join(sessionDir, 'existing.jsonl');
+    mockSessionManagerFindById.mockReturnValue(sessionFile);
+    const resumed = await resumePiAgent('workspace-agent', options);
+    expect(mockSessionManagerFindById).toHaveBeenCalledWith(cwd, 'workspace-agent', sessionDir);
+    expect(mockSessionManagerOpen).toHaveBeenCalledWith(sessionFile, sessionDir, cwd);
+    await resumed.close();
+  });
+
+  it.each(['session', 'extension', 'mcp', 'subscribe', 'switch', 'success'] as const)(
+    'uses a work copy for workspace resume when startup is %s',
+    async (mode) => {
+      const sdk = await vi.importActual<typeof import('@earendil-works/pi-coding-agent')>(
+        '@earendil-works/pi-coding-agent',
+      );
+      const workModule = await vi.importActual<typeof import('./pi-resume-work-copy.js')>(
+        './pi-resume-work-copy.js',
+      );
+      const lockModule = await vi.importActual<typeof import('./pi-transcript-lock.js')>(
+        './pi-transcript-lock.js',
+      );
+      mockPointerLock.mockImplementation(lockModule.withPiTranscriptPointerLock);
+      mockResumeWork.mockImplementation(workModule.createPiResumeWorkCopy);
+      mockSessionManagerOpen.mockImplementation((...args: Parameters<typeof sdk.SessionManager.open>) =>
+        sdk.SessionManager.open(...args));
+      const sessionDir = join(cwd, '.ensemble', 'workspaces', 'alpha', 'pi');
+      const originalManager = sdk.SessionManager.create(cwd, sessionDir, { id: 'workspace-agent' });
+      originalManager.appendMessage({
+        role: 'user', content: [{ type: 'text', text: 'original' }], timestamp: 1,
+      });
+      const sourceFile = originalManager.getSessionFile();
+      const original = await readFile(sourceFile);
+      mockSessionManagerFindById.mockReturnValue(sourceFile);
+      mockCreateAgentSession.mockImplementation(async (input: { sessionManager: unknown }) => {
+        (input.sessionManager as InstanceType<typeof sdk.SessionManager>)
+          .appendCustomEntry('fixture-startup', { value: 'staged' });
+        if (mode === 'session') throw new Error('session startup failure');
+        fakeSession.sessionManager = input.sessionManager;
+        return { session: fakeSession, extensionsResult: { errors: [] } };
+      });
+      if (mode === 'extension') {
+        fakeSession.bindExtensions.mockRejectedValue(new Error('extension startup failure'));
+      } else if (mode === 'mcp') {
+        fakeSession.bindExtensions.mockImplementation(async ({ onError }: {
+          onError: (error: unknown) => void;
+        }) => {
+          onError({ extensionPath: 'fixture/mcp', event: 'session_start', error: 'MCP startup failure' });
+        });
+      } else if (mode === 'switch') {
+        vi.spyOn(sdk.SessionManager.prototype, 'setSessionFile')
+          .mockImplementation(() => { throw new Error('switch startup failure'); });
+      } else if (mode === 'subscribe') {
+        fakeSession.subscribe.mockImplementation(() => { throw new Error('subscribe startup failure'); });
+      }
+      const options = {
+        cwd, issueUrl: 'workspace://alpha', pi: { agentDir },
+        modelId: 'anthropic/model-1', systemPrompt: 'system',
+      };
+      if (mode !== 'success') {
+        await expect(resumePiAgent('workspace-agent', options)).rejects.toThrow(/startup failure/);
+        expect((await readdir(sessionDir)).filter((name) => name.endsWith('.jsonl'))).toEqual([basename(sourceFile)]);
+      } else {
+        const conductor = await resumePiAgent('workspace-agent', options);
+        const manager = fakeSession.sessionManager as InstanceType<typeof sdk.SessionManager>;
+        expect(manager.getSessionFile()).not.toBe(sourceFile);
+        manager.appendCustomEntry('fixture-after-resume', { value: 'persisted' });
+        expect(await readFile(manager.getSessionFile(), 'utf8')).toContain('fixture-after-resume');
+        await conductor.close();
+        const committed = await readFile(manager.getSessionFile());
+        // Simulate a process that stopped after preparing a generation but
+        // before publishing its pointer. It must never become the resume source.
+        const orphanDir = join(sessionDir, '.ensemble-transcripts',
+          createHash('sha256').update('workspace-agent').digest('hex'), 'f'.repeat(32));
+        await mkdir(orphanDir, { recursive: true });
+        await writeFile(join(orphanDir, 'session.jsonl'), original);
+        fakeSession.bindExtensions.mockRejectedValueOnce(new Error('extension startup failure'));
+        await expect(resumePiAgent('workspace-agent', options)).rejects.toThrow('extension startup failure');
+        expect(await readFile(manager.getSessionFile())).toEqual(committed);
+        const resumedAgain = await resumePiAgent('workspace-agent', options);
+        const secondManager = fakeSession.sessionManager as InstanceType<typeof sdk.SessionManager>;
+        expect(secondManager.getSessionFile()).not.toBe(manager.getSessionFile());
+        expect(await readFile(secondManager.getSessionFile(), 'utf8')).toContain('fixture-after-resume');
+        expect(await readFile(manager.getSessionFile())).toEqual(committed);
+        await resumedAgain.close();
+      }
+      expect(await readFile(sourceFile)).toEqual(original);
+    },
+  );
+
+  it('keeps migrated v1 history stable through actual resume, append, and resume again', async () => {
+    resumeFixture.useActualFinder = true;
+    const sdk = await vi.importActual<typeof import('@earendil-works/pi-coding-agent')>('@earendil-works/pi-coding-agent');
+    const workModule = await vi.importActual<typeof import('./pi-resume-work-copy.js')>('./pi-resume-work-copy.js');
+    const lockModule = await vi.importActual<typeof import('./pi-transcript-lock.js')>('./pi-transcript-lock.js');
+    mockResumeWork.mockImplementation(workModule.createPiResumeWorkCopy);
+    mockPointerLock.mockImplementation(lockModule.withPiTranscriptPointerLock);
+    mockSessionManagerOpen.mockImplementation((...args: Parameters<typeof sdk.SessionManager.open>) => sdk.SessionManager.open(...args));
+    mockCreateAgentSession.mockImplementation(async (input: { sessionManager: unknown }) => {
+      fakeSession.sessionManager = input.sessionManager;
+      return { session: fakeSession, extensionsResult: { errors: [] } };
+    });
+    const sessionDir = join(cwd, '.ensemble', 'workspaces', 'legacy', 'pi');
+    await mkdir(sessionDir, { recursive: true });
+    const source = join(sessionDir, 'legacy-agent.jsonl');
+    const savedCwd = process.platform === 'win32' ? cwd.toUpperCase() : cwd;
+    const original = `${JSON.stringify({ type: 'session', id: 'legacy-agent', cwd: savedCwd })}\n` +
+      `${JSON.stringify({ type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'legacy' }], timestamp: 1 } })}\n`;
+    await writeFile(source, original);
+    const unrelated = join(sessionDir, '2026-01-02T03-04-05-678Z_other-agent.jsonl');
+    await writeFile(unrelated, '{broken');
+    mockSessionManagerFindById.mockReturnValue(source);
+    const issueUrl = 'workspace://legacy';
+    const query = { limit: 20, order: 'desc' as const };
+    const historyInput = { backend: 'pi' as const, conductorAgentId: 'legacy-agent', cwd, issueUrl, query };
+    expect((await listConductorProviderHistory(historyInput)).messages).toEqual([]);
+    const migrated = await readPiTranscriptSnapshot(historyInput);
+    const migratedIds = sdk.SessionManager.open(migrated!.sessionFile, sessionDir, cwd).getEntries().map((entry) => entry.id);
+    const options = { cwd, issueUrl, pi: { agentDir }, modelId: 'anthropic/model-1', systemPrompt: 'system' };
+    const resumed = await resumePiAgent('legacy-agent', options);
+    const manager = fakeSession.sessionManager as InstanceType<typeof sdk.SessionManager>;
+    expect(manager.getEntries().slice(0, migratedIds.length).map((entry) => entry.id)).toEqual(migratedIds);
+    const inboundEntryId = manager.appendMessage({ role: 'user', content: [{ type: 'text', text: 'after resume' }], timestamp: 2 });
+    const responseEntryId = manager.appendMessage({
+      role: 'assistant', content: [{ type: 'text', text: 'response' }], api: 'anthropic-messages',
+      provider: 'anthropic', model: 'fixture', usage: {} as never, stopReason: 'stop', timestamp: 3,
+    });
+    manager.appendCustomEntry(PI_CONDUCTOR_MESSAGE_HISTORY_ENTRY_TYPE, { inboundEntryId, responseEntryId, completedAt: 4, sendCount: 1, dispatchSource: 'operator' });
+    await resumed.close();
+    expect((await listConductorProviderHistory(historyInput)).messages[0]?.providerId).toBe(responseEntryId);
+    const again = await resumePiAgent('legacy-agent', options);
+    expect((fakeSession.sessionManager as InstanceType<typeof sdk.SessionManager>).getEntries().map((entry) => entry.id)).toContain(responseEntryId);
+    const snapshot = await readPiTranscriptSnapshot(historyInput);
+    expect(snapshot!.contents.toString()).toContain('after resume');
+    expect((await listConductorProviderHistory(historyInput)).messages[0]?.providerId).toBe(responseEntryId);
+    const store = JSON.parse(await readFile(new URL('../../test/fixtures/session-export/worktree-codex-session.json', import.meta.url), 'utf8'));
+    Object.assign(store, { conductorAgentId: 'legacy-agent', issueUrl, repoRoot: cwd, conductorCwd: cwd, workers: {} });
+    const storePath = resolveEnsemblePaths({ repoRoot: cwd }).workspaceSessionResumeStorePath('legacy', 'legacy-agent');
+    await mkdir(join(cwd, '.ensemble', 'workspaces', 'legacy'), { recursive: true });
+    await writeFile(storePath, JSON.stringify(store));
+    const outputDirectory = join(cwd, 'legacy-export');
+    const exported = await exportSessionBundle({
+      repoRoot: cwd, conductorAgentId: 'legacy-agent', issueUrl, outputDirectory,
+      ensembleVersion: 'test', cliVersion: 'test',
+    });
+    expect(exported.manifest.sources.find((item) => item.id === 'conductor.piTranscript')?.status).toBe('copied');
+    expect(await readFile(join(outputDirectory, 'conductor/pi-transcript.jsonl'))).toEqual(snapshot!.contents);
+    expect(await readFile(source, 'utf8')).toBe(original);
+    expect(await readFile(unrelated, 'utf8')).toBe('{broken');
+    await again.close();
   });
 
   it('reports the selected model when a prompt fails before a response', async () => {
