@@ -233,6 +233,28 @@ permission の ACP variant と抽出優先順位は
 
 SessionResumeStore は、harness がセッション再開に必要な情報を保存する JSON ファイル（`~/.ensemble/sessions/github.com/<owner>/<repo>/{conductorAgentId}.json`）です。会話 transcript の保存先ではなく、記録された socket path だけでは harness の稼働や接続可能性も分かりません。
 
+同一 session の書き手は SQLite の lock で排他します。通常終了時は新しい書き込みを封鎖し、受理済みの書き込みを待ってから解放します。`/close` を含め、書き込みの封鎖と受理済み操作の完了を確認できた場合は解放します。後始末を確認できない場合はプロセス終了まで保持します。lock は SQLite の file locking が機能するローカル filesystem を前提とし、旧版や直接ファイルを編集するツールは参加しません。親 directory の symlink は実体に解決して同一視します。保存ファイル自体の symlink・hard link は使用しないでください。lock ファイルを稼働中に削除・移動しないでください。複数ファイル間のクラッシュ時の原子性や、別々にコピーした保存先の同期は保証しません。
+
+`@agents-ensemble/core` の公開保存 API は `SessionOwnership` と、その `runWrite` が渡す lease を受け取ります。所有権を取得してから読み直し、変更と保存を同じ操作内で行ってください。所有権を共有した独立の stale snapshot を自動で統合する機能はありません。
+
+```typescript
+const owner = await SessionOwnership.acquire(storePath);
+try {
+  await owner.runWrite(async (lease) => {
+    const store = await loadSessionResumeStore(storePath);
+    if (!store) throw new Error('Session not found');
+    await saveSessionResumeStore(storePath, store, owner, lease);
+  });
+} finally {
+  await owner.closeWritesAndDrain();
+  owner.release();
+}
+```
+
+`saveOpenQuestionsStore` と `saveSessionStatusLine` は対象 ID の store path を `SessionOwnership.acquireProvider(storePath)` に渡して resource 所有権を取得し、その `runWrite` の lease を渡します。resume store と YAML を一つの操作で更新する場合は、session 所有権の `runJointWrite(resourceOwner, async (sessionLease, resourceLease) => ...)` を使います。両所有権を取得後、同じ操作内で読み直して保存し、両 gate を閉じて drain してから解放します。`acquire` は resume store 用、`acquireProvider` は YAML・history 用です。
+
+resume 時に legacy 情報を除去する `requireSessionResumeStoreForResume` / `requireLocatedSessionResumeStoreForResume` にも所有権と lease が必要です。旧 `saveSessionSidecar` と `requireSessionSidecarForResume` も同じ契約です。
+
 `ensemble session list/show` は core の SessionResumeStore / YAML 読取 API を使う読み取り専用 CLI です。`list` は省略時に全てのローカル canonical GitHub slug group を対象とし、`githubRepo` / `issueUrl` / `conductorAgentId` と `limit` / `cursor` で絞り込み・ページングできます。GitHub API による repository 探索はしません。session ID を受け取る `show` / `export` / `messages` / `workers messages` / `timeline` は `githubRepo` または `issueUrl` の scope を必須とし、ID だけで repository を推測しません。両方の filter が異なる slug を指す場合はエラーです。harness への接続や agent 起動は行わず、sidecar は許可したメタデータだけ、YAML は件数・時刻だけを表示します。旧形式の SessionResumeStore に残る ACP 環境変数の平文値も読取 API が除外します。`show` の `workerReaders` は、保存 preset に対応する transcript reader の有無と未対応理由を worker ごとに示します。transcript の保存先が現在読めるかどうかは、この表示では確認しません。
 
 `ensemble session messages` は operator-agent の `list_conductor_messages` と同じ `listConductorProviderHistory` を使い、provider が保存した user inbound / final response の本文をそのまま返すローカルデバッグ表示です。Pi conductor transcript は canonical repository slug だけを読みます。`Pi SessionManager` に渡す cwd は保存済み `conductorCwd` です。旧 path-hash / project-local transcript を移行していない場合、履歴は見つからず利用できません。テキストと JSON の両方で redaction は行いません。会話本文に秘密値や repository 内の非公開情報があれば、そのまま stdout に出ます。pipe / redirect 先も生データとして扱い、集計・蓄積・共有する前に利用側でサニタイズしてください。構造化された SessionResumeStore の秘密値保護は、この会話本文には適用されません。core API から後段へ渡す前に sanitizer を適用する契約は [provider history list API](live-open-question-control-api.md#operator-agent-の-provider-history-list)を参照してください。

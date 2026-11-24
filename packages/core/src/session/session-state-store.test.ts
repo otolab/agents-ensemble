@@ -10,15 +10,26 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { resolveEnsemblePaths } from '../ensemble-paths.js';
+import { SessionOwnership } from './session-ownership.js';
 import {
   loadSessionStateStore,
   legacySessionStateStorePath,
-  saveSessionStatusLine,
+  saveSessionStatusLine as saveWithLease,
   SESSION_STATE_STORE_MAX_BYTES,
   sessionStateStorePath,
   SESSION_STATUS_HISTORY_MAX_ENTRIES,
   SESSION_STATE_STORE_VERSION,
 } from './session-state-store.js';
+
+async function saveSessionStatusLine(path: string, status: string, reportedAt?: number) {
+  const owner = await SessionOwnership.acquireProvider(`${dirname(path)}.json`);
+  try {
+    await owner.runWrite((lease) => saveWithLease(path, status, reportedAt, owner, lease));
+  } finally {
+    await owner.closeWritesAndDrain();
+    owner.release();
+  }
+}
 
 const ISSUE_URL = 'https://github.com/org/repo/issues/607';
 

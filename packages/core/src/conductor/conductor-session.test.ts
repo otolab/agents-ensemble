@@ -45,7 +45,7 @@ import { loadPiResources } from './pi-resource-loader.js';
 import { computeMcpConfigDigest } from '../mcp/load-mcp-config.js';
 import {
   loadSessionResumeStore,
-  saveSessionResumeStore as writeSessionResumeStore,
+  saveSessionResumeStore as saveResumeStoreWithLease,
   SessionResumeStoreNotFoundError,
   SESSION_RESUME_STORE_VERSION,
   type SessionResumeStore,
@@ -81,6 +81,7 @@ import type {
 import { createMockConductorGetUsage } from '../testing/mock-conductor-get-usage.js';
 import type { ConductorToolResult } from './conductor-tool.js';
 import type { ConductorAgentCreateOptions } from './conductor-agent.js';
+import { SessionOwnership } from '../session/session-ownership.js';
 
 const TEST_ISSUE = {
   owner: 'org',
@@ -216,6 +217,16 @@ async function settleWithin<T>(promise: Promise<T>, timeoutMs: number): Promise<
 async function drainAsync(): Promise<void> {
   await Promise.resolve();
   await Promise.resolve();
+}
+
+async function writeSessionResumeStore(path: string, store: SessionResumeStore): Promise<void> {
+  const owner = await SessionOwnership.acquire(path);
+  try {
+    await owner.runWrite((lease) => saveResumeStoreWithLease(path, store, owner, lease));
+  } finally {
+    await owner.closeWritesAndDrain();
+    owner.release();
+  }
 }
 
 async function saveSessionResumeStore(
@@ -421,9 +432,9 @@ describe('runConductorSession resume / shutdown', () => {
     const persistedVersions: (string | undefined)[] = [];
     const persistResumeStore = sessionResumeStoreModule.saveSessionResumeStore;
     vi.spyOn(sessionResumeStoreModule, 'saveSessionResumeStore').mockImplementation(
-      async (path, resumeStore) => {
+      async (path, resumeStore, owner, lease) => {
         persistedVersions.push(resumeStore.createdHarnessCliVersion);
-        await persistResumeStore(path, resumeStore);
+        await persistResumeStore(path, resumeStore, owner, lease);
       },
     );
     const initial = await runConductorSession({
@@ -467,6 +478,79 @@ describe('runConductorSession resume / shutdown', () => {
     await expect(loadSessionResumeStore(resumeStorePath)).resolves.toMatchObject({
       createdHarnessCliVersion: '0.20.0-created',
     });
+  });
+
+  it('releases session ownership after a drained close and permits resume', async () => {
+    stubUnusedControlServer();
+    mockSend.mockResolvedValue({ runId: 'run-forced-lock', status: 'finished', result: 'done' });
+    await runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { workers: [] },
+      permissionPipeline: new PermissionPipeline({}),
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: false,
+      bindOperatorInput: (api) => { api.submit('/close'); },
+    });
+    await expect(runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { workers: [] },
+      resumeAgentId: 'agent-test',
+      permissionPipeline: new PermissionPipeline({}),
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: false,
+    })).resolves.toMatchObject({ stopReason: 'completed' });
+  });
+
+  it('rejects a different harness session sharing the provider and releases its partial ownership', async () => {
+    stubUnusedControlServer();
+    for (const id of ['harness-one', 'harness-two']) {
+      await saveSessionResumeStore(sessionResumeStorePath({ repoRoot, conductorAgentId: id }), {
+        version: SESSION_RESUME_STORE_VERSION, conductorAgentId: id,
+        issueUrl: TEST_ISSUE.url, repoRoot, profile: { workers: [] },
+        openQuestions: [], sequence: 0, workers: {}, updatedAt: 1,
+      });
+    }
+    mockResume.mockImplementation(async () => ({
+      agentId: 'shared-provider', send: mockSend, close: mockClose,
+      getUsage: createMockConductorGetUsage(),
+    }));
+    let api: OperatorInputBindingApi | undefined;
+    const first = runConductorSession({
+      issueUrl: TEST_ISSUE.url, repoRoot, profile: { workers: [] },
+      resumeAgentId: 'harness-one', permissionPipeline: new PermissionPipeline({}),
+      registerProcessSignalHandlers: false, waitForOperatorExit: true,
+      bindOperatorInput: (binding) => { api = binding; },
+    });
+    try {
+      await vi.waitFor(() => expect(api).toBeDefined());
+      await expect(runConductorSession({
+        issueUrl: TEST_ISSUE.url, repoRoot, profile: { workers: [] },
+        resumeAgentId: 'harness-two', permissionPipeline: new PermissionPipeline({}),
+        registerProcessSignalHandlers: false, waitForOperatorExit: false,
+      })).rejects.toThrow(/already in use/);
+      const retry = await SessionOwnership.acquire(sessionResumeStorePath({ repoRoot, conductorAgentId: 'harness-two' }));
+      await retry.closeWritesAndDrain();
+      retry.release();
+    } finally {
+      api?.submit('/close');
+      await first;
+    }
+  });
+
+  it('retains both ownerships when session cleanup fails', async () => {
+    stubUnusedControlServer();
+    mockClose.mockRejectedValueOnce(new Error('simulated close failure'));
+    mockSend.mockResolvedValue({ runId: 'cleanup-failure', status: 'finished', result: 'done' });
+    await expect(runConductorSession({
+      issueUrl: TEST_ISSUE.url, repoRoot, profile: { workers: [] },
+      permissionPipeline: new PermissionPipeline({}), registerProcessSignalHandlers: false,
+      waitForOperatorExit: false,
+    })).rejects.toThrow(/shutdown failed/);
+    const path = sessionResumeStorePath({ repoRoot, conductorAgentId: 'agent-test' });
+    await expect(SessionOwnership.acquire(path)).rejects.toThrow(/restart it/);
+    await expect(SessionOwnership.acquireProvider(path)).rejects.toThrow(/restart it/);
   });
 
   it('does not resume from a valid path-hash store', async () => {
@@ -1054,7 +1138,7 @@ describe('runConductorSession resume / shutdown', () => {
       selectedStoreBeforeFlushHadSocket: boolean;
     } | undefined;
     vi.spyOn(sessionResumeStoreModule, 'saveSessionResumeStore').mockImplementation(
-      async (path, resumeStore) => {
+      async (path, resumeStore, owner, lease) => {
         if (!firstSocketFlush && resumeStore.harnessSocketPath) {
           const selectedBeforeFlush = await loadSessionResumeStore(path);
           const previousHash = await loadSessionResumeStore(hashPath);
@@ -1067,7 +1151,7 @@ describe('runConductorSession resume / shutdown', () => {
           expect(previousHash).toEqual(staleHashStore);
           throw new Error('simulated first slug socket flush failure');
         }
-        await persistResumeStore(path, resumeStore);
+        await persistResumeStore(path, resumeStore, owner, lease);
       },
     );
     mockSend.mockResolvedValueOnce({
@@ -1764,7 +1848,7 @@ describe('runConductorSession resume / shutdown', () => {
       const persistResumeStore = sessionResumeStoreModule.saveSessionResumeStore;
       let rollbackAttempted = false;
       vi.spyOn(sessionResumeStoreModule, 'saveSessionResumeStore')
-        .mockImplementation(async (path, resumeStore) => {
+        .mockImplementation(async (path, resumeStore, owner, lease) => {
           if (
             path === resumeStorePath &&
             resumeStore.lifecycle === 'closed' &&
@@ -1773,7 +1857,7 @@ describe('runConductorSession resume / shutdown', () => {
             rollbackAttempted = true;
             if (!closeFails) throw rollbackFailure;
           }
-          await persistResumeStore(path, resumeStore);
+          await persistResumeStore(path, resumeStore, owner, lease);
         });
 
       const emitted: SessionLogEvent[] = [];
@@ -2439,7 +2523,9 @@ describe('runConductorSession resume / shutdown', () => {
     const events: SessionLogEvent[] = [];
     const sessionLogger = new SessionLogger({ issueUrl: TEST_ISSUE.url, repoRoot });
     sessionLogger.subscribe((event) => events.push(event));
+    let originalOptions!: ConductorAgentCreateOptions;
     mockCreate.mockImplementationOnce(async (options: ConductorAgentCreateOptions) => {
+      originalOptions = options;
       options.onCompactionEvent?.({ type: 'start', reason: 'overflow' });
       options.onCompactionEvent?.({ type: 'end', reason: 'overflow', outcome: 'failed', errorMessage: 'failed' });
       options.onRetryEvent?.({ type: 'auto_retry_end', success: false, attempt: 2, finalError: 'failed' });
@@ -2474,6 +2560,8 @@ describe('runConductorSession resume / shutdown', () => {
       { type: 'conductor.compaction', event: { type: 'end', reason: 'overflow', outcome: 'failed', errorMessage: 'failed' } },
       { type: 'conductor.retry', event: { type: 'auto_retry_end', success: false, attempt: 2, finalError: 'failed' } },
     ]);
+    originalOptions.onRetryEvent?.({ type: 'auto_retry_end', success: false, attempt: 3, finalError: 'late' });
+    expect(await readFile(conductorFailureLogPath({ repoRoot, issueUrl: TEST_ISSUE.url, conductorAgentId: 'agent-test' }), 'utf8')).toBe(resumedLog);
   });
 
   it('shares Pi tokens and successful compactions with get_session_usage while omitting estimated cost', async () => {
@@ -4874,12 +4962,12 @@ describe('runConductorSession resume / shutdown', () => {
     vi.spyOn(
       openQuestionsStoreModule,
       'saveOpenQuestionsStore',
-    ).mockImplementation(async (path, snapshot) => {
+    ).mockImplementation(async (path, snapshot, owner, lease) => {
       if (snapshot.openQuestions.some(({ status }) => status === 'answered')) {
         answerFlushStarted.resolve();
         await finishAnswerFlush.promise;
       }
-      await persistOpenQuestions(path, snapshot);
+      await persistOpenQuestions(path, snapshot, owner, lease);
     });
 
     mockCreate.mockImplementationOnce(async (agentOptions) => {
@@ -5382,11 +5470,11 @@ describe('runConductorSession resume / shutdown', () => {
     vi.spyOn(
       openQuestionsStoreModule,
       'saveOpenQuestionsStore',
-    ).mockImplementation(async (path, snapshot) => {
+    ).mockImplementation(async (path, snapshot, owner, lease) => {
       if (snapshot.openQuestions.some(({ status }) => status === 'answered')) {
         throw new Error('simulated open questions YAML persistence failure');
       }
-      await persistOpenQuestions(path, snapshot);
+      await persistOpenQuestions(path, snapshot, owner, lease);
     });
 
     mockCreate.mockImplementationOnce(async (agentOptions) => {
@@ -5554,11 +5642,11 @@ describe('runConductorSession resume / shutdown', () => {
     let failResumeStoreFlush = false;
     const persistResumeStore = sessionResumeStoreModule.saveSessionResumeStore;
     vi.spyOn(sessionResumeStoreModule, 'saveSessionResumeStore').mockImplementation(
-      async (path, resumeStore) => {
+      async (path, resumeStore, owner, lease) => {
         if (failResumeStoreFlush && path === resumeStorePath) {
           throw new Error('simulated session resume store flush failure');
         }
-        await persistResumeStore(path, resumeStore);
+        await persistResumeStore(path, resumeStore, owner, lease);
       },
     );
 
@@ -5669,6 +5757,10 @@ describe('runConductorSession resume / shutdown', () => {
         unregisterPullRequest,
       };
     });
+    mockSend.mockImplementationOnce(async () => {
+      await conductorTools!.unregister_github_watch!.execute({ prNumber: 354 });
+      return { runId: 'unregister-watch', status: 'finished', result: 'done' };
+    });
     await runConductorSession({
       issueUrl: TEST_ISSUE.url,
       repoRoot,
@@ -5678,11 +5770,11 @@ describe('runConductorSession resume / shutdown', () => {
       permissionPipeline: new PermissionPipeline({}),
       registerProcessSignalHandlers: false,
       waitForOperatorExit: false,
+      bindOperatorInput: (api) => { api.submit('unregister the watch'); },
     });
 
     expect(mockResume).toHaveBeenCalled();
     expect(conductorTools?.unregister_github_watch).toBeDefined();
-    await conductorTools!.unregister_github_watch!.execute({ prNumber: 354 });
     expect(unregisterPullRequest).toHaveBeenCalledWith(354);
     await vi.waitFor(async () => {
       const resumeStore = await loadSessionResumeStore(
@@ -5729,11 +5821,11 @@ describe('runConductorSession resume / shutdown', () => {
     let failResumeStoreFlush = false;
     const persistResumeStore = sessionResumeStoreModule.saveSessionResumeStore;
     vi.spyOn(sessionResumeStoreModule, 'saveSessionResumeStore').mockImplementation(
-      async (path, resumeStore) => {
+      async (path, resumeStore, owner, lease) => {
         if (failResumeStoreFlush && path === resumeStorePath) {
           throw new Error('simulated session resume store flush failure');
         }
-        await persistResumeStore(path, resumeStore);
+        await persistResumeStore(path, resumeStore, owner, lease);
       },
     );
 
@@ -8471,21 +8563,6 @@ describe('runConductorSession resume / shutdown', () => {
         },
       },
     });
-    const terminalResumeStore = await loadSessionResumeStore(resumeStorePath);
-
-    // Complete only after force shutdown has removed the resident. Its late
-    // The result must not be needed to make the saved session resumable.
-    firstPrompt.resolve({
-      stopReason: 'cancelled',
-      responseText: '',
-    });
-    await new Promise<void>((resolve) => setImmediate(resolve));
-    await expect(loadSessionResumeStore(resumeStorePath)).resolves.toMatchObject({
-      harnessPhase: terminalResumeStore?.harnessPhase,
-      modifiedAt: terminalResumeStore?.modifiedAt,
-      updatedAt: terminalResumeStore?.updatedAt,
-    });
-
     const sendsBeforeContinue = mockSend.mock.calls.length;
     let continuedOperatorApi: OperatorInputBindingApi | undefined;
     const continuedPostLoopWait = vi.fn();
@@ -8517,6 +8594,15 @@ describe('runConductorSession resume / shutdown', () => {
     await vi.waitFor(() =>
       expect(continuedPostLoopWait).toHaveBeenCalledOnce(),
     );
+    const resumedStore = await loadSessionResumeStore(resumeStorePath);
+    // The old prompt finishes only after a new owner has resumed the session.
+    firstPrompt.resolve({ stopReason: 'cancelled', responseText: '' });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await expect(loadSessionResumeStore(resumeStorePath)).resolves.toMatchObject({
+      harnessPhase: resumedStore?.harnessPhase,
+      modifiedAt: resumedStore?.modifiedAt,
+      updatedAt: resumedStore?.updatedAt,
+    });
     expect(connectAcp).toHaveBeenCalledTimes(2);
     expect(connectAcp.mock.calls[1]?.[0].cwd).toBe(path);
     expect(resumedBridge.loadSession).toHaveBeenCalledWith(

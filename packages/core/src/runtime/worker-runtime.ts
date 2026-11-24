@@ -375,17 +375,25 @@ export class WorkerRuntime {
       }
       this.cancelAllActivePrompts();
       const residents = [...this.residents.values()];
-      await Promise.all(
+      const results = await Promise.allSettled(
         residents.map((resident) => closeWorkerAcpSession(resident.attached.session)),
       );
+      const failures = results.filter((result) => result.status === 'rejected');
+      if (failures.length) {
+        throw new AggregateError(failures.map((failure) => failure.reason), 'Worker ACP shutdown failed');
+      }
       this.residents.clear();
       this.resolveIdleWaiters();
       return;
     }
 
     await this.waitForIdle();
-    for (const resident of this.residents.values()) {
-      await closeWorkerAcpSession(resident.attached.session);
+    const results = await Promise.allSettled(
+      [...this.residents.values()].map((resident) => closeWorkerAcpSession(resident.attached.session)),
+    );
+    const failures = results.filter((result) => result.status === 'rejected');
+    if (failures.length) {
+      throw new AggregateError(failures.map((failure) => failure.reason), 'Worker ACP shutdown failed');
     }
     this.residents.clear();
   }
@@ -478,6 +486,7 @@ export class WorkerRuntime {
     toolName?: string,
     toolCallUpdate?: Record<string, unknown>,
   ): void {
+    if (this.forceShutdownRequested) return;
     this.options.onAcpUpdate?.({
       workerId: resident.workerId,
       name: resident.started.name,

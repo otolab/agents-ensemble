@@ -158,3 +158,8 @@ export type {
   SessionModelsSummary,
   SessionWorkerModelSummary,
 } from './build-session-models-summary.js';
+export {
+  SessionOwnership,
+  SessionOwnershipUnavailableError,
+  type SessionWriteLease,
+} from './session-ownership.js';

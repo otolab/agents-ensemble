@@ -62,8 +62,11 @@ export function startInboxProcessor(
 
   return {
     async stop() {
-      await inbox.drain();
-      unsubscribe();
+      try {
+        await inbox.drain();
+      } finally {
+        unsubscribe();
+      }
     },
   };
 }

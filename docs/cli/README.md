@@ -6,6 +6,10 @@
 
 GitHub を正本にしない作業には **`ensemble run <brief>`** を使います。brief はプロンプト用ファイルのパス、`--conductor-cwd` で slug をアンカーする cwd、状態は `~/.ensemble/workspaces/<slug-key>/` に保存します。`ensemble run list` で workspace 一覧、`--continue` で同一 slug の最新 run を再開します。詳細は [ADR 0085](../adr/0085-ensemble-run-workspaces-and-notes.md)。
 
+同じ session は一度に一つのプロセスで実行します。別プロセスが同じ session を `--resume` / `--continue` しようとするとエラーになります。実行中のプロセスを終了してから再試行してください。異常終了した場合も、プロセス終了時に OS が lock を解放します。SQLite の file locking が機能するローカル filesystem が必要です。
+
+ライブラリから実行する場合、後始末や保存の完了を確認できなかった session の lock は、そのプロセスが終了するまで保持されます。同じ session を再開するにはプロセスを再起動してください。旧バージョンや直接ファイルを書き換える外部ツールは lock に参加しません。これらのツールは session の停止中に実行してください。
+
 調査と資料整理には同梱の team profile を `ensemble run brief.md --profile workspace-research` で指定できます。conductor が調整と Notes への記録を担い、explore と librarian が作業します。同名の profile がある場合、project、user、bundled の順に優先されます。`ensemble profiles list` では対応する入口の宣言と未指定・不正を区別できます。宣言は選択の目安であり、起動を制限しません。
 
 `ensemble run brief.md --name investigation` は指定名を cwd の `.ensemble/workspace.json` に記録します。以後は同じ cwd から `ensemble run --continue` で再開できます。すでに別の slug が記録された cwd では別名を指定できません。名前の変更用 CLI は [#826](https://github.com/otolab/agents-ensemble/issues/826) で扱います。

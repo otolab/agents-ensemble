@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { resolveEnsemblePaths } from '../ensemble-paths.js';
+import { SessionOwnership } from './session-ownership.js';
 import type { StoredToolCallSnapshot } from '../runtime/tool-call-snapshot-registry.js';
 import {
   TOOL_CALL_SNAPSHOT_HISTORY_MAX_BYTES,
@@ -12,7 +13,7 @@ import {
 import {
   loadToolCallSnapshotHistory,
   pruneExpiredToolCallSnapshotHistoryFiles,
-  saveToolCallSnapshotHistory,
+  saveToolCallSnapshotHistory as saveWithLease,
   toolCallSnapshotHistoryPath,
 } from './tool-call-snapshot-history.js';
 
@@ -28,6 +29,16 @@ const ENTRY: StoredToolCallSnapshot = {
   },
 };
 const ISSUE_URL = 'https://github.com/org/repo/issues/1';
+
+async function saveToolCallSnapshotHistory(path: string, snapshots: readonly StoredToolCallSnapshot[]) {
+  const owner = await SessionOwnership.acquireProvider(`${path.slice(0, -'.tool-calls'.length)}.json`);
+  try {
+    await owner.runWrite((lease) => saveWithLease(path, snapshots, owner, lease));
+  } finally {
+    await owner.closeWritesAndDrain();
+    owner.release();
+  }
+}
 
 function sha256(value: Buffer | string): string {
   return createHash('sha256').update(value).digest('hex');
@@ -448,6 +459,27 @@ describe('tool-call snapshot history', () => {
     await expect(access(path)).rejects.toThrow();
     await expect(access(legacyPath)).resolves.toBeUndefined();
     await expect(access(projectPath)).resolves.toBeUndefined();
+  });
+
+  it('does not prune an expired history while its session is owned', async () => {
+    repoRoot = await createHome();
+    const id = 'agent-active';
+    const paths = resolveEnsemblePaths({ repoRoot });
+    const path = toolCallSnapshotHistoryPath({ repoRoot, issueUrl: ISSUE_URL, conductorAgentId: id });
+    await saveToolCallSnapshotHistory(path, [ENTRY]);
+    const oldTime = (Date.now() - TOOL_CALL_SNAPSHOT_HISTORY_TTL_MS - 1000) / 1000;
+    await utimes(path, oldTime, oldTime);
+    const owner = await SessionOwnership.acquireProvider(paths.canonicalSessionResumeStorePath(ISSUE_URL, id));
+    try {
+      await expect(pruneExpiredToolCallSnapshotHistoryFiles({ repoRoot, issueUrl: ISSUE_URL }))
+        .resolves.toEqual({ removedCount: 0, failedCount: 0 });
+      await expect(access(path)).resolves.toBeUndefined();
+    } finally {
+      await owner.closeWritesAndDrain();
+      owner.release();
+    }
+    await expect(pruneExpiredToolCallSnapshotHistoryFiles({ repoRoot, issueUrl: ISSUE_URL }))
+      .resolves.toEqual({ removedCount: 1, failedCount: 0 });
   });
 
   it('removes expired atomic-write temp files', async () => {

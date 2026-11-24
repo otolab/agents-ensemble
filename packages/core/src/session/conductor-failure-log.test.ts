@@ -98,3 +98,16 @@ it.skipIf(process.platform === 'win32')('permits a configured user root that is 
   expect(warn).not.toHaveBeenCalled();
   expect(await readFile(join(target, 'sessions', 'session', 'conductor-failures.jsonl'), 'utf8')).toContain('compaction_failed');
 });
+
+it('ignores delayed Pi callbacks after the log is closed', async () => {
+  root = await mkdtemp(join(tmpdir(), 'failure-log-close-'));
+  const path = join(root, 'session', 'conductor-failures.jsonl');
+  const log = createConductorFailureLog(vi.fn());
+  log.setPath(path, root);
+  const event = { type: 'conductor.compaction' as const, event: { type: 'end' as const, reason: 'overflow' as const, outcome: 'failed' as const } };
+  log.emit(event);
+  const before = await readFile(path, 'utf8');
+  log.close();
+  log.emit(event);
+  expect(await readFile(path, 'utf8')).toBe(before);
+});

@@ -20,6 +20,29 @@ const TEST_WORKTREE = {
 };
 
 describe('WorkerSession', () => {
+  it('stops the inbox processor even when runtime shutdown fails', async () => {
+    const onWorkerFailed = vi.fn();
+    const session = new WorkerSession({
+      issueUrl: TEST_WORKTREE.issue.url,
+      workers: [],
+      sessionState: { workers: [], kinds: [] },
+      decidePermission: () => null,
+      onWorkerFailed,
+    });
+    const failure = new Error('shutdown failed');
+    vi.spyOn(session.runtime, 'shutdown').mockRejectedValue(failure);
+
+    await expect(session.stop()).rejects.toBe(failure);
+    session.inbox.publishWorkerFailed({
+      workerId: 'worker',
+      name: 'worker',
+      kind: 'implementer',
+      issueUrl: TEST_WORKTREE.issue.url,
+    } as Parameters<typeof session.inbox.publishWorkerFailed>[0], failure);
+    await session.inbox.drain();
+    expect(onWorkerFailed).not.toHaveBeenCalled();
+  });
+
   it('attaches workers at startWorkers and closes on stop', async () => {
     const close = vi.fn().mockResolvedValue(undefined);
     const connectAcp = vi.fn(async () =>

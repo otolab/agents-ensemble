@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { computeAcpSpawnEnvDigest } from '../acp/resolve-acp-spawn.js';
 import { resolveEnsemblePaths } from '../ensemble-paths.js';
+import { SessionOwnership } from './session-ownership.js';
 import {
   assertSessionResumeStoreMatches,
   assertSessionSidecarMatches,
@@ -20,11 +21,11 @@ import {
   listSessionSidecars,
   loadSessionResumeStore,
   loadSessionSidecar,
-  requireSessionResumeStoreForResume,
-  requireLocatedSessionResumeStoreForResume,
-  requireSessionSidecarForResume,
-  saveSessionSidecar,
-  saveSessionResumeStore,
+  requireSessionResumeStoreForResume as requireStoreWithLease,
+  requireLocatedSessionResumeStoreForResume as requireLocatedWithLease,
+  requireSessionSidecarForResume as requireSidecarWithLease,
+  saveSessionSidecar as saveSidecarWithLease,
+  saveSessionResumeStore as saveStoreWithLease,
   SESSION_SIDECAR_VERSION,
   SESSION_RESUME_STORE_VERSION,
   sessionSidecarDir,
@@ -38,6 +39,34 @@ import {
 } from './session-resume-store.js';
 
 const TEST_ISSUE_URL = 'https://github.com/org/repo/issues/1';
+
+async function withOwner<T>(path: string, fn: (owner: SessionOwnership, lease: import('./session-ownership.js').SessionWriteLease) => Promise<T>): Promise<T> {
+  const owner = await SessionOwnership.acquire(path);
+  try {
+    return await owner.runWrite((lease) => fn(owner, lease));
+  } finally {
+    await owner.closeWritesAndDrain();
+    owner.release();
+  }
+}
+
+const saveSessionResumeStore = (path: string, value: SessionResumeStore) =>
+  withOwner(path, (owner, lease) => saveStoreWithLease(path, value, owner, lease));
+const saveSessionSidecar = (path: string, value: SessionSidecar) =>
+  withOwner(path, (owner, lease) => saveSidecarWithLease(path, value, owner, lease));
+
+type ResumeInput = Omit<Parameters<typeof requireStoreWithLease>[0], 'owner' | 'lease'>;
+function resumePath(input: ResumeInput): string {
+  return input.issueUrl
+    ? canonicalSessionResumeStorePath(input)
+    : join(input.repoRoot, 'invalid-session.json');
+}
+const requireSessionResumeStoreForResume = (input: ResumeInput) =>
+  withOwner(resumePath(input), (owner, lease) => requireStoreWithLease({ ...input, owner, lease }));
+const requireLocatedSessionResumeStoreForResume = (input: ResumeInput) =>
+  withOwner(resumePath(input), (owner, lease) => requireLocatedWithLease({ ...input, owner, lease }));
+const requireSessionSidecarForResume = (input: ResumeInput) =>
+  withOwner(resumePath(input), (owner, lease) => requireSidecarWithLease({ ...input, owner, lease }));
 
 function baseResumeStore(
   overrides: Partial<SessionResumeStore> & Pick<SessionResumeStore, 'conductorAgentId'>,

@@ -53,6 +53,7 @@ import type { OperatorInputBindingApi } from '../../../core/src/conductor/operat
 import { PermissionPipeline } from '../../../core/src/permission/permission-pipeline.js';
 import { resolveEnsemblePaths } from '../../../core/src/ensemble-paths.js';
 import { saveSessionResumeStore, SESSION_RESUME_STORE_VERSION } from '../../../core/src/session/session-resume-store.js';
+import { SessionOwnership } from '../../../core/src/session/session-ownership.js';
 
 const issueUrl = 'https://github.com/org/repo/issues/1';
 let tempRoot = '';
@@ -90,11 +91,15 @@ it('delivers TUI answers through the host and core to conductor without running 
     source: 'conductor' as const,
     status: 'open' as const, askedAt: index + 1,
   }));
-  await saveSessionResumeStore(resolveEnsemblePaths({ repoRoot: tempRoot }).canonicalSessionResumeStorePath(issueUrl, agentId), {
+  const storePath = resolveEnsemblePaths({ repoRoot: tempRoot }).canonicalSessionResumeStorePath(issueUrl, agentId);
+  const owner = await SessionOwnership.acquire(storePath);
+  await owner.runWrite((lease) => saveSessionResumeStore(storePath, {
     version: SESSION_RESUME_STORE_VERSION, conductorAgentId: agentId, issueUrl, repoRoot: tempRoot,
     profile: { workers: [] }, openQuestions: questions, sequence: questions.length,
     workers: {}, updatedAt: 0, conductorBackend: 'cursor', cursorBootstrapComplete: true,
-  });
+  }, owner, lease));
+  await owner.closeWritesAndDrain();
+  owner.release();
   mocks.send.mockReset().mockResolvedValue({ runId: 'run', status: 'finished', result: 'done' });
   mocks.close.mockReset().mockResolvedValue(undefined);
   mocks.resume.mockReset().mockResolvedValue({

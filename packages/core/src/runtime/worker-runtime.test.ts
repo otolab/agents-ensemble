@@ -1,4 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { AcpBridge } from '../acp/acp-bridge.js';
 import { ConductorInbox } from './conductor-inbox.js';
 import { WorkerRuntime } from './worker-runtime.js';
@@ -87,6 +90,75 @@ function createDeferred<T>(): {
 }
 
 describe('WorkerRuntime', () => {
+  it('closes a delayed attach without starting its prompt after forced shutdown', async () => {
+    const connection = createDeferred<AcpBridge>();
+    const close = vi.fn().mockResolvedValue(undefined);
+    const bridge = createMockBridge(close);
+    const connectAcp = vi.fn(() => connection.promise);
+    const runtime = new WorkerRuntime({ inbox: new ConductorInbox(), connectAcp });
+    runtime.start({
+      name: 'ping-1',
+      issueUrl: TEST_WORKTREE.issue.url,
+      kind: 'ping',
+      prompt: { instructions: ['pong'] },
+      worktree: TEST_WORKTREE,
+      sessionState: { workers: [{ name: 'ping-1', kind: 'ping' }], kinds: ['ping'] },
+    });
+    await vi.waitFor(() => expect(connectAcp).toHaveBeenCalledOnce());
+    await runtime.shutdown({ force: true });
+    connection.resolve(bridge);
+    await vi.waitFor(() => expect(close).toHaveBeenCalledOnce());
+    expect(bridge.promptSession).not.toHaveBeenCalled();
+  });
+
+  it('does not deliver delayed ACP updates after forced shutdown', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'late-worker-save-'));
+    const path = join(directory, 'history');
+    await writeFile(path, 'before');
+    const inbox = new ConductorInbox();
+    const result = createDeferred<{ stopReason: string }>();
+    let lateUpdate: ((update: unknown) => void) | undefined;
+    const writes: Promise<void>[] = [];
+    const onAcpUpdate = vi.fn(() => {
+      writes.push(writeFile(path, 'late update'));
+    });
+    const runtime = new WorkerRuntime({
+      inbox,
+      onAcpUpdate,
+      connectAcp: async () => ({
+        ...createMockBridge(vi.fn().mockResolvedValue(undefined)),
+        promptSession: vi.fn((_id: string, _prompt: string, options: { onUpdate: (update: unknown) => void }) => {
+          lateUpdate = options.onUpdate;
+          return result.promise;
+        }),
+        cancelSession: vi.fn(),
+      }) as unknown as AcpBridge,
+    });
+    try {
+      runtime.start({
+        name: 'ping-1',
+        issueUrl: TEST_WORKTREE.issue.url,
+        kind: 'ping',
+        prompt: { instructions: ['pong'] },
+        worktree: TEST_WORKTREE,
+        sessionState: { workers: [{ name: 'ping-1', kind: 'ping' }], kinds: ['ping'] },
+      });
+      await vi.waitFor(() => expect(lateUpdate).toBeDefined());
+      await runtime.shutdown({ force: true });
+      lateUpdate!({
+        sessionId: 'sess-1',
+        update: { sessionUpdate: 'tool_call', toolCallId: 'late' },
+      });
+      await Promise.all(writes);
+      expect(await readFile(path, 'utf8')).toBe('before');
+      expect(onAcpUpdate).not.toHaveBeenCalled();
+      result.resolve({ stopReason: 'cancelled' });
+      await runtime.waitForIdle();
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it('attaches workers and reports harness init prompt completion via inbox', async () => {
     const inbox = new ConductorInbox();
     const completed: Array<{ workerId: string; source?: string }> = [];
