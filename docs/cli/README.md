@@ -88,7 +88,7 @@ headless conductor の設定キーと create / reload / resume の適用範囲�
 
 Pi の MCP transport、OAuth、resource tools と現行の resume 動作は [architecture](../architecture.md) を参照してください。
 
-resume は現在の backend 設定で復元を試みます。保存時と backend が異なる場合は通知されますが、backend 間の session 互換性は保証されません。system prompt と認証の差分は [ADR 0025](../adr/0025-conductor-agent-backend-sdk-and-pi.md)、現行の resume 動作は [architecture](../architecture.md) を参照してください。
+resume は現在の backend 設定で復元を試みます。保存時と backend が異なる場合は通知されますが、backend 間の session 互換性は保証されません。system prompt と認証の設計経緯は [ADR 0025](../adr/0025-conductor-agent-backend-sdk-and-pi.md) を参照してください。同 ADR の resume 差分拒否は現行動作と異なります。現行の resume 動作は [architecture](../architecture.md#ensemble-run-の-conductor-backend) を参照してください。
 
 backend を選んだ後の主経路は共通です。リポジトリのディレクトリで、対象 Issue を同じ `ensemble issue <url>` コマンドに渡します。
 

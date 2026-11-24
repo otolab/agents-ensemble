@@ -18,7 +18,7 @@
 
 - **最小ユースケース**: `ensemble issue <url>` → worker 起動 → Issue / PR 上で作業
 - **Issue 非連動**: `ensemble run <brief>` → 起動 cwd・brief ファイルを正本とし、永続化は `~/.ensemble/workspaces/<slug-key>/`（GitHub monitor / Issue context なし、[ADR 0085](adr/0085-ensemble-run-workspaces-and-notes.md)）
-- **backend 選択**: `conductor.backend` は `pi`（既定）または `cursor`。backend によって system prompt・認証・resume の扱いは異なるが、選択後も harness → worker ACP の経路と `ensemble issue <url>` の利用フローは共通（詳細は [ADR 0025](adr/0025-conductor-agent-backend-sdk-and-pi.md) / [ADR 0075](adr/0075-pi-conductor-default-and-model-selection.md)、設定は [settings.md](settings.md)）。
+- **backend 選択**: `conductor.backend` は `pi`（既定）または `cursor`。backend によって system prompt・認証・resume の扱いは異なるが、選択後も harness → worker ACP の経路と `ensemble issue <url>` の利用フローは共通（設計の経緯は [ADR 0025](adr/0025-conductor-agent-backend-sdk-and-pi.md) / [ADR 0075](adr/0075-pi-conductor-default-and-model-selection.md)、設定は [settings.md](settings.md)）。ADR 0025 の resume 差分拒否は現行動作と異なり、現在は差分を通知して復元を試みる。
 - **スコープ**: 小さな作業単位の Issue ベースフロー
 - **対象外（初期）**: 汎用タスクオーケ、IDE 内 Agent の代替
 
