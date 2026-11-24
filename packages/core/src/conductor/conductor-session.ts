@@ -3361,7 +3361,7 @@ async function runConductorSessionWithStartupGuard(
         ]);
         const failures = results.filter((result) => result.status === 'rejected');
         if (failures.length) {
-          throw new AggregateError(failures.map((failure) => failure.reason), 'Session shutdown failed');
+          throw new AggregateError(failures.map((failure) => failure.reason), 'Session shutdown failed or worker ACP shutdown is unconfirmed; ownership is retained until process exit; restart the owning process before resuming.');
         }
       } else {
         const failures: unknown[] = [];
@@ -3384,7 +3384,7 @@ async function runConductorSessionWithStartupGuard(
         } catch (error) {
           failures.push(error);
         }
-        if (failures.length) throw new AggregateError(failures, 'Session shutdown failed');
+        if (failures.length) throw new AggregateError(failures, 'Session shutdown failed or worker ACP shutdown is unconfirmed; ownership is retained until process exit; restart the owning process before resuming.');
       }
 
       // ACP updates can arrive while cancellation and bridge shutdown settle.

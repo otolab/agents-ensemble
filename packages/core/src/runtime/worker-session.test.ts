@@ -279,7 +279,7 @@ describe('WorkerSession', () => {
       expect(connectAcp).toHaveBeenCalledOnce();
     });
 
-    await session.stop({ force: true });
+    await expect(session.stop({ force: true })).rejects.toThrow(/shutdown failed/);
     expect(close).not.toHaveBeenCalled();
 
     resolveBridge?.(bridge);

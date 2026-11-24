@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { setTimeout as scheduleTimeout, clearTimeout as cancelTimeout } from 'node:timers';
 import { extractAcpToolName } from '../acp/extract-acp-tool-name.js';
 import type { SpawnAcpProcessOptions } from '../acp/acp-process.js';
 import {
@@ -11,6 +12,8 @@ import {
 import {
   cancelWorkerAcpPrompt,
   closeWorkerAcpSession,
+  WorkerAcpCleanupError,
+  type WorkerAcpSession,
   isUnrecoverableAcpSessionHistoryError,
   type ConnectWorkerAcpFn,
   type WorkerSessionRecovery,
@@ -113,6 +116,8 @@ export class WorkerRuntime {
   private readonly confirmingHandoffs = new Set<string>();
   private readonly idleResolvers = new Set<() => void>();
   private attachInFlight = 0;
+  private acpTransitionsInFlight = 0;
+  private acpCleanupUnconfirmed = false;
   private forceShutdownRequested = false;
 
   constructor(private readonly options: WorkerRuntimeOptions) {}
@@ -433,18 +438,26 @@ export class WorkerRuntime {
         resident.preemptInstruction = undefined;
       }
       this.cancelAllActivePrompts();
+      const pendingAcpTransition = this.acpTransitionsInFlight > 0 || this.recreating.size > 0;
       const residents = [...this.residents.values()];
-      const results = await Promise.allSettled(
+      const closes = Promise.allSettled(
         [
-          ...residents.map((resident) => closeWorkerAcpSession(resident.attached.session)),
+          ...residents.map((resident) => this.closeTrackedAcpSession(resident.attached.session)),
           ...[...this.recreating.values()].filter((candidate): candidate is AttachedWorker => candidate !== undefined)
-            .map((candidate) => closeWorkerAcpSession(candidate.session)),
+            .map((candidate) => this.closeTrackedAcpSession(candidate.session)),
         ],
       );
-      const failures = results.filter((result) => result.status === 'rejected');
-      if (failures.length) {
-        throw new AggregateError(failures.map((failure) => failure.reason), 'Worker ACP shutdown failed');
+      let timeout: number | NodeJS.Timeout | undefined;
+      const results = pendingAcpTransition ? undefined : await Promise.race([
+        closes,
+        new Promise<undefined>((resolve) => { timeout = scheduleTimeout(resolve, 1_000); }),
+      ]);
+      if (timeout) cancelTimeout(timeout);
+      const failures = (results ?? []).filter((result) => result.status === 'rejected').map((failure) => failure.reason);
+      if (pendingAcpTransition || !results || this.acpCleanupUnconfirmed) {
+        failures.push(new Error('Worker ACP shutdown could not be confirmed; restart the owning process before resuming.'));
       }
+      if (failures.length) throw new AggregateError(failures, 'Worker ACP shutdown failed');
       this.residents.clear();
       this.resolveIdleWaiters();
       return;
@@ -452,13 +465,25 @@ export class WorkerRuntime {
 
     await this.waitForIdle();
     const results = await Promise.allSettled(
-      [...this.residents.values()].map((resident) => closeWorkerAcpSession(resident.attached.session)),
+      [...this.residents.values()].map((resident) => this.closeTrackedAcpSession(resident.attached.session)),
     );
     const failures = results.filter((result) => result.status === 'rejected');
-    if (failures.length) {
-      throw new AggregateError(failures.map((failure) => failure.reason), 'Worker ACP shutdown failed');
+    if (failures.length || this.acpCleanupUnconfirmed) {
+      throw new AggregateError(failures.map((failure) => failure.reason), 'Worker ACP shutdown could not be confirmed; restart the owning process before resuming.');
     }
     this.residents.clear();
+  }
+
+  private async closeTrackedAcpSession(session: WorkerAcpSession): Promise<void> {
+    this.acpTransitionsInFlight++;
+    try {
+      await closeWorkerAcpSession(session);
+    } catch (error) {
+      this.acpCleanupUnconfirmed = true;
+      throw error;
+    } finally {
+      this.acpTransitionsInFlight--;
+    }
   }
 
   /** Recreate an idle or failed worker without replaying an interrupted instruction. */
@@ -506,7 +531,7 @@ export class WorkerRuntime {
       this.handoffReports.set(name, { sessionId: candidate.session.sessionId, report: bootstrap.promptResult.responseText!.trim() });
       this.handoffTokens.delete(name);
       if (this.forceShutdownRequested) {
-        await closeWorkerAcpSession(candidate.session);
+        await this.closeTrackedAcpSession(candidate.session);
         throw new Error('Worker recreation was saved during shutdown; resume from the saved session.');
       }
       resident.state = 'idle';
@@ -517,7 +542,7 @@ export class WorkerRuntime {
       this.emitWorkerState(started.workerId, name, started.kind, 'idle');
       if (previous) {
         try {
-          await closeWorkerAcpSession(previous.attached.session);
+          await this.closeTrackedAcpSession(previous.attached.session);
         } catch (error) {
           throw new Error('Worker recreation was saved, but the old connection did not close. Inspect it before sending work.', { cause: error });
         }
@@ -528,7 +553,7 @@ export class WorkerRuntime {
       this.recreating.delete(name);
       this.attachInFlight--;
       this.resolveIdleIfReady();
-      if (candidate && !committed) await closeWorkerAcpSession(candidate.session);
+      if (candidate && !committed) await this.closeTrackedAcpSession(candidate.session);
     }
   }
 
@@ -668,7 +693,15 @@ export class WorkerRuntime {
     started: WorkerStartedInfo,
     resumeSavedSession = true,
   ): Promise<AttachedWorker> {
-    return attachWorker(this.workerAttachOptions(started, resumeSavedSession));
+    this.acpTransitionsInFlight++;
+    try {
+      return await attachWorker(this.workerAttachOptions(started, resumeSavedSession));
+    } catch (error) {
+      if (error instanceof WorkerAcpCleanupError) this.acpCleanupUnconfirmed = true;
+      throw error;
+    } finally {
+      this.acpTransitionsInFlight--;
+    }
   }
 
   private async notifyWorkerSessionRecovered(
@@ -700,7 +733,7 @@ export class WorkerRuntime {
 
     resident.sessionRecoveryAttempted = true;
     const previousSessionId = previousSession.sessionId;
-    await closeWorkerAcpSession(previousSession);
+    await this.closeTrackedAcpSession(previousSession);
     if (this.forceShutdownRequested) return undefined;
 
     const replacement = await this.attachStartedWorker(
@@ -708,7 +741,7 @@ export class WorkerRuntime {
       false,
     );
     if (this.forceShutdownRequested) {
-      await closeWorkerAcpSession(replacement.session);
+      await this.closeTrackedAcpSession(replacement.session);
       return undefined;
     }
 
@@ -885,7 +918,7 @@ export class WorkerRuntime {
       if (this.forceShutdownRequested) {
         attaching.queue.length = 0;
         attaching.preemptInstruction = undefined;
-        await closeWorkerAcpSession(attached.session);
+        await this.closeTrackedAcpSession(attached.session);
         return;
       }
 
@@ -1126,7 +1159,7 @@ export class WorkerRuntime {
       }
       if (lazyInitFailed || sessionRecoveryFailed) {
         try {
-          await closeWorkerAcpSession(resident.attached.session);
+          await this.closeTrackedAcpSession(resident.attached.session);
         } catch {
           // Retain the session so a later non-forced shutdown can retry cleanup.
           this.residents.set(resident.started.name, resident);

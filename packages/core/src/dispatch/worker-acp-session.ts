@@ -85,6 +85,12 @@ function isBuiltinPiResume(
   );
 }
 
+export class WorkerAcpCleanupError extends AggregateError {
+  constructor(initializationError: unknown, cleanupError: unknown) {
+    super([initializationError, cleanupError], 'Worker ACP initialization and cleanup failed; restart the owning process before resuming.');
+  }
+}
+
 export async function openWorkerAcpSession(
   options: OpenWorkerAcpSessionOptions,
 ): Promise<WorkerAcpSession> {
@@ -154,8 +160,8 @@ export async function openWorkerAcpSession(
     if (ownsBridge && bridge) {
       try {
         await bridge.close();
-      } catch {
-        // Keep the session initialization error as the primary failure.
+      } catch (cleanupError) {
+        throw new WorkerAcpCleanupError(error, cleanupError);
       }
     }
     throw error;

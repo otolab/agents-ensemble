@@ -105,7 +105,7 @@ describe('WorkerRuntime', () => {
       sessionState: { workers: [{ name: 'ping-1', kind: 'ping' }], kinds: ['ping'] },
     });
     await vi.waitFor(() => expect(connectAcp).toHaveBeenCalledOnce());
-    await runtime.shutdown({ force: true });
+    await expect(runtime.shutdown({ force: true })).rejects.toThrow(/shutdown failed/);
     connection.resolve(bridge);
     await vi.waitFor(() => expect(close).toHaveBeenCalledOnce());
     expect(bridge.promptSession).not.toHaveBeenCalled();
@@ -280,7 +280,31 @@ describe('WorkerRuntime', () => {
     expect(confirmed).not.toHaveBeenCalled();
     expect(runtime.sendWorkerMessage('ping-1', 'old instruction').status).toBe('error');
     expect(runtime.inspectWorkerHandoff('ping-1').report).toBe('new report');
-    await runtime.shutdown();
+    await expect(runtime.shutdown()).rejects.toThrow(/restart the owning process/);
+  });
+
+  it('reports an unconfirmed old ACP close during forced shutdown', async () => {
+    const closeGate = createDeferred<void>();
+    const oldBridge = createMockBridge(vi.fn(() => closeGate.promise));
+    const candidate = createMockBridge(vi.fn().mockResolvedValue(undefined));
+    candidate.cancelSession = vi.fn();
+    vi.mocked(candidate.newSession).mockResolvedValue('new-id');
+    vi.mocked(candidate.promptSession).mockResolvedValue({ stopReason: 'end_turn', responseText: 'handoff' });
+    const runtime = new WorkerRuntime({
+      inbox: new ConductorInbox(), connectAcp: vi.fn().mockResolvedValueOnce(oldBridge).mockResolvedValueOnce(candidate),
+      onWorkerSessionRecovered: vi.fn().mockResolvedValue(undefined),
+    });
+    runtime.start({
+      name: 'ping-1', issueUrl: TEST_WORKTREE.issue.url, kind: 'ping', worktree: TEST_WORKTREE,
+      resumeAcpSessionId: 'sess-1',
+      sessionState: { workers: [{ name: 'ping-1', kind: 'ping' }], kinds: ['ping'] },
+    });
+    await runtime.waitForIdle();
+    const recreation = runtime.recreateWorker('ping-1', 'sess-1');
+    await vi.waitFor(() => expect(oldBridge.close).toHaveBeenCalledOnce());
+    await expect(runtime.shutdown({ force: true })).rejects.toThrow(/shutdown failed/);
+    closeGate.resolve();
+    await recreation;
   });
 
   it('serializes confirmation against recreation and rejects a second confirmation', async () => {
