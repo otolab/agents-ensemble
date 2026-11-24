@@ -1733,7 +1733,11 @@ test('persistence docs use canonical slug paths and identify legacy migration so
 
   assert.match(
     documents[1],
-    /Pi transcript は canonical slug のみから読み取り、legacy path-hash \/ project transcript は明示 migration の source です/u,
+    /Issue transcript は `~\/\.ensemble\/sessions\/github\.com\/<owner>\/<repo>\/pi\/`、workspace transcript は `~\/\.ensemble\/workspaces\/<slug>\/pi\/` に保存する/u,
+  );
+  assert.match(
+    documents[1],
+    /legacy path-hash \/ project transcript は明示 migration の source とする/u,
   );
   assert.doesNotMatch(
     documents[1],
