@@ -1,6 +1,7 @@
 import { conductorFailureLogPath, createConductorFailureLog } from '../session/conductor-failure-log.js';
 import { resolveUserEnsembleRoot } from '../resolve-user-ensemble-root.js';
-import { acquireSessionOwnerLock } from '../session/session-owner-lock.js';
+import { acquireSessionMigrationReadLock, acquireSessionOwnerLock } from '../session/session-owner-lock.js';
+import { readWorkspaceAnchor } from '../workspace-run/slug-key.js';
 import { stat } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
 import { isAbsolute, resolve as resolvePath } from 'node:path';
@@ -142,6 +143,7 @@ import {
   requireLocatedSessionResumeStoreForResume,
   saveSessionResumeStore,
   SESSION_RESUME_STORE_VERSION,
+  WORKSPACE_RENAME_SESSION_RESUME_STORE_VERSION,
   type HarnessPhase,
   type SessionLifecycle,
   type EnsembleConfigDigestScheme,
@@ -434,7 +436,16 @@ export async function runConductorSession(
 ): Promise<ConductorSessionResult> {
   const startupCleanup = new StartupCleanupGuard();
   const ownership: { release?: () => void; active: boolean } = { active: false };
+  let releaseWorkspaceGate: (() => void) | undefined;
   try {
+    const workspace = parseWorkspaceSessionUrl(options.issueUrl);
+    if (workspace) {
+      releaseWorkspaceGate = await acquireSessionMigrationReadLock();
+      const anchor = await readWorkspaceAnchor(options.conductorCwd ?? process.cwd());
+      if (anchor && anchor.slug !== workspace.slugKey) {
+        throw new Error(`Workspace anchor changed to "${anchor.slug}"; retry the session.`);
+      }
+    }
     if (options.resumeAgentId) {
       ownership.release = await acquireSessionOwnerLock(options.resumeAgentId);
       ownership.active = true;
@@ -445,7 +456,11 @@ export async function runConductorSession(
     throw error;
   } finally {
     ownership.active = false;
-    ownership.release?.();
+    try {
+      ownership.release?.();
+    } finally {
+      releaseWorkspaceGate?.();
+    }
   }
 }
 
@@ -586,6 +601,7 @@ async function runConductorSessionWithStartupGuard(
   let githubMonitor: GitHubMonitor | undefined;
   let activeResumeStorePath: string | undefined;
   let activeLocatedResumeStore: LocatedSessionResumeStore | undefined;
+  let activeResumeStoreVersion: SessionResumeStore['version'] = SESSION_RESUME_STORE_VERSION;
   let createdHarnessCliVersion = options.cliPackageVersion;
   let drainStartupResumeStoreWrites = async () => {};
   const pendingGitHubRecoveries: number[] = [];
@@ -611,6 +627,7 @@ async function runConductorSessionWithStartupGuard(
       issueUrl: options.issueUrl,
     });
     const loadedResumeStore = locatedResumeStore.resumeStore;
+    activeResumeStoreVersion = loadedResumeStore.version;
     activeLocatedResumeStore = locatedResumeStore;
     // A resume keeps its origin version; a legacy store stays without one.
     createdHarnessCliVersion = loadedResumeStore.createdHarnessCliVersion;
@@ -1840,7 +1857,10 @@ async function runConductorSessionWithStartupGuard(
       ? cursorBootstrapCompleteForStore(cursorBootstrapState)
       : undefined;
     return {
-      version: SESSION_RESUME_STORE_VERSION,
+      version: activeResumeStoreVersion === WORKSPACE_RENAME_SESSION_RESUME_STORE_VERSION ||
+        Object.values(workers).some((worker) => worker.recreateRequired)
+        ? WORKSPACE_RENAME_SESSION_RESUME_STORE_VERSION
+        : SESSION_RESUME_STORE_VERSION,
       conductorAgentId: conductorHandle.conductor.agentId,
       conductorBackend,
       ...(createdHarnessCliVersion !== undefined
@@ -2528,7 +2548,7 @@ async function runConductorSessionWithStartupGuard(
     startupCleanup.handoff();
     workerSession.startWorkers();
     for (const [name, saved] of workerSessions) {
-      if (!saved.handoffPending) continue;
+      if (!saved.handoffPending && !saved.recreateRequired) continue;
       const worker = activeProfile.workers.find((entry) => entry.name === name);
       if (!worker) continue;
       eventQueue.enqueue({
@@ -2536,6 +2556,7 @@ async function runConductorSessionWithStartupGuard(
         name,
         kind: worker.kind,
         reason: saved.generations?.at(-1)?.reason ?? 'explicit',
+        ...(saved.recreateRequired ? { recreateRequired: true } : {}),
       });
     }
     if (resumeToolCallSnapshots.length > 0) {

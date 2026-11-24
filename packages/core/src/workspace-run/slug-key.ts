@@ -1,7 +1,10 @@
-import { createHash } from 'node:crypto';
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { createHash, randomUUID } from 'node:crypto';
+import { lstat, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, normalize, resolve } from 'node:path';
+import { lock } from 'proper-lockfile';
 import { resolveEnsemblePaths } from '../ensemble-paths.js';
+import { acquireSessionMigrationLock } from '../session/session-owner-lock.js';
+import { applyRenameJournal, assertNoRenameJournal, prepareRenameJournal, publishRenameJournal, rollbackRenameJournal } from './rename-journal.js';
 
 export const SLUG_KEY_HASH_LENGTH = 16;
 export const SLUG_KEY_MAX_LENGTH = 64;
@@ -85,10 +88,13 @@ export async function writeWorkspaceAnchor(
   assertValidSlugKey(slugKey);
   const path = workspaceAnchorPath(cwd);
   await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, `${JSON.stringify({ slug: slugKey }, null, 2)}\n`, {
-    encoding: 'utf8',
-    flag: 'w',
-  });
+  const temporary = `${path}.${randomUUID()}.tmp`;
+  try {
+    await writeFile(temporary, `${JSON.stringify({ slug: slugKey }, null, 2)}\n`, 'utf8');
+    await rename(temporary, path);
+  } finally {
+    await rm(temporary, { force: true });
+  }
 }
 
 /**
@@ -136,19 +142,60 @@ export async function renameWorkspaceSlug(input: {
       ? { userEnsembleRoot: input.userEnsembleRoot }
       : {}),
   });
-  const fromDir = paths.workspaceSlugDir(input.fromSlug);
   const toDir = paths.workspaceSlugDir(input.toSlug);
+  const releaseMigration = await acquireSessionMigrationLock(paths.userRoot);
+  let release: (() => Promise<void>) | undefined;
   try {
-    await rename(fromDir, toDir);
-  } catch (error) {
-    if (isEexist(error)) {
-      throw new Error(
-        `workspace slug "${input.toSlug}" already exists; rename aborted.`,
-      );
+    release = await lock(paths.workspacesRoot, { realpath: false });
+    await assertNoRenameJournal(paths.userRoot);
+    const anchor = await readWorkspaceAnchor(input.cwd);
+    if (anchor && anchor.slug !== input.fromSlug) {
+      throw new Error(`Workspace is anchored to "${anchor.slug}", not "${input.fromSlug}".`);
     }
-    throw error;
+    if (await pathExists(toDir)) {
+      throw new Error(`workspace slug "${input.toSlug}" already exists; rename aborted.`);
+    }
+    const journal = await prepareRenameJournal({
+      userRoot: paths.userRoot, cwd: input.cwd, from: input.fromSlug, to: input.toSlug,
+    });
+    await publishRenameJournal(paths.userRoot, journal);
+    try {
+      await applyRenameJournal(paths.userRoot, journal);
+    } catch (error) {
+      try {
+        await rollbackRenameJournal(paths.userRoot);
+      } catch (rollbackError) {
+        throw new Error(
+          `Workspace rename failed (${String(error)}); rollback failed (${String(rollbackError)}). ` +
+          'Stop workspace operations and run ensemble workspace-rename-recover.',
+        );
+      }
+      throw new Error(`Workspace rename failed; changes were rolled back: ${String(error)}`);
+    }
+  } finally {
+    try {
+      await release?.();
+    } finally {
+      releaseMigration();
+    }
   }
-  await writeWorkspaceAnchor(input.cwd, input.toSlug);
+}
+
+/** Roll back a rename interrupted after its recovery journal was published. */
+export async function recoverWorkspaceRename(input: {
+  repoRoot: string;
+  home?: string;
+  userEnsembleRoot?: string;
+}): Promise<void> {
+  const paths = resolveEnsemblePaths(input);
+  const releaseMigration = await acquireSessionMigrationLock(paths.userRoot);
+  let release: (() => Promise<void>) | undefined;
+  try {
+    release = await lock(paths.workspacesRoot, { realpath: false });
+    await rollbackRenameJournal(paths.userRoot);
+  } finally {
+    try { await release?.(); } finally { releaseMigration(); }
+  }
 }
 
 function isEnoent(error: unknown): boolean {
@@ -160,11 +207,12 @@ function isEnoent(error: unknown): boolean {
   );
 }
 
-function isEexist(error: unknown): boolean {
-  return (
-    typeof error === 'object' &&
-    error !== null &&
-    'code' in error &&
-    (error as { code?: string }).code === 'EEXIST'
-  );
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await lstat(path);
+    return true;
+  } catch (error) {
+    if (isEnoent(error)) return false;
+    throw error;
+  }
 }

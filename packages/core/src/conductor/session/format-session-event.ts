@@ -30,7 +30,7 @@ function formatSingleSessionEventForConductor(event: SessionEvent): string {
     case 'worker.failed':
       return ['## worker 失敗', '', formatEventBodyForConductor(event)].join('\n');
     case 'worker.session.recovered':
-      return ['## worker session 復旧', '', formatEventBodyForConductor(event)].join('\n');
+      return [event.recreateRequired ? '## worker session 再作成待ち' : '## worker session 復旧', '', formatEventBodyForConductor(event)].join('\n');
     case 'permission.pending':
       return [
         '## permission 判断待ち',
@@ -83,8 +83,10 @@ function formatEventBodyForConductor(event: SessionEvent): string {
         name: event.name,
         kind: event.kind,
         reason: event.reason,
-        action: 'started_new_session',
-        handoff: 'Call inspect_worker_handoff to read the report; review interrupted operations and missing information, then call confirm_worker_handoff with its token before sending new work.',
+        action: event.recreateRequired ? 'recreation_required' : 'started_new_session',
+        handoff: event.recreateRequired
+          ? 'The workspace was renamed. Call recreate_worker, then inspect_worker_handoff; review interrupted work and confirm_worker_handoff before sending new work.'
+          : 'Call inspect_worker_handoff to read the report; review interrupted operations and missing information, then call confirm_worker_handoff with its token before sending new work.',
       });
     case 'permission.pending': {
       const request = event.permission.request;
