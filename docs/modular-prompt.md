@@ -10,15 +10,21 @@
 
 | モジュール | 読者 | merge |
 |------------|------|-------|
-| `baseModule` + `ticketModule` | Issue の conductor + worker | Issue 固有の前提を ticket に分離 |
-| `runBaseModule` | workspace の conductor + worker | `ensemble run` 用 |
-| `conductorBaseModule` | conductor のみ | `base` の後 |
-| `workerBaseModule` | worker のみ | `base` の後 |
+| `baseModule` | conductor + worker 共通 | Issue / workspace 両方の context に対応 |
+| `ticketModule` | Issue の conductor + worker | Issue の目標・正本・worktree |
+| `runBaseModule` | workspace の conductor + worker | slug・brief・Notes・workspace の差分 |
+| `conductorBaseModule` | conductor 共通 | open question・permission・worker 連携 |
+| `ticketConductorModule` | Issue conductor | Issue / PR と GitHub 監視 |
+| `runConductorBaseModule` | workspace conductor | brief・Notes と監視の制約 |
+| `workerBaseModule` | worker 共通 | 待機・permission |
+| `ticketWorkerModule` | Issue worker | Issue / PR の記録先・認証助言 |
 | user-wide 文書（`~/.ensemble/AGENTS.md`） | conductor + worker 全員 | conductor: Issue context の後、profile materials の前。worker: profile materials の前 |
 | profile 起動文書（`agents.<kind>.prompt` / `promptFile`） | 役割ごと | merge で追記（セクション分担） |
 | profile materials（`team.md` 等） | 共通または `kinds` 指定の役割 | 最後に追記（`materials` → Prepared Materials） |
 
 compile 時の context は `EnsembleContext`（`kind`, `issueUrl`, `issueNumber`, `workers`, `kinds`）。`ensembleContext(kind, issueUrl, sessionState)` で組み立てる。`sessionState` は `sessionStateFromProfile(profile)` で profile から取る。Issue の **objective** は `ticketModule` の Issue 解決目標、base の **state** は workers 構成と kind 一覧。workspace では `workspaceEnsembleContext` と run 用モジュールを使う。worker の Issue 固有指示も Issue 時のみ merge する。
+
+merge 順は issue conductor が `baseModule → ticketModule → conductorBaseModule → ticketConductorModule`、issue worker が `baseModule → ticketModule → workerBaseModule → ticketWorkerModule`。workspace conductor は `baseModule → runBaseModule → conductorBaseModule → runConductorBaseModule`、workspace worker は `baseModule → runBaseModule → workerBaseModule` を使い、いずれも最後に profile を追加する。worker の attach と `buildWorkerPrompt` は workspace identity で経路を選ぶ。常駐 worker への通常 dispatch は attach 時の system prompt を再生成せず、conductor の指示文を送る。ticket モジュールは workspace では merge しない。
 
 profile 起動文書は **PromptModule として merge** される（persona / instructions 等のセクション分担）。profile materials は **Prepared Materials** に載せ、文書があるときは instructions に「文書の役割に応じて参照し、適用される指示に従う」旨を1行追記する。`materials` の `kinds` を省略した項目は全 agent に、`kinds: [implementer]` のように指定した項目は列挙した kind にだけ compile 時に同梱される。ensemble 側に書くべき共通前提を profile に重複させない。**チーム運用**（マージまで持っていく、Issue / PR 正本、投稿の出自、作業単位など）は profile の materials または起動文書に書き、base に置かない。
 

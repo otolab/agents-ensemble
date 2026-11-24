@@ -12,13 +12,6 @@ export const workerBaseModule: PromptModule = {
     '- セッション開始時に起動し、conductor からの作業指示を待つ。明示的な作業指示のメッセージが来るまで待機すること',
     '- 勝手に方針転換をしたり新しい作業を始めたりしない。conductorとの相談は随時行う',
     '- 操作の許可が必要なときは harness 経由で permission を要求する',
-    {
-      type: 'subsection',
-      title: 'codex-acpへのアドバイス',
-      items: [
-        '- サンドボックス内では認証エラーになるツールがあります(ghなど)が、conductorと相談の上、サンドボックス外での実行に切り替えてください',
-        '- git addやcommitについても同様に権限エラーになる可能性があります。sandbox外実行を試し、失敗する場合はconductorに対して代行を依頼してください'
-      ],
-    },
+
   ],
 };
