@@ -454,7 +454,7 @@ export function OpenQuestionsPane({
   const scrollIndicators = `${viewport.canScrollUp ? '↑' : ''}${viewport.canScrollDown ? '↓' : ''}`;
   const scrollHint =
     viewport.maxLinesFromTop > 0
-      ? `Shift+PgUp/PgDnで本文スクロール ${scrollIndicators}`
+      ? `Shift/Alt+PgUp/PgDnでスクロール ${scrollIndicators}`
       : undefined;
   const titleSuffixParts = [layout.titleSuffix, scrollHint].filter(Boolean);
   const titleSuffix =
@@ -768,7 +768,7 @@ export function IssueSessionTui({
       moveQueue(input === 't' ? 'previous' : 'next', input === 'o');
       return;
     }
-    if (openQuestions.length > 0 && key.shift && !key.ctrl && !key.meta) {
+    if (openQuestions.length > 0 && !key.ctrl && (key.meta || key.shift)) {
       if (key.pageUp) {
         setOpenQuestionLinesFromTop((current) =>
           advanceOpenQuestionsScrollOffset(

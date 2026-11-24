@@ -400,6 +400,27 @@ describe('IssueSessionTuiStream', () => {
     expect(onSubmit).toHaveBeenCalledWith('/ex', undefined);
   });
 
+  it('keeps recovery inspection active when Alt+PgDn is pressed with an open question', async () => {
+    Object.defineProperty(process.stdout, 'rows', { configurable: true, value: 6 });
+    Object.defineProperty(process.stdout, 'columns', { configurable: true, value: 40 });
+    const viewModel = createTuiViewModel();
+    viewModel.setDisplayState({
+      workers: {}, conductorOutput: null,
+      openQuestions: [createOpenQuestion({ id: 'inq-recovery', question: 'Question?', context: LONG_QUESTION_CONTEXT })],
+      dispatchHold: { hold: false, heldEventCount: 0 },
+    });
+    viewModel.setRecoveryInspection({
+      title: 'Recovery', text: 'recovery content', recoveryId: 'recovery-test',
+      expiresAt: Date.now() + 60_000, sensitive: true,
+    });
+    const { stdin, lastFrame } = render(<IssueSessionTuiStream viewModel={viewModel} onSubmit={vi.fn()} />);
+    await flushInkStdin();
+    stdin.write(INK_TEST_KEYS.altPageDown);
+    await flushInkStdin();
+    expect(viewModel.getSnapshot().recoveryInspection).toBeDefined();
+    expect(lastFrame() ?? '').toContain('recovery content');
+  });
+
   it('shows recovery content outside the stream activity log and hides it with Escape', async () => {
     const viewModel = createTuiViewModel({ activityLogWindowSize: null });
     viewModel.setRecoveryInspection({
@@ -1505,7 +1526,7 @@ describe('IssueSessionTuiStream', () => {
     expect(lastFrame()).toContain('Q:^T< ^O>');
   });
 
-  it('holds new activity while detached and flushes the pending suffix once on End', async () => {
+  it.each([INK_TEST_KEYS.pageUp, INK_TEST_KEYS.altPageUp])('holds new activity after page input %j when no question is open', async (pageUp) => {
     const viewModel = createTuiViewModel({ activityLogWindowSize: null });
     viewModel.appendActivityLog('harness', 'committed');
 
@@ -1513,7 +1534,7 @@ describe('IssueSessionTuiStream', () => {
       <IssueSessionTuiStream viewModel={viewModel} onSubmit={() => {}} />,
     );
 
-    stdin.write(INK_TEST_KEYS.pageUp);
+    stdin.write(pageUp);
     await flushInkStdin();
 
     viewModel.appendActivityLog('harness', 'pending-one');
@@ -1978,11 +1999,11 @@ describe('IssueSessionTuiStream', () => {
     const initialFrame = lastFrame() ?? '';
     expect(initialFrame).toContain('context-line-00');
     expect(initialFrame).not.toContain('context-line-39');
-    expect(initialFrame).toContain('Shift+PgUp/PgDnで本文スクロール');
-    expect(initialFrame).toContain('で選択) · Shift+PgUp/PgDn');
+    expect(initialFrame).toContain('Shift/Alt+PgUp/PgDnでスクロール');
+    expect(initialFrame).toContain('で選択) · Shift/Alt+PgUp/PgDn');
     expect(initialFrame).toContain('› safe: Safe mode');
 
-    stdin.write(INK_TEST_KEYS.shiftPageDown.repeat(2));
+    stdin.write(INK_TEST_KEYS.altPageDown.repeat(2));
     await flushInkStdin();
     const scrolledFrame = lastFrame() ?? '';
     expect(scrolledFrame).not.toContain('context-line-00');
@@ -2017,10 +2038,17 @@ describe('IssueSessionTuiStream', () => {
     stdin.write(INK_TEST_KEYS.shiftPageDown.repeat(200));
     await flushInkStdin();
     expect(lastFrame() ?? '').toContain('context-line-39');
-    stdin.write(INK_TEST_KEYS.shiftPageUp.repeat(200));
+    stdin.write(INK_TEST_KEYS.altPageUp.repeat(200));
     await flushInkStdin();
     const topFrame = lastFrame() ?? '';
     expect(topFrame).toContain('context-line-00');
     expect(topFrame).not.toContain('context-line-39');
+
+    stdin.write(INK_TEST_KEYS.shiftPageDown.repeat(200));
+    await flushInkStdin();
+    stdin.write(INK_TEST_KEYS.shiftPageUp.repeat(200));
+    await flushInkStdin();
+    expect(lastFrame() ?? '').toContain('context-line-00');
+    expect(lastFrame() ?? '').not.toContain('context-line-39');
   });
 });

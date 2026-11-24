@@ -472,6 +472,27 @@ describe('IssueSessionTui', () => {
     expect(onSubmit).toHaveBeenCalledWith('/ex', undefined);
   });
 
+  it('keeps recovery inspection active when Alt+PgDn is pressed with an open question', async () => {
+    Object.defineProperty(process.stdout, 'rows', { configurable: true, value: 6 });
+    Object.defineProperty(process.stdout, 'columns', { configurable: true, value: 40 });
+    const viewModel = createTuiViewModel();
+    viewModel.setDisplayState({
+      workers: {}, conductorOutput: null,
+      openQuestions: [createOpenQuestion({ id: 'inq-recovery', question: 'Question?', context: LONG_QUESTION_CONTEXT })],
+      dispatchHold: { hold: false, heldEventCount: 0 },
+    });
+    viewModel.setRecoveryInspection({
+      title: 'Recovery', text: 'recovery content', recoveryId: 'recovery-test',
+      expiresAt: Date.now() + 60_000, sensitive: true,
+    });
+    const { stdin, lastFrame } = render(<IssueSessionTui viewModel={viewModel} onSubmit={vi.fn()} />);
+    await flushInkStdin();
+    stdin.write(INK_TEST_KEYS.altPageDown);
+    await flushInkStdin();
+    expect(viewModel.getSnapshot().recoveryInspection).toBeDefined();
+    expect(lastFrame() ?? '').toContain('recovery content');
+  });
+
   it('shows recovery content outside the activity log and hides it with Escape', async () => {
     const viewModel = createTuiViewModel();
     viewModel.setRecoveryInspection({
@@ -2448,11 +2469,11 @@ describe('IssueSessionTui', () => {
       const initialFrame = lastFrame() ?? '';
       expect(initialFrame).toContain('context-line-00');
       expect(initialFrame).not.toContain('context-line-39');
-      expect(initialFrame).toContain('Shift+PgUp/PgDnで本文スクロール');
-      expect(initialFrame).toContain('で選択) · Shift+PgUp/PgDn');
+      expect(initialFrame).toContain('Shift/Alt+PgUp/PgDnでスクロール');
+      expect(initialFrame).toContain('で選択) · Shift/Alt+PgUp/PgDn');
       expect(initialFrame).toContain('› safe: Safe mode');
 
-      stdin.write(INK_TEST_KEYS.shiftPageDown.repeat(2));
+      stdin.write(INK_TEST_KEYS.altPageDown.repeat(2));
       await flushInkStdin();
       const scrolledFrame = lastFrame() ?? '';
       expect(scrolledFrame).not.toContain('context-line-00');
@@ -2487,11 +2508,18 @@ describe('IssueSessionTui', () => {
       stdin.write(INK_TEST_KEYS.shiftPageDown.repeat(200));
       await flushInkStdin();
       expect(lastFrame() ?? '').toContain('context-line-39');
-      stdin.write(INK_TEST_KEYS.shiftPageUp.repeat(200));
+      stdin.write(INK_TEST_KEYS.altPageUp.repeat(200));
       await flushInkStdin();
       const topFrame = lastFrame() ?? '';
       expect(topFrame).toContain('context-line-00');
       expect(topFrame).not.toContain('context-line-39');
+
+      stdin.write(INK_TEST_KEYS.shiftPageDown.repeat(200));
+      await flushInkStdin();
+      stdin.write(INK_TEST_KEYS.shiftPageUp.repeat(200));
+      await flushInkStdin();
+      expect(lastFrame() ?? '').toContain('context-line-00');
+      expect(lastFrame() ?? '').not.toContain('context-line-39');
     });
 
     it('cycles selection with Shift+arrow keys', async () => {
@@ -2690,7 +2718,7 @@ describe('IssueSessionTui', () => {
   });
 
   describe('orchestration pane scroll (stdin integration)', () => {
-    it('scrolls to older lines on PgUp when input is empty and shows scroll hint', async () => {
+    it.each([INK_TEST_KEYS.pageUp, INK_TEST_KEYS.altPageUp])('scrolls activity with page input %j when no question is open', async (pageUp) => {
       const viewModel = createTuiViewModel();
       fillScrollableHarnessLog(viewModel);
 
@@ -2703,7 +2731,7 @@ describe('IssueSessionTui', () => {
       expect(pinnedFrame).not.toContain('[harness] line-14');
       expect(pinnedFrame).not.toContain(SCROLL_HINT);
 
-      stdin.write(INK_TEST_KEYS.pageUp);
+      stdin.write(pageUp);
       await flushInkStdin();
 
       const scrolledFrame = lastFrame() ?? '';

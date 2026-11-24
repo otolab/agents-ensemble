@@ -413,7 +413,7 @@ export function IssueSessionTuiStream({
       moveQueue(input === 't' ? 'previous' : 'next', input === 'o');
       return;
     }
-    if (openQuestions.length > 0 && key.shift && !key.ctrl && !key.meta) {
+    if (openQuestions.length > 0 && !key.ctrl && (key.meta || key.shift)) {
       if (key.pageUp) {
         setOpenQuestionLinesFromTop((current) =>
           advanceOpenQuestionsScrollOffset(
