@@ -24,6 +24,7 @@ describe('buildWorkerAttachPrompt', () => {
     expect(prompt).toContain('作業指示を待つ');
     expect(prompt).toContain('profile bootstrap');
     expect(prompt).not.toContain('### User instructions (~/.ensemble/AGENTS.md)');
+    expect(prompt).toMatchSnapshot();
   });
 
   it('builds workspace attach without Issue defaults', () => {
