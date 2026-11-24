@@ -104,10 +104,79 @@ describe('WorkerRuntime', () => {
       'saved', expect.stringContaining('引き継ぎ確認が完了していません'), expect.any(Object),
     );
     expect(runtime.sendWorkerMessage('ping-1', 'continue').status).toBe('error');
-    await runtime.confirmWorkerHandoff('ping-1');
+    await runtime.confirmWorkerHandoff('ping-1', runtime.inspectWorkerHandoff('ping-1').token);
     expect(confirm).toHaveBeenCalledWith('ping-1');
     expect(runtime.sendWorkerMessage('ping-1', 'continue').status).toBe('sent');
     await runtime.waitForIdle();
+    await runtime.shutdown();
+  });
+
+  it('rejects early confirmation through attach and report delivery, even with lazy workers', async () => {
+    const load = createDeferred<void>();
+    const report = createDeferred<{ stopReason: string; responseText: string }>();
+    const delivered = createDeferred<void>();
+    const releaseDelivery = createDeferred<void>();
+    const inbox = new ConductorInbox();
+    inbox.subscribe(async (message) => {
+      if (message.type === 'worker.completed') {
+        delivered.resolve();
+        await releaseDelivery.promise;
+      }
+    });
+    const bridge = {
+      loadSession: vi.fn().mockReturnValue(load.promise),
+      promptSession: vi.fn().mockReturnValue(report.promise),
+      close: vi.fn().mockResolvedValue(undefined),
+    } as unknown as AcpBridge;
+    const confirm = vi.fn().mockResolvedValue(undefined);
+    const runtime = new WorkerRuntime({ inbox, connectAcp: vi.fn().mockResolvedValue(bridge), onWorkerHandoffConfirmed: confirm });
+    runtime.start({
+      name: 'ping-1', issueUrl: TEST_WORKTREE.issue.url, kind: 'ping', worktree: TEST_WORKTREE,
+      resumeAcpSessionId: 'saved', handoffPending: true,
+      sessionState: { workers: [{ name: 'ping-1', kind: 'ping' }], kinds: ['ping'] },
+    }, { lazy: true });
+    await vi.waitFor(() => expect(bridge.loadSession).toHaveBeenCalledOnce());
+    await expect(runtime.confirmWorkerHandoff('ping-1', 'unknown')).rejects.toThrow('handoff report');
+    expect(runtime.sendWorkerMessage('ping-1', 'old instruction').status).toBe('error');
+    load.resolve();
+    await vi.waitFor(() => expect(bridge.promptSession).toHaveBeenCalledOnce());
+    await expect(runtime.confirmWorkerHandoff('ping-1', 'unknown')).rejects.toThrow('handoff report');
+    const prompt = vi.mocked(bridge.promptSession).mock.calls[0]![1];
+    expect(prompt).toContain('引き継ぎ確認が完了していません');
+    expect(prompt).not.toContain('中断していた作業を再開してください');
+    report.resolve({ stopReason: 'end_turn', responseText: '中断操作を確認しました' });
+    await delivered.promise;
+    await expect(runtime.confirmWorkerHandoff('ping-1', 'unknown')).rejects.toThrow('handoff report');
+    expect(confirm).not.toHaveBeenCalled();
+    releaseDelivery.resolve();
+    await runtime.waitForIdle();
+    await expect(runtime.confirmWorkerHandoff('ping-1', 'unknown')).rejects.toThrow('Inspect the handoff report');
+    expect(runtime.inspectWorkerHandoff('ping-1').report).toBe('中断操作を確認しました');
+    await runtime.confirmWorkerHandoff('ping-1', runtime.inspectWorkerHandoff('ping-1').token);
+    expect(confirm).toHaveBeenCalledOnce();
+    expect(bridge.promptSession).toHaveBeenCalledOnce();
+    await runtime.shutdown();
+  });
+
+  it.each(['error', 'cancelled', 'empty', 'incomplete'])('keeps the handoff gate closed when resume bootstrap is %s', async (failure) => {
+    const bridge = createMockBridge(vi.fn().mockResolvedValue(undefined));
+    vi.mocked(bridge.promptSession).mockImplementation(async () => {
+      if (failure === 'error') throw new Error('bootstrap failed');
+      if (failure === 'cancelled') return { stopReason: 'cancelled', responseText: 'partial' };
+      if (failure === 'incomplete') return { stopReason: 'max_tokens', responseText: 'partial' };
+      return { stopReason: 'end_turn', responseText: '  ' };
+    });
+    const confirm = vi.fn();
+    const runtime = new WorkerRuntime({ inbox: new ConductorInbox(), connectAcp: vi.fn().mockResolvedValue(bridge), onWorkerHandoffConfirmed: confirm });
+    runtime.start({
+      name: 'ping-1', issueUrl: TEST_WORKTREE.issue.url, kind: 'ping', worktree: TEST_WORKTREE,
+      resumeAcpSessionId: 'saved', handoffPending: true,
+      sessionState: { workers: [{ name: 'ping-1', kind: 'ping' }], kinds: ['ping'] },
+    });
+    await runtime.waitForIdle();
+    await expect(runtime.confirmWorkerHandoff('ping-1', 'unknown')).rejects.toThrow('handoff report');
+    expect(runtime.sendWorkerMessage('ping-1', 'old instruction').status).toBe('error');
+    expect(confirm).not.toHaveBeenCalled();
     await runtime.shutdown();
   });
 
@@ -786,7 +855,7 @@ describe('WorkerRuntime', () => {
       status: 'error',
       message: expect.stringContaining('handoff confirmation'),
     });
-    await runtime.confirmWorkerHandoff('ping-1');
+    await runtime.confirmWorkerHandoff('ping-1', runtime.inspectWorkerHandoff('ping-1').token);
     expect(runtime.sendWorkerMessage('ping-1', 'inspect current state')).toEqual({
       status: 'sent',
       worker: 'ping-1',
@@ -1018,7 +1087,7 @@ describe('WorkerRuntime', () => {
       close: vi.fn().mockResolvedValue(undefined),
     } as unknown as AcpBridge;
     const bootstrapStarted = createDeferred<void>();
-    const bootstrapResult = createDeferred<{ stopReason: string }>();
+    const bootstrapResult = createDeferred<{ stopReason: string; responseText: string }>();
     const newPromptSession = vi.fn(
       (_sessionId: string, prompt: string) => {
         if (prompt.includes('pong')) {
@@ -1070,7 +1139,7 @@ describe('WorkerRuntime', () => {
     ).toEqual({ status: 'preempted', worker: 'ping-1' });
     expect(newCancelSession).not.toHaveBeenCalled();
 
-    bootstrapResult.resolve({ stopReason: 'end_turn' });
+    bootstrapResult.resolve({ stopReason: 'end_turn', responseText: 'handoff reviewed' });
     await runtime.waitForIdle();
     await inbox.drain();
 

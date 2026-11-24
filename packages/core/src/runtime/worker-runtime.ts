@@ -93,6 +93,12 @@ interface FailedWorker {
   error: string;
 }
 
+class InterruptedInstructionAfterHandoffError extends Error {
+  constructor(message: string, readonly report: string, options: ErrorOptions) {
+    super(message, options);
+  }
+}
+
 export class WorkerRuntime {
   private readonly configuredWorkers = new Map<string, WorkerStartedInfo>();
   private readonly processing = new Map<string, WorkerStartedInfo>();
@@ -102,6 +108,8 @@ export class WorkerRuntime {
   private readonly failedWorkers = new Map<string, FailedWorker>();
   private readonly recreating = new Map<string, AttachedWorker | undefined>();
   private readonly handoffPending = new Set<string>();
+  private readonly handoffReports = new Map<string, string>();
+  private readonly handoffTokens = new Map<string, string>();
   private readonly idleResolvers = new Set<() => void>();
   private attachInFlight = 0;
   private forceShutdownRequested = false;
@@ -233,7 +241,7 @@ export class WorkerRuntime {
     const started: WorkerStartedInfo = { workerId, ...params };
     this.configuredWorkers.set(params.name, started);
     if (params.handoffPending) this.handoffPending.add(params.name);
-    if (options?.lazy) {
+    if (options?.lazy && !params.handoffPending) {
       this.sleeping.set(params.name, started);
       this.emitWorkerState(workerId, params.name, params.kind, 'sleeping');
     } else {
@@ -353,12 +361,30 @@ export class WorkerRuntime {
     return { status: 'sent', worker: name };
   }
 
-  async confirmWorkerHandoff(name: string): Promise<void> {
+  inspectWorkerHandoff(name: string): { report: string; token: string } {
+    const report = this.handoffReports.get(name);
+    if (!this.handoffPending.has(name) || !report || this.recreating.has(name)) {
+      throw new Error(`Worker "${name}" has not completed its handoff report. Wait for the report before inspecting.`);
+    }
+    const token = randomUUID();
+    this.handoffTokens.set(name, token);
+    return { report, token };
+  }
+
+  async confirmWorkerHandoff(name: string, token: string): Promise<void> {
     if (!this.handoffPending.has(name)) {
       throw new Error(`Worker "${name}" has no handoff awaiting confirmation.`);
     }
+    if (!this.handoffReports.has(name) || this.recreating.has(name)) {
+      throw new Error(`Worker "${name}" has not completed its handoff report. Wait for the report before confirming.`);
+    }
+    if (!token || this.handoffTokens.get(name) !== token) {
+      throw new Error(`Inspect the handoff report for worker "${name}" and provide its confirmation token.`);
+    }
     await this.options.onWorkerHandoffConfirmed?.(name);
     this.handoffPending.delete(name);
+    this.handoffReports.delete(name);
+    this.handoffTokens.delete(name);
   }
 
   async waitForIdle(): Promise<void> {
@@ -468,6 +494,8 @@ export class WorkerRuntime {
           throw new Error('Worker recreation was saved, but the old connection did not close. Inspect it before sending work.', { cause: error });
         }
       }
+      this.handoffReports.set(name, bootstrap.promptResult.responseText!.trim());
+      this.handoffTokens.delete(name);
       return bootstrap.promptResult.responseText ?? '';
     } finally {
       this.recreating.delete(name);
@@ -706,9 +734,9 @@ export class WorkerRuntime {
     bootstrapResult: Awaited<ReturnType<typeof this.runAttachedPrompt>>,
   ): Promise<void> {
     if (!resident.pendingSessionRecovery) return;
-    if (bootstrapResult.promptResult.stopReason === 'cancelled') {
+    if (bootstrapResult.promptResult.stopReason !== 'end_turn' || !bootstrapResult.promptResult.responseText?.trim()) {
       throw new Error(
-        `Worker "${resident.started.name}" recovery bootstrap was cancelled`,
+        `Worker "${resident.started.name}" recovery bootstrap did not produce a complete handoff report`,
       );
     }
 
@@ -784,8 +812,9 @@ export class WorkerRuntime {
           const activityNote = toolActivityObserved
             ? ' ACP had reported tool activity before the history error.'
             : '';
-          throw new Error(
+          throw new InterruptedInstructionAfterHandoffError(
             `Worker "${resident.started.name}" recovered onto a new session, but the interrupted instruction was not replayed.${activityNote} ${discarded} queued instructions were discarded. Inspect the worktree before sending follow-up work. Worker handoff: ${bootstrapResult.promptResult.responseText ?? '(no response)'}`,
+            bootstrapResult.promptResult.responseText!.trim(),
             { cause: error },
           );
         }
@@ -936,6 +965,10 @@ export class WorkerRuntime {
         initCancelled = true;
         throw new Error('init prompt was cancelled');
       }
+      const isHandoffReport = this.handoffPending.has(resident.started.name);
+      if (isHandoffReport && (result.promptResult.stopReason !== 'end_turn' || !result.promptResult.responseText?.trim())) {
+        throw new Error(`Worker "${resident.started.name}" did not provide a complete handoff report`);
+      }
       const dispatch = { ...result, source };
       skipCompletion =
         promptOutcome.superseded ||
@@ -951,6 +984,13 @@ export class WorkerRuntime {
           stopReason: result.promptResult.stopReason,
         });
         this.options.inbox.publishWorkerCompleted(resident.workerId, dispatch);
+        if (isHandoffReport) {
+          await this.options.inbox.drain();
+          if (!this.forceShutdownRequested) {
+            this.handoffReports.set(resident.started.name, result.promptResult.responseText!.trim());
+            this.handoffTokens.delete(resident.started.name);
+          }
+        }
       }
     } catch (error) {
       if (isLazyInit && !this.forceShutdownRequested) {
@@ -1038,6 +1078,13 @@ export class WorkerRuntime {
           error: message,
         });
         this.options.inbox.publishWorkerFailed(resident.started, error);
+        if (error instanceof InterruptedInstructionAfterHandoffError) {
+          await this.options.inbox.drain();
+          if (!this.forceShutdownRequested) {
+            this.handoffReports.set(resident.started.name, error.report);
+            this.handoffTokens.delete(resident.started.name);
+          }
+        }
       }
     } finally {
       if (source === 'harness' && resident.lazyInitInFlight) {

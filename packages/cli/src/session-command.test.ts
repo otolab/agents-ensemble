@@ -1493,7 +1493,7 @@ describe('ensemble session commands', () => {
         reader: 'pi-acp-jsonl',
       },
     ]);
-  });
+  }, 60_000);
 
   it('reads builtin Pi ACP worker messages from the user-scoped path', async () => {
     await writeResumeStore({

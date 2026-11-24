@@ -3761,10 +3761,12 @@ describe('runConductorSession resume / shutdown', () => {
 
     // A process restart must retain the confirmation gate until the conductor
     // explicitly acknowledges the handoff, without losing the saved history.
+    const resumedLoad = createDeferred<void>();
+    const resumedReport = createDeferred<{ stopReason: string; responseText: string }>();
     const resumedBridge = {
-      loadSession: vi.fn().mockResolvedValue(undefined),
+      loadSession: vi.fn().mockReturnValue(resumedLoad.promise),
       newSession: vi.fn(),
-      promptSession: vi.fn().mockResolvedValue({ stopReason: 'end_turn', responseText: 'handoff reviewed' }),
+      promptSession: vi.fn().mockReturnValue(resumedReport.promise),
       cancelSession: vi.fn(),
       close: vi.fn().mockResolvedValue(undefined),
     } as unknown as AcpBridge;
@@ -3785,9 +3787,24 @@ describe('runConductorSession resume / shutdown', () => {
       waitForOperatorExit: true, onPostLoopWait: postLoopWait,
       bindOperatorInput: (api) => { resumedOperatorApi = api; },
     });
+    await vi.waitFor(() => expect(resumedBridge.loadSession).toHaveBeenCalledOnce());
+    await expect(conductorTools!.confirm_worker_handoff!.execute({ worker: 'implementer', token: 'unknown' })).rejects.toThrow('handoff report');
+    expect((await loadSessionResumeStore(resumeStorePath))?.workers.implementer?.handoffPending).toBe(true);
+    resumedLoad.resolve();
+    await vi.waitFor(() => expect(resumedBridge.promptSession).toHaveBeenCalledOnce());
+    await expect(conductorTools!.confirm_worker_handoff!.execute({ worker: 'implementer', token: 'unknown' })).rejects.toThrow('handoff report');
+    expect(resumedBridge.promptSession.mock.calls[0]?.[1]).toContain('引き継ぎ確認が完了していません');
+    expect(resumedBridge.promptSession.mock.calls[0]?.[1]).not.toContain('中断していた作業を再開してください');
+    resumedReport.resolve({ stopReason: 'end_turn', responseText: 'handoff reviewed' });
     await vi.waitFor(() => expect(postLoopWait).toHaveBeenCalledOnce());
     expect((await loadSessionResumeStore(resumeStorePath))?.workers.implementer?.handoffPending).toBe(true);
-    await conductorTools!.confirm_worker_handoff!.execute({ worker: 'implementer' });
+    await expect(conductorTools!.confirm_worker_handoff!.execute({ worker: 'implementer', token: 'unknown' })).rejects.toThrow('Inspect the handoff report');
+    const handoff = await conductorTools!.inspect_worker_handoff!.execute({ worker: 'implementer' });
+    const handoffText = JSON.stringify(handoff);
+    expect(handoffText).toContain('handoff reviewed');
+    const token = handoffText.match(/Confirmation token: ([a-f0-9-]+)/)?.[1];
+    expect(token).toBeDefined();
+    await conductorTools!.confirm_worker_handoff!.execute({ worker: 'implementer', token });
     expect((await loadSessionResumeStore(resumeStorePath))?.workers.implementer?.handoffPending).toBeUndefined();
     resumedOperatorApi!.submit('/close');
     await resumed;

@@ -1245,7 +1245,7 @@ async function runConductorSessionWithStartupGuard(
             : '明示的な再作成が指示されたため';
       sessionLogger.emit({
         type: 'harness.warning',
-        message: `worker.session.recovered name=${notification.name} kind=${notification.kind}: ${detail}新しい session に切り替えました。中断操作と不足情報を確認し、confirm_worker_handoff で確認するまで新しい指示は受け付けません。`,
+        message: `worker.session.recovered name=${notification.name} kind=${notification.kind}: ${detail}新しい session に切り替えました。inspect_worker_handoff で報告を読み、中断操作と不足情報を確認して confirm_worker_handoff を呼ぶまで新しい指示は受け付けません。`,
       });
       eventQueue.enqueue({
         type: 'worker.session.recovered',
@@ -1452,9 +1452,9 @@ async function runConductorSessionWithStartupGuard(
         };
       },
     },
-    confirm_worker_handoff: {
-      name: 'confirm_worker_handoff',
-      description: 'After reviewing the worker handoff and checking interrupted operations and missing information, allow new instructions for the recreated worker.',
+    inspect_worker_handoff: {
+      name: 'inspect_worker_handoff',
+      description: 'Read the completed worker handoff report and obtain its confirmation token.',
       inputSchema: {
         type: 'object',
         properties: { worker: { type: 'string', enum: activeProfile.workers.map((worker) => worker.name) } },
@@ -1462,7 +1462,21 @@ async function runConductorSessionWithStartupGuard(
       },
       async execute(args) {
         const name = String(args.worker ?? '').trim();
-        await workerSession.runtime.confirmWorkerHandoff(name);
+        const { report, token } = workerSession.runtime.inspectWorkerHandoff(name);
+        return { content: [{ type: 'text', text: `Worker handoff:\n${report}\nConfirmation token: ${token}` }] };
+      },
+    },
+    confirm_worker_handoff: {
+      name: 'confirm_worker_handoff',
+      description: 'After reviewing the worker handoff and checking interrupted operations and missing information, allow new instructions for the recreated worker.',
+      inputSchema: {
+        type: 'object',
+        properties: { worker: { type: 'string', enum: activeProfile.workers.map((worker) => worker.name) }, token: { type: 'string' } },
+        required: ['worker', 'token'],
+      },
+      async execute(args) {
+        const name = String(args.worker ?? '').trim();
+        await workerSession.runtime.confirmWorkerHandoff(name, String(args.token ?? ''));
         return { content: [{ type: 'text', text: `Handoff confirmed for worker "${name}".` }] };
       },
     },
