@@ -384,13 +384,18 @@ def Runner.recoveryContinue (r : Runner) (explicit : Option String) : Runner × 
 /-- `/recovery clear` による snapshot 削除は attention を変更しない。 -/
 def clearRecoverySnapshot (inbox : Inbox) (attemptId : String) : Inbox := inbox.remove [attemptId]
 
+/-- 停止後は recovery clear を受け付けず、inbox も変更しない。 -/
+def Runner.recoveryClear (r : Runner) (inbox : Inbox) (attemptId : String) : Inbox :=
+  if r.stopped then inbox else clearRecoverySnapshot inbox attemptId
+
 /-- commit 待ちの終了状態。 -/
 inductive CommitResult where
   | stopped | rejected | error
   deriving Repr, BEq, DecidableEq
 
-/-- commit 前の停止・不成立は完了扱いで lease を解放し、例外は確認不要の失敗として解放する。 -/
+/-- 停止済みなら何もせず、それ以外は commit 結果に応じて lease を解放する。 -/
 def Runner.settleBeforeSend (r : Runner) (lease : Lease) (result : CommitResult) : Except LeaseError Runner := do
+  if r.stopped then return r
   let outcome : SendOutcome := if result == .error then { completed := false, requiresConfirmation := some false } else { completed := true }
   let lifecycle ← r.lifecycle.settleSend lease outcome
   return { r with lifecycle, stopped := r.stopped || result == .stopped || result == .error }
@@ -414,13 +419,15 @@ def Runner.beginSend (r : Runner) (token : Nat) : Runner × Option Lease :=
     let (lifecycle, lease) := r.lifecycle.beginSend token
     ({ r with lifecycle }, lease)
 
-/-- reconnect の結果を共有 lifecycle に渡す。 -/
+/-- 停止済みなら何もせず、それ以外は reconnect の結果を共有 lifecycle に渡す。 -/
 def Runner.settleReconnect (r : Runner) (lease : Lease) (success : Bool) : Except LeaseError Runner := do
+  if r.stopped then return r
   let lifecycle ← r.lifecycle.settleReconnect lease success
   return { r with lifecycle }
 
-/-- send を共有 lifecycle で settle し、完了時は ack を開始し、例外時は runner を終了する。 -/
-def Runner.settleSend (r : Runner) (input : SettlementInput) (inbox : Inbox) (now : Nat) : Runner × SettlementResult :=
+/-- 停止済みなら結果なしで状態を保つ。それ以外は send を settle し、完了時に ack、例外時に終了する。 -/
+def Runner.settleSend (r : Runner) (input : SettlementInput) (inbox : Inbox) (now : Nat) : Runner × Option SettlementResult :=
+  if r.stopped then (r, none) else
   let hasUser := r.batch.any (·.user)
   let input := { input with workflow := .operatorAgent, hasOperatorInput := hasUser, requiresConfirmation := some hasUser }
   let result := settleConductorDispatch r.lifecycle input inbox
@@ -428,7 +435,7 @@ def Runner.settleSend (r : Runner) (input : SettlementInput) (inbox : Inbox) (no
   let selection := { r.selection with lastSession := session, continuationConsumed := r.batchUsedContinuation }
   let retryPending := result.result.toOption == some false
   let failed := match result.result with | .error _ => true | .ok _ => false
-  ({ r with lifecycle := result.lifecycle, selection, retryPending, retryStoredAt := if retryPending then some (now + 5000) else none, ack := if result.result.toOption == some true then .attempting 1 0 else .idle, stopped := r.stopped || failed }, result)
+  ({ r with lifecycle := result.lifecycle, selection, retryPending, retryStoredAt := if retryPending then some (now + 5000) else none, ack := if result.result.toOption == some true then .attempting 1 0 else .idle, stopped := failed }, some result)
 
 /-- 保存後に report ごとの時計値を順に受けて再投入する。停止・例外なら再投入せず終了する。 -/
 def Runner.finishRetryRecord (r : Runner) (readTime : Nat → Nat) (succeeded : Bool) : Runner :=
@@ -527,7 +534,7 @@ def Runner.finishAcknowledged (r : Runner) : Runner :=
   let r : Runner := { lifecycle, queue := { inFlight := ["x"] }, batch := [e] }
   let (r, result) := r.settleSend { lease := lease.get!, workflow := .operatorAgent, status := .other, failureClass := .incompleteStatus } {} 100
   let r := r.finishRetryRecord (fun _ => 100) true
-  result.result.toOption == some false && r.queue.inFlight.isEmpty &&
+  result.bind (fun x => x.result.toOption) == some false && r.queue.inFlight.isEmpty &&
     r.queue.pending.head!.retryReadyAt == some 5100 && r.queue.pending.head!.frozenPayload == some "payload" && r.ack == .idle
 ))
 
@@ -640,8 +647,8 @@ def Runner.finishAcknowledged (r : Runner) : Runner :=
   let input : SettlementInput := { lease := lease.get!, workflow := .operatorAgent, status := .finished, failureClass := .transport, hasInbox := true, hasReservation := true }
   let (completed, success) := r.settleSend input {} 100
   let (incomplete, failure) := r.settleSend { input with status := .other } {} 100
-  success.result.toOption == some true && !completed.stopped && completed.ack == .attempting 1 0 &&
-    failure.result.toOption == some false && !incomplete.stopped && incomplete.retryPending && incomplete.queue.conversationHold
+  success.bind (fun x => x.result.toOption) == some true && !completed.stopped && completed.ack == .attempting 1 0 &&
+    failure.bind (fun x => x.result.toOption) == some false && !incomplete.stopped && incomplete.retryPending && incomplete.queue.conversationHold
 ))
 
 /- send の待機中断では lease を settle せず、次の処理を開始しない。 -/
@@ -665,10 +672,36 @@ def Runner.finishAcknowledged (r : Runner) : Runner :=
   let (_, nextSend) := afterReconnectRequest.beginSend 2
   let (_, reconnect) := afterReconnectRequest.beginReconnect 3
   let (_, confirmed) := afterReconnectRequest.recoveryContinue none
-  (match result.result with | .error .commitRejected => true | _ => false) &&
+  let retryInput : SettlementInput := { lease := lease.get!, workflow := .operatorAgent, status := .finished, failureClass := .transport }
+  let (reapplied, retryResult) := r.settleSend retryInput ({} : Inbox) 101
+  let beforeSend := (r.settleBeforeSend lease.get! .rejected).toOption
+  let reconnectSettled := (r.settleReconnect lease.get! true).toOption
+  (result.map (fun x => match x.result with | .error .commitRejected => true | _ => false) == some true) &&
     r.stopped && r.lifecycle.activeLease.isSome && r.queue.conversationHold && r.queue.pending.isEmpty &&
     r.ack == .idle && !r.retryPending && afterReconnectRequest.pendingReconnects == 0 &&
-    nextSend.isNone && reconnect.isNone && !confirmed
+    nextSend.isNone && reconnect.isNone && !confirmed && reapplied == r && retryResult.isNone &&
+    beforeSend == some r && reconnectSettled == some r
+))
+
+/- 停止済みでは reconnect lease を持っていても settle は lifecycle を変更しない。 -/
+#guard (decide (
+  let (busy, lease) := ({} : Runner).requestReconnect.beginReconnect 1
+  let stopped := { busy with stopped := true }
+  let after := (stopped.settleReconnect lease.get! true).toOption
+  lease.isSome && after == some stopped && stopped.lifecycle.activeLease == lease
+))
+
+/- 停止済みの公開 runner 操作は queue・inbox を含む状態を進めない。 -/
+#guard (decide (
+  let r : Runner := { stopped := true, ack := .attempting 1 0, retryPending := true, pendingReconnects := 1 }
+  let inbox : Inbox := { snapshots := ["1"] }
+  let (send, sendLease) := r.beginSend 1
+  let (reconnect, reconnectLease) := r.beginReconnect 2
+  let (continued, ok) := r.recoveryContinue none
+  send == r && sendLease.isNone && reconnect == r && reconnectLease.isNone &&
+    r.requestReconnect == r && r.recoveryList == r && continued == r && !ok &&
+    r.recoveryClear inbox "1" == inbox && r.finishRetryRecord (fun _ => 0) true == r &&
+    r.ackResult true 0 == r && r.advanceAck 0 false == r && r.finishAcknowledged == r && r.interruptSend == r
 ))
 
 /- 手動 hold を残したまま `/resume-watch` しても report は解放されない。 -/
