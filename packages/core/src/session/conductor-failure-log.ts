@@ -90,6 +90,11 @@ export function createConductorFailureLog(warn: () => void) {
       else if (pending.length < 100) pending.push(record);
       else { failed = true; warn(); }
     },
+    close() {
+      failed = true;
+      path = undefined;
+      pending.length = 0;
+    },
     abandon() {
       if (pending.length && !failed) { failed = true; warn(); }
       pending.length = 0;

@@ -26,7 +26,7 @@ import type { Profile } from '../../src/profile/types.js';
 import type { EnsembleConfig } from '../../src/config/types.js';
 import {
   loadSessionResumeStore,
-  saveSessionResumeStore,
+  saveSessionResumeStore as saveOwnedSessionResumeStore,
   SESSION_RESUME_STORE_VERSION,
   findLatestSessionResumeStoreForWorkspace,
   listWorkspaceSlugEntries,
@@ -34,7 +34,7 @@ import {
 import {
   loadOpenQuestionsStore,
   openQuestionsStorePath,
-  saveOpenQuestionsStore,
+  saveOpenQuestionsStore as saveOwnedOpenQuestionsStore,
 } from '../../src/session/open-questions-store.js';
 import * as worktreeModule from '../../src/worktree/worktree.js';
 import {
@@ -58,6 +58,34 @@ import { permissionRequestFixtures } from '../fixtures/permission-request-fixtur
 import { readWorkspaceNote } from '../../src/notes/workspace-notes-store.js';
 import { executeRunCommand } from '../../../cli/src/run-command.js';
 import { renameWorkspaceSlug, writeWorkspaceAnchor } from '../../src/workspace-run/slug-key.js';
+
+import { SessionOwnership } from '../../src/session/session-ownership.js';
+
+async function saveSessionResumeStore(
+  path: string,
+  store: Parameters<typeof saveOwnedSessionResumeStore>[1],
+): Promise<void> {
+  const owner = await SessionOwnership.acquire(path);
+  try {
+    await owner.runWrite((lease) => saveOwnedSessionResumeStore(path, store, owner, lease));
+  } finally {
+    await owner.closeWritesAndDrain();
+    owner.release();
+  }
+}
+
+async function saveOpenQuestionsStore(
+  path: string,
+  snapshot: Parameters<typeof saveOwnedOpenQuestionsStore>[1],
+): Promise<void> {
+  const owner = await SessionOwnership.acquireProvider(`${path.slice(0, -'/open-questions.yaml'.length)}.json`);
+  try {
+    await owner.runWrite((lease) => saveOwnedOpenQuestionsStore(path, snapshot, owner, lease));
+  } finally {
+    await owner.closeWritesAndDrain();
+    owner.release();
+  }
+}
 
 const RESUME_AGENT_ID = 'agent-resume-test';
 

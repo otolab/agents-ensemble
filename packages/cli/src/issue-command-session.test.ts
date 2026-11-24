@@ -116,7 +116,18 @@ import { createTuiViewModel } from './tui/tui-view-model.js';
 import { createTuiTelemetrySink } from './tui/create-tui-telemetry-sink.js';
 import { runGit } from '../../core/src/git/run-git.js';
 import { loadSessionResumeStore } from '../../core/src/session/session-resume-store.js';
-import { saveOpenQuestionsStore } from '../../core/src/session/open-questions-store.js';
+import { saveOpenQuestionsStore as saveOwnedOpenQuestionsStore } from '../../core/src/session/open-questions-store.js';
+import { SessionOwnership } from '../../core/src/session/session-ownership.js';
+
+async function saveOpenQuestionsStore(path: string, snapshot: Parameters<typeof saveOwnedOpenQuestionsStore>[1]): Promise<void> {
+  const owner = await SessionOwnership.acquireProvider(`${path.slice(0, -'/open-questions.yaml'.length)}.json`);
+  try {
+    await owner.runWrite((lease) => saveOwnedOpenQuestionsStore(path, snapshot, owner, lease));
+  } finally {
+    await owner.closeWritesAndDrain();
+    owner.release();
+  }
+}
 import * as worktreeModule from '../../core/src/worktree/worktree.js';
 
 const issueUrl = 'https://github.com/org/repo/issues/1';

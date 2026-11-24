@@ -5,11 +5,22 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   resolveEnsemblePaths,
-  saveSessionResumeStore,
+  saveSessionResumeStore as saveOwnedSessionResumeStore,
   type SessionResumeStore,
 } from '@agents-ensemble/core';
+import { SessionOwnership } from '../../../core/src/session/session-ownership.js';
 import { createListOperatorSessionsTool } from './list-operator-sessions-tool.js';
 import { createListWorkerMessagesTool } from './worker-session-tools.js';
+
+async function saveSessionResumeStore(path: string, store: Parameters<typeof saveOwnedSessionResumeStore>[1]): Promise<void> {
+  const owner = await SessionOwnership.acquire(path);
+  try {
+    await owner.runWrite((lease) => saveOwnedSessionResumeStore(path, store, owner, lease));
+  } finally {
+    await owner.closeWritesAndDrain();
+    owner.release();
+  }
+}
 
 const ISSUE_URL = 'https://github.com/example/project/issues/691';
 const FIXTURE_PATH = fileURLToPath(

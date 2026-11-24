@@ -22,6 +22,7 @@ import {
 } from './session-persistence-scope.js';
 import { resolveUserEnsembleRoot } from '../resolve-user-ensemble-root.js';
 import { writeFileIfMissing } from './persisted-file.js';
+import { type SessionOwnership, type SessionWriteLease } from './session-ownership.js';
 
 export const SESSION_RESUME_STORE_VERSION = 1;
 export const WORKSPACE_RENAME_SESSION_RESUME_STORE_VERSION = 2;
@@ -346,6 +347,8 @@ export async function requireSessionResumeStoreForResume(input: {
   repoRoot: string;
   conductorAgentId: string;
   issueUrl: string;
+  owner: SessionOwnership;
+  lease: SessionWriteLease;
 }): Promise<SessionResumeStore> {
   const located = await requireLocatedSessionResumeStoreForResume(input);
   return located.resumeStore;
@@ -355,8 +358,11 @@ export async function requireLocatedSessionResumeStoreForResume(input: {
   repoRoot: string;
   conductorAgentId: string;
   issueUrl: string;
+  owner: SessionOwnership;
+  lease: SessionWriteLease;
   onDuplicate?: (diagnostic: SessionResumeStoreDuplicateDiagnostic) => void;
 }): Promise<LocatedSessionResumeStore> {
+  input.owner.assertLease(input.lease);
   if (
     typeof input.issueUrl !== 'string' ||
     !input.issueUrl.trim()
@@ -377,6 +383,7 @@ export async function requireLocatedSessionResumeStoreForResume(input: {
     throw new SessionResumeStoreNotFoundError(input.conductorAgentId, path);
   }
 
+  await input.owner.assertResourcePath(located.path, 'store');
   const loaded = await readSessionResumeStore(located.path);
   if (!loaded) {
     throw new SessionResumeStoreNotFoundError(
@@ -391,7 +398,10 @@ export async function requireLocatedSessionResumeStoreForResume(input: {
   if (loaded.hasLegacyAcpSpawnEnv) {
     // Scrub canonical data before resume validation can reject the session
     // and bypass its normal first write.
-    await writeSessionResumeStoreFile(located.path, persistedValue);
+    await input.owner.writeWithLease(input.lease, async () => {
+      await input.owner.assertResourcePath(located.path, 'store');
+      await writeSessionResumeStoreFile(located.path, persistedValue);
+    });
   }
   return {
     ...located,
@@ -404,6 +414,8 @@ export async function requireSessionSidecarForResume(input: {
   repoRoot: string;
   conductorAgentId: string;
   issueUrl: string;
+  owner: SessionOwnership;
+  lease: SessionWriteLease;
 }): Promise<SessionSidecar> {
   try {
     return await requireSessionResumeStoreForResume(input);
@@ -421,23 +433,28 @@ export async function requireSessionSidecarForResume(input: {
 export async function saveSessionResumeStore(
   path: string,
   resumeStore: SessionResumeStore,
+  owner: SessionOwnership,
+  lease: SessionWriteLease,
 ): Promise<void> {
-  const updatedAt =
-    resumeStore.harnessPhase !== undefined &&
-    resumeStore.harnessPhase !== 'running' &&
-    resumeStore.harnessPhase !== 'idle' &&
-    resumeStore.modifiedAt !== undefined
-      ? resumeStore.modifiedAt
-      : Date.now();
-  const parsed = parseSessionResumeStore({
-    ...resumeStore,
-    updatedAt,
-    ...(resumeStore.harnessPhase === 'running' ||
-    resumeStore.harnessPhase === 'idle'
-      ? { modifiedAt: updatedAt }
-      : {}),
+  return owner.writeWithLease(lease, async () => {
+    await owner.assertResourcePath(path, 'store');
+    const updatedAt =
+      resumeStore.harnessPhase !== undefined &&
+      resumeStore.harnessPhase !== 'running' &&
+      resumeStore.harnessPhase !== 'idle' &&
+      resumeStore.modifiedAt !== undefined
+        ? resumeStore.modifiedAt
+        : Date.now();
+    const parsed = parseSessionResumeStore({
+      ...resumeStore,
+      updatedAt,
+      ...(resumeStore.harnessPhase === 'running' ||
+      resumeStore.harnessPhase === 'idle'
+        ? { modifiedAt: updatedAt }
+        : {}),
   });
   await writeSessionResumeStoreFile(path, parsed);
+  });
 }
 
 async function writeSessionResumeStoreFile(

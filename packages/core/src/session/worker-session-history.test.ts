@@ -19,7 +19,7 @@ import {
 } from 'vitest';
 import { resolveEnsemblePaths } from '../ensemble-paths.js';
 import {
-  saveSessionResumeStore,
+  saveSessionResumeStore as saveOwnedSessionResumeStore,
   loadSessionResumeStore,
   type SessionResumeStore,
 } from './session-resume-store.js';
@@ -52,6 +52,18 @@ const CODEX_FIXTURE_PATH = fileURLToPath(
   new URL('../../test/fixtures/codex-cli-worker-rollout.jsonl', import.meta.url),
 );
 const itWithCursorSqlite = (await hasCursorAcpSqliteSupport()) ? it : it.skip;
+
+import { SessionOwnership } from './session-ownership.js';
+
+async function saveSessionResumeStore(path: string, store: Parameters<typeof saveOwnedSessionResumeStore>[1]): Promise<void> {
+  const owner = await SessionOwnership.acquire(path);
+  try {
+    await owner.runWrite((lease) => saveOwnedSessionResumeStore(path, store, owner, lease));
+  } finally {
+    await owner.closeWritesAndDrain();
+    owner.release();
+  }
+}
 
 describe('worker session history', () => {
   let tempRoot = '';

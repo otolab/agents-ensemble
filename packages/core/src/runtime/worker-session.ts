@@ -189,7 +189,22 @@ export class WorkerSession {
   }
 
   async stop(options?: { force?: boolean }): Promise<void> {
-    await this.runtime.shutdown(options);
-    await this.processor.stop();
+    let shutdownError: unknown;
+    let shutdownFailed = false;
+    try {
+      await this.runtime.shutdown(options);
+    } catch (error) {
+      shutdownFailed = true;
+      shutdownError = error;
+    }
+    try {
+      await this.processor.stop();
+    } catch (error) {
+      if (shutdownFailed) {
+        throw new AggregateError([shutdownError, error], 'Worker session shutdown failed');
+      }
+      throw error;
+    }
+    if (shutdownFailed) throw shutdownError;
   }
 }
