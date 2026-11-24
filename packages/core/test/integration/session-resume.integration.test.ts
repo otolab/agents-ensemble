@@ -250,6 +250,117 @@ describe('session resume integration', () => {
     expect(monitor).not.toHaveBeenCalled();
   });
 
+  it('migrates a legacy workspace worker and preserves its handoff', async () => {
+    const cwd = join(repoRoot, 'workspace');
+    await mkdir(cwd);
+    const bridge = await createInProcessAcpBridge();
+    const newSession = vi.spyOn(bridge, 'newSession');
+    const loadSession = vi.spyOn(bridge, 'loadSession');
+    const promptSession = vi.spyOn(bridge, 'promptSession');
+    let noteId = '';
+    let phase = 'initial';
+    mockCreate.mockImplementation(async (options, resumeOptions) => {
+      if (phase === 'failure') throw new Error('backend unavailable');
+      conductorTools = (resumeOptions ?? options).customTools ?? {};
+      return {
+        agentId: RESUME_AGENT_ID,
+        send: mockSend,
+        close: mockClose,
+        closeForResume: mockClose,
+        getUsage: createMockConductorGetUsage(),
+      };
+    });
+    mockSend.mockImplementation(async () => {
+      if (phase === 'initial' && !noteId) {
+        const result = await conductorTools.create_note!.execute({ summary: 'test' });
+        noteId = JSON.parse(result.content[0]!.text).noteId;
+        await conductorTools.push_memo!.execute({ noteId, body: 'saved memo' });
+      } else if (phase === 'resume') {
+        const result = await conductorTools.read_note!.execute({ noteId });
+        expect(JSON.parse(result.content[0]!.text).memos[0].body).toBe('saved memo');
+      }
+      return { runId: phase, status: 'finished', result: 'ok' };
+    });
+    let operatorApi: OperatorInputBindingApi | undefined;
+    const postLoop = vi.fn();
+    const common = {
+      issueUrl: 'workspace://test-workspace',
+      repoRoot,
+      conductorCwd: cwd,
+      profile: PING_PROFILE_BASE,
+      defaultAcp: IN_PROCESS_DEFAULT_ACP,
+      maxTurns: 3,
+      connectAcp: async () => bridge,
+      ownsWorkerAcpConnections: false,
+    };
+    const first = runConductorSession({
+      ...common,
+      briefText: 'Investigate',
+      waitForOperatorExit: true,
+      onPostLoopWait: postLoop,
+      bindOperatorInput: (api) => { operatorApi = api; },
+    });
+    await vi.waitFor(() => expect(postLoop).toHaveBeenCalledOnce());
+    expect(operatorApi!.submit('/close')).toBe(false);
+    expect((await first).stopReason).toBe('completed');
+    expect(newSession).toHaveBeenCalledWith(cwd);
+    expect(promptSession).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.stringContaining('test-workspace'),
+      expect.anything(),
+    );
+    expect(noteId).toBeTruthy();
+    const resumePath = resolveEnsemblePaths({ repoRoot })
+      .workspaceSessionResumeStorePath('test-workspace', RESUME_AGENT_ID);
+    const beforeFailure = await readFile(resumePath, 'utf8');
+    expect((await findLatestSessionResumeStoreForWorkspace({ repoRoot, slugKey: 'test-workspace' }))?.conductorAgentId)
+      .toBe(RESUME_AGENT_ID);
+    expect(await listWorkspaceSlugEntries({ repoRoot })).toContainEqual(
+      expect.objectContaining({ slugKey: 'test-workspace', latestConductorAgentId: RESUME_AGENT_ID }),
+    );
+    phase = 'failure';
+    await expect(runConductorSession({ ...common, resumeAgentId: RESUME_AGENT_ID }))
+      .rejects.toThrow('backend unavailable');
+    expect(await readFile(resumePath, 'utf8')).toBe(beforeFailure);
+    phase = 'resume';
+    expect((await runConductorSession({ ...common, resumeAgentId: RESUME_AGENT_ID })).stopReason).toBe('completed');
+    expect(loadSession).toHaveBeenCalled();
+
+    // Simulate a pre-separation workspace worker whose saved session has no marker.
+    const legacy = (await loadSessionResumeStore(resumePath))!;
+    const oldId = legacy.workers['ping-1']!.acpSessionId;
+    delete legacy.workers['ping-1']!.workspacePromptVersion;
+    await saveSessionResumeStore(resumePath, legacy);
+    loadSession.mockClear();
+    const migrationWait = vi.fn();
+    let migrationOperator: OperatorInputBindingApi | undefined;
+    const migration = runConductorSession({
+      ...common, resumeAgentId: RESUME_AGENT_ID, waitForOperatorExit: true,
+      onPostLoopWait: migrationWait, bindOperatorInput: (api) => { migrationOperator = api; },
+    });
+    await vi.waitFor(async () => {
+      const saved = await loadSessionResumeStore(resumePath);
+      expect(saved?.workers['ping-1']?.handoffPending).toBe(true);
+    });
+    const migrated = (await loadSessionResumeStore(resumePath))!.workers['ping-1']!;
+    expect(migrated.workspacePromptVersion).toBe(1);
+    expect(migrated.acpSessionId).not.toBe(oldId);
+    expect(migrated.generations).toContainEqual(expect.objectContaining({
+      acpSessionId: oldId, nextSessionId: migrated.acpSessionId, reason: 'workspace_prompt_migration',
+    }));
+    expect(loadSession).not.toHaveBeenCalledWith(oldId, expect.anything(), expect.anything());
+    await vi.waitFor(() => expect(migrationWait).toHaveBeenCalled());
+    expect(migrationOperator!.submit('/close')).toBe(false);
+    await migration;
+    expect((await loadSessionResumeStore(resumePath))!.workers['ping-1']).toMatchObject({
+      acpSessionId: migrated.acpSessionId, workspacePromptVersion: 1, handoffPending: true,
+    });
+    loadSession.mockClear();
+    expect((await runConductorSession({ ...common, resumeAgentId: RESUME_AGENT_ID })).stopReason).toBe('completed');
+    expect(loadSession).toHaveBeenCalledWith(migrated.acpSessionId, cwd, expect.anything());
+    expect((await loadSessionResumeStore(resumePath))!.workers['ping-1']?.handoffPending).toBe(true);
+  });
+
   it('renames and resumes a non-Pi workspace with its notes and a new worker generation', async () => {
     const cwd = join(repoRoot, 'workspace');
     await mkdir(cwd);
@@ -331,7 +442,9 @@ describe('session resume integration', () => {
     await expect(runConductorSession({ ...common, resumeAgentId: RESUME_AGENT_ID }))
       .rejects.toThrow('backend unavailable');
     expect(await readFile(resumePath, 'utf8')).toBe(beforeFailure);
-    const oldStore = await loadSessionResumeStore(resumePath);
+    const oldStore = (await loadSessionResumeStore(resumePath))!;
+    delete oldStore.workers['ping-1']!.workspacePromptVersion;
+    await saveSessionResumeStore(resumePath, oldStore);
     await writeWorkspaceAnchor(cwd, 'test-workspace');
     await renameWorkspaceSlug({ repoRoot, cwd, fromSlug: 'test-workspace', toSlug: 'renamed' });
     phase = 'resume';
@@ -339,6 +452,7 @@ describe('session resume integration', () => {
     expect(loadSession).not.toHaveBeenCalled();
     expect(recreated).toBe(true);
     const migrated = await loadSessionResumeStore(resolveEnsemblePaths({ repoRoot }).workspaceSessionResumeStorePath('renamed', RESUME_AGENT_ID));
+    expect(migrated?.workers['ping-1']?.workspacePromptVersion).toBe(1);
     expect(migrated?.workers['ping-1']?.generations?.at(-1)).toMatchObject({
       acpSessionId: oldStore?.workers['ping-1']?.acpSessionId,
       issueUrl: 'workspace://test-workspace',

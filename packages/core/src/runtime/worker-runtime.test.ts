@@ -90,6 +90,69 @@ function createDeferred<T>(): {
 }
 
 describe('WorkerRuntime', () => {
+  it('retries migration from the old session if shutdown interrupts bootstrap', async () => {
+    const report = createDeferred<{ stopReason: string; responseText: string }>();
+    const firstBridge = createMockBridge(vi.fn().mockResolvedValue(undefined));
+    firstBridge.cancelSession = vi.fn();
+    vi.mocked(firstBridge.promptSession).mockReturnValueOnce(report.promise);
+    const committed = vi.fn().mockResolvedValue(undefined);
+    const issue = { ...TEST_WORKTREE.issue, url: 'workspace://research' };
+    const params = { name: 'ping-1', kind: 'ping', issueUrl: issue.url,
+      worktree: { ...TEST_WORKTREE, issue }, sessionState: { workers: [{ name: 'ping-1', kind: 'ping' }], kinds: ['ping'] },
+      resumeAcpSessionId: 'old-session', migrateWorkspacePrompt: true };
+    const first = new WorkerRuntime({ inbox: new ConductorInbox(), connectAcp: vi.fn().mockResolvedValue(firstBridge), onWorkerSessionRecovered: committed });
+    first.start(params);
+    await vi.waitFor(() => expect(firstBridge.promptSession).toHaveBeenCalledOnce());
+    const stopping = first.shutdown({ force: true });
+    report.resolve({ stopReason: 'end_turn', responseText: 'late report' });
+    await stopping;
+    expect(committed).not.toHaveBeenCalled();
+    expect(first.listAttachedForResume()).toHaveLength(0);
+    const retryBridge = createMockBridge(vi.fn().mockResolvedValue(undefined));
+    const retry = new WorkerRuntime({ inbox: new ConductorInbox(), connectAcp: vi.fn().mockResolvedValue(retryBridge), onWorkerSessionRecovered: committed });
+    retry.start(params);
+    await retry.waitForIdle();
+    expect(retryBridge.loadSession).not.toHaveBeenCalled();
+    expect(committed).toHaveBeenCalledWith(expect.objectContaining({ previousSessionId: 'old-session', reason: 'workspace_prompt_migration' }));
+    expect(retry.sendWorkerMessage('ping-1', 'work').status).toBe('error');
+    await retry.shutdown();
+  });
+
+  it.each(['new', 'resume', 'recovery'] as const)(
+    'uses workspace prompts through attach and dispatch (%s)', async (mode) => {
+      const bridge = createMockBridge(vi.fn().mockResolvedValue(undefined));
+      if (mode === 'recovery') vi.mocked(bridge.loadSession).mockRejectedValueOnce(new Error('load failed'));
+      const runtime = new WorkerRuntime({ inbox: new ConductorInbox(), connectAcp: vi.fn().mockResolvedValue(bridge) });
+      const issue = { ...TEST_WORKTREE.issue, url: 'workspace://research' };
+      runtime.start({
+        name: 'explore', kind: 'explore', issueUrl: issue.url,
+        worktree: { ...TEST_WORKTREE, issue },
+        sessionState: { workers: [{ name: 'explore', kind: 'explore' }], kinds: ['explore'] },
+        ...(mode !== 'new' ? { resumeAcpSessionId: 'saved' } : {}),
+      });
+      await runtime.waitForIdle();
+      const calls = vi.mocked(bridge.promptSession).mock.calls;
+      const firstPrompt = calls[0]![1];
+      expect(firstPrompt).not.toMatch(/Issue|\bPR\b|GitHub|\bgh\b/);
+      if (mode === 'resume') {
+        expect(firstPrompt).toContain('前回の続き');
+        expect(bridge.loadSession).toHaveBeenCalledOnce();
+      } else {
+        expect(firstPrompt).toContain('作業場 **research**');
+        expect(firstPrompt).toContain('permission を要求する');
+        if (mode === 'recovery') expect(firstPrompt).toContain('以前の会話はこの session に引き継がれていません');
+      }
+      if (mode === 'recovery') {
+        expect(runtime.sendWorkerMessage('explore', '調査してください').status).toBe('error');
+        await runtime.confirmWorkerHandoff('explore', runtime.inspectWorkerHandoff('explore').token);
+      }
+      expect(runtime.sendWorkerMessage('explore', '調査してください').status).toBe('sent');
+      await runtime.waitForIdle();
+      expect(vi.mocked(bridge.promptSession).mock.calls.at(-1)?.[1]).toBe('調査してください');
+      expect(vi.mocked(bridge.promptSession).mock.calls.at(-1)?.[0]).toBe(mode === 'resume' ? 'saved' : 'sess-1');
+      await runtime.shutdown();
+    },
+  );
   it('closes a delayed attach without starting its prompt after forced shutdown', async () => {
     const connection = createDeferred<AcpBridge>();
     const close = vi.fn().mockResolvedValue(undefined);

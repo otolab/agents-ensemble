@@ -26,6 +26,8 @@ rename 中のエラーでは元に戻すことを試みます。強制終了や�
 
 worker は既定で conductor と同じ cwd を共有し、isolated worktree は作りません。profile の `workers[].workspace` を指定した worker はそのディレクトリを使います。GitHub Issue の取得や monitor は使いません。
 
+旧バージョンで保存された prompt 世代不明の workspace worker は、初回再開時に新しい ACP session へ一度切り替わります。旧 session と履歴は保持されますが、会話は新 session に自動継承されません。conductor が handoff を確認するまで新しい作業指示は保留されます。切替後は通常の session 再開を使います。切替の初期化に失敗した場合は旧 session の保存情報から再試行します。保存結果が不明な場合は停止し、保存された session ID と履歴を確認してから再開します。
+
 conductor は `create_note` で summary 必須のノートを作り、`push_memo` でメモを追加できます。`list_notes` は summary と最新メモの冒頭を一覧し、`read_note` は既定で最新メモを返します。履歴は `includeHistory` と `historyOffset` / `historyLimit`、archive 済みメモは `includeArchived` で読めます。`archive_note` / `archive_memo` で非表示にした内容も読取可能です。Notes は workspace ごとに共有され、再開後も残ります。
 
 `ensemble notes` は operator や run worker から同じ workspace Notes を操作します。例えば、operator は slug を明示し、worker は harness が渡す環境変数を利用できます。

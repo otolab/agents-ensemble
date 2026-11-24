@@ -685,6 +685,7 @@ export class WorkerRuntime {
       expectedResumeAcpSpawn: started.expectedResumeAcpSpawn,
       currentAcpSpawn: started.acpFingerprint,
       handoffPending: this.handoffPending.has(started.name),
+      migrateWorkspacePrompt: resumeSavedSession && started.migrateWorkspacePrompt,
       ...(resumeSavedSession && started.resumeAcpSessionId
         ? { resumeAcpSessionId: started.resumeAcpSessionId }
         : {}),

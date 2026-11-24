@@ -20,6 +20,79 @@ const TEST_WORKTREE = {
 };
 
 describe('WorkerSession', () => {
+  it.each([
+    { name: 'legacy workspace', workspace: true, version: undefined, migrates: true },
+    { name: 'migrated workspace', workspace: true, version: 1, migrates: false },
+    { name: 'legacy issue', workspace: false, version: undefined, migrates: false },
+  ])('selects the session lifecycle for $name', async ({ workspace, version, migrates }) => {
+    const issue = { ...TEST_WORKTREE.issue, url: workspace ? 'workspace://research' : TEST_WORKTREE.issue.url };
+    const loadSession = vi.fn().mockResolvedValue(undefined);
+    const newSession = vi.fn().mockResolvedValue('new-session');
+    const promptSession = vi.fn().mockResolvedValue({ stopReason: 'end_turn', responseText: 'handoff report' });
+    const recovered = vi.fn().mockResolvedValue(undefined);
+    const session = new WorkerSession({
+      issueUrl: issue.url, worktree: { ...TEST_WORKTREE, issue },
+      workers: [{ name: 'ping-1', kind: 'ping' }],
+      sessionState: { workers: [{ name: 'ping-1', kind: 'ping' }], kinds: ['ping'] },
+      restoredWorkerSessions: { 'ping-1': { acpSessionId: 'old-session', ...(version ? { workspacePromptVersion: version } : {}) } },
+      connectAcp: vi.fn().mockResolvedValue({ loadSession, newSession, promptSession, close: vi.fn() }),
+      decidePermission: () => ({ outcome: { outcome: 'cancelled' } }),
+      onWorkerSessionRecovered: recovered,
+    });
+    session.startWorkers();
+    await session.runtime.waitForIdle();
+    if (migrates) {
+      expect(loadSession).not.toHaveBeenCalled();
+      expect(newSession).toHaveBeenCalledOnce();
+      expect(promptSession.mock.calls[0]![1]).toContain('作業場 **research**');
+      expect(promptSession.mock.calls[0]![1]).not.toMatch(/Issue|\bPR\b|GitHub/);
+      expect(recovered).toHaveBeenCalledWith(expect.objectContaining({ reason: 'workspace_prompt_migration', previousSessionId: 'old-session', acpSessionId: 'new-session' }));
+      expect(session.runtime.sendWorkerMessage('ping-1', '作業').status).toBe('error');
+      await session.runtime.confirmWorkerHandoff('ping-1', session.runtime.inspectWorkerHandoff('ping-1').token);
+      expect(session.runtime.sendWorkerMessage('ping-1', '作業').status).toBe('sent');
+      await session.runtime.waitForIdle();
+      expect(promptSession.mock.calls.at(-1)?.slice(0, 2)).toEqual(['new-session', '作業']);
+    } else {
+      expect(loadSession).toHaveBeenCalledOnce();
+      expect(newSession).not.toHaveBeenCalled();
+      expect(recovered).not.toHaveBeenCalled();
+    }
+    await session.stop();
+  });
+
+  it('does not enable dispatch when migration persistence fails', async () => {
+    const issue = { ...TEST_WORKTREE.issue, url: 'workspace://research' };
+    const session = new WorkerSession({
+      issueUrl: issue.url, worktree: { ...TEST_WORKTREE, issue },
+      workers: [{ name: 'ping-1', kind: 'ping' }],
+      sessionState: { workers: [{ name: 'ping-1', kind: 'ping' }], kinds: ['ping'] },
+      restoredWorkerSessions: { 'ping-1': { acpSessionId: 'old-session' } },
+      connectAcp: vi.fn().mockResolvedValue({ loadSession: vi.fn(), newSession: vi.fn().mockResolvedValue('new-session'), promptSession: vi.fn().mockResolvedValue({ stopReason: 'end_turn', responseText: 'report' }), close: vi.fn() }),
+      decidePermission: () => ({ outcome: { outcome: 'cancelled' } }),
+      onWorkerSessionRecovered: vi.fn().mockRejectedValue(new Error('save failed')),
+    });
+    session.startWorkers();
+    await session.runtime.waitForIdle();
+    expect(session.runtime.sendWorkerMessage('ping-1', '作業').status).toBe('error');
+    await session.stop();
+    // Retry with the unchanged saved ID after the failed commit.
+    const commit = vi.fn().mockResolvedValue(undefined);
+    const retry = new WorkerSession({
+      issueUrl: issue.url, worktree: { ...TEST_WORKTREE, issue },
+      workers: [{ name: 'ping-1', kind: 'ping' }],
+      sessionState: { workers: [{ name: 'ping-1', kind: 'ping' }], kinds: ['ping'] },
+      restoredWorkerSessions: { 'ping-1': { acpSessionId: 'old-session' } },
+      connectAcp: vi.fn().mockResolvedValue({ loadSession: vi.fn(), newSession: vi.fn().mockResolvedValue('retry-session'), promptSession: vi.fn().mockResolvedValue({ stopReason: 'end_turn', responseText: 'report' }), close: vi.fn() }),
+      decidePermission: () => ({ outcome: { outcome: 'cancelled' } }),
+      onWorkerSessionRecovered: commit,
+    });
+    retry.startWorkers();
+    await retry.runtime.waitForIdle();
+    expect(commit).toHaveBeenCalledWith(expect.objectContaining({ previousSessionId: 'old-session', acpSessionId: 'retry-session' }));
+    expect(retry.runtime.sendWorkerMessage('ping-1', '作業').status).toBe('error');
+    await retry.stop();
+  });
+
   it('stops the inbox processor even when runtime shutdown fails', async () => {
     const onWorkerFailed = vi.fn();
     const session = new WorkerSession({

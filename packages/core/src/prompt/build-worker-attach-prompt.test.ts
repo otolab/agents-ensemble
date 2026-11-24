@@ -33,7 +33,8 @@ describe('buildWorkerAttachPrompt', () => {
     });
     expect(prompt).toContain('作業ディレクトリ: /repo');
     expect(prompt).toContain('permission を要求する');
-    expect(prompt).not.toMatch(/Issue|\bPR\b/);
+    expect(prompt).not.toMatch(/Issue|\bPR\b|GitHub|register_github_watch|\bgh\b/);
+    expect(prompt).toMatchSnapshot();
   });
 
   it('places user instructions before kind-filtered profile materials', () => {

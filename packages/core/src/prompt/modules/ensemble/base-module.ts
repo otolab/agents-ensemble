@@ -1,5 +1,5 @@
 import type { PromptModule } from '@modular-prompt/core';
-import type { EnsembleContext } from '../../contexts/kind.js';
+import type { EnsembleSessionState } from '../../../profile/types.js';
 import type { SessionWorkerSpec } from '../../../profile/types.js';
 
 /**
@@ -7,7 +7,7 @@ import type { SessionWorkerSpec } from '../../../profile/types.js';
  *
  * セクション分担・書き方: docs/modular-prompt.md
  */
-export const baseModule: PromptModule<EnsembleContext> = {
+export const baseModule: PromptModule<EnsembleSessionState & { kind: string }> = {
   persona: [
     (ctx) => ([
       `あなたは agents-ensemble team の **${ctx.kind}** です。`,
@@ -27,7 +27,7 @@ export const baseModule: PromptModule<EnsembleContext> = {
     '- オペレータが conductor を監督する',
     '- conductor が worker 群を調整する',
     '- conductor は harness 経由で worker に作業指示を送り、worker の応答は harness がラウンド完了として conductor に届ける。worker 同士は直接つながっていない',
-    '- 作業の実行は worker、方針・許否・調整は conductor、大目標とマージはオペレータが決める・行う',
+    '- 作業の実行は worker、方針・許否・調整は conductor、大目標はオペレータが決める',
     '- worker が判断に困ることは conductor が扱う。conductor が決められないことはオペレータが最終判断する',
     '- オペレータからの問いかけがあったとき、 conductor はオペレータと対話を優先し、作業の手を止めて集中する',
     '- conductor からオペレータに対してエスカレーションするときは、必ずOpen Questionの機構を利用する',
