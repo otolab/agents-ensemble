@@ -414,14 +414,21 @@ describe('IssueSessionTuiStream', () => {
       openQuestions: [createOpenQuestion({ id: 'inq-recovery', question: 'Question?', context: LONG_QUESTION_CONTEXT })],
       dispatchHold: { hold: false, heldEventCount: 0 },
     });
+    const { stdin, lastFrame } = render(
+      <IssueSessionTuiStream viewModel={viewModel} terminalSizeStore={terminalSizeStore} onSubmit={vi.fn()} />,
+    );
+    await flushInkStdin();
+    stdin.write(INK_TEST_KEYS.shiftPageDown.repeat(10));
+    await flushInkStdin();
+    const questionPane = (frame: string) => frame.slice(frame.indexOf('╭─ Open questions')).split('╰')[0];
+    const questionBefore = questionPane(lastFrame() ?? '');
+    expect(questionBefore).toContain('context-line-05');
+    expect(questionBefore).not.toContain('context-line-00');
     viewModel.setRecoveryInspection({
       title: 'Recovery',
       text: Array.from({ length: 40 }, (_, index) => `recovery-line-${String(index).padStart(2, '0')}`).join('\n'),
       recoveryId: 'recovery-test', expiresAt: Date.now() + 60_000, sensitive: true,
     });
-    const { stdin, lastFrame } = render(
-      <IssueSessionTuiStream viewModel={viewModel} terminalSizeStore={terminalSizeStore} onSubmit={vi.fn()} />,
-    );
     await flushInkStdin();
     expect(lastFrame() ?? '').toContain('recovery-line-39');
     expect(lastFrame() ?? '').not.toContain('recovery-line-00');
@@ -430,8 +437,7 @@ describe('IssueSessionTuiStream', () => {
     expect(lastFrame() ?? '').not.toContain('recovery-line-39');
     stdin.write('\u001b');
     await flushInkStdin();
-    expect(lastFrame() ?? '').toContain('context-line-00');
-    expect(lastFrame() ?? '').not.toContain('context-line-39');
+    expect(questionPane(lastFrame() ?? '')).toBe(questionBefore);
     terminalSizeStore.dispose();
   });
 

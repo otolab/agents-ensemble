@@ -477,7 +477,6 @@ describe('IssueSessionTui', () => {
     ['Shift', INK_TEST_KEYS.shiftPageUp],
   ])('scrolls recovery before the hidden question with %s+PgUp', async (_modifier, pageUp) => {
     const source = new ResizeSource();
-    source.rows = 6;
     const terminalSizeStore = createTuiTerminalSizeStore(
       source as unknown as Pick<NodeJS.WriteStream, 'columns' | 'rows' | 'on' | 'off'>,
     );
@@ -487,15 +486,24 @@ describe('IssueSessionTui', () => {
       openQuestions: [createOpenQuestion({ id: 'inq-recovery', question: 'Question?', context: LONG_QUESTION_CONTEXT })],
       dispatchHold: { hold: false, heldEventCount: 0 },
     });
+    const { stdin, lastFrame } = render(
+      <IssueSessionTui viewModel={viewModel} terminalSizeStore={terminalSizeStore} onSubmit={vi.fn()} />,
+    );
+    await flushInkStdin();
+    stdin.write(INK_TEST_KEYS.shiftPageDown.repeat(10));
+    await flushInkStdin();
+    const questionPane = (frame: string) => frame.slice(frame.indexOf('╭─ Open questions')).split('╰')[0];
+    const questionBefore = questionPane(lastFrame() ?? '');
+    expect(questionBefore).toContain('context-line-05');
+    expect(questionBefore).not.toContain('context-line-00');
     viewModel.setRecoveryInspection({
       title: 'Recovery',
       text: Array.from({ length: 40 }, (_, index) => `recovery-line-${String(index).padStart(2, '0')}`).join('\n'),
       recoveryId: 'recovery-test', expiresAt: Date.now() + 60_000, sensitive: true,
     });
-    const { stdin, lastFrame } = render(
-      <IssueSessionTui viewModel={viewModel} terminalSizeStore={terminalSizeStore} onSubmit={vi.fn()} />,
-    );
-    await flushInkStdin();
+    source.rows = 6;
+    source.emit('resize');
+    await flushInkStdin(TUI_RESIZE_SETTLE_MS + 50);
     expect(lastFrame() ?? '').toContain('recovery-line-39');
     expect(lastFrame() ?? '').not.toContain('recovery-line-00');
     stdin.write(pageUp);
@@ -506,8 +514,7 @@ describe('IssueSessionTui', () => {
     source.rows = 24;
     source.emit('resize');
     await flushInkStdin(TUI_RESIZE_SETTLE_MS + 50);
-    expect(lastFrame() ?? '').toContain('context-line-00');
-    expect(lastFrame() ?? '').not.toContain('context-line-39');
+    expect(questionPane(lastFrame() ?? '')).toBe(questionBefore);
     terminalSizeStore.dispose();
   });
 
