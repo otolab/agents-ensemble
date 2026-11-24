@@ -20,7 +20,7 @@ GitHub を正本にしない作業には **`ensemble run <brief>`** を使いま
 
 名前を変更するときは、すべての Ensemble セッションと対象 workspace の Notes などの操作を停止し、その cwd で `ensemble workspace-rename investigation new-name` を実行します。別の cwd を指定する場合は `--conductor-cwd <path>` を使います。保存ディレクトリとセッションの参照先を移行し、アンカーを更新します。移動先が存在する場合は空ディレクトリでも拒否します。未対応の session resume store や引き継ぎ確認待ちの worker がある場合も、変更前に拒否します。外部ツールが独自に保存した slug の参照は移行できません。
 
-変更後の `ensemble run --continue` では保存済み worker を直接読み込まず、新しい worker session を作ります。conductor は引き継ぎ報告を確認してから次の指示を出します。以前の session ID と保存先は世代履歴に残りますが、以前の会話自体が新しい session に復元されるわけではありません。Pi conductor の workspace 再開には別途 [Issue #850](https://github.com/otolab/agents-ensemble/issues/850) の問題があります。
+変更後の `ensemble run --continue` では保存済み worker を直接読み込まず、新しい worker session を作ります。conductor は引き継ぎ報告を確認してから次の指示を出します。以前の session ID と保存先は世代履歴に残りますが、以前の会話自体が新しい session に復元されるわけではありません。
 
 rename 中のエラーでは元に戻すことを試みます。強制終了や巻き戻し失敗後は、すべての操作を停止したまま `ensemble workspace-rename-recover` を実行してください。記録された内容と実際のファイルが異なる場合は自動復旧を拒否するため、データを保全してから状況を確認してください。復旧記録が残っている間はセッションの起動も拒否します。
 
