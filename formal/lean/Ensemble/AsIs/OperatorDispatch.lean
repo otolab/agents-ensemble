@@ -328,10 +328,10 @@ def Queue.commitBatch (q : Queue) (batch : Batch) (id payload : String) : Queue 
 /-- rollback は report を pending に戻し、当該 batch の凍結を解除する。 -/
 def Queue.rollbackBatchCommit (q : Queue) (b : Batch) : Queue × Batch :=
   if b.session.isNone then (q, b) else
-    let ids := b.events.filterMap (·.usableReportId)
-    let events := b.events.map (fun e => if b.batchId.isSome && e.frozenBatchId == b.batchId then { e with frozenBatchId := none, frozenPayload := none } else e)
-    let pending := events.foldl (fun acc e => if acc.any (fun x => x.id == e.id) then acc else acc ++ [e]) q.pending
-    ({ q with pending := orderEvents pending, inFlight := q.inFlight.filter (fun id => !ids.contains id) }, { b with batchId := none, payload := none })
+    let ids := b.events.filterMap (fun e => if e.user then none else e.usableReportId)
+    let events := b.events.map (fun e => if !e.user && b.batchId.isSome && e.frozenBatchId == b.batchId then { e with frozenBatchId := none, frozenPayload := none } else e)
+    let pending := events.foldl (fun acc e => if e.user then acc else if acc.any (fun x => x.id == e.id) then acc.map (fun x => if x.id == e.id then e else x) else acc ++ [e]) q.pending
+    ({ q with pending := orderEvents pending, inFlight := q.inFlight.filter (fun id => !ids.contains id) }, { b with events, batchId := none, payload := none })
 
 /-- manifest 永続化前の commit 例外だけ rollback する。永続化後の例外では凍結を維持する。 -/
 def Queue.afterCommitError (q : Queue) (batch : Batch) (committed durable : Bool) : Queue × Batch :=
@@ -427,11 +427,13 @@ def Runner.settleSend (r : Runner) (input : SettlementInput) (inbox : Inbox) (no
   let retryPending := result.result.toOption == some false
   ({ r with lifecycle := result.lifecycle, selection, retryPending, retryStoredAt := if retryPending then some (now + 5000) else none, ack := if result.result.toOption == some true then .attempting 1 0 else .idle }, result)
 
-/-- retry 時刻の保存が済んだ後に report を再投入する。停止・例外なら再投入せず終了する。 -/
-def Runner.finishRetryRecord (r : Runner) (now : Nat) (succeeded : Bool) : Runner :=
+/-- 保存後に report ごとの時計値を順に受けて再投入する。停止・例外なら再投入せず終了する。 -/
+def Runner.finishRetryRecord (r : Runner) (readTime : Nat → Nat) (succeeded : Bool) : Runner :=
   if !r.retryPending then r else if !succeeded then { r with retryPending := false, stopped := true } else
     let floor := r.batch.foldl (fun n e => max n (e.id + 1)) r.queue.nextIdentity
-    let queue := r.batch.foldl (fun q e => if e.user then q else q.requeueReport e now 5000) { r.queue with nextIdentity := floor }
+    let (queue, _) := r.batch.foldl (fun (q, index) e =>
+      if e.user then (q, index) else (q.requeueReport e (readTime index) 5000, index + 1))
+      ({ r.queue with nextIdentity := floor }, 0)
     { r with queue, retryPending := false }
 
 /-- ack に失敗すると最大3回まで5秒後の retry を待つ。 -/
@@ -487,7 +489,22 @@ def Runner.finishAcknowledged (r : Runner) : Runner :=
   let b : Batch := { session := some "a", events := [e] }
   let (q, b, ok) := q.commitBatch b "batch" "payload"
   let (q, b) := q.rollbackBatchCommit b
-  ok && q.inFlight.isEmpty && q.pending.map (·.id) == [99, 1] && b.batchId.isNone && q.pending.all (fun e => e.frozenBatchId.isNone)
+  ok && q.inFlight.isEmpty && q.pending.map (·.id) == [99, 1] && b.batchId.isNone && q.pending.all (fun e => e.frozenBatchId.isNone && e.frozenPayload.isNone) &&
+    b.events.all (fun e => e.frozenBatchId.isNone && e.frozenPayload.isNone) && b.events == q.pending
+))
+
+/- 複数 report はそれぞれ時計を読み、最後の期限まで frozen batch を選べない。 -/
+#guard (decide (
+  let first : Event := { id := 1, arrival := 1, user := false, session := "a", reportId := some "x", frozenBatchId := some "b", frozenPayload := some "p" }
+  let second : Event := { id := 2, arrival := 2, user := false, session := "a", reportId := some "y", frozenBatchId := some "b", frozenPayload := some "p" }
+  let user : Event := { id := 3, user := true }
+  let r : Runner := { retryPending := true, batch := [first, user, second] }
+  let r := r.finishRetryRecord (fun i => if i == 0 then 100 else 101) true
+  let cfg : Scheduling := { maxWait := 10, idleAging := 100, maxUserBytes := 100 }
+  let (_, early) := r.queue.selectBatch {} cfg 5100
+  let (_, ready) := r.queue.selectBatch {} cfg 5101
+  r.queue.pending.map (·.retryReadyAt) == [some 5100, some 5101] && early.isNone &&
+    ready.map (fun b => b.events.length) == some 2
 ))
 
 /- ack 成功だけが in-flight と request を解放する。 -/
@@ -506,7 +523,7 @@ def Runner.finishAcknowledged (r : Runner) : Runner :=
   let (lifecycle, lease) := ({} : Lifecycle).beginSend 1
   let r : Runner := { lifecycle, queue := { inFlight := ["x"] }, batch := [e] }
   let (r, result) := r.settleSend { lease := lease.get!, workflow := .operatorAgent, status := .other, failureClass := .incompleteStatus } {} 100
-  let r := r.finishRetryRecord 100 true
+  let r := r.finishRetryRecord (fun _ => 100) true
   result.result.toOption == some false && r.queue.inFlight.isEmpty &&
     r.queue.pending.head!.retryReadyAt == some 5100 && r.queue.pending.head!.frozenPayload == some "payload" && r.ack == .idle
 ))
@@ -596,8 +613,8 @@ def Runner.finishAcknowledged (r : Runner) : Runner :=
   let (r, lease) := ({} : Runner).beginSend 1
   let r := { r with queue := { inFlight := ["x"] }, batch := [e] }
   let (r, _) := r.settleSend { lease := lease.get!, workflow := .operatorAgent, status := .other, failureClass := .transport } {} 100
-  let stopped := r.finishRetryRecord 900 false
-  let resumed := r.finishRetryRecord 900 true
+  let stopped := r.finishRetryRecord (fun _ => 900) false
+  let resumed := r.finishRetryRecord (fun _ => 900) true
   stopped.stopped && stopped.queue.pending.isEmpty && stopped.queue.inFlight == ["x"] &&
     resumed.retryStoredAt == some 5100 && resumed.queue.pending.head!.retryReadyAt == some 5900
 ))

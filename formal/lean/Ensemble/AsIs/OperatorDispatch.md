@@ -26,7 +26,7 @@ Lean 名はすべて `Ensemble.AsIs.OperatorDispatch` の配下。共有 settle 
 
 ## 抽象化と入力の前提
 
-- 時刻は自然数のミリ秒として各操作に渡す。timer、待機、通知 listener は実行せず、停止・I/O の成否を外部結果として与える。retry の durable な期限と queue の期限は、TS と同じく別々の時刻から計算する。lock、永続化、process 間 handoff は対象外だが、commit が永続化に達したか、retry 保存待ちが停止したかは区別する。
+- 時刻は自然数のミリ秒として各操作に渡す。timer、待機、通知 listener は実行せず、停止・I/O の成否を外部結果として与える。retry の durable な期限と queue の期限は、TS と同じく別々の時刻から計算する。queue への再投入時は report ごとの時計読み取りを、report の順番を引数とする関数で供給する（user は時計を消費しない）。lock、永続化、process 間 handoff は対象外だが、commit が永続化に達したか、retry 保存待ちが停止したかは区別する。
 - `Event.id` は TS の object identity、`arrival` は process 内到着順、`arrivalOrder` は保存される report の順序を表す。新規イベントの identity と arrival は呼び出し側が TS の採番結果と整合するよう一意に供給し、retry では別 identity を発行する。空の report ID の truthiness はモデル内で扱う。watch state が受け入れる frozen batch ID は空ではない（`watch-state-store.ts` の検証）。
 - report type は、選択に使う `question`、priority、weight に射影する。priority の 0 / 1 / 2 は open question / normal / idle。enqueue 時に TS が決定する既定 priority、report type ごとの weight、focus の期限切れ後の値は呼び出し側が与える。本文は選択に使わないため保持せず、UTF-8 byte 数、空白判定、batch ID、整形済み payload を与える。payload は凍結後に保持する。
 - selection reason、deadline reason、eligibility は scheduling event の診断出力に使われ、後続の選択や hold・retry の制御には使われないため省略する。`usedContinuation` は次の選択に影響するため保持し、`isBatchCurrent` の成功時も更新する。focus 操作と timeout の時計は対象 queue 操作の外から反映する。
