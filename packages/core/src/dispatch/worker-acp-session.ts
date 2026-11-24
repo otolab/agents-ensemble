@@ -43,6 +43,7 @@ export interface OpenWorkerAcpSessionOptions {
   /** 現在の profile / CLI から解決した ACP spawn。 */
   currentAcpSpawn?: AcpSpawnFingerprint;
   resumeAcpSessionId?: string;
+  migrateWorkspacePrompt?: boolean;
   bridge?: AcpBridge;
   connectAcp?: ConnectWorkerAcpFn;
   spawn?: SpawnAcpProcessOptions;
@@ -52,6 +53,7 @@ export interface OpenWorkerAcpSessionOptions {
 }
 
 export type WorkerSessionRecoveryReason =
+  | 'workspace_prompt_migration'
   | 'session_load_failed'
   | 'prompt_history_unreadable'
   | 'explicit';
@@ -121,6 +123,10 @@ export async function openWorkerAcpSession(
   let recoveryReason: WorkerSessionRecoveryReason | undefined;
   const previousSessionId = sessionId;
   try {
+    if (sessionId && options.migrateWorkspacePrompt) {
+      recoveryReason = 'workspace_prompt_migration';
+      sessionId = undefined;
+    }
     if (sessionId) {
       try {
         await bridge.loadSession(

@@ -99,6 +99,7 @@ export interface WorkerSessionResumeStore {
   repoRoot?: string;
   issueUrl?: string;
   handoffPending?: boolean;
+  workspacePromptVersion?: number;
   generations?: WorkerSessionGeneration[];
 }
 
@@ -109,7 +110,7 @@ export interface WorkerSessionGeneration {
   repoRoot: string;
   issueUrl: string;
   replacedAt: number;
-  reason: 'session_load_failed' | 'prompt_history_unreadable' | 'explicit';
+  reason: 'session_load_failed' | 'prompt_history_unreadable' | 'explicit' | 'workspace_prompt_migration';
   nextSessionId: string;
 }
 
@@ -125,7 +126,7 @@ function parseWorkerSessionGenerations(value: unknown, name: string): WorkerSess
       typeof generation.issueUrl !== 'string' ||
       typeof generation.replacedAt !== 'number' ||
       !Number.isFinite(generation.replacedAt) ||
-      !['session_load_failed', 'prompt_history_unreadable', 'explicit'].includes(String(generation.reason))
+      !['session_load_failed', 'prompt_history_unreadable', 'explicit', 'workspace_prompt_migration'].includes(String(generation.reason))
     ) throw new Error(`Invalid worker session generation: ${name}`);
     const acpSpawn = parseAcpSpawnFingerprint(generation.acpSpawn, name);
     return {
@@ -1353,7 +1354,11 @@ function parseSessionResumeStore(value: unknown): SessionResumeStore {
     if (worker.handoffPending !== undefined && typeof worker.handoffPending !== 'boolean') {
       throw new Error(`Invalid session resume store worker handoffPending: ${name}`);
     }
+    if (worker.workspacePromptVersion !== undefined && (!Number.isSafeInteger(worker.workspacePromptVersion) || (worker.workspacePromptVersion as number) < 1)) {
+      throw new Error(`Invalid session resume store worker workspacePromptVersion: ${name}`);
+    }
     workers[name] = {
+      ...(typeof worker.workspacePromptVersion === 'number' ? { workspacePromptVersion: worker.workspacePromptVersion } : {}),
       acpSessionId: worker.acpSessionId,
       ...(typeof worker.acpCwd === 'string' ? { acpCwd: worker.acpCwd } : {}),
       ...(typeof worker.repoRoot === 'string' ? { repoRoot: worker.repoRoot } : {}),

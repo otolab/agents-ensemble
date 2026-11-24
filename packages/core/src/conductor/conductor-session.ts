@@ -1,3 +1,4 @@
+import { WORKSPACE_WORKER_PROMPT_VERSION } from '../workspace-run/worker-prompt-version.js';
 import { conductorFailureLogPath, createConductorFailureLog } from '../session/conductor-failure-log.js';
 import { resolveUserEnsembleRoot } from '../resolve-user-ensemble-root.js';
 import { acquireSessionOwnerLock } from '../session/session-owner-lock.js';
@@ -1216,6 +1217,7 @@ async function runConductorSessionWithStartupGuard(
       workerSessions.set(result.name, {
         ...workerSessions.get(result.name),
         acpSessionId: result.acpSessionId,
+        ...(workspaceSession && result.source === 'harness' && result.promptResult.stopReason === 'end_turn' && !attached?.session.resumed ? { workspacePromptVersion: WORKSPACE_WORKER_PROMPT_VERSION } : {}),
         acpCwd: attached?.session.acpCwd ?? workerWorktree?.path,
         ...(!savedWorker?.originAcpCwd
           ? { originAcpCwd: attached?.session.acpCwd ?? workerWorktree?.path }
@@ -1238,7 +1240,9 @@ async function runConductorSessionWithStartupGuard(
         throw error;
       }
       const detail =
-        notification.reason === 'session_load_failed'
+        notification.reason === 'workspace_prompt_migration'
+          ? 'workspace worker の旧 prompt 世代を移行するため'
+          : notification.reason === 'session_load_failed'
           ? '保存済み ACP session を読み込めなかったため'
           : notification.reason === 'prompt_history_unreadable'
             ? '保存済み ACP thread の履歴を読めなかったため'
@@ -1920,6 +1924,7 @@ async function runConductorSessionWithStartupGuard(
         acpSessionId: notification.acpSessionId,
         acpCwd: notification.acpCwd,
         handoffPending: true,
+        ...(workspaceSession ? { workspacePromptVersion: WORKSPACE_WORKER_PROMPT_VERSION } : {}),
         originAcpCwd: notification.acpCwd,
         repoRoot: options.repoRoot,
         issueUrl: options.issueUrl,

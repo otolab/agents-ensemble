@@ -87,6 +87,34 @@ function createDeferred<T>(): {
 }
 
 describe('WorkerRuntime', () => {
+  it('retries migration from the old session if shutdown interrupts bootstrap', async () => {
+    const report = createDeferred<{ stopReason: string; responseText: string }>();
+    const firstBridge = createMockBridge(vi.fn().mockResolvedValue(undefined));
+    firstBridge.cancelSession = vi.fn();
+    vi.mocked(firstBridge.promptSession).mockReturnValueOnce(report.promise);
+    const committed = vi.fn().mockResolvedValue(undefined);
+    const issue = { ...TEST_WORKTREE.issue, url: 'workspace://research' };
+    const params = { name: 'ping-1', kind: 'ping', issueUrl: issue.url,
+      worktree: { ...TEST_WORKTREE, issue }, sessionState: { workers: [{ name: 'ping-1', kind: 'ping' }], kinds: ['ping'] },
+      resumeAcpSessionId: 'old-session', migrateWorkspacePrompt: true };
+    const first = new WorkerRuntime({ inbox: new ConductorInbox(), connectAcp: vi.fn().mockResolvedValue(firstBridge), onWorkerSessionRecovered: committed });
+    first.start(params);
+    await vi.waitFor(() => expect(firstBridge.promptSession).toHaveBeenCalledOnce());
+    const stopping = first.shutdown({ force: true });
+    report.resolve({ stopReason: 'end_turn', responseText: 'late report' });
+    await stopping;
+    expect(committed).not.toHaveBeenCalled();
+    expect(first.listAttachedForResume()).toHaveLength(0);
+    const retryBridge = createMockBridge(vi.fn().mockResolvedValue(undefined));
+    const retry = new WorkerRuntime({ inbox: new ConductorInbox(), connectAcp: vi.fn().mockResolvedValue(retryBridge), onWorkerSessionRecovered: committed });
+    retry.start(params);
+    await retry.waitForIdle();
+    expect(retryBridge.loadSession).not.toHaveBeenCalled();
+    expect(committed).toHaveBeenCalledWith(expect.objectContaining({ previousSessionId: 'old-session', reason: 'workspace_prompt_migration' }));
+    expect(retry.sendWorkerMessage('ping-1', 'work').status).toBe('error');
+    await retry.shutdown();
+  });
+
   it.each(['new', 'resume', 'recovery'] as const)(
     'uses workspace prompts through attach and dispatch (%s)', async (mode) => {
       const bridge = createMockBridge(vi.fn().mockResolvedValue(undefined));

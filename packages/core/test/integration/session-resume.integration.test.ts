@@ -296,6 +296,40 @@ describe('session resume integration', () => {
     phase = 'resume';
     expect((await runConductorSession({ ...common, resumeAgentId: RESUME_AGENT_ID })).stopReason).toBe('completed');
     expect(loadSession).toHaveBeenCalled();
+
+    // Simulate a pre-separation workspace worker whose saved session has no marker.
+    const legacy = (await loadSessionResumeStore(resumePath))!;
+    const oldId = legacy.workers['ping-1']!.acpSessionId;
+    delete legacy.workers['ping-1']!.workspacePromptVersion;
+    await saveSessionResumeStore(resumePath, legacy);
+    loadSession.mockClear();
+    const migrationWait = vi.fn();
+    let migrationOperator: OperatorInputBindingApi | undefined;
+    const migration = runConductorSession({
+      ...common, resumeAgentId: RESUME_AGENT_ID, waitForOperatorExit: true,
+      onPostLoopWait: migrationWait, bindOperatorInput: (api) => { migrationOperator = api; },
+    });
+    await vi.waitFor(async () => {
+      const saved = await loadSessionResumeStore(resumePath);
+      expect(saved?.workers['ping-1']?.handoffPending).toBe(true);
+    });
+    const migrated = (await loadSessionResumeStore(resumePath))!.workers['ping-1']!;
+    expect(migrated.workspacePromptVersion).toBe(1);
+    expect(migrated.acpSessionId).not.toBe(oldId);
+    expect(migrated.generations).toContainEqual(expect.objectContaining({
+      acpSessionId: oldId, nextSessionId: migrated.acpSessionId, reason: 'workspace_prompt_migration',
+    }));
+    expect(loadSession).not.toHaveBeenCalledWith(oldId, expect.anything(), expect.anything());
+    await vi.waitFor(() => expect(migrationWait).toHaveBeenCalled());
+    expect(migrationOperator!.submit('/close')).toBe(false);
+    await migration;
+    expect((await loadSessionResumeStore(resumePath))!.workers['ping-1']).toMatchObject({
+      acpSessionId: migrated.acpSessionId, workspacePromptVersion: 1, handoffPending: true,
+    });
+    loadSession.mockClear();
+    expect((await runConductorSession({ ...common, resumeAgentId: RESUME_AGENT_ID })).stopReason).toBe('completed');
+    expect(loadSession).toHaveBeenCalledWith(migrated.acpSessionId, cwd, expect.anything());
+    expect((await loadSessionResumeStore(resumePath))!.workers['ping-1']?.handoffPending).toBe(true);
   });
 
   it.skipIf(process.platform === 'win32')('restores an attached worker and workspace state after a process receives SIGINT', async () => {
