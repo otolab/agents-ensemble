@@ -49,6 +49,8 @@ import {
 } from './compute-operator-input-cursor-y.js';
 import {
   computeMaxInputDisplayLines,
+  computeTextAreaDisplayLineCount,
+  getVisibleOperatorPrompt,
   isCursorAtVisualBoundary,
   trimBlankLinesOnly,
 } from './operator-input-layout.js';
@@ -151,7 +153,6 @@ export function IssueSessionTuiStream({
   const [queueOffset, setQueueOffset] = useState(0);
   const [inputCursorPosition, setInputCursorPosition] = useState<[number, number]>([0, 0]);
   const inputHistoryRef = useRef(new OperatorInputHistory());
-  const [inputDisplayLineCount, setInputDisplayLineCount] = useState(1);
   const [recoveryLinesFromBottom, setRecoveryLinesFromBottom] = useState(0);
   const [selectedCommandIndex, setSelectedCommandIndex] = useState(0);
   const [selectedAnswerSuggestionIndex, setSelectedAnswerSuggestionIndex] = useState(0);
@@ -232,6 +233,10 @@ export function IssueSessionTuiStream({
     1 + Math.min(queuedMessages.length, Math.max(1, Math.floor(terminalRows / 4) - 2));
   const hintLines = contextHintLines.flatMap((line) => wrapTextToWidth(line, contentWidth));
   const suggestionLines = [...commandSuggestionLines, ...answerSuggestionLines];
+  const inputDisplayLineCount = computeTextAreaDisplayLineCount(
+    inputValue, contentWidth, stringWidth(getVisibleOperatorPrompt(operatorPrompt, contentWidth)),
+    inputCursorPosition, !snapshot.shuttingDown,
+  );
   const desiredInputLines = Math.min(inputDisplayLineCount, maxInputDisplayLines);
   const desiredInputPaneHeight = computeInputPaneHeight({
     hintLineCount: hintLines.length + suggestionLines.length + desiredQueueRows,
@@ -323,9 +328,6 @@ export function IssueSessionTuiStream({
     ),
     linesFromTop: openQuestionLinesFromTop,
   });
-  const handleDisplayLineCountChange = useCallback((lineCount: number) => {
-    setInputDisplayLineCount(Math.max(1, lineCount));
-  }, []);
 
   useEffect(() => {
     setSelectedQuestionIndex((current) =>
@@ -581,7 +583,6 @@ export function IssueSessionTuiStream({
     setInputCursorPosition([0, selectedSuggestion.value.length]);
     setHiddenAnswerSuggestionQuestionId(selectedQuestion.id);
     setSelectedAnswerSuggestionIndex(0);
-    setInputDisplayLineCount(1);
   };
 
   const handleSubmit = (value: string) => {
@@ -611,7 +612,6 @@ export function IssueSessionTuiStream({
     setSelectedCommandIndex(0);
     setSelectedAnswerSuggestionIndex(0);
     setHiddenAnswerSuggestionQuestionId(undefined);
-    setInputDisplayLineCount(1);
   };
 
   const handleInputChange = (value: string) => {
@@ -715,7 +715,6 @@ export function IssueSessionTuiStream({
               contentWidth={contentWidth}
               promptPrefix={operatorPrompt}
               maxDisplayLines={visibleInputDisplayLineCount}
-              onDisplayLineCountChange={handleDisplayLineCountChange}
               suggestionsActive={
                 suggestionsVisible
               }

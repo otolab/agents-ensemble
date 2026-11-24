@@ -128,6 +128,17 @@ function buildTextAreaVisualRows(
   return rows;
 }
 
+/** 入力幅を最低 1 列確保したプロンプト。 */
+export function getVisibleOperatorPrompt(prompt: string, contentWidth: number): string {
+  const limit = Math.max(0, contentWidth - 1);
+  let visible = '';
+  for (const { segment } of inputGraphemeSegmenter.segment(prompt)) {
+    if (stringWidth(visible + segment) > limit) break;
+    visible += segment;
+  }
+  return visible;
+}
+
 /** TextArea と同じ折り返しとカーソル行末の追加行を含む表示行数。 */
 export function computeTextAreaDisplayLineCount(
   value: string,

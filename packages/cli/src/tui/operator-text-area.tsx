@@ -5,6 +5,7 @@ import { TextArea, type TKeybindings, type TLinePrefixProps } from 'react-ink-te
 import {
   computeTextAreaDisplayLineCount,
   isCursorAtVisualBoundary,
+  getVisibleOperatorPrompt,
   OPERATOR_INPUT_TAB_WIDTH,
 } from './operator-input-layout.js';
 import { INPUT_PANE_PROMPT_COLOR } from './tui-layout-constants.js';
@@ -89,12 +90,7 @@ export function OperatorTextArea({
   onCursorChange,
   cursorStart,
 }: OperatorTextAreaProps) {
-  const promptLimit = Math.max(0, contentWidth - 1);
-  let visiblePrompt = '';
-  for (const { segment } of new Intl.Segmenter('en', { granularity: 'grapheme' }).segment(promptPrefix)) {
-    if (stringWidth(visiblePrompt + segment) > promptLimit) break;
-    visiblePrompt += segment;
-  }
+  const visiblePrompt = getVisibleOperatorPrompt(promptPrefix, contentWidth);
   const promptWidth = stringWidth(visiblePrompt);
 
   const displayLineCount = useMemo(
