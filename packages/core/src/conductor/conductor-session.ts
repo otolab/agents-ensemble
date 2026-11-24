@@ -967,7 +967,7 @@ async function runConductorSessionWithStartupGuard(
   let commitWorkerSessionRecovery: (
     notification: import('../runtime/types.js').WorkerSessionRecoveredNotification,
   ) => Promise<void> = async () => { throw new Error('Resume store is not ready'); };
-  let commitWorkerHandoffConfirmed: (name: string) => Promise<void> =
+  let commitWorkerHandoffConfirmed: (name: string, sessionId: string) => Promise<void> =
     async () => { throw new Error('Resume store is not ready'); };
   let scheduleToolCallHistoryFlush = () => {};
   let flushToolCallHistory = async () => {};
@@ -1254,7 +1254,7 @@ async function runConductorSessionWithStartupGuard(
         reason: notification.reason,
       });
     },
-    onWorkerHandoffConfirmed: (name) => commitWorkerHandoffConfirmed(name),
+    onWorkerHandoffConfirmed: (name, sessionId) => commitWorkerHandoffConfirmed(name, sessionId),
     onWorkerFailed: (failure) => {
       // Notifications are serialized by the inbox, preserving each worker's
       // telemetry order even if a later round fails before this one is sent.
@@ -1963,12 +1963,12 @@ async function runConductorSessionWithStartupGuard(
       workerSessions.set(notification.name, replacement);
       workerSessionOrigins.set(notification.name, { repoRoot: options.repoRoot, issueUrl: options.issueUrl });
     });
-  commitWorkerHandoffConfirmed = (name) => enqueueSessionResumeStoreWrite(async () => {
+  commitWorkerHandoffConfirmed = (name, sessionId) => enqueueSessionResumeStoreWrite(async () => {
     if (terminalResumeStoreFinalFlushQueued || teardownStarted || recoverySaveUncertain) {
       throw new Error('Cannot confirm worker handoff during shutdown or an uncertain save.');
     }
     const previous = workerSessions.get(name);
-    if (!previous?.handoffPending) throw new Error(`Worker "${name}" has no saved pending handoff.`);
+    if (!previous?.handoffPending || previous.acpSessionId !== sessionId) throw new Error(`Worker "${name}" has no saved pending handoff for the expected session.`);
     const replacement = { ...previous, handoffPending: false };
     const snapshot = createSessionResumeStore(openQuestions.snapshot());
     snapshot.workers[name] = replacement;

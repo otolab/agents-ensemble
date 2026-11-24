@@ -58,7 +58,7 @@ export interface WorkerSessionOptions {
   onWorkerSessionRecovered?: (
     notification: WorkerSessionRecoveredNotification,
   ) => void | Promise<void>;
-  onWorkerHandoffConfirmed?: (name: string) => Promise<void>;
+  onWorkerHandoffConfirmed?: (name: string, sessionId: string) => Promise<void>;
   onPermissionCleanup?: (event: {
     workerId: string;
     entries: PendingPermission[];

@@ -105,7 +105,7 @@ describe('WorkerRuntime', () => {
     );
     expect(runtime.sendWorkerMessage('ping-1', 'continue').status).toBe('error');
     await runtime.confirmWorkerHandoff('ping-1', runtime.inspectWorkerHandoff('ping-1').token);
-    expect(confirm).toHaveBeenCalledWith('ping-1');
+    expect(confirm).toHaveBeenCalledWith('ping-1', 'saved');
     expect(runtime.sendWorkerMessage('ping-1', 'continue').status).toBe('sent');
     await runtime.waitForIdle();
     await runtime.shutdown();
@@ -180,6 +180,127 @@ describe('WorkerRuntime', () => {
     await runtime.shutdown();
   });
 
+  it('invalidates the old handoff when recreation commits but closing the previous bridge fails', async () => {
+    const oldBridge = createMockBridge(vi.fn().mockRejectedValue(new Error('close failed')));
+    vi.mocked(oldBridge.promptSession).mockResolvedValue({ stopReason: 'end_turn', responseText: 'old report' });
+    const candidate = {
+      newSession: vi.fn().mockResolvedValue('new-id'),
+      promptSession: vi.fn().mockResolvedValue({ stopReason: 'end_turn', responseText: 'new report' }),
+      close: vi.fn().mockResolvedValue(undefined),
+    } as unknown as AcpBridge;
+    const confirmed = vi.fn().mockResolvedValue(undefined);
+    const committed = vi.fn().mockResolvedValue(undefined);
+    const runtime = new WorkerRuntime({
+      inbox: new ConductorInbox(), connectAcp: vi.fn().mockResolvedValueOnce(oldBridge).mockResolvedValueOnce(candidate),
+      onWorkerSessionRecovered: committed, onWorkerHandoffConfirmed: confirmed,
+    });
+    runtime.start({
+      name: 'ping-1', issueUrl: TEST_WORKTREE.issue.url, kind: 'ping', worktree: TEST_WORKTREE,
+      resumeAcpSessionId: 'old-id', handoffPending: true,
+      sessionState: { workers: [{ name: 'ping-1', kind: 'ping' }], kinds: ['ping'] },
+    });
+    await runtime.waitForIdle();
+    const old = runtime.inspectWorkerHandoff('ping-1');
+    expect(old.report).toBe('old report');
+    await expect(runtime.recreateWorker('ping-1', 'old-id')).rejects.toThrow('old connection did not close');
+    expect(committed).toHaveBeenCalledWith(expect.objectContaining({ acpSessionId: 'new-id' }));
+    await expect(runtime.confirmWorkerHandoff('ping-1', old.token)).rejects.toThrow();
+    expect(confirmed).not.toHaveBeenCalled();
+    expect(runtime.sendWorkerMessage('ping-1', 'old instruction').status).toBe('error');
+    expect(runtime.inspectWorkerHandoff('ping-1').report).toBe('new report');
+    await runtime.shutdown();
+  });
+
+  it('serializes confirmation against recreation and rejects a second confirmation', async () => {
+    const saved = createDeferred<void>();
+    const confirm = vi.fn().mockReturnValue(saved.promise);
+    const bridge = createMockBridge(vi.fn().mockResolvedValue(undefined));
+    const runtime = new WorkerRuntime({ inbox: new ConductorInbox(), connectAcp: vi.fn().mockResolvedValue(bridge), onWorkerHandoffConfirmed: confirm });
+    runtime.start({ name: 'ping-1', issueUrl: TEST_WORKTREE.issue.url, kind: 'ping', worktree: TEST_WORKTREE,
+      resumeAcpSessionId: 'saved', handoffPending: true,
+      sessionState: { workers: [{ name: 'ping-1', kind: 'ping' }], kinds: ['ping'] } });
+    await runtime.waitForIdle();
+    const { token } = runtime.inspectWorkerHandoff('ping-1');
+    const confirmation = runtime.confirmWorkerHandoff('ping-1', token);
+    expect(confirm).toHaveBeenCalledWith('ping-1', 'saved');
+    await expect(runtime.recreateWorker('ping-1', 'saved')).rejects.toThrow('busy');
+    await expect(runtime.confirmWorkerHandoff('ping-1', token)).rejects.toThrow();
+    expect(runtime.sendWorkerMessage('ping-1', 'old instruction').status).toBe('error');
+    saved.resolve();
+    await confirmation;
+    await runtime.shutdown();
+  });
+
+  it('requires a fresh inspection after confirmation persistence fails', async () => {
+    const bridge = createMockBridge(vi.fn().mockResolvedValue(undefined));
+    const confirm = vi.fn().mockRejectedValueOnce(new Error('save failed')).mockResolvedValueOnce(undefined);
+    const runtime = new WorkerRuntime({ inbox: new ConductorInbox(), connectAcp: vi.fn().mockResolvedValue(bridge), onWorkerHandoffConfirmed: confirm });
+    runtime.start({ name: 'ping-1', issueUrl: TEST_WORKTREE.issue.url, kind: 'ping', worktree: TEST_WORKTREE,
+      resumeAcpSessionId: 'saved', handoffPending: true,
+      sessionState: { workers: [{ name: 'ping-1', kind: 'ping' }], kinds: ['ping'] } });
+    await runtime.waitForIdle();
+    const oldToken = runtime.inspectWorkerHandoff('ping-1').token;
+    await expect(runtime.confirmWorkerHandoff('ping-1', oldToken)).rejects.toThrow('save failed');
+    await expect(runtime.confirmWorkerHandoff('ping-1', oldToken)).rejects.toThrow('Inspect the handoff report');
+    expect(runtime.sendWorkerMessage('ping-1', 'old instruction').status).toBe('error');
+    await runtime.confirmWorkerHandoff('ping-1', runtime.inspectWorkerHandoff('ping-1').token);
+    expect(confirm).toHaveBeenCalledTimes(2);
+    await runtime.shutdown();
+  });
+
+  it.each(['bootstrap', 'save'])('invalidates the old token when recreation fails at %s', async (stage) => {
+    const oldBridge = createMockBridge(vi.fn().mockResolvedValue(undefined));
+    const bootstrap = createDeferred<{ stopReason: string; responseText: string }>();
+    const candidate = {
+      newSession: vi.fn().mockResolvedValue('new-id'),
+      promptSession: vi.fn().mockReturnValue(bootstrap.promise),
+      close: vi.fn().mockResolvedValue(undefined),
+    } as unknown as AcpBridge;
+    const runtime = new WorkerRuntime({ inbox: new ConductorInbox(),
+      connectAcp: vi.fn().mockResolvedValueOnce(oldBridge).mockResolvedValueOnce(candidate),
+      onWorkerSessionRecovered: vi.fn().mockRejectedValue(new Error('save outcome unknown')) });
+    runtime.start({ name: 'ping-1', issueUrl: TEST_WORKTREE.issue.url, kind: 'ping', worktree: TEST_WORKTREE,
+      resumeAcpSessionId: 'old-id', handoffPending: true,
+      sessionState: { workers: [{ name: 'ping-1', kind: 'ping' }], kinds: ['ping'] } });
+    await runtime.waitForIdle();
+    const { token } = runtime.inspectWorkerHandoff('ping-1');
+    const attempt = runtime.recreateWorker('ping-1', 'old-id');
+    await vi.waitFor(() => expect(candidate.promptSession).toHaveBeenCalledOnce());
+    await expect(runtime.confirmWorkerHandoff('ping-1', token)).rejects.toThrow();
+    if (stage === 'bootstrap') bootstrap.reject(new Error('bootstrap failed'));
+    else bootstrap.resolve({ stopReason: 'end_turn', responseText: 'new report' });
+    await expect(attempt).rejects.toThrow();
+    expect(runtime.getAttached('ping-1')?.session.sessionId).toBe('old-id');
+    await expect(runtime.confirmWorkerHandoff('ping-1', token)).rejects.toThrow();
+    if (stage === 'bootstrap') expect(runtime.inspectWorkerHandoff('ping-1').report).toBe('pong');
+    else expect(() => runtime.inspectWorkerHandoff('ping-1')).toThrow('handoff report');
+    expect(runtime.sendWorkerMessage('ping-1', 'old instruction').status).toBe('error');
+    await runtime.shutdown();
+  });
+
+  it('requires a new report and token after restarting the committed generation', async () => {
+    const old = createMockBridge(vi.fn().mockResolvedValue(undefined));
+    const runtime = new WorkerRuntime({ inbox: new ConductorInbox(), connectAcp: vi.fn().mockResolvedValue(old) });
+    runtime.start({ name: 'ping-1', issueUrl: TEST_WORKTREE.issue.url, kind: 'ping', worktree: TEST_WORKTREE,
+      resumeAcpSessionId: 'old-id', handoffPending: true,
+      sessionState: { workers: [{ name: 'ping-1', kind: 'ping' }], kinds: ['ping'] } });
+    await runtime.waitForIdle();
+    const stale = runtime.inspectWorkerHandoff('ping-1').token;
+    await runtime.shutdown();
+    const resumedBridge = createMockBridge(vi.fn().mockResolvedValue(undefined));
+    vi.mocked(resumedBridge.promptSession).mockResolvedValue({ stopReason: 'end_turn', responseText: 'new generation report' });
+    const resumed = new WorkerRuntime({ inbox: new ConductorInbox(), connectAcp: vi.fn().mockResolvedValue(resumedBridge) });
+    resumed.start({ name: 'ping-1', issueUrl: TEST_WORKTREE.issue.url, kind: 'ping', worktree: TEST_WORKTREE,
+      resumeAcpSessionId: 'new-id', handoffPending: true,
+      sessionState: { workers: [{ name: 'ping-1', kind: 'ping' }], kinds: ['ping'] } });
+    await resumed.waitForIdle();
+    await expect(resumed.confirmWorkerHandoff('ping-1', stale)).rejects.toThrow();
+    expect(resumed.inspectWorkerHandoff('ping-1').report).toBe('new generation report');
+    expect(resumed.sendWorkerMessage('ping-1', 'old instruction').status).toBe('error');
+    await resumed.confirmWorkerHandoff('ping-1', resumed.inspectWorkerHandoff('ping-1').token);
+    await resumed.shutdown();
+  });
+
   it('allows explicit recreation after builtin Pi rejects an unexpected load failure', async () => {
     const oldBridge = {
       loadSession: vi.fn().mockRejectedValue(new Error('map missing')),
@@ -219,7 +340,7 @@ describe('WorkerRuntime', () => {
       newSession: vi.fn().mockResolvedValue('sess-new'),
       promptSession: stage === 'bootstrap'
         ? vi.fn().mockRejectedValue(new Error('bootstrap failed'))
-        : vi.fn().mockResolvedValue({ stopReason: 'end_turn' }),
+        : vi.fn().mockResolvedValue({ stopReason: 'end_turn', responseText: 'handoff report' }),
       close: closeCandidate,
     } as unknown as AcpBridge;
     const runtime = new WorkerRuntime({

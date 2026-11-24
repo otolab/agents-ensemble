@@ -50,7 +50,7 @@ export interface WorkerRuntimeOptions {
   onWorkerSessionRecovered?: (
     notification: WorkerSessionRecoveredNotification,
   ) => void | Promise<void>;
-  onWorkerHandoffConfirmed?: (name: string) => Promise<void>;
+  onWorkerHandoffConfirmed?: (name: string, sessionId: string) => Promise<void>;
   onAcpUpdate?: (event: WorkerAcpUpdateTelemetry) => void;
   onWorkerState?: (event: WorkerStateTelemetry) => void;
 }
@@ -108,8 +108,9 @@ export class WorkerRuntime {
   private readonly failedWorkers = new Map<string, FailedWorker>();
   private readonly recreating = new Map<string, AttachedWorker | undefined>();
   private readonly handoffPending = new Set<string>();
-  private readonly handoffReports = new Map<string, string>();
-  private readonly handoffTokens = new Map<string, string>();
+  private readonly handoffReports = new Map<string, { sessionId: string; report: string }>();
+  private readonly handoffTokens = new Map<string, { sessionId: string; token: string }>();
+  private readonly confirmingHandoffs = new Set<string>();
   private readonly idleResolvers = new Set<() => void>();
   private attachInFlight = 0;
   private forceShutdownRequested = false;
@@ -362,29 +363,40 @@ export class WorkerRuntime {
   }
 
   inspectWorkerHandoff(name: string): { report: string; token: string } {
-    const report = this.handoffReports.get(name);
-    if (!this.handoffPending.has(name) || !report || this.recreating.has(name)) {
+    const entry = this.handoffReports.get(name);
+    const currentId = this.residents.get(name)?.attached.session.sessionId;
+    if (this.forceShutdownRequested || this.confirmingHandoffs.has(name) || !this.handoffPending.has(name) ||
+        !entry || entry.sessionId !== currentId || this.recreating.has(name)) {
       throw new Error(`Worker "${name}" has not completed its handoff report. Wait for the report before inspecting.`);
     }
     const token = randomUUID();
-    this.handoffTokens.set(name, token);
-    return { report, token };
+    this.handoffTokens.set(name, { sessionId: entry.sessionId, token });
+    return { report: entry.report, token };
   }
 
   async confirmWorkerHandoff(name: string, token: string): Promise<void> {
     if (!this.handoffPending.has(name)) {
       throw new Error(`Worker "${name}" has no handoff awaiting confirmation.`);
     }
-    if (!this.handoffReports.has(name) || this.recreating.has(name)) {
+    const entry = this.handoffReports.get(name);
+    const currentId = this.residents.get(name)?.attached.session.sessionId;
+    if (this.forceShutdownRequested || this.confirmingHandoffs.has(name) || this.recreating.has(name) ||
+        !entry || entry.sessionId !== currentId) {
       throw new Error(`Worker "${name}" has not completed its handoff report. Wait for the report before confirming.`);
     }
-    if (!token || this.handoffTokens.get(name) !== token) {
+    const issued = this.handoffTokens.get(name);
+    if (!token || issued?.token !== token || issued.sessionId !== entry.sessionId) {
       throw new Error(`Inspect the handoff report for worker "${name}" and provide its confirmation token.`);
     }
-    await this.options.onWorkerHandoffConfirmed?.(name);
-    this.handoffPending.delete(name);
-    this.handoffReports.delete(name);
+    this.confirmingHandoffs.add(name);
     this.handoffTokens.delete(name);
+    try {
+      await this.options.onWorkerHandoffConfirmed?.(name, entry.sessionId);
+      this.handoffPending.delete(name);
+      this.handoffReports.delete(name);
+    } finally {
+      this.confirmingHandoffs.delete(name);
+    }
   }
 
   async waitForIdle(): Promise<void> {
@@ -446,7 +458,7 @@ export class WorkerRuntime {
     const started = this.configuredWorkers.get(name);
     const previous = this.residents.get(name);
     if (!started || !previousSessionId.trim()) throw new Error(`No saved worker session for "${name}".`);
-    if (this.forceShutdownRequested || this.recreating.has(name) || this.attaching.has(name) ||
+    if (this.forceShutdownRequested || this.recreating.has(name) || this.confirmingHandoffs.has(name) || this.attaching.has(name) ||
         (previous && (previous.state !== 'idle' || previous.queue.length > 0 || previous.preemptInstruction))) {
       throw new Error(`Worker "${name}" is busy or shutting down.`);
     }
@@ -454,9 +466,11 @@ export class WorkerRuntime {
       throw new Error(`Worker "${name}" no longer uses the expected session.`);
     }
     this.recreating.set(name, undefined);
+    this.handoffTokens.delete(name);
     this.attachInFlight++;
     let candidate: AttachedWorker | undefined;
     let committed = false;
+    let commitAttempted = false;
     try {
       candidate = await this.attachStartedWorker(started, false);
       this.recreating.set(name, candidate);
@@ -475,8 +489,14 @@ export class WorkerRuntime {
         this.workerAttachOptions(started, false), candidate.session,
       ));
       if (this.forceShutdownRequested) throw new Error('Shutdown interrupted worker recreation.');
+      if (bootstrap.promptResult.stopReason !== 'end_turn' || !bootstrap.promptResult.responseText?.trim()) {
+        throw new Error(`Worker "${name}" recovery bootstrap did not produce a complete handoff report`);
+      }
+      commitAttempted = true;
       await this.completeWorkerSessionRecovery(resident, bootstrap);
       committed = true;
+      this.handoffReports.set(name, { sessionId: candidate.session.sessionId, report: bootstrap.promptResult.responseText!.trim() });
+      this.handoffTokens.delete(name);
       if (this.forceShutdownRequested) {
         await closeWorkerAcpSession(candidate.session);
         throw new Error('Worker recreation was saved during shutdown; resume from the saved session.');
@@ -494,10 +514,9 @@ export class WorkerRuntime {
           throw new Error('Worker recreation was saved, but the old connection did not close. Inspect it before sending work.', { cause: error });
         }
       }
-      this.handoffReports.set(name, bootstrap.promptResult.responseText!.trim());
-      this.handoffTokens.delete(name);
       return bootstrap.promptResult.responseText ?? '';
     } finally {
+      if (commitAttempted && !committed) this.handoffReports.delete(name);
       this.recreating.delete(name);
       this.attachInFlight--;
       this.resolveIdleIfReady();
@@ -987,7 +1006,7 @@ export class WorkerRuntime {
         if (isHandoffReport) {
           await this.options.inbox.drain();
           if (!this.forceShutdownRequested) {
-            this.handoffReports.set(resident.started.name, result.promptResult.responseText!.trim());
+            this.handoffReports.set(resident.started.name, { sessionId: resident.attached.session.sessionId, report: result.promptResult.responseText!.trim() });
             this.handoffTokens.delete(resident.started.name);
           }
         }
@@ -1081,7 +1100,7 @@ export class WorkerRuntime {
         if (error instanceof InterruptedInstructionAfterHandoffError) {
           await this.options.inbox.drain();
           if (!this.forceShutdownRequested) {
-            this.handoffReports.set(resident.started.name, error.report);
+            this.handoffReports.set(resident.started.name, { sessionId: resident.attached.session.sessionId, report: error.report });
             this.handoffTokens.delete(resident.started.name);
           }
         }

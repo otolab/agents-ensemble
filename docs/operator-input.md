@@ -408,7 +408,7 @@ ACP session の作成と store 保存は一つの transaction ではありませ
 
 `session/load` が成功しても、provider / account の暗号化履歴を読めない場合は新 session を bootstrap します。切替の保存後に operator と conductor へ通知し、中断した instruction と復旧中の待機指示は自動実行しません。worktree と外部操作の結果を確認し、不足する情報を揃えてから新しい指示を送ってください。idle または failed worker は conductor の `recreate_worker` でも明示的に再作成できます。builtin Pi の予期しない load failure は自動再作成しません。
 
-切替後は引き継ぎ確認待ちになり、worker は新しい指示を受け付けません。worker の確認用 prompt が正常に完了し、内容のある報告が届くまでは `confirm_worker_handoff` を受け付けません。conductor は `inspect_worker_handoff` で報告と確認 token を取得し、その報告、中断操作の結果、不足情報を確認して token とともに呼ぶと解除されます。attach や確認用 prompt が失敗・中断した場合は確認待ちを維持し、session を再開して確認をやり直します。この確認待ちは保存され、process を再開しても引き継がれます。
+切替後は引き継ぎ確認待ちになり、worker は新しい指示を受け付けません。worker の確認用 prompt が正常に完了し、内容のある報告が届くまでは `confirm_worker_handoff` を受け付けません。conductor は `inspect_worker_handoff` で報告と確認 token を取得し、その報告、中断操作の結果、不足情報を確認して token とともに呼ぶと解除されます。attach や確認用 prompt が失敗・中断した場合は確認待ちを維持し、session を再開して確認をやり直します。再作成を試みると、それまでの確認 token は失効します。切替の保存後に旧接続の close が失敗した場合は、保存された新 session の報告を改めて取得し、旧接続の状態も確認してください。保存結果が不明な場合は session を停止して保存状態を確認し、再開してから報告を取得し直します。この確認待ちは保存され、process を再開しても引き継がれます。
 
 中断した instruction が conductor に返す failure は、worker session の bootstrap が成功した場合も消しません。worker の新しい session に旧履歴はないため、operator は worktree の現在状態を確認し、新しい instruction で続きを指定してください。切替の保存結果を確認できない場合は session を停止し、保存された ID と履歴を確認してから再開します。共有 ACP bridge には session 単位の close API がないため、切り替え前の session は bridge 自体の teardown まで残ることがあります。
 
