@@ -20,6 +20,11 @@ import {
   PI_CONDUCTOR_MESSAGE_HISTORY_ENTRY_TYPE,
 } from '../conductor/pi-conductor-agent.js';
 import { listConductorProviderHistory } from '../conductor/conductor-history.js';
+import { readPiTranscriptSnapshot } from '../conductor/pi-transcript-snapshot.js';
+import { withPiTranscriptPointerLock } from '../conductor/pi-transcript-lock.js';
+import { piTranscriptGenerationFile } from '../conductor/pi-transcript-pointer.js';
+import { createPiResumeWorkCopy } from '../conductor/pi-resume-work-copy.js';
+import { renameWorkspaceSlug } from '../workspace-run/slug-key.js';
 
 const { listRuns, getRun } = vi.hoisted(() => ({
   listRuns: vi.fn(),
@@ -101,6 +106,126 @@ describe('exportSessionBundle', () => {
     vi.unstubAllEnvs();
     if (tempRoot) await rm(tempRoot, { recursive: true, force: true });
     tempRoot = '';
+  });
+
+  it('reads and exports a workspace Pi transcript using its workspace identity', async () => {
+    const issueUrl = 'workspace://alpha';
+    const sessionDir = join(userRoot, 'workspaces', 'alpha', 'pi');
+    const manager = SessionManager.create(conductorCwd, sessionDir, { id: SESSION_ID });
+    appendPiTurn(manager, 1, 'workspace inbound');
+    const workspaceStore = paths.workspaceSessionResumeStorePath('alpha', SESSION_ID);
+    const store = JSON.parse(await readFile(resumeStorePath, 'utf8'));
+    store.issueUrl = issueUrl;
+    await mkdir(dirname(workspaceStore), { recursive: true });
+    await writeFile(workspaceStore, JSON.stringify(store));
+
+    const history = await listConductorProviderHistory({
+      backend: 'pi', conductorAgentId: SESSION_ID, cwd: conductorCwd,
+      repoRoot, issueUrl, query: { limit: 20, order: 'desc' },
+    });
+    expect(history.messages).toHaveLength(1);
+    expect(history.messages[0]).toMatchObject({ inbound: 'workspace inbound' });
+
+    const outputDirectory = join(tempRoot, 'workspace-bundle');
+    const result = await exportSessionBundle({
+      repoRoot, conductorAgentId: SESSION_ID, issueUrl, outputDirectory,
+      ensembleVersion: '0.21.0', cliVersion: '0.21.0',
+    });
+    expect(result.manifest.sources.find((source) => source.id === 'conductor.piTranscript'))
+      .toMatchObject({ status: 'copied', sourcePaths: [manager.getSessionFile()] });
+    expect(await readFile(join(outputDirectory, 'conductor/pi-transcript.jsonl')))
+      .toEqual(await readFile(manager.getSessionFile()));
+  });
+
+  it('shares a migrated v1 transcript across history, export, and a resumed copy', async () => {
+    const issueUrl = 'workspace://legacy';
+    const sessionDir = join(userRoot, 'workspaces', 'legacy', 'pi');
+    const source = join(sessionDir, `${SESSION_ID}.jsonl`);
+    const original = `${JSON.stringify({ type: 'session', id: SESSION_ID, cwd: conductorCwd })}\n` +
+      `${JSON.stringify({ type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'legacy' }], timestamp: 1 } })}\n`;
+    await mkdir(sessionDir, { recursive: true });
+    await writeFile(source, original);
+    const store = JSON.parse(await readFile(resumeStorePath, 'utf8'));
+    store.issueUrl = issueUrl;
+    const storePath = paths.workspaceSessionResumeStorePath('legacy', SESSION_ID);
+    await mkdir(dirname(storePath), { recursive: true });
+    await writeFile(storePath, JSON.stringify(store));
+    const historyInput = {
+      backend: 'pi' as const, conductorAgentId: SESSION_ID, cwd: conductorCwd,
+      repoRoot, issueUrl, query: { limit: 20, order: 'desc' as const },
+    };
+    expect((await listConductorProviderHistory(historyInput)).messages).toEqual([]);
+    const migrated = await readPiTranscriptSnapshot(historyInput);
+    expect(migrated).toBeDefined();
+    const manager = SessionManager.open(migrated!.sessionFile, sessionDir, conductorCwd);
+    appendPiTurn(manager, 1, 'first migrated turn');
+    const firstHistory = await listConductorProviderHistory(historyInput);
+    const cursor = firstHistory.messages[0]!.providerId;
+    expect((await listConductorProviderHistory(historyInput)).messages[0]?.providerId).toBe(cursor);
+
+    const identity = { sessionDir, conductorAgentId: SESSION_ID, cwds: [conductorCwd] };
+    await withPiTranscriptPointerLock(identity, async (pointer) => {
+      const current = pointer.read()!;
+      const generation = 'c'.repeat(32);
+      const work = await createPiResumeWorkCopy({
+        sourceFile: current.sessionFile, destinationFile: piTranscriptGenerationFile(identity, generation),
+      });
+      const resumed = SessionManager.open(work.workFile, sessionDir, conductorCwd);
+      const committed = await work.commit();
+      resumed.setSessionFile(committed.path);
+      pointer.publish(generation, current.generation);
+      appendPiTurn(resumed, 2, 'after resume');
+    });
+    const after = await listConductorProviderHistory(historyInput);
+    expect(after.messages.map((message) => message.inbound)).toEqual(['after resume', 'first migrated turn']);
+    expect((await listConductorProviderHistory({ ...historyInput, query: { ...historyInput.query, cursor: after.messages[0]!.providerId } })).messages[0]?.providerId).toBe(cursor);
+    const outputDirectory = join(tempRoot, 'legacy-bundle');
+    const result = await exportSessionBundle({
+      repoRoot, conductorAgentId: SESSION_ID, issueUrl, outputDirectory,
+      ensembleVersion: '0.21.0', cliVersion: '0.21.0',
+    });
+    const latest = await readPiTranscriptSnapshot(historyInput);
+    expect(result.manifest.sources.find((item) => item.id === 'conductor.piTranscript')?.sourcePaths).toEqual([latest!.sessionFile]);
+    expect(await readFile(join(outputDirectory, 'conductor/pi-transcript.jsonl'))).toEqual(latest!.contents);
+    expect(latest!.contents.toString()).toContain('after resume');
+    expect(await readFile(source, 'utf8')).toBe(original);
+    delete store.rawFixtureSecret;
+    await writeFile(storePath, JSON.stringify(store));
+    await renameWorkspaceSlug({
+      repoRoot, cwd: conductorCwd, userEnsembleRoot: userRoot, fromSlug: 'legacy', toSlug: 'renamed',
+    });
+    const renamedInput = { ...historyInput, issueUrl: 'workspace://renamed' };
+    const renamed = await listConductorProviderHistory(renamedInput);
+    expect(renamed.messages.map((message) => message.providerId)).toEqual(after.messages.map((message) => message.providerId));
+    const renamedSnapshot = await readPiTranscriptSnapshot(renamedInput);
+    expect(renamedSnapshot!.contents).toEqual(latest!.contents);
+    expect(renamedSnapshot!.sessionFile).toContain('/workspaces/renamed/');
+  });
+
+  it('reports a corrupt workspace transcript without changing it', async () => {
+    const issueUrl = 'workspace://alpha';
+    const sessionDir = join(userRoot, 'workspaces', 'alpha', 'pi');
+    const transcript = join(sessionDir, `${SESSION_ID}.jsonl`);
+    const bytes = `${JSON.stringify({ type: 'session', id: SESSION_ID, cwd: conductorCwd })}\n{broken`;
+    const storePath = paths.workspaceSessionResumeStorePath('alpha', SESSION_ID);
+    const store = JSON.parse(await readFile(resumeStorePath, 'utf8'));
+    store.issueUrl = issueUrl;
+    await mkdir(sessionDir, { recursive: true });
+    await writeFile(storePath, JSON.stringify(store));
+    await writeFile(transcript, bytes);
+
+    await expect(listConductorProviderHistory({
+      backend: 'pi', conductorAgentId: SESSION_ID, cwd: conductorCwd,
+      repoRoot, issueUrl, query: { limit: 20, order: 'desc' },
+    })).rejects.toThrow('Invalid Pi transcript contents');
+    const result = await exportSessionBundle({
+      repoRoot, conductorAgentId: SESSION_ID, issueUrl,
+      outputDirectory: join(tempRoot, 'corrupt-workspace-bundle'),
+      ensembleVersion: '0.21.0', cliVersion: '0.21.0',
+    });
+    expect(result.manifest.sources.find((source) => source.id === 'conductor.piTranscript'))
+      .toMatchObject({ status: 'unavailable', reason: expect.stringContaining('Invalid Pi transcript contents') });
+    expect(await readFile(transcript, 'utf8')).toBe(bytes);
   });
 
   it('copies a worktree Pi transcript and an unbounded Codex worker result with hashes', async () => {

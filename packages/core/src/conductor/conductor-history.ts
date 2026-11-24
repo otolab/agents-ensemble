@@ -1,11 +1,13 @@
 import { Agent, type Run } from '@cursor/sdk';
 import {
   SessionManager,
+  type FileEntry,
   type SessionMessageEntry,
 } from '@earendil-works/pi-coding-agent';
 import type { ConductorBackend } from '../config/types.js';
 import { PI_CONDUCTOR_MESSAGE_HISTORY_ENTRY_TYPE } from './pi-conductor-agent.js';
-import { findPiConductorSessionFile } from './pi-conductor-session-file.js';
+import { PiTranscriptValidationError } from './pi-conductor-session-file.js';
+import { readPiTranscriptSnapshot } from './pi-transcript-snapshot.js';
 
 export const CONDUCTOR_PROVIDER_HISTORY_LIMIT = 100;
 
@@ -64,10 +66,11 @@ export async function listConductorProviderHistory(input: {
     history =
       input.backend === 'cursor'
         ? await readCursorConductorHistory(input)
-        : readPiConductorHistory(input);
-  } catch {
+        : await readPiConductorHistory(input);
+  } catch (error) {
     throw new Error(
-      `Provider history is unavailable for conductor session ${input.conductorAgentId} (${input.backend}).`,
+      `Provider history is unavailable for conductor session ${input.conductorAgentId} (${input.backend}).${error instanceof PiTranscriptValidationError ? ` ${error.message}` : ''}`,
+      { cause: error },
     );
   }
   const ordered =
@@ -133,15 +136,15 @@ async function sanitizeProviderHistoryMessages(
   return sanitized;
 }
 
-function readPiConductorHistory(input: {
+async function readPiConductorHistory(input: {
   conductorAgentId: string;
   cwd: string;
   repoRoot?: string;
   issueUrl?: string;
   resumeCwds?: readonly string[];
-}): ConductorProviderHistoryMessage[] {
+}): Promise<ConductorProviderHistoryMessage[]> {
   const cwd = input.cwd;
-  const location = findPiConductorSessionFile({
+  const location = await readPiTranscriptSnapshot({
     conductorAgentId: input.conductorAgentId,
     cwd,
     repoRoot: input.repoRoot,
@@ -154,11 +157,11 @@ function readPiConductorHistory(input: {
 
   let session: SessionManager;
   try {
-    session = SessionManager.open(
-      location.sessionFile,
-      location.sessionDir,
-      cwd,
-    );
+    const entries = location.contents.toString('utf8')
+      .split('\n')
+      .filter((line) => line.trim())
+      .map((line) => JSON.parse(line)) as FileEntry[];
+    session = SessionManager.inMemory(cwd, undefined, entries);
   } catch {
     throw new Error('The Pi provider session could not be read.');
   }

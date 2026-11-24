@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { chmod, mkdir } from 'node:fs/promises';
+import { chmod, mkdir, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
   type AgentMessage,
@@ -40,7 +40,12 @@ import {
   type SessionMessageEntry,
   type ToolDefinition,
 } from '@earendil-works/pi-coding-agent';
-import { resolveEnsemblePaths } from '../ensemble-paths.js';
+import { piConductorSessionDir } from './pi-conductor-session-dir.js';
+import { findValidatedPiSessionFile } from './pi-conductor-session-file.js';
+import { createPiResumeWorkCopy, type PiResumeWorkCopy } from './pi-resume-work-copy.js';
+import { withPiTranscriptPointerLock, type LockedPiTranscriptPointer } from './pi-transcript-lock.js';
+import { piTranscriptGenerationFile, type PiTranscriptPointerInput } from './pi-transcript-pointer.js';
+import { acquireSessionMigrationReadLock } from '../session/session-owner-lock.js';
 import {
   createPiConductorAuthContext,
   hasPiConductorCommandCredential,
@@ -977,14 +982,37 @@ function resolvePiConductorSessionDir(
       'Pi conductor transcript storage requires issueUrl or an explicit sessionDir.',
     );
   }
-  return resolveEnsemblePaths({ repoRoot: options.cwd })
-    .canonicalPiSessionsDir(options.issueUrl);
+  return piConductorSessionDir({ cwd: options.cwd, issueUrl: options.issueUrl });
 }
 
 async function createPiConductorSession(
   agentId: string,
   options: ConductorAgentCreateOptions,
   reason: PiSessionStartReason,
+): Promise<PiConductorAgent> {
+  const releaseMigration = await acquireSessionMigrationReadLock();
+  try {
+    if (reason === 'resume') {
+      const pointerInput = {
+        sessionDir: resolvePiConductorSessionDir(options),
+        conductorAgentId: agentId,
+        cwds: [...new Set([options.cwd, ...(options.resumeCwds ?? [])])],
+      };
+      return await withPiTranscriptPointerLock(pointerInput, (pointer) =>
+        createPiConductorSessionLocked(agentId, options, reason, pointerInput, pointer));
+    }
+    return await createPiConductorSessionLocked(agentId, options, reason);
+  } finally {
+    releaseMigration();
+  }
+}
+
+async function createPiConductorSessionLocked(
+  agentId: string,
+  options: ConductorAgentCreateOptions,
+  reason: PiSessionStartReason,
+  pointerInput?: PiTranscriptPointerInput,
+  pointer?: LockedPiTranscriptPointer,
 ): Promise<PiConductorAgent> {
   const sessionDir = resolvePiConductorSessionDir(options);
   const piInternalExtensions = options.piInternalExtensions !== false;
@@ -1038,31 +1066,26 @@ async function createPiConductorSession(
   await chmod(sessionDir, 0o700);
   let sessionManager: SessionManager;
   let previousSessionFile: string | undefined;
+  let resumeWork: PiResumeWorkCopy | undefined;
+  let publishedFile: string | undefined;
+  let pointerPublished = false;
+  let previousGeneration: string | undefined;
+  let generation: string | undefined;
   if (reason === 'resume') {
     const resumeCwds = [
       ...new Set([options.cwd, ...(options.resumeCwds ?? [])]),
     ];
-    const findSessionFile = (directory: string) => {
-      for (const cwd of resumeCwds) {
-        const sessionFile = SessionManager.findById(cwd, agentId, directory);
-        if (sessionFile) return sessionFile;
-      }
-      return undefined;
-    };
-    previousSessionFile = findSessionFile(sessionDir);
+    const previous = pointer!.read();
+    previousGeneration = previous?.generation;
+    previousSessionFile = previous?.sessionFile ?? findValidatedPiSessionFile({
+      sessionDir, conductorAgentId: agentId, cwds: resumeCwds,
+    });
     if (!previousSessionFile) {
       throw new Error(
         `Pi session not found for resume (sessionId=${agentId}, cwd=${options.cwd}, ` +
           `sessionsRoot=${sessionDir})`,
       );
     }
-    sessionManager = SessionManager.open(
-      previousSessionFile,
-      sessionDir,
-      options.cwd,
-    );
-  } else {
-    sessionManager = SessionManager.create(options.cwd, sessionDir, { id: agentId });
   }
 
   const systemPromptRef = {
@@ -1111,11 +1134,19 @@ async function createPiConductorSession(
       createPiSystemPromptExtension(systemPromptRef),
     ],
   });
-  await resourceLoader.reload();
-  applyPiHeadlessSettings(settingsManager, headlessSettingsOverrides);
-
   let session: AgentSession | undefined;
   try {
+    await resourceLoader.reload();
+    applyPiHeadlessSettings(settingsManager, headlessSettingsOverrides);
+    if (previousSessionFile) {
+      resumeWork = await createPiResumeWorkCopy({
+        sourceFile: previousSessionFile,
+        destinationFile: piTranscriptGenerationFile(pointerInput!, generation = randomUUID().replaceAll('-', '')),
+      });
+      sessionManager = SessionManager.open(resumeWork.workFile, sessionDir, options.cwd);
+    } else {
+      sessionManager = SessionManager.create(options.cwd, sessionDir, { id: agentId });
+    }
     const mcpStartupState: PiMcpStartupState = {};
     const result = await createAgentSession({
       cwd: options.cwd,
@@ -1158,7 +1189,7 @@ async function createPiConductorSession(
     if (mcpStartupState.error) {
       throw new Error(mcpStartupState.error);
     }
-    return new PiConductorAgent(
+    const agent = new PiConductorAgent(
       session,
       resources,
       settingsManager,
@@ -1176,10 +1207,21 @@ async function createPiConductorSession(
       options.onRetryEvent,
       options.onCompactionEvent,
     );
+    if (resumeWork) {
+      const committed = await resumeWork.commit();
+      publishedFile = committed.path;
+      sessionManager.setSessionFile(publishedFile);
+      if (sessionManager.getSessionId() !== agentId ||
+          sessionManager.getSessionFile() !== publishedFile) {
+        throw new Error('Pi conductor session identity changed during resume.');
+      }
+      pointer!.publish(generation!, previousGeneration);
+      pointerPublished = true;
+    }
+    return agent;
   } catch (error) {
-    if (!session) throw error;
     const cleanupErrors: unknown[] = [];
-    if (mcpLifecycleState.enabled) {
+    if (session && mcpLifecycleState.enabled) {
       mcpLifecycleState.enabled = false;
       try {
         await session.reload();
@@ -1187,10 +1229,25 @@ async function createPiConductorSession(
         cleanupErrors.push(cleanupError);
       }
     }
-    try {
-      session.dispose();
-    } catch (cleanupError) {
-      cleanupErrors.push(cleanupError);
+    if (session) {
+      try {
+        session.dispose();
+      } catch (cleanupError) {
+        cleanupErrors.push(cleanupError);
+      }
+    }
+    if (publishedFile && !pointerPublished) {
+      try {
+        await unlink(publishedFile);
+      } catch (cleanupError) {
+        cleanupErrors.push(cleanupError);
+      }
+    } else if (resumeWork) {
+      try {
+        await resumeWork.discard();
+      } catch (cleanupError) {
+        cleanupErrors.push(cleanupError);
+      }
     }
     if (cleanupErrors.length === 0) throw error;
     throw markConductorAgentFactoryCleanupIncomplete(
