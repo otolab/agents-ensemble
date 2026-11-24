@@ -13,3 +13,5 @@ packages/core/test/integration/test-acp.yaml
 /packages/cli/docs/
 /packages/cli/config.example.yaml
 /packages/cli/scripts/pi/
+
+/formal/lean/.lake/

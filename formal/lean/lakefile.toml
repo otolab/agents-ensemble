@@ -1,0 +1,6 @@
+name = "Ensemble"
+version = "0.1.0"
+defaultTargets = ["Ensemble"]
+
+[[lean_lib]]
+name = "Ensemble"
