@@ -1,5 +1,36 @@
 # @agents-ensemble/operator-agent
 
+## 0.8.0
+
+### Minor Changes
+
+- 559cb99: operator-agent の runner と内部モジュール、テストを責務ごとに整理しました。
+
+### Patch Changes
+
+- c6d42cc: Refactor watch observation and tool factories into internal modules.
+- cc40fd0: Refactor watch state persistence and locking into an internal store.
+- a031efd: Record operator scheduling events and expose read-only scheduling statistics.
+- 7d3e990: watch-pool の型定義を整理し、型だけを利用するモジュールの依存を分離します。
+- 10bae92: dispatch の時刻とタイマーを差し替え可能にし、既定では従来どおり実時間を使用します。
+- 9106fb7: 表示中の harness 状態を更新し、conductor の compaction と retry を観測できるようにする。
+- fbda69a: operator-agent の共通処理と watch state path の重複を整理しました。既存の動作と公開 API は維持しています。
+- 64d1d09: Refactor watch report and state logic into internal modules.
+- dbd179b: watch pool の内部処理とテストを責務ごとに整理しました。
+- Updated dependencies [3a0d819]
+- Updated dependencies [8d1f0e6]
+- Updated dependencies [559601b]
+- Updated dependencies [9f13880]
+- Updated dependencies [a031efd]
+- Updated dependencies [ee24180]
+- Updated dependencies [4a65c18]
+- Updated dependencies [22ea40c]
+- Updated dependencies [9106fb7]
+- Updated dependencies [131237f]
+- Updated dependencies [89d6b1a]
+- Updated dependencies [7c7d0f8]
+  - @agents-ensemble/core@0.25.0
+
 ## 0.7.2
 
 ### Patch Changes
