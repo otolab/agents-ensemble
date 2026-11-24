@@ -5,6 +5,7 @@ import { lock } from 'proper-lockfile';
 import { resolveEnsemblePaths } from '../ensemble-paths.js';
 
 export const NOTE_MEMO_LIST_PREVIEW_CHARS = 300;
+export const NOTE_MEMO_MAX_BYTES = 512 * 1024;
 
 export interface WorkspaceMemoRecord {
   id: string;
@@ -113,6 +114,9 @@ export async function pushWorkspaceMemo(input: {
   const body = input.body.trim();
   if (!body) {
     throw new Error('Memo body must be non-empty.');
+  }
+  if (Buffer.byteLength(body, 'utf8') > NOTE_MEMO_MAX_BYTES) {
+    throw new Error(`Memo body exceeds ${NOTE_MEMO_MAX_BYTES} bytes.`);
   }
   const path = notePath(input.repoRoot, input.slugKey, input.noteId);
   const memo: WorkspaceMemoRecord = {

@@ -24,7 +24,24 @@ worker は既定で conductor と同じ cwd を共有し、isolated worktree は
 
 conductor は `create_note` で summary 必須のノートを作り、`push_memo` でメモを追加できます。`list_notes` は summary と最新メモの冒頭を一覧し、`read_note` は既定で最新メモを返します。履歴は `includeHistory` と `historyOffset` / `historyLimit`、archive 済みメモは `includeArchived` で読めます。`archive_note` / `archive_memo` で非表示にした内容も読取可能です。Notes は workspace ごとに共有され、再開後も残ります。
 
-同じノートへの更新はプロセス間で排他し、一時ファイルから置き換えます。更新途中のプロセス終了では、完了前の更新は失われる場合があります。電源断やストレージ障害後の保存は保証されません。
+`ensemble notes` は operator や run worker から同じ workspace Notes を操作します。例えば、operator は slug を明示し、worker は harness が渡す環境変数を利用できます。
+
+```bash
+# create の出力から得た ID を NOTE_ID に設定する
+ensemble notes create --slug investigation --summary '調査の記録' --json
+printf '%s\n' '確認した内容' | ensemble notes push --slug investigation --note "$NOTE_ID"
+# ensemble run の worker 内（slug、repo root、conductor cwd は harness が注入）
+printf '%s\n' 'worker の調査結果' | ensemble notes push --note "$NOTE_ID"
+ensemble notes list --include-archived
+ensemble notes show "$NOTE_ID" --history --offset 0 --limit 20
+ensemble notes show "$NOTE_ID" --history --include-archived
+ensemble notes archive "$NOTE_ID"
+ensemble notes archive-memo --note "$NOTE_ID" --memo "$MEMO_ID" --archived false
+```
+
+各コマンドは `--repo-root`、`--slug`、`--conductor-cwd`、`--json` を受け付けます。slug は明示指定、`ENSEMBLE_WORKSPACE_SLUG`、conductor cwd の `.ensemble/workspace.json` の順に解決します。暗黙解決では既存 anchor だけを読み、新しい anchor は作りません。anchor がない場合は終了コード 2 です。Issue session 向けの Notes はなく、Issue worker には workspace 環境変数を注入しません。明示 slug での手動利用はセッション外でも可能です。repo root は明示指定、注入された `ENSEMBLE_WORKSPACE_REPO_ROOT`、git root の順に解決します。conductor cwd は明示指定、注入された `ENSEMBLE_WORKSPACE_CONDUCTOR_CWD`、現在の cwd の順です。
+
+本文は前後の空白を除いて非空、UTF-8 で最大 512 KiB です。終了コードは成功 0、実行エラー 1、引数やコンテキストのエラー 2 です。`--json` 指定時、stdout には JSON のみを出力します。store は同じ note の更新をファイルロックで直列化し、一時ファイルから rename して保存します。ロックに参加しない外部の直接編集や、ファイルシステムのロック・rename の信頼性は保証しません。更新途中のプロセス終了では、完了前の更新は失われる場合があります。電源断やストレージ障害後の保存も保証されません。同じ slug を使う人は誰でも読み書きできます。
 
 `ensemble run` の共通プロンプトには Issue / PR を正本とする既定は含まれません。ただし、既定の team profile は Issue / PR を前提とする materials を含むため、run では上記の `workspace-research` など、run に適した materials を持つ profile を指定してください。
 

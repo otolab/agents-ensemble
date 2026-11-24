@@ -70,6 +70,7 @@ import {
   type PiModelsSyncTarget,
 } from './pi-model-catalog-command.js';
 import { runSecretExec, runSecretPush } from './secret-command.js';
+import { registerNotesCommand } from './notes-command.js';
 import { readSchedulingStats } from './session-scheduling-stats.js';
 
 const program = new Command();
@@ -79,6 +80,8 @@ program
   .name('ensemble')
   .description('Issue-based agent orchestration')
   .version(readCliPackageVersion());
+
+registerNotesCommand(program);
 
 const secret = program
   .command('secret')
