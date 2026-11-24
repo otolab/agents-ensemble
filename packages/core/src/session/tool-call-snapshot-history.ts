@@ -17,6 +17,7 @@ import {
   type StoredToolCallSnapshot,
 } from '../runtime/tool-call-snapshot-registry.js';
 import { resolveEnsemblePaths } from '../ensemble-paths.js';
+import { SessionOwnership, SessionOwnershipUnavailableError, type SessionWriteLease } from './session-ownership.js';
 import {
   resolveSessionPersistenceScope,
   toolCallHistoryPathForScope,
@@ -212,31 +213,36 @@ function serializeHistory(
 export async function saveToolCallSnapshotHistory(
   path: string,
   snapshots: readonly StoredToolCallSnapshot[],
+  owner: SessionOwnership,
+  lease: SessionWriteLease,
 ): Promise<void> {
-  if (snapshots.length === 0) {
-    await removeHistoryFile(path);
-    return;
-  }
-  if (
-    snapshots.length > TOOL_CALL_SNAPSHOT_HISTORY_MAX_ENTRIES ||
-    encodedHistorySize(snapshots) > TOOL_CALL_SNAPSHOT_HISTORY_MAX_BYTES
-  ) {
-    throw new Error('tool-call snapshot history exceeds its configured limit');
-  }
+  return owner.writeWithLease(lease, async () => {
+    await owner.assertResourcePath(path, 'history');
+    if (snapshots.length === 0) {
+      await removeHistoryFile(path);
+      return;
+    }
+    if (
+      snapshots.length > TOOL_CALL_SNAPSHOT_HISTORY_MAX_ENTRIES ||
+      encodedHistorySize(snapshots) > TOOL_CALL_SNAPSHOT_HISTORY_MAX_BYTES
+    ) {
+      throw new Error('tool-call snapshot history exceeds its configured limit');
+    }
 
-  const serialized = serializeHistory(snapshots);
-  const directory = dirname(path);
-  await mkdir(directory, { recursive: true, mode: 0o700 });
-  await chmod(directory, 0o700);
-  const tempPath = `${path}.tmp`;
-  try {
-    await writeFile(tempPath, serialized, { encoding: 'utf8', mode: 0o600 });
-    await chmod(tempPath, 0o600);
-    await rename(tempPath, path);
-  } catch (error) {
-    await removeHistoryFile(tempPath);
-    throw error;
-  }
+    const serialized = serializeHistory(snapshots);
+    const directory = dirname(path);
+    await mkdir(directory, { recursive: true, mode: 0o700 });
+    await chmod(directory, 0o700);
+    const tempPath = `${path}.tmp`;
+    try {
+      await writeFile(tempPath, serialized, { encoding: 'utf8', mode: 0o600 });
+      await chmod(tempPath, 0o600);
+      await rename(tempPath, path);
+    } catch (error) {
+      await removeHistoryFile(tempPath);
+      throw error;
+    }
+  });
 }
 
 /**
@@ -275,8 +281,29 @@ export async function pruneExpiredToolCallSnapshotHistoryFiles(
       try {
         const fileInfo = await stat(path);
         if (!fileInfo.isFile() || fileInfo.mtimeMs > cutoff) continue;
-        await rm(path, { force: true });
-        removedCount += 1;
+        const suffix = entry.endsWith('.tmp')
+          ? `${TOOL_CALL_SNAPSHOT_HISTORY_SUFFIX}.tmp`
+          : TOOL_CALL_SNAPSHOT_HISTORY_SUFFIX;
+        const agentId = entry.slice(0, -suffix.length);
+        if (!agentId) continue;
+        let owner: SessionOwnership;
+        try {
+          owner = await SessionOwnership.acquireProvider(join(dir, `${agentId}.json`));
+        } catch (error) {
+          if (error instanceof SessionOwnershipUnavailableError) continue;
+          throw error;
+        }
+        try {
+          await owner.runWrite(async () => {
+            const current = await stat(path);
+            if (!current.isFile() || current.mtimeMs > cutoff) return;
+            await rm(path, { force: true });
+            removedCount += 1;
+          });
+        } finally {
+          await owner.closeWritesAndDrain();
+          owner.release();
+        }
       } catch (error) {
         if (!isEnoent(error)) failedCount += 1;
       }

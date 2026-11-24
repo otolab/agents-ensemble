@@ -1,3 +1,4 @@
+import { acquireSessionMigrationLock, acquireSessionOwnerLock } from '../session/session-owner-lock.js';
 import { conductorFailureLogPath } from '../session/conductor-failure-log.js';
 import { access, mkdir, mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
@@ -47,7 +48,7 @@ import { loadPiResources } from './pi-resource-loader.js';
 import { computeMcpConfigDigest } from '../mcp/load-mcp-config.js';
 import {
   loadSessionResumeStore,
-  saveSessionResumeStore as writeSessionResumeStore,
+  saveSessionResumeStore as saveResumeStoreWithLease,
   SessionResumeStoreNotFoundError,
   SESSION_RESUME_STORE_VERSION,
   type SessionResumeStore,
@@ -83,6 +84,7 @@ import type {
 import { createMockConductorGetUsage } from '../testing/mock-conductor-get-usage.js';
 import type { ConductorToolResult } from './conductor-tool.js';
 import type { ConductorAgentCreateOptions } from './conductor-agent.js';
+import { SessionOwnership } from '../session/session-ownership.js';
 
 const TEST_ISSUE = {
   owner: 'org',
@@ -218,6 +220,16 @@ async function settleWithin<T>(promise: Promise<T>, timeoutMs: number): Promise<
 async function drainAsync(): Promise<void> {
   await Promise.resolve();
   await Promise.resolve();
+}
+
+async function writeSessionResumeStore(path: string, store: SessionResumeStore): Promise<void> {
+  const owner = await SessionOwnership.acquire(path);
+  try {
+    await owner.runWrite((lease) => saveResumeStoreWithLease(path, store, owner, lease));
+  } finally {
+    await owner.closeWritesAndDrain();
+    owner.release();
+  }
 }
 
 async function saveSessionResumeStore(
@@ -423,9 +435,9 @@ describe('runConductorSession resume / shutdown', () => {
     const persistedVersions: (string | undefined)[] = [];
     const persistResumeStore = sessionResumeStoreModule.saveSessionResumeStore;
     vi.spyOn(sessionResumeStoreModule, 'saveSessionResumeStore').mockImplementation(
-      async (path, resumeStore) => {
+      async (path, resumeStore, owner, lease) => {
         persistedVersions.push(resumeStore.createdHarnessCliVersion);
-        await persistResumeStore(path, resumeStore);
+        await persistResumeStore(path, resumeStore, owner, lease);
       },
     );
     const initial = await runConductorSession({
@@ -469,6 +481,243 @@ describe('runConductorSession resume / shutdown', () => {
     await expect(loadSessionResumeStore(resumeStorePath)).resolves.toMatchObject({
       createdHarnessCliVersion: '0.20.0-created',
     });
+  });
+
+  it('releases session ownership after a drained close and permits resume', async () => {
+    stubUnusedControlServer();
+    mockSend.mockResolvedValue({ runId: 'run-forced-lock', status: 'finished', result: 'done' });
+    await runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { workers: [] },
+      permissionPipeline: new PermissionPipeline({}),
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: false,
+      bindOperatorInput: (api) => { api.submit('/close'); },
+    });
+    await expect(runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { workers: [] },
+      resumeAgentId: 'agent-test',
+      permissionPipeline: new PermissionPipeline({}),
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: false,
+    })).resolves.toMatchObject({ stopReason: 'completed' });
+  });
+
+  it('rejects a different harness session sharing the provider and releases its partial ownership', async () => {
+    stubUnusedControlServer();
+    for (const id of ['harness-one', 'harness-two']) {
+      await saveSessionResumeStore(sessionResumeStorePath({ repoRoot, conductorAgentId: id }), {
+        version: SESSION_RESUME_STORE_VERSION, conductorAgentId: id,
+        issueUrl: TEST_ISSUE.url, repoRoot, profile: { workers: [] },
+        openQuestions: [], sequence: 0, workers: {}, updatedAt: 1,
+      });
+    }
+    mockResume.mockImplementation(async () => ({
+      agentId: 'shared-provider', send: mockSend, close: mockClose,
+      getUsage: createMockConductorGetUsage(),
+    }));
+    let api: OperatorInputBindingApi | undefined;
+    const first = runConductorSession({
+      issueUrl: TEST_ISSUE.url, repoRoot, profile: { workers: [] },
+      resumeAgentId: 'harness-one', permissionPipeline: new PermissionPipeline({}),
+      registerProcessSignalHandlers: false, waitForOperatorExit: true,
+      bindOperatorInput: (binding) => { api = binding; },
+    });
+    try {
+      await vi.waitFor(() => expect(api).toBeDefined());
+      await expect(runConductorSession({
+        issueUrl: TEST_ISSUE.url, repoRoot, profile: { workers: [] },
+        resumeAgentId: 'harness-two', permissionPipeline: new PermissionPipeline({}),
+        registerProcessSignalHandlers: false, waitForOperatorExit: false,
+      })).rejects.toThrow(/already in use/);
+      const retry = await SessionOwnership.acquire(sessionResumeStorePath({ repoRoot, conductorAgentId: 'harness-two' }));
+      await retry.closeWritesAndDrain();
+      retry.release();
+      const releaseGlobal = await acquireSessionOwnerLock('harness-two');
+      releaseGlobal();
+    } finally {
+      api?.submit('/close');
+      await first;
+    }
+  });
+
+  it('retains both ownerships when session cleanup fails', async () => {
+    stubUnusedControlServer();
+    mockClose.mockRejectedValueOnce(new Error('simulated close failure'));
+    mockSend.mockResolvedValue({ runId: 'cleanup-failure', status: 'finished', result: 'done' });
+    await expect(runConductorSession({
+      issueUrl: TEST_ISSUE.url, repoRoot, profile: { workers: [] },
+      permissionPipeline: new PermissionPipeline({}), registerProcessSignalHandlers: false,
+      waitForOperatorExit: false,
+    })).rejects.toThrow(/shutdown failed/);
+    const path = sessionResumeStorePath({ repoRoot, conductorAgentId: 'agent-test' });
+    await expect(SessionOwnership.acquire(path)).rejects.toThrow(/restart it/);
+    await expect(SessionOwnership.acquireProvider(path)).rejects.toThrow(/restart it/);
+    await expect(acquireSessionOwnerLock('agent-test')).rejects.toThrow(/another process/);
+  });
+
+  it.each([false, true])('protects workspace migration when cleanup fails: %s', async (fails) => {
+    stubUnusedControlServer();
+    if (fails) mockClose.mockRejectedValueOnce(new Error('simulated close failure'));
+    mockSend.mockResolvedValue({ runId: 'workspace-lock', status: 'finished', result: 'done' });
+    const session = runConductorSession({
+      issueUrl: 'workspace://research', repoRoot, profile: { workers: [] },
+      permissionPipeline: new PermissionPipeline({}), registerProcessSignalHandlers: false,
+      waitForOperatorExit: false,
+    });
+    if (fails) {
+      await expect(session).rejects.toThrow(/shutdown failed/);
+      await expect(acquireSessionMigrationLock()).rejects.toThrow(/Cannot migrate/);
+    } else {
+      await expect(session).resolves.toMatchObject({ stopReason: 'completed' });
+      const release = await acquireSessionMigrationLock();
+      release();
+    }
+  });
+
+  it.each(['connect', 'load', 'load-close-fails'])(
+    'retains all ownerships after /close during delayed ACP %s',
+    async (stage) => {
+      stubUnusedControlServer();
+      const agentId = `delayed-acp-${stage}`;
+      const path = sessionResumeStorePath({ repoRoot, conductorAgentId: agentId });
+      await saveSessionResumeStore(path, {
+        version: SESSION_RESUME_STORE_VERSION, conductorAgentId: agentId,
+        issueUrl: TEST_ISSUE.url, repoRoot,
+        profile: { workers: [{ name: 'implementer', kind: 'implementer' }] },
+        openQuestions: [], sequence: 0,
+        workers: { implementer: { acpSessionId: 'saved-worker', acpCwd: repoRoot } }, updatedAt: 1,
+      });
+      const connectGate = createDeferred<AcpBridge>();
+      const loadGate = createDeferred<void>();
+      const close = stage === 'load-close-fails'
+        ? vi.fn().mockRejectedValue(new Error('late close failed'))
+        : vi.fn().mockResolvedValue(undefined);
+      const bridge = {
+        loadSession: vi.fn(() => stage === 'connect' ? Promise.resolve() : loadGate.promise),
+        newSession: vi.fn().mockResolvedValue('fresh-worker'),
+        promptSession: vi.fn().mockResolvedValue({ stopReason: 'end_turn' }),
+        cancelSession: vi.fn(), close,
+      } as unknown as AcpBridge;
+      const connect = vi.fn(() => stage === 'connect' ? connectGate.promise : Promise.resolve(bridge));
+      mockSend.mockResolvedValue({ runId: 'run', status: 'finished', result: 'done' });
+      let api: OperatorInputBindingApi | undefined;
+      const options = {
+        issueUrl: TEST_ISSUE.url, repoRoot,
+        profile: { workers: [{ name: 'implementer', kind: 'implementer' }] },
+        workerWorktree: { path: repoRoot, branch: 'ensemble/issue-1', issue: TEST_ISSUE, inRepo: true },
+        resumeAgentId: agentId, defaultAcp: { defaultAcpCommand: process.execPath },
+        connectAcp: connect, disableGitHubMonitor: true, maxTurns: 5,
+        permissionPipeline: new PermissionPipeline({}), registerProcessSignalHandlers: false,
+        waitForOperatorExit: true, bindOperatorInput: (binding: OperatorInputBindingApi) => { api = binding; },
+      };
+      const session = runConductorSession(options);
+      await vi.waitFor(() => expect(connect).toHaveBeenCalledOnce());
+      if (stage !== 'connect') await vi.waitFor(() => expect(bridge.loadSession).toHaveBeenCalledOnce());
+      await vi.waitFor(() => expect(api).toBeDefined());
+      const shutdownStarted = Date.now();
+      api!.submit('/close');
+      await expect(session).rejects.toThrow(/restart the owning process/);
+      expect(Date.now() - shutdownStarted).toBeLessThan(2_000);
+      await expect(runConductorSession(options)).rejects.toThrow(/another process/);
+      await expect(SessionOwnership.acquire(path)).rejects.toThrow(/restart it/);
+      const providerPath = sessionResumeStorePath({ repoRoot, conductorAgentId: 'agent-test' });
+      await expect(SessionOwnership.acquireProvider(providerPath)).rejects.toThrow(/restart it/);
+      if (stage === 'connect') connectGate.resolve(bridge);
+      else loadGate.resolve();
+      await vi.waitFor(() => expect(close).toHaveBeenCalledOnce());
+      expect(bridge.promptSession).not.toHaveBeenCalled();
+      await expect(runConductorSession(options)).rejects.toThrow(/another process/);
+    },
+  );
+
+  it('bounds an unresolved worker close and keeps ownership after /close', async () => {
+    stubUnusedControlServer();
+    const closeGate = createDeferred<void>();
+    const bridge = {
+      newSession: vi.fn().mockResolvedValue('worker-session'),
+      promptSession: vi.fn().mockResolvedValue({ stopReason: 'end_turn', responseText: 'ready' }),
+      close: vi.fn(() => closeGate.promise), cancelSession: vi.fn(),
+    } as unknown as AcpBridge;
+    mockSend.mockResolvedValue({ runId: 'run', status: 'finished', result: 'done' });
+    let api: OperatorInputBindingApi | undefined;
+    const postLoopWait = vi.fn();
+    const options = {
+      issueUrl: TEST_ISSUE.url, repoRoot,
+      profile: { workers: [{ name: 'implementer', kind: 'implementer' }] },
+      workerWorktree: { path: repoRoot, branch: 'ensemble/issue-1', issue: TEST_ISSUE, inRepo: true },
+      defaultAcp: { defaultAcpCommand: process.execPath }, connectAcp: vi.fn().mockResolvedValue(bridge),
+      disableGitHubMonitor: true, maxTurns: 5, permissionPipeline: new PermissionPipeline({}),
+      registerProcessSignalHandlers: false, waitForOperatorExit: true, onPostLoopWait: postLoopWait,
+      bindOperatorInput: (binding: OperatorInputBindingApi) => { api = binding; },
+    };
+    const session = runConductorSession(options);
+    await vi.waitFor(() => expect(postLoopWait).toHaveBeenCalledOnce());
+    const shutdownStarted = Date.now();
+    api!.submit('/close');
+    await expect(session).rejects.toThrow(/restart the owning process/);
+    expect(Date.now() - shutdownStarted).toBeLessThan(3_000);
+    await expect(runConductorSession({ ...options, resumeAgentId: 'agent-test' })).rejects.toThrow(/another process/);
+    const path = sessionResumeStorePath({ repoRoot, conductorAgentId: 'agent-test' });
+    await expect(SessionOwnership.acquire(path)).rejects.toThrow(/restart it/);
+    await expect(SessionOwnership.acquireProvider(path)).rejects.toThrow(/restart it/);
+    closeGate.resolve();
+  });
+
+  it('retains ownership while a delayed worker recreation finishes after /close', async () => {
+    stubUnusedControlServer();
+    const candidateGate = createDeferred<AcpBridge>();
+    const oldBridge = {
+      newSession: vi.fn().mockResolvedValue('original-worker'),
+      promptSession: vi.fn().mockResolvedValue({ stopReason: 'end_turn', responseText: 'ready' }),
+      close: vi.fn().mockResolvedValue(undefined), cancelSession: vi.fn(),
+    } as unknown as AcpBridge;
+    const candidate = {
+      newSession: vi.fn().mockResolvedValue('replacement-worker'),
+      promptSession: vi.fn().mockResolvedValue({ stopReason: 'end_turn', responseText: 'ready' }),
+      close: vi.fn().mockRejectedValue(new Error('late candidate close failed')), cancelSession: vi.fn(),
+    } as unknown as AcpBridge;
+    const connect = vi.fn().mockResolvedValueOnce(oldBridge).mockImplementationOnce(() => candidateGate.promise);
+    let tools: Parameters<typeof mockCreate>[0]['customTools'];
+    mockCreate.mockImplementationOnce(async (options) => {
+      tools = options.customTools;
+      return { agentId: 'agent-test', send: mockSend, close: mockClose, getUsage: createMockConductorGetUsage() };
+    });
+    mockSend.mockResolvedValue({ runId: 'run', status: 'finished', result: 'done' });
+    let api: OperatorInputBindingApi | undefined;
+    const postLoopWait = vi.fn();
+    const options = {
+      issueUrl: TEST_ISSUE.url, repoRoot,
+      profile: { workers: [{ name: 'implementer', kind: 'implementer' }] },
+      workerWorktree: { path: repoRoot, branch: 'ensemble/issue-1', issue: TEST_ISSUE, inRepo: true },
+      defaultAcp: { defaultAcpCommand: process.execPath }, connectAcp: connect,
+      disableGitHubMonitor: true, maxTurns: 5, permissionPipeline: new PermissionPipeline({}),
+      registerProcessSignalHandlers: false, waitForOperatorExit: true, onPostLoopWait: postLoopWait,
+      bindOperatorInput: (binding: OperatorInputBindingApi) => { api = binding; },
+    };
+    const session = runConductorSession(options);
+    await vi.waitFor(() => expect(postLoopWait).toHaveBeenCalledOnce());
+    const recreation = tools!.recreate_worker!.execute({ worker: 'implementer' });
+    const recreationResult = recreation.catch((error: unknown) => error);
+    await vi.waitFor(() => expect(connect).toHaveBeenCalledTimes(2));
+    const shutdownStarted = Date.now();
+    api!.submit('/close');
+    await expect(session).rejects.toThrow(/restart the owning process/);
+    expect(Date.now() - shutdownStarted).toBeLessThan(2_000);
+    const resumeOptions = { ...options, resumeAgentId: 'agent-test' };
+    await expect(runConductorSession(resumeOptions)).rejects.toThrow(/another process/);
+    const path = sessionResumeStorePath({ repoRoot, conductorAgentId: 'agent-test' });
+    await expect(SessionOwnership.acquire(path)).rejects.toThrow(/restart it/);
+    await expect(SessionOwnership.acquireProvider(path)).rejects.toThrow(/restart it/);
+    candidateGate.resolve(candidate);
+    expect(await recreationResult).toBeInstanceOf(Error);
+    expect(candidate.newSession).toHaveBeenCalledOnce();
+    expect(candidate.promptSession).not.toHaveBeenCalled();
+    expect(candidate.close).toHaveBeenCalledOnce();
+    await expect(runConductorSession(resumeOptions)).rejects.toThrow(/another process/);
   });
 
   it('does not resume from a valid path-hash store', async () => {
@@ -1056,7 +1305,7 @@ describe('runConductorSession resume / shutdown', () => {
       selectedStoreBeforeFlushHadSocket: boolean;
     } | undefined;
     vi.spyOn(sessionResumeStoreModule, 'saveSessionResumeStore').mockImplementation(
-      async (path, resumeStore) => {
+      async (path, resumeStore, owner, lease) => {
         if (!firstSocketFlush && resumeStore.harnessSocketPath) {
           const selectedBeforeFlush = await loadSessionResumeStore(path);
           const previousHash = await loadSessionResumeStore(hashPath);
@@ -1069,7 +1318,7 @@ describe('runConductorSession resume / shutdown', () => {
           expect(previousHash).toEqual(staleHashStore);
           throw new Error('simulated first slug socket flush failure');
         }
-        await persistResumeStore(path, resumeStore);
+        await persistResumeStore(path, resumeStore, owner, lease);
       },
     );
     mockSend.mockResolvedValueOnce({
@@ -1766,7 +2015,7 @@ describe('runConductorSession resume / shutdown', () => {
       const persistResumeStore = sessionResumeStoreModule.saveSessionResumeStore;
       let rollbackAttempted = false;
       vi.spyOn(sessionResumeStoreModule, 'saveSessionResumeStore')
-        .mockImplementation(async (path, resumeStore) => {
+        .mockImplementation(async (path, resumeStore, owner, lease) => {
           if (
             path === resumeStorePath &&
             resumeStore.lifecycle === 'closed' &&
@@ -1775,7 +2024,7 @@ describe('runConductorSession resume / shutdown', () => {
             rollbackAttempted = true;
             if (!closeFails) throw rollbackFailure;
           }
-          await persistResumeStore(path, resumeStore);
+          await persistResumeStore(path, resumeStore, owner, lease);
         });
 
       const emitted: SessionLogEvent[] = [];
@@ -2534,7 +2783,9 @@ process.stdin.on('data', chunk => {
     const events: SessionLogEvent[] = [];
     const sessionLogger = new SessionLogger({ issueUrl: TEST_ISSUE.url, repoRoot });
     sessionLogger.subscribe((event) => events.push(event));
+    let originalOptions!: ConductorAgentCreateOptions;
     mockCreate.mockImplementationOnce(async (options: ConductorAgentCreateOptions) => {
+      originalOptions = options;
       options.onCompactionEvent?.({ type: 'start', reason: 'overflow' });
       options.onCompactionEvent?.({ type: 'end', reason: 'overflow', outcome: 'failed', errorMessage: 'failed' });
       options.onRetryEvent?.({ type: 'auto_retry_end', success: false, attempt: 2, finalError: 'failed' });
@@ -2569,6 +2820,8 @@ process.stdin.on('data', chunk => {
       { type: 'conductor.compaction', event: { type: 'end', reason: 'overflow', outcome: 'failed', errorMessage: 'failed' } },
       { type: 'conductor.retry', event: { type: 'auto_retry_end', success: false, attempt: 2, finalError: 'failed' } },
     ]);
+    originalOptions.onRetryEvent?.({ type: 'auto_retry_end', success: false, attempt: 3, finalError: 'late' });
+    expect(await readFile(conductorFailureLogPath({ repoRoot, issueUrl: TEST_ISSUE.url, conductorAgentId: 'agent-test' }), 'utf8')).toBe(resumedLog);
   });
 
   it('shares Pi tokens and successful compactions with get_session_usage while omitting estimated cost', async () => {
@@ -3920,12 +4173,12 @@ process.stdin.on('data', chunk => {
       updatedAt: 1,
     });
     const persist = sessionResumeStoreModule.saveSessionResumeStore;
-    vi.spyOn(sessionResumeStoreModule, 'saveSessionResumeStore').mockImplementation(async (target, store) => {
+    vi.spyOn(sessionResumeStoreModule, 'saveSessionResumeStore').mockImplementation(async (target, store, owner, lease) => {
       if (store.workers.implementer?.acpSessionId === 'new') {
-        if (failurePoint === 'after') await persist(target, store);
+        if (failurePoint === 'after') await persist(target, store, owner, lease);
         throw new Error('injected recovery save failure');
       }
-      return persist(target, store);
+      return persist(target, store, owner, lease);
     });
     const historyError = new Error("The current provider can't read this thread's earlier reasoning, which another provider encrypted.");
     const oldBridge = {
@@ -5096,12 +5349,12 @@ process.stdin.on('data', chunk => {
     vi.spyOn(
       openQuestionsStoreModule,
       'saveOpenQuestionsStore',
-    ).mockImplementation(async (path, snapshot) => {
+    ).mockImplementation(async (path, snapshot, owner, lease) => {
       if (snapshot.openQuestions.some(({ status }) => status === 'answered')) {
         answerFlushStarted.resolve();
         await finishAnswerFlush.promise;
       }
-      await persistOpenQuestions(path, snapshot);
+      await persistOpenQuestions(path, snapshot, owner, lease);
     });
 
     mockCreate.mockImplementationOnce(async (agentOptions) => {
@@ -5604,11 +5857,11 @@ process.stdin.on('data', chunk => {
     vi.spyOn(
       openQuestionsStoreModule,
       'saveOpenQuestionsStore',
-    ).mockImplementation(async (path, snapshot) => {
+    ).mockImplementation(async (path, snapshot, owner, lease) => {
       if (snapshot.openQuestions.some(({ status }) => status === 'answered')) {
         throw new Error('simulated open questions YAML persistence failure');
       }
-      await persistOpenQuestions(path, snapshot);
+      await persistOpenQuestions(path, snapshot, owner, lease);
     });
 
     mockCreate.mockImplementationOnce(async (agentOptions) => {
@@ -5776,11 +6029,11 @@ process.stdin.on('data', chunk => {
     let failResumeStoreFlush = false;
     const persistResumeStore = sessionResumeStoreModule.saveSessionResumeStore;
     vi.spyOn(sessionResumeStoreModule, 'saveSessionResumeStore').mockImplementation(
-      async (path, resumeStore) => {
+      async (path, resumeStore, owner, lease) => {
         if (failResumeStoreFlush && path === resumeStorePath) {
           throw new Error('simulated session resume store flush failure');
         }
-        await persistResumeStore(path, resumeStore);
+        await persistResumeStore(path, resumeStore, owner, lease);
       },
     );
 
@@ -5958,11 +6211,11 @@ process.stdin.on('data', chunk => {
     let failResumeStoreFlush = false;
     const persistResumeStore = sessionResumeStoreModule.saveSessionResumeStore;
     vi.spyOn(sessionResumeStoreModule, 'saveSessionResumeStore').mockImplementation(
-      async (path, resumeStore) => {
+      async (path, resumeStore, owner, lease) => {
         if (failResumeStoreFlush && path === resumeStorePath) {
           throw new Error('simulated session resume store flush failure');
         }
-        await persistResumeStore(path, resumeStore);
+        await persistResumeStore(path, resumeStore, owner, lease);
       },
     );
 
@@ -8700,21 +8953,6 @@ process.stdin.on('data', chunk => {
         },
       },
     });
-    const terminalResumeStore = await loadSessionResumeStore(resumeStorePath);
-
-    // Complete only after force shutdown has removed the resident. Its late
-    // The result must not be needed to make the saved session resumable.
-    firstPrompt.resolve({
-      stopReason: 'cancelled',
-      responseText: '',
-    });
-    await new Promise<void>((resolve) => setImmediate(resolve));
-    await expect(loadSessionResumeStore(resumeStorePath)).resolves.toMatchObject({
-      harnessPhase: terminalResumeStore?.harnessPhase,
-      modifiedAt: terminalResumeStore?.modifiedAt,
-      updatedAt: terminalResumeStore?.updatedAt,
-    });
-
     const sendsBeforeContinue = mockSend.mock.calls.length;
     let continuedOperatorApi: OperatorInputBindingApi | undefined;
     const continuedPostLoopWait = vi.fn();
@@ -8746,6 +8984,15 @@ process.stdin.on('data', chunk => {
     await vi.waitFor(() =>
       expect(continuedPostLoopWait).toHaveBeenCalledOnce(),
     );
+    const resumedStore = await loadSessionResumeStore(resumeStorePath);
+    // The old prompt finishes only after a new owner has resumed the session.
+    firstPrompt.resolve({ stopReason: 'cancelled', responseText: '' });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await expect(loadSessionResumeStore(resumeStorePath)).resolves.toMatchObject({
+      harnessPhase: resumedStore?.harnessPhase,
+      modifiedAt: resumedStore?.modifiedAt,
+      updatedAt: resumedStore?.updatedAt,
+    });
     expect(connectAcp).toHaveBeenCalledTimes(2);
     expect(connectAcp.mock.calls[1]?.[0].cwd).toBe(path);
     expect(resumedBridge.loadSession).toHaveBeenCalledWith(

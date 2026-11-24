@@ -17,6 +17,12 @@ import {
 } from './index.js';
 
 describe('ensemble prompt modules', () => {
+  it('captures issue conductor and worker prompts after module separation', () => {
+    for (const [kind, module] of [['conductor', conductorEnsembleModule], ['implementer', workerEnsembleModule]] as const) {
+      expect(renderCompiledPrompt(compile(module, ensembleContext(kind, TEST_ISSUE_URL, TEST_SESSION_STATE)))).toMatchSnapshot(kind);
+    }
+  });
+
   it('exports Base, ConductorBase, WorkerBase as the three foundations', () => {
     expect(baseModule.persona).toBeDefined();
     expect(baseModule.methodology).toBeDefined();

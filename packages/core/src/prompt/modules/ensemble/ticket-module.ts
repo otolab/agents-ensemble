@@ -26,6 +26,7 @@ export const ticketModule: PromptModule<EnsembleContext> = {
     },
   ],
   methodology: [
+    '- マージはオペレータが決めて行う',
     '- worker 群はセッション開始時に harness へ登録される。設定により全員を eager attach するか、初回 `prompt_worker` まで ACP attach を遅らせる。一度 attach した worker はセッション終了まで常駐する。同時に Issue 向け worktree も harness が解決する（isolated なら作成または再利用、in_repo ならリポジトリルート）',
   ],
 };

@@ -6,6 +6,7 @@ import { AcpSessionConfigOptionError } from '../acp/acp-client.js';
 import {
   isUnrecoverableAcpSessionHistoryError,
   openWorkerAcpSession,
+  WorkerAcpCleanupError,
 } from './worker-acp-session.js';
 
 const TEST_WORKTREE = {
@@ -54,6 +55,20 @@ describe('openWorkerAcpSession', () => {
     );
     expect(newSession).toHaveBeenCalledWith(workspaceDir);
     expect(session.acpCwd).toBe(workspaceDir);
+  });
+
+  it('reports both initialization and bridge cleanup failures', async () => {
+    const initError = new Error('new session failed');
+    const closeError = new Error('bridge close failed');
+    const close = vi.fn().mockRejectedValue(closeError);
+    const result = await openWorkerAcpSession({
+      issueUrl: TEST_WORKTREE.issue.url,
+      worktree: TEST_WORKTREE,
+      connectAcp: vi.fn().mockResolvedValue({ newSession: vi.fn().mockRejectedValue(initError), close }),
+    }).catch((error: unknown) => error);
+    expect(result).toBeInstanceOf(WorkerAcpCleanupError);
+    expect((result as WorkerAcpCleanupError).errors).toEqual([initError, closeError]);
+    expect(close).toHaveBeenCalledOnce();
   });
 
   it('fails when workspace path does not exist', async () => {

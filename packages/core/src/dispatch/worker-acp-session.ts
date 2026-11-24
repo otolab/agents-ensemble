@@ -43,6 +43,7 @@ export interface OpenWorkerAcpSessionOptions {
   /** 現在の profile / CLI から解決した ACP spawn。 */
   currentAcpSpawn?: AcpSpawnFingerprint;
   resumeAcpSessionId?: string;
+  migrateWorkspacePrompt?: boolean;
   bridge?: AcpBridge;
   connectAcp?: ConnectWorkerAcpFn;
   spawn?: SpawnAcpProcessOptions;
@@ -52,6 +53,7 @@ export interface OpenWorkerAcpSessionOptions {
 }
 
 export type WorkerSessionRecoveryReason =
+  | 'workspace_prompt_migration'
   | 'session_load_failed'
   | 'prompt_history_unreadable'
   | 'explicit';
@@ -83,6 +85,12 @@ function isBuiltinPiResume(
   return [options.currentAcpSpawn, options.expectedResumeAcpSpawn].some(
     (spawn) => spawn?.preset === 'pi' && spawn.piRuntime === 'builtin',
   );
+}
+
+export class WorkerAcpCleanupError extends AggregateError {
+  constructor(initializationError: unknown, cleanupError: unknown) {
+    super([initializationError, cleanupError], 'Worker ACP initialization and cleanup failed; restart the owning process before resuming.');
+  }
 }
 
 export async function openWorkerAcpSession(
@@ -121,6 +129,10 @@ export async function openWorkerAcpSession(
   let recoveryReason: WorkerSessionRecoveryReason | undefined;
   const previousSessionId = sessionId;
   try {
+    if (sessionId && options.migrateWorkspacePrompt) {
+      recoveryReason = 'workspace_prompt_migration';
+      sessionId = undefined;
+    }
     if (sessionId) {
       try {
         await bridge.loadSession(
@@ -154,8 +166,8 @@ export async function openWorkerAcpSession(
     if (ownsBridge && bridge) {
       try {
         await bridge.close();
-      } catch {
-        // Keep the session initialization error as the primary failure.
+      } catch (cleanupError) {
+        throw new WorkerAcpCleanupError(error, cleanupError);
       }
     }
     throw error;

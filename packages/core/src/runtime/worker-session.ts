@@ -1,3 +1,5 @@
+import { WORKSPACE_WORKER_PROMPT_VERSION } from '../workspace-run/worker-prompt-version.js';
+import { parseWorkspaceSessionUrl } from '../workspace-run/session-url.js';
 import type { SpawnAcpProcessOptions } from '../acp/acp-process.js';
 import type { AcpSpawnFingerprint } from '../acp/resolve-acp-spawn.js';
 import type { PermissionDecision } from '../acp/types.js';
@@ -42,6 +44,7 @@ export interface WorkerSessionOptions {
         acpCwd?: string;
         acpSpawn?: AcpSpawnFingerprint;
         handoffPending?: boolean;
+        workspacePromptVersion?: number;
         recreateRequired?: boolean;
       }
   >;
@@ -161,6 +164,7 @@ export class WorkerSession {
         expectedResumeAcpCwd,
         expectedResumeAcpSpawn,
         resumeAcpSessionId,
+        migrateWorkspacePrompt: Boolean(resumeAcpSessionId && parseWorkspaceSessionUrl(this.options.issueUrl) && (typeof restored === 'string' || restored?.workspacePromptVersion !== WORKSPACE_WORKER_PROMPT_VERSION)),
         handoffPending: typeof restored === 'object' && restored?.handoffPending === true,
         recreateRequired: typeof restored === 'object' && restored?.recreateRequired === true,
         spawn: worker.spawn,
@@ -189,7 +193,22 @@ export class WorkerSession {
   }
 
   async stop(options?: { force?: boolean }): Promise<void> {
-    await this.runtime.shutdown(options);
-    await this.processor.stop();
+    let shutdownError: unknown;
+    let shutdownFailed = false;
+    try {
+      await this.runtime.shutdown(options);
+    } catch (error) {
+      shutdownFailed = true;
+      shutdownError = error;
+    }
+    try {
+      await this.processor.stop();
+    } catch (error) {
+      if (shutdownFailed) {
+        throw new AggregateError([shutdownError, error], 'Worker session shutdown failed');
+      }
+      throw error;
+    }
+    if (shutdownFailed) throw shutdownError;
   }
 }

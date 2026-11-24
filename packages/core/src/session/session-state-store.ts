@@ -8,6 +8,7 @@ import {
   sessionStatePathForScope,
 } from './session-persistence-scope.js';
 import type { SessionResumeStoreLocation } from './session-resume-store.js';
+import type { SessionOwnership, SessionWriteLease } from './session-ownership.js';
 
 export const SESSION_STATE_STORE_VERSION = 2;
 export const SESSION_STATUS_LINE_MAX_LENGTH = 80;
@@ -74,37 +75,43 @@ export async function loadSessionStateStore(
 export async function saveSessionStatusLine(
   path: string,
   statusLine: string,
-  reportedAt = Date.now(),
+  reportedAt: number | undefined,
+  owner: SessionOwnership,
+  lease: SessionWriteLease,
 ): Promise<void> {
-  const current = parseSessionStatusLine({ statusLine, reportedAt });
-  const existing = await loadSessionStateStore(path);
-  const next = {
-    current,
-    history: boundHistory(
-      [
-        ...(existing?.history ?? []),
-        ...(existing ? [existing.current] : []),
-      ],
+  return owner.writeWithLease(lease, async () => {
+    await owner.assertResourcePath(path, 'state');
+    reportedAt ??= Date.now();
+    const current = parseSessionStatusLine({ statusLine, reportedAt });
+    const existing = await loadSessionStateStore(path);
+    const next = {
       current,
-    ),
-  };
+      history: boundHistory(
+        [
+          ...(existing?.history ?? []),
+          ...(existing ? [existing.current] : []),
+        ],
+        current,
+      ),
+    };
 
-  const directory = dirname(path);
-  await mkdir(directory, { recursive: true, mode: 0o700 });
-  await chmod(directory, 0o700);
-  const tempPath = `${path}.${process.pid}.${randomUUID()}.tmp`;
-  try {
-    await writeFile(tempPath, serializeSessionStateStore(next), {
-      encoding: 'utf8',
-      mode: 0o600,
-    });
-    await chmod(tempPath, 0o600);
-    await rename(tempPath, path);
-  } catch (error) {
-    // A failed rename must not leave temporary state that looks like a store.
-    await unlink(tempPath).catch(() => {});
-    throw error;
-  }
+    const directory = dirname(path);
+    await mkdir(directory, { recursive: true, mode: 0o700 });
+    await chmod(directory, 0o700);
+    const tempPath = `${path}.${process.pid}.${randomUUID()}.tmp`;
+    try {
+      await writeFile(tempPath, serializeSessionStateStore(next), {
+        encoding: 'utf8',
+        mode: 0o600,
+      });
+      await chmod(tempPath, 0o600);
+      await rename(tempPath, path);
+    } catch (error) {
+      // A failed rename must not leave temporary state that looks like a store.
+      await unlink(tempPath).catch(() => {});
+      throw error;
+    }
+  });
 }
 
 function parseSessionStateStore(value: unknown): SessionStateStore {

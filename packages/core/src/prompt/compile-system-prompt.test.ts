@@ -27,6 +27,10 @@ const TEST_ISSUE_CONTEXT = {
 };
 
 describe('compileConductorSystemPrompt', () => {
+  it('captures the issue conductor compile output after module separation', () => {
+    expect(compileConductorSystemPrompt({ issueUrl: TEST_ISSUE_URL, profile: TEST_PROFILE, issueContext: TEST_ISSUE_CONTEXT })).toMatchSnapshot();
+  });
+
   it('includes ensemble base and conductor instructions', () => {
     const prompt = compileConductorSystemPrompt({
       issueUrl: TEST_ISSUE_URL,

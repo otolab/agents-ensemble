@@ -11,6 +11,7 @@ import {
   resolveSessionPersistenceScope,
 } from './session-persistence-scope.js';
 import type { SessionResumeStoreLocation } from './session-resume-store.js';
+import type { SessionOwnership, SessionWriteLease } from './session-ownership.js';
 
 export const OPEN_QUESTIONS_STORE_VERSION = 1;
 
@@ -62,10 +63,14 @@ export async function loadOpenQuestionsStore(
 export async function saveOpenQuestionsStore(
   path: string,
   snapshot: OpenQuestionRegistrySnapshot,
+  owner: SessionOwnership,
+  lease: SessionWriteLease,
 ): Promise<void> {
-  const document = parseOpenQuestionsStore({
-    version: OPEN_QUESTIONS_STORE_VERSION,
-    ...snapshot,
+  return owner.writeWithLease(lease, async () => {
+    await owner.assertResourcePath(path, 'questions');
+    const document = parseOpenQuestionsStore({
+      version: OPEN_QUESTIONS_STORE_VERSION,
+      ...snapshot,
   });
   const directory = dirname(path);
   await mkdir(directory, { recursive: true, mode: 0o700 });
@@ -84,6 +89,7 @@ export async function saveOpenQuestionsStore(
   );
   await chmod(tempPath, 0o600);
   await rename(tempPath, path);
+  });
 }
 
 function parseOpenQuestionsStore(

@@ -6,6 +6,10 @@
 
 GitHub を正本にしない作業には **`ensemble run <brief>`** を使います。brief はプロンプト用ファイルのパス、`--conductor-cwd` で slug をアンカーする cwd、状態は `~/.ensemble/workspaces/<slug-key>/` に保存します。`ensemble run list` で workspace 一覧、`--continue` で同一 slug の最新 run を再開します。詳細は [ADR 0085](../adr/0085-ensemble-run-workspaces-and-notes.md)。
 
+同じ session は一度に一つのプロセスで実行します。別プロセスが同じ session を `--resume` / `--continue` しようとするとエラーになります。実行中のプロセスを終了してから再試行してください。異常終了した場合も、プロセス終了時に OS が lock を解放します。SQLite の file locking が機能するローカル filesystem が必要です。
+
+ライブラリから実行する場合、後始末や保存の完了を確認できなかった session の lock は、そのプロセスが終了するまで保持されます。強制停止時に worker の接続・load・再作成や close が進行中、または close が失敗した場合も、旧 worker の停止を確認できないため保持します。強制停止時の close は最長 1 秒で待機を打ち切り、完了を確認できない場合は同様に保持します。同じ session を再開するにはプロセスを再起動してください。旧バージョンや直接ファイルを書き換える外部ツールは lock に参加しません。これらのツールは session の停止中に実行してください。
+
 調査と資料整理には同梱の team profile を `ensemble run brief.md --profile workspace-research` で指定できます。conductor が調整と Notes への記録を担い、explore と librarian が作業します。同名の profile がある場合、project、user、bundled の順に優先されます。`ensemble profiles list` では対応する入口の宣言と未指定・不正を区別できます。宣言は選択の目安であり、起動を制限しません。
 
 `ensemble run brief.md --name investigation` は指定名を cwd の `.ensemble/workspace.json` に記録します。以後は同じ cwd から `ensemble run --continue` で再開できます。すでに別の slug が記録された cwd では別名を指定できません。
@@ -21,6 +25,8 @@ rename 中のエラーでは元に戻すことを試みます。強制終了や�
 対応するバージョンのセッションと rename は排他しますが、旧バージョンや外部プロセス、Notes などの非協調操作は排他できません。移行中はそれらを起動しないでください。移行後のセッション記録は旧バージョンでは読めません。journal はプロセスの中断に備えるもので、電源断やストレージ障害後の整合性は保証しません。
 
 worker は既定で conductor と同じ cwd を共有し、isolated worktree は作りません。profile の `workers[].workspace` を指定した worker はそのディレクトリを使います。GitHub Issue の取得や monitor は使いません。
+
+旧バージョンで保存された prompt 世代不明の workspace worker は、初回再開時に新しい ACP session へ一度切り替わります。旧 session と履歴は保持されますが、会話は新 session に自動継承されません。conductor が handoff を確認するまで新しい作業指示は保留されます。切替後は通常の session 再開を使います。切替の初期化に失敗した場合は旧 session の保存情報から再試行します。保存結果が不明な場合は停止し、保存された session ID と履歴を確認してから再開します。
 
 conductor は `create_note` で summary 必須のノートを作り、`push_memo` でメモを追加できます。`list_notes` は summary と最新メモの冒頭を一覧し、`read_note` は既定で最新メモを返します。履歴は `includeHistory` と `historyOffset` / `historyLimit`、archive 済みメモは `includeArchived` で読めます。`archive_note` / `archive_memo` で非表示にした内容も読取可能です。Notes は workspace ごとに共有され、再開後も残ります。
 

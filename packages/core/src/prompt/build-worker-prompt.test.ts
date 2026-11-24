@@ -31,7 +31,8 @@ describe('buildWorkerPrompt', () => {
     });
     expect(prompt).toContain('作業ディレクトリ: /repo');
     expect(prompt).toContain('conductor からの作業指示を待つ');
-    expect(prompt).not.toMatch(/Issue|\bPR\b/);
+    expect(prompt).not.toMatch(/Issue|\bPR\b|GitHub|register_github_watch|\bgh\b/);
+    expect(prompt).toMatchSnapshot();
   });
 
   it('includes profile materials from session state', () => {

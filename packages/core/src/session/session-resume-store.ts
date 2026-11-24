@@ -22,6 +22,7 @@ import {
 } from './session-persistence-scope.js';
 import { resolveUserEnsembleRoot } from '../resolve-user-ensemble-root.js';
 import { writeFileIfMissing } from './persisted-file.js';
+import { type SessionOwnership, type SessionWriteLease } from './session-ownership.js';
 
 export const SESSION_RESUME_STORE_VERSION = 1;
 export const WORKSPACE_RENAME_SESSION_RESUME_STORE_VERSION = 2;
@@ -100,6 +101,7 @@ export interface WorkerSessionResumeStore {
   repoRoot?: string;
   issueUrl?: string;
   handoffPending?: boolean;
+  workspacePromptVersion?: number;
   /** A workspace rename requires an explicit new worker session before dispatch. */
   recreateRequired?: boolean;
   generations?: WorkerSessionGeneration[];
@@ -112,7 +114,7 @@ export interface WorkerSessionGeneration {
   repoRoot: string;
   issueUrl: string;
   replacedAt: number;
-  reason: 'session_load_failed' | 'prompt_history_unreadable' | 'explicit';
+  reason: 'session_load_failed' | 'prompt_history_unreadable' | 'explicit' | 'workspace_prompt_migration';
   nextSessionId: string;
 }
 
@@ -128,7 +130,7 @@ function parseWorkerSessionGenerations(value: unknown, name: string): WorkerSess
       typeof generation.issueUrl !== 'string' ||
       typeof generation.replacedAt !== 'number' ||
       !Number.isFinite(generation.replacedAt) ||
-      !['session_load_failed', 'prompt_history_unreadable', 'explicit'].includes(String(generation.reason))
+      !['session_load_failed', 'prompt_history_unreadable', 'explicit', 'workspace_prompt_migration'].includes(String(generation.reason))
     ) throw new Error(`Invalid worker session generation: ${name}`);
     const acpSpawn = parseAcpSpawnFingerprint(generation.acpSpawn, name);
     return {
@@ -346,6 +348,8 @@ export async function requireSessionResumeStoreForResume(input: {
   repoRoot: string;
   conductorAgentId: string;
   issueUrl: string;
+  owner: SessionOwnership;
+  lease: SessionWriteLease;
 }): Promise<SessionResumeStore> {
   const located = await requireLocatedSessionResumeStoreForResume(input);
   return located.resumeStore;
@@ -355,8 +359,11 @@ export async function requireLocatedSessionResumeStoreForResume(input: {
   repoRoot: string;
   conductorAgentId: string;
   issueUrl: string;
+  owner: SessionOwnership;
+  lease: SessionWriteLease;
   onDuplicate?: (diagnostic: SessionResumeStoreDuplicateDiagnostic) => void;
 }): Promise<LocatedSessionResumeStore> {
+  input.owner.assertLease(input.lease);
   if (
     typeof input.issueUrl !== 'string' ||
     !input.issueUrl.trim()
@@ -377,6 +384,7 @@ export async function requireLocatedSessionResumeStoreForResume(input: {
     throw new SessionResumeStoreNotFoundError(input.conductorAgentId, path);
   }
 
+  await input.owner.assertResourcePath(located.path, 'store');
   const loaded = await readSessionResumeStore(located.path);
   if (!loaded) {
     throw new SessionResumeStoreNotFoundError(
@@ -391,7 +399,10 @@ export async function requireLocatedSessionResumeStoreForResume(input: {
   if (loaded.hasLegacyAcpSpawnEnv) {
     // Scrub canonical data before resume validation can reject the session
     // and bypass its normal first write.
-    await writeSessionResumeStoreFile(located.path, persistedValue);
+    await input.owner.writeWithLease(input.lease, async () => {
+      await input.owner.assertResourcePath(located.path, 'store');
+      await writeSessionResumeStoreFile(located.path, persistedValue);
+    });
   }
   return {
     ...located,
@@ -404,6 +415,8 @@ export async function requireSessionSidecarForResume(input: {
   repoRoot: string;
   conductorAgentId: string;
   issueUrl: string;
+  owner: SessionOwnership;
+  lease: SessionWriteLease;
 }): Promise<SessionSidecar> {
   try {
     return await requireSessionResumeStoreForResume(input);
@@ -421,23 +434,28 @@ export async function requireSessionSidecarForResume(input: {
 export async function saveSessionResumeStore(
   path: string,
   resumeStore: SessionResumeStore,
+  owner: SessionOwnership,
+  lease: SessionWriteLease,
 ): Promise<void> {
-  const updatedAt =
-    resumeStore.harnessPhase !== undefined &&
-    resumeStore.harnessPhase !== 'running' &&
-    resumeStore.harnessPhase !== 'idle' &&
-    resumeStore.modifiedAt !== undefined
-      ? resumeStore.modifiedAt
-      : Date.now();
-  const parsed = parseSessionResumeStore({
-    ...resumeStore,
-    updatedAt,
-    ...(resumeStore.harnessPhase === 'running' ||
-    resumeStore.harnessPhase === 'idle'
-      ? { modifiedAt: updatedAt }
-      : {}),
+  return owner.writeWithLease(lease, async () => {
+    await owner.assertResourcePath(path, 'store');
+    const updatedAt =
+      resumeStore.harnessPhase !== undefined &&
+      resumeStore.harnessPhase !== 'running' &&
+      resumeStore.harnessPhase !== 'idle' &&
+      resumeStore.modifiedAt !== undefined
+        ? resumeStore.modifiedAt
+        : Date.now();
+    const parsed = parseSessionResumeStore({
+      ...resumeStore,
+      updatedAt,
+      ...(resumeStore.harnessPhase === 'running' ||
+      resumeStore.harnessPhase === 'idle'
+        ? { modifiedAt: updatedAt }
+        : {}),
   });
   await writeSessionResumeStoreFile(path, parsed);
+  });
 }
 
 async function writeSessionResumeStoreFile(
@@ -1356,11 +1374,15 @@ export function parseSessionResumeStore(value: unknown): SessionResumeStore {
     if (worker.handoffPending !== undefined && typeof worker.handoffPending !== 'boolean') {
       throw new Error(`Invalid session resume store worker handoffPending: ${name}`);
     }
+    if (worker.workspacePromptVersion !== undefined && (!Number.isSafeInteger(worker.workspacePromptVersion) || (worker.workspacePromptVersion as number) < 1)) {
+      throw new Error(`Invalid session resume store worker workspacePromptVersion: ${name}`);
+    }
     if (worker.recreateRequired !== undefined &&
         (record.version !== WORKSPACE_RENAME_SESSION_RESUME_STORE_VERSION || typeof worker.recreateRequired !== 'boolean')) {
       throw new Error(`Invalid session resume store worker recreateRequired: ${name}`);
     }
     workers[name] = {
+      ...(typeof worker.workspacePromptVersion === 'number' ? { workspacePromptVersion: worker.workspacePromptVersion } : {}),
       acpSessionId: worker.acpSessionId,
       ...(typeof worker.acpCwd === 'string' ? { acpCwd: worker.acpCwd } : {}),
       ...(typeof worker.repoRoot === 'string' ? { repoRoot: worker.repoRoot } : {}),
