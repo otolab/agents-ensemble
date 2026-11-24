@@ -5,6 +5,7 @@ import { conductorBaseModule } from './conductor-base-module.js';
 import { runBaseModule } from './run-base-module.js';
 import { runConductorBaseModule } from './run-conductor-base-module.js';
 import { workerBaseModule } from './worker-base-module.js';
+import { runWorkerModule } from './run-worker-module.js';
 
 export const runConductorEnsembleModule = merge(
   baseModule,
@@ -21,5 +22,5 @@ export function mergeRunConductorSystemPrompt(
     : runConductorEnsembleModule;
 }
 export function mergeRunWorkerSystemPrompt(profileModule?: PromptModule): PromptModule {
-  return merge(baseModule, runBaseModule, workerBaseModule, profileModule ?? {});
+  return merge(baseModule, runBaseModule, workerBaseModule, runWorkerModule, profileModule ?? {});
 }

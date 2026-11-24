@@ -22,6 +22,7 @@ describe('buildWorkerPrompt', () => {
     expect(prompt).toContain('profile 固有: respond with pong');
     expect(prompt).toContain('https://github.com/org/repo/issues/1');
     expect(prompt).not.toContain('### User instructions (~/.ensemble/AGENTS.md)');
+    expect(prompt).toMatchSnapshot();
   });
 
   it('builds workspace dispatch without Issue defaults', () => {
