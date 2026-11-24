@@ -478,7 +478,9 @@ describe('IssueSessionTui', () => {
   ])('scrolls recovery before the hidden question with %s+PgUp', async (_modifier, pageUp) => {
     const source = new ResizeSource();
     source.rows = 6;
-    const terminalSizeStore = createTuiTerminalSizeStore(source);
+    const terminalSizeStore = createTuiTerminalSizeStore(
+      source as unknown as Pick<NodeJS.WriteStream, 'columns' | 'rows' | 'on' | 'off'>,
+    );
     const viewModel = createTuiViewModel();
     viewModel.setDisplayState({
       workers: {}, conductorOutput: null,
@@ -515,7 +517,9 @@ describe('IssueSessionTui', () => {
   ])('scrolls the visible question before recovery with %s+PgDn in a normal pane', async (_modifier, pageDown) => {
     const source = new ResizeSource();
     source.rows = 40;
-    const terminalSizeStore = createTuiTerminalSizeStore(source);
+    const terminalSizeStore = createTuiTerminalSizeStore(
+      source as unknown as Pick<NodeJS.WriteStream, 'columns' | 'rows' | 'on' | 'off'>,
+    );
     const viewModel = createTuiViewModel();
     viewModel.setDisplayState({
       workers: {}, conductorOutput: null,

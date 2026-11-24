@@ -405,7 +405,9 @@ describe('IssueSessionTuiStream', () => {
     ['Shift', INK_TEST_KEYS.shiftPageUp],
   ])('scrolls recovery before the hidden question with %s+PgUp', async (_modifier, pageUp) => {
     const source = new ResizeSource();
-    const terminalSizeStore = createTuiTerminalSizeStore(source);
+    const terminalSizeStore = createTuiTerminalSizeStore(
+      source as unknown as Pick<NodeJS.WriteStream, 'columns' | 'rows' | 'on' | 'off'>,
+    );
     const viewModel = createTuiViewModel();
     viewModel.setDisplayState({
       workers: {}, conductorOutput: null,
