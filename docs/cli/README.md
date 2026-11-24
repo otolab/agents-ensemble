@@ -24,6 +24,7 @@ printf '%s\n' '確認した内容' | ensemble notes push --slug investigation --
 printf '%s\n' 'worker の調査結果' | ensemble notes push --note "$NOTE_ID"
 ensemble notes list --include-archived
 ensemble notes show "$NOTE_ID" --history --offset 0 --limit 20
+ensemble notes show "$NOTE_ID" --history --include-archived
 ensemble notes archive "$NOTE_ID"
 ensemble notes archive-memo --note "$NOTE_ID" --memo "$MEMO_ID" --archived false
 ```

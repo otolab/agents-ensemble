@@ -2,6 +2,8 @@ import { conductorFailureLogPath } from '../session/conductor-failure-log.js';
 import { access, mkdir, mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { createWorkspaceNote, readWorkspaceNote } from '../notes/workspace-notes-store.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_ENSEMBLE_CONFIG } from '../config/defaults.js';
 import { ModelRuntime } from '@earendil-works/pi-coding-agent';
@@ -1962,6 +1964,68 @@ describe('runConductorSession resume / shutdown', () => {
     expect(observed?.ENSEMBLE_WORKSPACE_REPO_ROOT).toBe(workspace ? repoRoot : undefined);
     expect(observed?.ENSEMBLE_WORKSPACE_CONDUCTOR_CWD).toBe(workspace ? repoRoot : undefined);
   });
+
+  it.skipIf(process.platform === 'win32').each([true, false])('runs Notes through an ACP worker and Bash with workspace context %s', async (workspace) => {
+    stubUnusedControlServer();
+    vi.stubEnv('ENSEMBLE_USER_ROOT', userEnsembleRoot);
+    vi.stubEnv('ENSEMBLE_WORKSPACE_SLUG', 'stale');
+    vi.stubEnv('ENSEMBLE_WORKSPACE_REPO_ROOT', '/stale');
+    vi.stubEnv('ENSEMBLE_WORKSPACE_CONDUCTOR_CWD', '/stale');
+    const note = await createWorkspaceNote({ repoRoot, slugKey: 'research', summary: 'worker record' });
+    const capture = join(repoRoot, 'worker-result.json');
+    const fixture = join(repoRoot, 'fixture.cjs');
+    const cli = fileURLToPath(new URL('../../../cli/dist/index.js', import.meta.url));
+    await writeFile(fixture, String.raw`
+const fs = require('node:fs');
+const { spawnSync } = require('node:child_process');
+let buffer = '';
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', chunk => {
+  buffer += chunk;
+  while (buffer.includes('\n')) {
+    const end = buffer.indexOf('\n');
+    const message = JSON.parse(buffer.slice(0, end));
+    buffer = buffer.slice(end + 1);
+    if (message.id === undefined) continue;
+    if (message.method === 'session/new') {
+      const child = spawnSync('/bin/bash', ['-c', 'printf "%s\\n" "from worker bash" | "$NOTES_TEST_NODE" "$NOTES_TEST_CLI" notes push --note "$NOTES_TEST_NOTE" --json'], { encoding: 'utf8' });
+      fs.writeFileSync(process.env.NOTES_TEST_CAPTURE, JSON.stringify({ status: child.status, stdout: child.stdout, stderr: child.stderr, slug: process.env.ENSEMBLE_WORKSPACE_SLUG, repo: process.env.ENSEMBLE_WORKSPACE_REPO_ROOT, cwd: process.env.ENSEMBLE_WORKSPACE_CONDUCTOR_CWD }));
+    }
+    const result = message.method === 'initialize' ? { protocolVersion: 1, agentCapabilities: {} } : message.method === 'session/new' ? { sessionId: 'worker-session' } : message.method === 'session/prompt' ? { stopReason: 'end_turn' } : {};
+    process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: message.id, result }) + '\n');
+  }
+});
+`);
+    vi.stubEnv('NOTES_TEST_NODE', process.execPath);
+    vi.stubEnv('NOTES_TEST_CLI', cli);
+    vi.stubEnv('NOTES_TEST_NOTE', note.id);
+    vi.stubEnv('NOTES_TEST_CAPTURE', capture);
+    mockSend.mockImplementation(async () => {
+      await vi.waitFor(async () => { await access(capture); }, { timeout: 15000 });
+      return { runId: 'worker-notes', status: 'finished', result: 'done' };
+    });
+    await runConductorSession({
+      issueUrl: workspace ? 'workspace://research' : TEST_ISSUE.url,
+      repoRoot, conductorCwd: repoRoot,
+      profile: { workers: [{ name: 'implementer', kind: 'implementer' }] },
+      defaultAcp: { defaultAcpCommand: process.execPath, defaultAcpArgs: [fixture] },
+      workerWorktree: { path: repoRoot, branch: 'main', issue: TEST_ISSUE, inRepo: true },
+      permissionPipeline: new PermissionPipeline({}), registerProcessSignalHandlers: false,
+      disableGitHubMonitor: true, waitForOperatorExit: false,
+    });
+    const result = JSON.parse(await readFile(capture, 'utf8'));
+    if (workspace) {
+      expect(result).toMatchObject({ status: 0, slug: 'research', repo: repoRoot, cwd: repoRoot });
+      expect(JSON.parse(result.stdout).body).toBe('from worker bash');
+      expect((await readWorkspaceNote({ repoRoot, slugKey: 'research', noteId: note.id })).memos[0]?.body).toBe('from worker bash');
+    } else {
+      expect(result).toMatchObject({ status: 2, stdout: '' });
+      expect(result).not.toHaveProperty('slug');
+      expect(result).not.toHaveProperty('repo');
+      expect(result).not.toHaveProperty('cwd');
+      expect((await readWorkspaceNote({ repoRoot, slugKey: 'research', noteId: note.id })).memos).toHaveLength(0);
+    }
+  }, 30000);
 
   it('keeps one-time secret helper credentials out of worker fingerprints and resume state', async () => {
     if (!isOneTimeSecretPlatformSupported()) return;

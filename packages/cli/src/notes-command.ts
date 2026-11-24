@@ -93,7 +93,7 @@ export function registerNotesCommand(program: Command): void {
     return pushWorkspaceMemo({ ...scope, noteId: o.note!, body });
   });
   action(common(notes.command('list').option('--offset <n>').option('--limit <n>').option('--include-archived')), async (o) => listWorkspaceNotes({ ...await context(o), offset: integer(o.offset, 'offset'), limit: integer(o.limit, 'limit'), includeArchived: o.includeArchived }));
-  action(common(notes.command('show').argument('<noteId>').option('--history').option('--offset <n>').option('--limit <n>')), async (o, id) => readWorkspaceNote({ ...await context(o), noteId: id!, includeHistory: o.history, historyOffset: integer(o.offset, 'offset'), historyLimit: integer(o.limit, 'limit') }), true);
+  action(common(notes.command('show').argument('<noteId>').option('--history').option('--offset <n>').option('--limit <n>').option('--include-archived')), async (o, id) => readWorkspaceNote({ ...await context(o), noteId: id!, includeHistory: o.history, historyOffset: integer(o.offset, 'offset'), historyLimit: integer(o.limit, 'limit'), includeArchived: o.includeArchived }), true);
   action(common(notes.command('archive').argument('<noteId>').option('--archived [boolean]', 'Archive (true) or restore (false)')), async (o, id) => { await archiveWorkspaceNote({ ...await context(o), noteId: id!, archived: archived(o.archived) }); }, true);
   action(common(notes.command('archive-memo').requiredOption('--note <id>').requiredOption('--memo <id>').option('--archived [boolean]', 'Archive (true) or restore (false)')), async (o) => { await archiveWorkspaceMemo({ ...await context(o), noteId: o.note!, memoId: o.memo!, archived: archived(o.archived) }); });
 }
