@@ -164,6 +164,7 @@ export async function readSavedSessionWorkerMessages(input: {
   workerName: string;
   githubRepo?: string;
   issueUrl?: string;
+  generation?: number;
 }): Promise<SessionWorkerMessagesResult> {
   return readWorkerSessionHistory({
     repoRoot: input.repoRoot,
@@ -171,7 +172,35 @@ export async function readSavedSessionWorkerMessages(input: {
     workerName: input.workerName,
     githubRepo: input.githubRepo,
     issueUrl: input.issueUrl,
+    generation: input.generation,
   });
+}
+
+export async function listSavedWorkerGenerations(input: {
+  repoRoot: string;
+  conductorAgentId: string;
+  workerName: string;
+  githubRepo?: string;
+  issueUrl?: string;
+}) {
+  const located = await findSessionResumeStoreBySelector(input.repoRoot, input);
+  if (!located) throw new Error(`No saved session found for ${input.conductorAgentId}.`);
+  const worker = located.resumeStore.workers[input.workerName];
+  if (!worker) throw new Error(`No saved worker session found for ${input.workerName}.`);
+  const previous = (worker.generations ?? []).map((generation, index) => ({
+    generation: index + 1,
+    current: false,
+    ...generation,
+  }));
+  return [...previous, {
+    generation: previous.length + 1,
+    current: true,
+    acpSessionId: worker.acpSessionId,
+    acpCwd: worker.acpCwd,
+    acpSpawn: worker.originAcpSpawn,
+    repoRoot: worker.repoRoot ?? located.resumeStore.repoRoot,
+    issueUrl: worker.issueUrl ?? located.resumeStore.issueUrl,
+  }];
 }
 
 export async function listSavedSessionMessages(input: {

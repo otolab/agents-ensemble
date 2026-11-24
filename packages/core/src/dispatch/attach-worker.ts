@@ -38,6 +38,7 @@ export interface AttachWorkerOptions {
   expectedResumeAcpSpawn?: AcpSpawnFingerprint;
   currentAcpSpawn?: AcpSpawnFingerprint;
   resumeAcpSessionId?: string;
+  handoffPending?: boolean;
   spawn?: SpawnAcpProcessOptions;
   connectAcp?: ConnectWorkerAcpFn;
   permissionHandler?: PermissionHandler;
@@ -81,11 +82,14 @@ export function buildWorkerAttachPrompt(
   session: WorkerAcpSession,
 ): string {
   if (session.resumed) {
+    if (options.handoffPending) {
+      return '前回の切替後の引き継ぎ確認が完了していません。新しい作業は行わず、Notes、Issue、作業ディレクトリ、open questions と中断操作の状態を確認し、conductor に報告して指示を待ってください。';
+    }
     return parseWorkspaceSessionUrl(options.issueUrl)
       ? '前回の続きです。作業ディレクトリの最新状態を踏まえ、中断していた作業を再開してください。'
       : WORKER_RESUME_PROMPT;
   }
-  return compileWorkerAttachPrompt({
+  const prompt = compileWorkerAttachPrompt({
     issueUrl: session.issue.url,
     kind: options.kind,
     agentModule: options.prompt,
@@ -95,6 +99,8 @@ export function buildWorkerAttachPrompt(
     sessionState: options.sessionState,
     userInstructions: options.userInstructions,
   });
+  if (!session.recovery) return prompt;
+  return `${prompt}\n\n以前の会話はこの session に引き継がれていません。Notes、Issue、作業ディレクトリと open questions を確認し、中断した操作の副作用を調べてください。必要な情報が不足する場合は作業を停止して conductor に報告してください。旧指示を自動的に再実行せず、確認結果を報告して次の指示を待ってください。`;
 }
 
 /** @deprecated 互換名。`buildWorkerAttachPrompt` を使う。 */

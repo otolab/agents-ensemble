@@ -273,6 +273,18 @@ ensemble session timeline <conductorAgentId> --github-repo OWNER/REPOSITORY \
 # Pi / Cursor の conductor 会話履歴を見る
 ensemble session messages <conductorAgentId> --github-repo OWNER/REPOSITORY
 
+# worker の既知の session 世代を古い順に確認する
+ensemble session workers generations <conductorAgentId> \
+  --github-repo OWNER/REPOSITORY --worker implementer
+
+# 世代番号を指定して旧 session の会話履歴を見る
+ensemble session workers messages <conductorAgentId> \
+  --github-repo OWNER/REPOSITORY --worker implementer --generation 1
+
+# workspace session も URL を指定して世代を選べる
+ensemble session workers generations <conductorAgentId> \
+  --issue-url <workspace-session-url> --worker implementer
+
 # Pi ACP worker の会話履歴を見る
 ensemble session workers messages <conductorAgentId> \
   --github-repo OWNER/REPOSITORY --worker implementer
@@ -284,7 +296,7 @@ ensemble session timeline <conductorAgentId> \
   --harness-log harness.log
 ```
 
-`session list` は省略時に全てのローカル canonical GitHub slug group を対象にし、GitHub API で repository を探索しません。`--github-repo <owner/repo>`、`--issue-url <url>`、`--conductor-agent-id <id>` で絞り込めます。`--limit <n>`（1〜500）と返された `nextCursor` を使ってページを取得できます。session ID を受け取る `show` / `export` / `messages` / `workers messages` / `timeline` は、`--github-repo` または `--issue-url` が必須です。ID だけから repository を推測しません。両方を指定でき、異なる repository slug を指す場合はエラーになります。
+`session list` は省略時に全てのローカル canonical GitHub slug group を対象にし、GitHub API で repository を探索しません。`--github-repo <owner/repo>`、`--issue-url <url>`、`--conductor-agent-id <id>` で絞り込めます。`--limit <n>`（1〜500）と返された `nextCursor` を使ってページを取得できます。session ID を受け取る `show` / `export` / `messages` / `workers generations` / `workers messages` / `timeline` は、`--github-repo` または `--issue-url` が必須です。ID だけから repository を推測しません。両方を指定でき、異なる repository slug を指す場合はエラーになります。
 
 `--repo-root <path>` は各 subcommand で指定できます（既定値は現在のディレクトリ）。session data の保存・通常読み取りは canonical slug を使い、`--repo-root` は clone 固有の実行 context / Pi の transcript 内 CWD 判定に使います。path-hash や project-local legacy data は通常読み取りません。各 subcommand の `--json` は JSON を出力します。テキスト表示は `NO_COLOR` が空でない値に設定されていると色を使いません。
 
@@ -306,9 +318,11 @@ raw copy では symlink と通常 file 以外の source を追いません。任
 
 `messages` は保存 session の `conductorAgentId` と明示した repository scope を使い、operator-agent の `list_conductor_messages` と同じ core provider-history API を使う quick peek 用コマンドです。Pi transcript は canonical slug の user 層 `~/.ensemble/sessions/github.com/<owner>/<repo>/pi/`（user root を変更している場合はその配下）だけから読みます。Pi `SessionManager` の cwd には保存済み `conductorCwd` を使います。未移行の path-hash / project-local transcript は履歴に現れません。必要なデータは [legacy data の一括 inventory / copy 手順](../session-logging.md#legacy-data-の一括-inventory-copy)で移行してください。既定では新しい履歴から20件、最大100件を表示します。`--limit <n>`、`--order asc|desc`、`--cursor <providerId>` でページを指定できます。返すのは user inbound と conductor の最終応答で、tool output や thinking は含みません。本文は保存値のまま出力し、テキスト表示も `--json` もサニタイズしません。API key・token・password などを会話に入力していた場合、その値も出力されます。`messages` は raw debug 経路を保ち、sanitizer の CLI option は設けていません。アプリから core API を使う場合は、返却前に `inbound` / `text` へ利用側の sanitizer を渡せます。適用境界、エラー時の動作、秘密値保護の限界は [provider history list の API 契約](../live-open-question-control-api.md#operator-agent-の-provider-history-list)を参照してください。
 
+`workers generations` は保存済みの世代を古い順に JSON で表示します。番号は 1 から始まり、最後が現在の session です。`workers messages --generation <番号>` で表示された世代を指定でき、省略時は現在の session を読みます。旧形式の store に記録がない過去世代は推測できません。選択した世代の provider データが欠落している場合や reader が非対応の場合は理由を表示します。世代と参照先の詳細は [session logging](../session-logging.md) を参照してください。
+
 `workers messages` は保存済み ACP session を `--worker <name>` で指定します。現在オフラインで読めるのは Pi ACP（`pi`）、Codex ACP（`codex`）、Cursor Agent CLI（`cursor`）です。Pi は保存 session ID に対応する JSONL transcript を runtime に応じた session map から解決し、active branch の user / assistant 本文を出します。
 
-Pi worker の runtime は SessionResumeStore の fingerprint から判定します。BYO と runtime marker のない旧 session は従来どおり `~/.pi/pi-acp/session-map.json` を読みます。builtin は `~/.ensemble/pi/worker/<repoKey>/issue-<issueNumber>/<workerKey>/.pi/pi-acp/session-map.json` を使い、transcript は同じ Issue / worker directory の `sessions/` にあります。以前の共有 builtin map は Issue ごとの map がまだない場合に wrapper がコピーします。元の map と transcript は残し、reader は移行前の共有 map も fallback として読みます。既存 session は旧 transcript path を保ったまま `session/load` と `workers messages` で参照できます。BYO は upstream `pi-acp@0.0.33`、builtin は `pi-acp@0.0.34` を使います。両方とも Pi ACP の既存 JSONL 形式と active branch を使うため、CLI から同じ `workers messages` コマンドで閲覧できます。
+Pi worker の runtime は SessionResumeStore の fingerprint から判定します。BYO と runtime marker のない旧 session は従来どおり `~/.pi/pi-acp/session-map.json` を読みます。builtin の Issue session は `~/.ensemble/pi/worker/<repoKey>/issue-<issueNumber>/<workerKey>/.pi/pi-acp/session-map.json` を使い、transcript は同じ Issue / worker directory の `sessions/` にあります。workspace session は `~/.ensemble/pi/worker/<repoKey>/workspace/<slugKey>/<workerKey>/.pi/pi-acp/session-map.json` と同じ worker directory の `sessions/` を使います。以前の共有 builtin map は Issue ごとの map がまだない場合に wrapper がコピーします。元の map と transcript は残し、reader は移行前の共有 map も fallback として読みます。既存 session は旧 transcript path を保ったまま `session/load` と `workers messages` で参照できます。BYO は upstream `pi-acp@0.0.33`、builtin は `pi-acp@0.0.34` を使います。両方とも Pi ACP の既存 JSONL 形式と active branch を使うため、CLI から同じ `workers messages` コマンドで閲覧できます。
 
 POSIX では builtin worker の session directory は `0700`、map / transcript file は `0600` で保存し、wrapper が既存データも起動前に同じ mode へ直します。Windows では wrapper が専用 parent と repository storage tree の DACL を現在の account SID のみに設定し、owner と ACL を読み戻して確認します。設定または確認に失敗すると builtin adapter を起動しません。upstream が指定された map / transcript 保存先内に通常の方法で作るデータには、この ACL が継承されます。対象は worker の map / transcript で、共有 Pi settings / auth root には適用しません。同じ OS account の別 process、管理者 / SYSTEM / backup privilege、ACL を無視する storage、指定先外への書込みや upstream の権限拡大までは保護しません（詳細は [Pi worker runtime](../config.md#pi-worker-runtime)）。
 
