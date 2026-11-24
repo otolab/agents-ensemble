@@ -41,6 +41,7 @@ export interface WorkerSessionOptions {
         acpSessionId: string;
         acpCwd?: string;
         acpSpawn?: AcpSpawnFingerprint;
+        handoffPending?: boolean;
       }
   >;
   connectAcp?: ConnectWorkerAcpFn;
@@ -57,6 +58,7 @@ export interface WorkerSessionOptions {
   onWorkerSessionRecovered?: (
     notification: WorkerSessionRecoveredNotification,
   ) => void | Promise<void>;
+  onWorkerHandoffConfirmed?: (name: string) => Promise<void>;
   onPermissionCleanup?: (event: {
     workerId: string;
     entries: PendingPermission[];
@@ -108,6 +110,7 @@ export class WorkerSession {
         ? { ownsWorkerAcpConnections: options.ownsWorkerAcpConnections }
         : {}),
       onWorkerSessionRecovered: options.onWorkerSessionRecovered,
+      onWorkerHandoffConfirmed: options.onWorkerHandoffConfirmed,
       ...(options.onPromptTelemetry
         ? { onPromptTelemetry: options.onPromptTelemetry }
         : {}),
@@ -157,6 +160,7 @@ export class WorkerSession {
         expectedResumeAcpCwd,
         expectedResumeAcpSpawn,
         resumeAcpSessionId,
+        handoffPending: typeof restored === 'object' && restored?.handoffPending === true,
         spawn: worker.spawn,
         acpFingerprint: worker.acpFingerprint,
       }, {

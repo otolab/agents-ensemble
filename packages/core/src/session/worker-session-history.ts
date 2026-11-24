@@ -10,12 +10,14 @@ import {
   type SessionMessageEntry,
 } from '@earendil-works/pi-coding-agent';
 import { parseIssueUrl } from '../issue/issue-ref.js';
+import { parseWorkspaceSessionUrl } from '../workspace-run/session-url.js';
 import { resolveEnsemblePaths } from '../ensemble-paths.js';
 import { resolvePiAcpSessionMapPaths } from '../acp/pi-session-map.js';
 import type { PiAcpRuntimeMarker } from '../acp/resolve-acp-spawn.js';
 import { resolveCursorConfigRoot } from './cursor-config-root.js';
 import {
   findSessionResumeStoreBySelector,
+  listLocatedSessionResumeStoresPage,
   listUserLocatedSessionResumeStoresPage,
 } from './session-resume-store.js';
 
@@ -50,6 +52,7 @@ export interface WorkerSessionHistoryReaderInput {
   acpCwd: string;
   piRuntime?: PiAcpRuntimeMarker;
   issueNumber?: number;
+  workspaceSlugKey?: string;
 }
 
 /** Adapter contract for reading a provider's local worker transcript. */
@@ -160,6 +163,8 @@ export async function readWorkerSessionHistory(input: {
   githubRepo?: string;
   issueUrl?: string;
   includeSourceFiles?: boolean;
+  /** One-based index into known generations, oldest first. Omit for current. */
+  generation?: number;
 }): Promise<WorkerSessionHistoryResult> {
   const conductorAgentId = requireNonEmpty(
     input.conductorAgentId,
@@ -184,14 +189,24 @@ export async function readWorkerSessionHistory(input: {
   if (!located) {
     throw new Error(`No saved session found for ${conductorAgentId}.`);
   }
-  const repoRoot = resolve(input.repoRoot ?? located.resumeStore.repoRoot);
-
-  const worker = located.resumeStore.workers[workerName];
-  if (!worker) {
+  const currentWorker = located.resumeStore.workers[workerName];
+  if (!currentWorker) {
     throw new Error(
       `No saved worker session found for ${workerName} in ${conductorAgentId}.`,
     );
   }
+  const generations = currentWorker.generations ?? [];
+  const currentIndex = generations.length + 1;
+  const selected = input.generation ?? currentIndex;
+  if (!Number.isSafeInteger(selected) || selected < 1 || selected > currentIndex) {
+    throw new Error(`Unknown worker session generation: ${selected}`);
+  }
+  const worker = selected === currentIndex ? currentWorker : generations[selected - 1]!;
+  const generationRepoRoot = worker.repoRoot ?? located.resumeStore.repoRoot;
+  const generationIssueUrl = worker.issueUrl ?? located.resumeStore.issueUrl;
+  const repoRoot = resolve(
+    selected === currentIndex ? input.repoRoot ?? generationRepoRoot : generationRepoRoot,
+  );
 
   const support = getWorkerSessionHistoryReaderSupport(
     worker.acpSpawn?.preset,
@@ -237,18 +252,24 @@ export async function readWorkerSessionHistory(input: {
   try {
     const piRuntime = worker.acpSpawn?.piRuntime;
     let issueNumber: number | undefined;
+    let workspaceSlugKey: string | undefined;
     if (piRuntime === 'builtin') {
-      try {
-        issueNumber = parseIssueUrl(located.resumeStore.issueUrl).number;
-      } catch {
-        throw new WorkerSessionHistoryUnavailableError(
-          'SessionResumeStore に有効な Issue URL がないため、builtin Pi の保存先を解決できません。',
-        );
+      workspaceSlugKey = parseWorkspaceSessionUrl(generationIssueUrl)?.slugKey;
+      if (!workspaceSlugKey) {
+        try {
+          issueNumber = parseIssueUrl(generationIssueUrl).number;
+        } catch {
+          throw new WorkerSessionHistoryUnavailableError(
+            'SessionResumeStore に有効な Issue URL または workspace identity がないため、builtin Pi の保存先を解決できません。',
+          );
+        }
       }
     }
     const readerInput: WorkerSessionHistoryReaderInput = {
       repoRoot,
-      fallbackRepoRoots: [located.resumeStore.repoRoot],
+      fallbackRepoRoots: selected === currentIndex
+        ? [generationRepoRoot]
+        : [],
       ...(input.userEnsembleRoot
         ? { userEnsembleRoot: input.userEnsembleRoot }
         : {}),
@@ -259,6 +280,7 @@ export async function readWorkerSessionHistory(input: {
         ? { piRuntime }
         : {}),
       ...(issueNumber !== undefined ? { issueNumber } : {}),
+      ...(workspaceSlugKey ? { workspaceSlugKey } : {}),
     };
     const result = input.includeSourceFiles
       ? await reader.readWithSources(readerInput)
@@ -299,7 +321,16 @@ async function findUserWorkerSessionResumeStore(input: {
       'Repository scope is required to read a session; pass githubRepo or issueUrl.',
     );
   }
-  const page = await listUserLocatedSessionResumeStoresPage(
+  const query = {
+    githubRepo: input.githubRepo,
+    issueUrl: input.issueUrl,
+    conductorAgentId: input.conductorAgentId,
+  };
+  const page = input.issueUrl && parseWorkspaceSessionUrl(input.issueUrl)
+    ? await listLocatedSessionResumeStoresPage(input.userEnsembleRoot, query, {
+        userEnsembleRoot: input.userEnsembleRoot,
+      })
+    : await listUserLocatedSessionResumeStoresPage(
     {
       githubRepo: input.githubRepo,
       issueUrl: input.issueUrl,
@@ -355,9 +386,9 @@ async function readPiAcpSessionHistoryWithSources(
   if (paths) {
     const issueNumber = input.issueNumber;
     if (
-      issueNumber === undefined ||
+      !input.workspaceSlugKey && (issueNumber === undefined ||
       !Number.isSafeInteger(issueNumber) ||
-      issueNumber < 1
+      issueNumber < 1)
     ) {
       throw new WorkerSessionHistoryUnavailableError(
         'builtin Pi の Issue number がなく、session map を解決できません。',
@@ -371,7 +402,9 @@ async function readPiAcpSessionHistoryWithSources(
             userEnsembleRoot: input.userEnsembleRoot,
           });
           const mapPaths = resolvePiAcpSessionMapPaths(
-            rootPaths.piWorkerDir(input.workerName, issueNumber),
+            input.workspaceSlugKey
+              ? rootPaths.piWorkspaceWorkerDir(input.workerName, input.workspaceSlugKey)
+              : rootPaths.piWorkerDir(input.workerName, issueNumber!),
             rootPaths.legacyPiWorkerDir(input.workerName),
           );
           return [mapPaths.upstreamPath, ...mapPaths.compatibilityPaths];

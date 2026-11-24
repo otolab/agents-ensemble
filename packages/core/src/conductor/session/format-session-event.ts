@@ -84,6 +84,7 @@ function formatEventBodyForConductor(event: SessionEvent): string {
         kind: event.kind,
         reason: event.reason,
         action: 'started_new_session',
+        handoff: 'Review interrupted operations and missing information, then call confirm_worker_handoff before sending new work.',
       });
     case 'permission.pending': {
       const request = event.permission.request;

@@ -87,6 +87,127 @@ function createDeferred<T>(): {
 }
 
 describe('WorkerRuntime', () => {
+  it('restores a pending handoff and blocks instructions until confirmation', async () => {
+    const bridge = createMockBridge(vi.fn().mockResolvedValue(undefined));
+    const confirm = vi.fn().mockResolvedValue(undefined);
+    const runtime = new WorkerRuntime({
+      inbox: new ConductorInbox(), connectAcp: vi.fn().mockResolvedValue(bridge),
+      onWorkerHandoffConfirmed: confirm,
+    });
+    runtime.start({
+      name: 'ping-1', issueUrl: TEST_WORKTREE.issue.url, kind: 'ping',
+      worktree: TEST_WORKTREE, resumeAcpSessionId: 'saved', handoffPending: true,
+      sessionState: { workers: [{ name: 'ping-1', kind: 'ping' }], kinds: ['ping'] },
+    });
+    await runtime.waitForIdle();
+    expect(bridge.promptSession).toHaveBeenCalledWith(
+      'saved', expect.stringContaining('引き継ぎ確認が完了していません'), expect.any(Object),
+    );
+    expect(runtime.sendWorkerMessage('ping-1', 'continue').status).toBe('error');
+    await runtime.confirmWorkerHandoff('ping-1');
+    expect(confirm).toHaveBeenCalledWith('ping-1');
+    expect(runtime.sendWorkerMessage('ping-1', 'continue').status).toBe('sent');
+    await runtime.waitForIdle();
+    await runtime.shutdown();
+  });
+
+  it('allows explicit recreation after builtin Pi rejects an unexpected load failure', async () => {
+    const oldBridge = {
+      loadSession: vi.fn().mockRejectedValue(new Error('map missing')),
+      newSession: vi.fn(), close: vi.fn().mockResolvedValue(undefined),
+    } as unknown as AcpBridge;
+    const newBridge = {
+      newSession: vi.fn().mockResolvedValue('replacement'),
+      promptSession: vi.fn().mockResolvedValue({ stopReason: 'end_turn', responseText: 'checked' }),
+      close: vi.fn().mockResolvedValue(undefined),
+    } as unknown as AcpBridge;
+    const committed = vi.fn().mockResolvedValue(undefined);
+    const runtime = new WorkerRuntime({
+      inbox: new ConductorInbox(),
+      connectAcp: vi.fn().mockResolvedValueOnce(oldBridge).mockResolvedValueOnce(newBridge),
+      onWorkerSessionRecovered: committed,
+    });
+    runtime.start({
+      name: 'ping-1', issueUrl: TEST_WORKTREE.issue.url, kind: 'ping',
+      worktree: TEST_WORKTREE, resumeAcpSessionId: 'saved',
+      acpFingerprint: { preset: 'pi', piRuntime: 'builtin', command: 'pi-acp', args: [] },
+      sessionState: { workers: [{ name: 'ping-1', kind: 'ping' }], kinds: ['ping'] },
+    });
+    await runtime.waitForIdle();
+    expect(oldBridge.newSession).not.toHaveBeenCalled();
+    expect(runtime.getWorkerStatus('ping-1')?.state).toBe('failed');
+    expect(await runtime.recreateWorker('ping-1', 'saved')).toBe('checked');
+    expect(committed).toHaveBeenCalledWith(expect.objectContaining({
+      reason: 'explicit', previousSessionId: 'saved', acpSessionId: 'replacement',
+    }));
+    await runtime.shutdown();
+  });
+
+  it.each(['bootstrap', 'save'])('keeps the old session when explicit recreation fails at %s', async (stage) => {
+    const oldBridge = createMockBridge(vi.fn().mockResolvedValue(undefined));
+    const closeCandidate = vi.fn().mockResolvedValue(undefined);
+    const candidate = {
+      newSession: vi.fn().mockResolvedValue('sess-new'),
+      promptSession: stage === 'bootstrap'
+        ? vi.fn().mockRejectedValue(new Error('bootstrap failed'))
+        : vi.fn().mockResolvedValue({ stopReason: 'end_turn' }),
+      close: closeCandidate,
+    } as unknown as AcpBridge;
+    const runtime = new WorkerRuntime({
+      inbox: new ConductorInbox(),
+      connectAcp: vi.fn().mockResolvedValueOnce(oldBridge).mockResolvedValueOnce(candidate),
+      onWorkerSessionRecovered: stage === 'save'
+        ? vi.fn().mockRejectedValue(new Error('save failed'))
+        : vi.fn(),
+    });
+    runtime.start({
+      name: 'ping-1', issueUrl: TEST_WORKTREE.issue.url, kind: 'ping',
+      worktree: TEST_WORKTREE,
+      sessionState: { workers: [{ name: 'ping-1', kind: 'ping' }], kinds: ['ping'] },
+    });
+    await runtime.waitForIdle();
+    await expect(runtime.recreateWorker('ping-1', 'sess-1')).rejects.toThrow();
+    expect(runtime.getAttached('ping-1')?.session.sessionId).toBe('sess-1');
+    expect(closeCandidate).toHaveBeenCalledOnce();
+    await runtime.shutdown();
+  });
+
+  it('publishes explicit recreation only after its bootstrap and durable callback succeed', async () => {
+    const inbox = new ConductorInbox();
+    const oldBridge = createMockBridge(vi.fn().mockResolvedValue(undefined));
+    const newPrompt = createDeferred<{ stopReason: string; responseText: string }>();
+    const newBridge = {
+      newSession: vi.fn().mockResolvedValue('sess-new'),
+      promptSession: vi.fn().mockReturnValue(newPrompt.promise),
+      close: vi.fn().mockResolvedValue(undefined),
+      cancelSession: vi.fn(),
+    } as unknown as AcpBridge;
+    const committed = vi.fn().mockResolvedValue(undefined);
+    const runtime = new WorkerRuntime({
+      inbox, connectAcp: vi.fn().mockResolvedValueOnce(oldBridge).mockResolvedValueOnce(newBridge),
+      onWorkerSessionRecovered: committed,
+    });
+    runtime.start({
+      name: 'ping-1', issueUrl: TEST_WORKTREE.issue.url, kind: 'ping',
+      worktree: TEST_WORKTREE,
+      sessionState: { workers: [{ name: 'ping-1', kind: 'ping' }], kinds: ['ping'] },
+    });
+    await runtime.waitForIdle();
+    await inbox.drain();
+    const pending = runtime.recreateWorker('ping-1', 'sess-1');
+    await vi.waitFor(() => expect(newBridge.promptSession).toHaveBeenCalledOnce());
+    expect(runtime.getAttached('ping-1')?.session.sessionId).toBe('sess-1');
+    expect(runtime.sendWorkerMessage('ping-1', 'work').status).toBe('error');
+    expect(committed).not.toHaveBeenCalled();
+    newPrompt.resolve({ stopReason: 'end_turn', responseText: 'ready' });
+    await pending;
+    expect(committed).toHaveBeenCalledWith(expect.objectContaining({
+      reason: 'explicit', previousSessionId: 'sess-1', acpSessionId: 'sess-new',
+    }));
+    expect(runtime.getAttached('ping-1')?.session.sessionId).toBe('sess-new');
+    await runtime.shutdown();
+  });
+
   it('attaches workers and reports harness init prompt completion via inbox', async () => {
     const inbox = new ConductorInbox();
     const completed: Array<{ workerId: string; source?: string }> = [];
@@ -498,6 +619,7 @@ describe('WorkerRuntime', () => {
       name: 'ping-1',
       kind: 'ping',
       reason: 'prompt_history_unreadable',
+      previousSessionId: 'sess-old',
       acpSessionId: 'sess-new',
       acpCwd: TEST_WORKTREE.path,
     });
@@ -660,6 +782,11 @@ describe('WorkerRuntime', () => {
     expect(failures).toHaveLength(1);
     expect(failures[0]).toContain('instruction was not replayed');
 
+    expect(runtime.sendWorkerMessage('ping-1', 'inspect current state')).toMatchObject({
+      status: 'error',
+      message: expect.stringContaining('handoff confirmation'),
+    });
+    await runtime.confirmWorkerHandoff('ping-1');
     expect(runtime.sendWorkerMessage('ping-1', 'inspect current state')).toEqual({
       status: 'sent',
       worker: 'ping-1',
@@ -801,7 +928,7 @@ describe('WorkerRuntime', () => {
     await runtime.shutdown();
   });
 
-  it('lets a preempted instruction wait for recovery bootstrap without cancelling the closed thread', async () => {
+  it('discards a preempted instruction during recovery without cancelling the closed thread', async () => {
     const inbox = new ConductorInbox();
     const historyError = new Error(
       "The current provider can't read this thread's earlier reasoning, which another provider encrypted.",
@@ -865,9 +992,7 @@ describe('WorkerRuntime', () => {
     await runtime.waitForIdle();
     await inbox.drain();
 
-    expect(newPromptSession).toHaveBeenCalledTimes(2);
-    expect(newPromptSession.mock.calls[1]?.[0]).toBe('sess-new');
-    expect(newPromptSession.mock.calls[1]?.[1]).toBe('urgent instruction');
+    expect(newPromptSession).toHaveBeenCalledOnce();
     expect(
       newPromptSession.mock.calls.some(
         ([, prompt]) => prompt === 'old instruction',
@@ -876,7 +1001,7 @@ describe('WorkerRuntime', () => {
     await runtime.shutdown();
   });
 
-  it('does not cancel recovery bootstrap when preempting and runs only the latest instruction', async () => {
+  it('does not cancel recovery bootstrap or run the queued preempt instruction', async () => {
     const inbox = new ConductorInbox();
     const historyError = new Error(
       "The current provider can't read this thread's earlier reasoning, which another provider encrypted.",
@@ -949,8 +1074,7 @@ describe('WorkerRuntime', () => {
     await runtime.waitForIdle();
     await inbox.drain();
 
-    expect(newPromptSession).toHaveBeenCalledTimes(2);
-    expect(newPromptSession.mock.calls[1]?.[1]).toBe('urgent instruction');
+    expect(newPromptSession).toHaveBeenCalledOnce();
     expect(
       newPromptSession.mock.calls.some(
         ([, prompt]) => prompt === 'old instruction',

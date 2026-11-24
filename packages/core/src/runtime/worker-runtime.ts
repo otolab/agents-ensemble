@@ -50,6 +50,7 @@ export interface WorkerRuntimeOptions {
   onWorkerSessionRecovered?: (
     notification: WorkerSessionRecoveredNotification,
   ) => void | Promise<void>;
+  onWorkerHandoffConfirmed?: (name: string) => Promise<void>;
   onAcpUpdate?: (event: WorkerAcpUpdateTelemetry) => void;
   onWorkerState?: (event: WorkerStateTelemetry) => void;
 }
@@ -99,6 +100,8 @@ export class WorkerRuntime {
   private readonly attaching = new Map<string, AttachingWorker>();
   private readonly sleeping = new Map<string, WorkerStartedInfo>();
   private readonly failedWorkers = new Map<string, FailedWorker>();
+  private readonly recreating = new Map<string, AttachedWorker | undefined>();
+  private readonly handoffPending = new Set<string>();
   private readonly idleResolvers = new Set<() => void>();
   private attachInFlight = 0;
   private forceShutdownRequested = false;
@@ -229,6 +232,7 @@ export class WorkerRuntime {
     const workerId = randomUUID();
     const started: WorkerStartedInfo = { workerId, ...params };
     this.configuredWorkers.set(params.name, started);
+    if (params.handoffPending) this.handoffPending.add(params.name);
     if (options?.lazy) {
       this.sleeping.set(params.name, started);
       this.emitWorkerState(workerId, params.name, params.kind, 'sleeping');
@@ -244,6 +248,12 @@ export class WorkerRuntime {
     instruction: string,
     options?: SendWorkerMessageOptions,
   ): SendWorkerMessageResult {
+    if (this.recreating.has(name)) {
+      return { status: 'error', worker: name, message: `Worker "${name}" is being recreated; retry after it finishes.` };
+    }
+    if (this.handoffPending.has(name)) {
+      return { status: 'error', worker: name, message: `Worker "${name}" is waiting for handoff confirmation. Inspect the interrupted work before confirming.` };
+    }
     if (this.forceShutdownRequested) {
       return {
         status: 'error',
@@ -343,6 +353,14 @@ export class WorkerRuntime {
     return { status: 'sent', worker: name };
   }
 
+  async confirmWorkerHandoff(name: string): Promise<void> {
+    if (!this.handoffPending.has(name)) {
+      throw new Error(`Worker "${name}" has no handoff awaiting confirmation.`);
+    }
+    await this.options.onWorkerHandoffConfirmed?.(name);
+    this.handoffPending.delete(name);
+  }
+
   async waitForIdle(): Promise<void> {
     const promptsIdle = this.processing.size === 0 && this.attachInFlight === 0;
     const promptIdle = promptsIdle
@@ -355,6 +373,9 @@ export class WorkerRuntime {
 
   /** 進行中の全 resident prompt を `session/cancel` する（明示 exit 用）。 */
   cancelAllActivePrompts(): void {
+    for (const candidate of this.recreating.values()) {
+      if (candidate) cancelWorkerAcpPrompt(candidate.session);
+    }
     for (const resident of this.residents.values()) {
       if (resident.state === 'processing' && !resident.cancelInFlight) {
         resident.cancelInFlight = true;
@@ -376,7 +397,11 @@ export class WorkerRuntime {
       this.cancelAllActivePrompts();
       const residents = [...this.residents.values()];
       await Promise.all(
-        residents.map((resident) => closeWorkerAcpSession(resident.attached.session)),
+        [
+          ...residents.map((resident) => closeWorkerAcpSession(resident.attached.session)),
+          ...[...this.recreating.values()].filter((candidate): candidate is AttachedWorker => candidate !== undefined)
+            .map((candidate) => closeWorkerAcpSession(candidate.session)),
+        ],
       );
       this.residents.clear();
       this.resolveIdleWaiters();
@@ -388,6 +413,68 @@ export class WorkerRuntime {
       await closeWorkerAcpSession(resident.attached.session);
     }
     this.residents.clear();
+  }
+
+  /** Recreate an idle or failed worker without replaying an interrupted instruction. */
+  async recreateWorker(name: string, previousSessionId: string): Promise<string> {
+    const started = this.configuredWorkers.get(name);
+    const previous = this.residents.get(name);
+    if (!started || !previousSessionId.trim()) throw new Error(`No saved worker session for "${name}".`);
+    if (this.forceShutdownRequested || this.recreating.has(name) || this.attaching.has(name) ||
+        (previous && (previous.state !== 'idle' || previous.queue.length > 0 || previous.preemptInstruction))) {
+      throw new Error(`Worker "${name}" is busy or shutting down.`);
+    }
+    if (previous && previous.attached.session.sessionId !== previousSessionId) {
+      throw new Error(`Worker "${name}" no longer uses the expected session.`);
+    }
+    this.recreating.set(name, undefined);
+    this.attachInFlight++;
+    let candidate: AttachedWorker | undefined;
+    let committed = false;
+    try {
+      candidate = await this.attachStartedWorker(started, false);
+      this.recreating.set(name, candidate);
+      if (this.forceShutdownRequested) throw new Error('Shutdown interrupted worker recreation.');
+      const recovery: WorkerSessionRecovery = {
+        reason: 'explicit', previousSessionId, newSessionId: candidate.session.sessionId,
+      };
+      candidate.session.recovery = recovery;
+      const resident: ResidentWorker = {
+        workerId: started.workerId, started, attached: candidate,
+        state: 'processing', queue: [], lazyInitInFlight: false, cancelInFlight: false,
+        sessionRecoveryAttempted: true, pendingSessionRecovery: recovery,
+        sessionRecoveryInProgress: true, sessionRecoveryPhase: 'bootstrap',
+      };
+      const bootstrap = await this.runAttachedPrompt(resident, buildWorkerAttachPrompt(
+        this.workerAttachOptions(started, false), candidate.session,
+      ));
+      if (this.forceShutdownRequested) throw new Error('Shutdown interrupted worker recreation.');
+      await this.completeWorkerSessionRecovery(resident, bootstrap);
+      committed = true;
+      if (this.forceShutdownRequested) {
+        await closeWorkerAcpSession(candidate.session);
+        throw new Error('Worker recreation was saved during shutdown; resume from the saved session.');
+      }
+      resident.state = 'idle';
+      resident.sessionRecoveryPhase = undefined;
+      this.residents.set(name, resident);
+      this.failedWorkers.delete(name);
+      this.sleeping.delete(name);
+      this.emitWorkerState(started.workerId, name, started.kind, 'idle');
+      if (previous) {
+        try {
+          await closeWorkerAcpSession(previous.attached.session);
+        } catch (error) {
+          throw new Error('Worker recreation was saved, but the old connection did not close. Inspect it before sending work.', { cause: error });
+        }
+      }
+      return bootstrap.promptResult.responseText ?? '';
+    } finally {
+      this.recreating.delete(name);
+      this.attachInFlight--;
+      this.resolveIdleIfReady();
+      if (candidate && !committed) await closeWorkerAcpSession(candidate.session);
+    }
   }
 
   private resolveIdleWaiters(): void {
@@ -505,6 +592,7 @@ export class WorkerRuntime {
       expectedResumeAcpCwd: started.expectedResumeAcpCwd,
       expectedResumeAcpSpawn: started.expectedResumeAcpSpawn,
       currentAcpSpawn: started.acpFingerprint,
+      handoffPending: this.handoffPending.has(started.name),
       ...(resumeSavedSession && started.resumeAcpSessionId
         ? { resumeAcpSessionId: started.resumeAcpSessionId }
         : {}),
@@ -536,6 +624,7 @@ export class WorkerRuntime {
       name: resident.started.name,
       kind: resident.started.kind,
       reason: recovery.reason,
+      previousSessionId: recovery.previousSessionId,
       acpSessionId: recovery.newSessionId,
       acpCwd: resident.attached.session.acpCwd,
     });
@@ -573,6 +662,7 @@ export class WorkerRuntime {
       previousSessionId,
       newSessionId: replacement.session.sessionId,
     };
+    replacement.session.recovery = recovery;
     resident.pendingSessionRecovery = recovery;
     return recovery;
   }
@@ -626,6 +716,16 @@ export class WorkerRuntime {
       resident,
       resident.pendingSessionRecovery,
     );
+    this.handoffPending.add(resident.started.name);
+    const discarded = resident.queue.length + (resident.preemptInstruction ? 1 : 0);
+    if (discarded) {
+      resident.queue.length = 0;
+      resident.preemptInstruction = undefined;
+      this.options.inbox.publishWorkerFailed(
+        resident.started,
+        new Error(`Worker "${resident.started.name}" changed session; ${discarded} queued instructions were discarded. Inspect interrupted work before sending new instructions.`),
+      );
+    }
     resident.pendingSessionRecovery = undefined;
     resident.sessionRecoveryInProgress = false;
   }
@@ -678,14 +778,14 @@ export class WorkerRuntime {
         await this.completeWorkerSessionRecovery(resident, bootstrapResult);
 
         if (source === 'conductor') {
-          if (resident.preemptInstruction) {
-            return { result: bootstrapResult, superseded: true };
-          }
+          const discarded = resident.queue.length + (resident.preemptInstruction ? 1 : 0);
+          resident.queue.length = 0;
+          resident.preemptInstruction = undefined;
           const activityNote = toolActivityObserved
             ? ' ACP had reported tool activity before the history error.'
             : '';
           throw new Error(
-            `Worker "${resident.started.name}" recovered onto a new session, but the interrupted instruction was not replayed.${activityNote} Inspect the worktree before sending follow-up work.`,
+            `Worker "${resident.started.name}" recovered onto a new session, but the interrupted instruction was not replayed.${activityNote} ${discarded} queued instructions were discarded. Inspect the worktree before sending follow-up work. Worker handoff: ${bootstrapResult.promptResult.responseText ?? '(no response)'}`,
             { cause: error },
           );
         }

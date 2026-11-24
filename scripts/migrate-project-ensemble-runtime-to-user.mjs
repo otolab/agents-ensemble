@@ -40,6 +40,7 @@ import {
 } from 'node:fs/promises';
 import { constants as fsConstants } from 'node:fs';
 import { createRequire } from 'node:module';
+import { DatabaseSync } from 'node:sqlite';
 import { homedir } from 'node:os';
 import {
   basename,
@@ -3534,6 +3535,23 @@ async function main() {
   };
   await writeManifest(options.manifest, manifest, { create: true });
 
+  let migrationGate;
+  if (options.mode === 'apply') {
+    const directory = join(options.userRoot, 'session-locks');
+    await mkdir(directory, { recursive: true, mode: 0o700 });
+    await chmod(directory, 0o700);
+    const path = join(await realpath(directory), 'migration.sqlite');
+    migrationGate = new DatabaseSync(path);
+    try {
+      await chmod(path, 0o600);
+      migrationGate.exec('PRAGMA busy_timeout = 0');
+      migrationGate.exec('BEGIN EXCLUSIVE');
+    } catch (error) {
+      migrationGate.close();
+      throw new Error('Cannot migrate while an ensemble session is owned. Stop active sessions and retry.', { cause: error });
+    }
+  }
+  try {
   const storeIndex = new Map();
   const copyCandidates = [];
   const linkedTasks = [];
@@ -3607,7 +3625,34 @@ async function main() {
   finalizeManifest(manifest);
   await writeManifest(options.manifest, manifest);
 
+  const ownerDatabases = [];
   try {
+    if (options.mode === 'apply') {
+      const ids = [...new Set(copyCandidates
+        .map((candidate) => candidate.evidence?.conductorAgentId)
+        .filter((id) => typeof id === 'string' && id.length > 0))].sort();
+      if (ids.length > 0) {
+        const directory = join(options.userRoot, 'session-locks');
+        await mkdir(directory, { recursive: true, mode: 0o700 });
+        await chmod(directory, 0o700);
+        const canonicalDirectory = await realpath(directory);
+        for (const id of ids) {
+          const key = createHash('sha256').update(id).digest('hex');
+          const path = join(canonicalDirectory, `${key}.sqlite`);
+          const database = new DatabaseSync(path);
+          const owner = { database, locked: false };
+          ownerDatabases.push(owner);
+          await chmod(path, 0o600);
+          database.exec('PRAGMA busy_timeout = 0');
+          try {
+            database.exec('BEGIN IMMEDIATE');
+            owner.locked = true;
+          } catch (error) {
+            throw new Error(`Cannot migrate session "${id}" while another process owns it. Stop that session and retry.`, { cause: error });
+          }
+        }
+      }
+    }
     for (const candidate of copyCandidates) {
       await applyFileCopy(candidate, options.mode, options.userRoot);
     }
@@ -3627,6 +3672,14 @@ async function main() {
     finalizeManifest(manifest);
     await writeManifest(options.manifest, manifest);
     throw error;
+  } finally {
+    for (const { database, locked } of ownerDatabases.reverse()) {
+      try {
+        if (locked) database.exec('ROLLBACK');
+      } finally {
+        database.close();
+      }
+    }
   }
 
   finalizeManifest(manifest);
@@ -3634,6 +3687,15 @@ async function main() {
   process.stdout.write(
     `${options.mode}: ${manifest.summary.total} source entries; manifest ${options.manifest}\n`,
   );
+  } finally {
+    if (migrationGate) {
+      try {
+        migrationGate.exec('ROLLBACK');
+      } finally {
+        migrationGate.close();
+      }
+    }
+  }
 }
 
 main().catch((error) => {

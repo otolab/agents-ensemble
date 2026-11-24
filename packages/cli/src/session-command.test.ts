@@ -1443,6 +1443,22 @@ describe('ensemble session commands', () => {
     expect(json.stdout).not.toContain('TOOL_SECRET');
     expect(json.stdout).not.toContain('THINKING_SECRET');
 
+    const generations = runCli([
+      'session', 'workers', 'generations', conductorAgentId,
+      '--worker', 'implementer', '--repo-root', repoRoot,
+    ]);
+    expect(generations.status).toBe(0);
+    expect(JSON.parse(generations.stdout)).toMatchObject([
+      { generation: 1, current: true, acpSessionId: WORKER_PI_SESSION_ID },
+    ]);
+    const selected = runCli([
+      'session', 'workers', 'messages', conductorAgentId,
+      '--worker', 'implementer', '--repo-root', repoRoot,
+      '--generation', '1', '--json',
+    ]);
+    expect(selected.status).toBe(0);
+    expect(JSON.parse(selected.stdout).messages).toEqual(output.messages);
+
     const text = runCli([
       'session',
       'workers',
@@ -2255,7 +2271,7 @@ describe('ensemble session commands', () => {
     const idRead =
       args[0] === 'session' &&
       (['export', 'show', 'messages', 'timeline'].includes(args[1] ?? '') ||
-        (args[1] === 'workers' && args[2] === 'messages'));
+        (args[1] === 'workers' && ['messages', 'generations'].includes(args[2] ?? '')));
     const hasScope =
       args.includes('--github-repo') || args.includes('--issue-url');
     const argsWithScope =
