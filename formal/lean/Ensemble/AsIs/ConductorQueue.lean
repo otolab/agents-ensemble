@@ -3,15 +3,43 @@ import Ensemble.AsIs.ConductorDispatchLifecycle
 /-!
 # 現行 conductor の hold と queue
 
-| TypeScript | Lean |
-|---|---|
-| `packages/core/src/conductor/session/dispatch-hold.ts`: `createDispatchHoldState`, `bufferDispatchHoldEvents`, `pruneStalePermissionEvents` | `Hold`, `bufferHold`, `prunePermissions` |
-| `packages/core/src/dispatch/set-dispatch-hold-tool.ts`: `execute` | `setHold` |
-| `packages/core/src/conductor/session/session-event-queue.ts`: `enqueue`, `dequeue`, `replaceQueue`, `removeEvents`, `prependSilent`, `findSendEvent`, `findSendEvents` | `enqueue`, `dequeue`, `replaceQueue`, `removeEvents`, `prependSilent`, `findEvent`, `findEvents` |
-| `packages/core/src/conductor/session/select-dispatch-batch.ts`: `eventSourceKey`, `selectDispatchBatch`, `dispatchBatchStateAfterSend`, `markContinuationConsumed` | `source`, `selectBatch`, `afterSend`, `consumeContinuation` |
-| `packages/core/src/conductor/session/dispatch-mode.ts`: `sessionEventDispatchMode`, `isTriggerSessionEvent` | `Event.mode`, `isTrigger` |
-| `packages/core/src/conductor/session-policy.ts`: `canDispatchConductorSend` | `canSend` |
-| `packages/core/src/conductor/conductor-session-driver.ts`: `canDispatchIdleOperatorMessage`, `waitForDispatchBatch`, reconnect と send の開始 | `allowIdle`, `chooseDispatch`, `beginDispatch`, `recordSend`, `settleReconnect` |
+| TypeScript のファイル | 関数 | Lean の定義 | 対応範囲 |
+|---|---|---|---|
+| `packages/core/src/conductor/session/dispatch-hold.ts` | `createDispatchHoldState` | `Ensemble.AsIs.ConductorQueue.Hold` | 初期値 |
+| `packages/core/src/conductor/session/dispatch-hold.ts` | `bufferDispatchHoldEvents` | `Ensemble.AsIs.ConductorQueue.bufferHold` | 保留対象の移動。通知は省略 |
+| `packages/core/src/conductor/session/dispatch-hold.ts` | `pruneStalePermissionEvents` | `Ensemble.AsIs.ConductorQueue.prunePermissions` | queue と held の除去。pending 判定は入力 |
+| `packages/core/src/conductor/session/dispatch-hold.ts` | `isHoldableDispatchEvent` | `Ensemble.AsIs.ConductorQueue.holdable` | 保留対象の判定 |
+| `packages/core/src/conductor/session/dispatch-hold.ts` | `filterActivePermissionEvents` | `Ensemble.AsIs.ConductorQueue.prunePermissions` | 生存判定と除去 |
+| `packages/core/src/dispatch/set-dispatch-hold-tool.ts` | `createSetDispatchHoldTool（execute）` | `Ensemble.AsIs.ConductorQueue.setHold` | hold 切替と解除前の回収。出力・通知は省略 |
+| `packages/core/src/conductor/session/session-event-queue.ts` | `enqueue` | `Ensemble.AsIs.ConductorQueue.enqueue` | waiter 不在時の追加。waiter への直接配送は対象外 |
+| `packages/core/src/conductor/session/session-event-queue.ts` | `dequeue` | `Ensemble.AsIs.ConductorQueue.dequeue` | 先頭の取り出し |
+| `packages/core/src/conductor/session/session-event-queue.ts` | `snapshot` | `Ensemble.AsIs.ConductorQueue.Driver.queue` | 値として queue を保持 |
+| `packages/core/src/conductor/session/session-event-queue.ts` | `replaceQueue` | `Ensemble.AsIs.ConductorQueue.replaceQueue` | queue の置換 |
+| `packages/core/src/conductor/session/session-event-queue.ts` | `removeEvents` | `Ensemble.AsIs.ConductorQueue.removeEvents` | object identity による除去 |
+| `packages/core/src/conductor/session/session-event-queue.ts` | `prependSilent` | `Ensemble.AsIs.ConductorQueue.prependSilent` | 先頭への挿入 |
+| `packages/core/src/conductor/session/session-event-queue.ts` | `findSendEvent` | `Ensemble.AsIs.ConductorQueue.findEvent` | 最初の一致を除去 |
+| `packages/core/src/conductor/session/session-event-queue.ts` | `findSendEvents` | `Ensemble.AsIs.ConductorQueue.findEvents` | 全一致を除去 |
+| `packages/core/src/conductor/session/session-event-queue.ts` | `waitForMatchingEvent` | `Ensemble.AsIs.ConductorQueue.findEvent` | queue 内の検索のみ。非同期待機は対象外 |
+| `packages/core/src/conductor/session/select-dispatch-batch.ts` | `eventSourceKey` | `Ensemble.AsIs.ConductorQueue.source` | source の分類 |
+| `packages/core/src/conductor/session/select-dispatch-batch.ts` | `staticEventPriority` | `Ensemble.AsIs.ConductorQueue.priority` | event ごとの静的優先度 |
+| `packages/core/src/conductor/session/select-dispatch-batch.ts` | `isDispatchable` | `Ensemble.AsIs.ConductorQueue.eligible` | dispatch 可否 |
+| `packages/core/src/conductor/session/select-dispatch-batch.ts` | `pickStaticSourceKey` | `Ensemble.AsIs.ConductorQueue.staticSource` | source ごとの優先度と到着順 |
+| `packages/core/src/conductor/session/select-dispatch-batch.ts` | `canUseWorkerContinuation` | `Ensemble.AsIs.ConductorQueue.selectBatch` | worker continuation の選択条件 |
+| `packages/core/src/conductor/session/select-dispatch-batch.ts` | `selectDispatchBatch` | `Ensemble.AsIs.ConductorQueue.selectBatch` | source 選択と束の構築 |
+| `packages/core/src/conductor/session/select-dispatch-batch.ts` | `selectDispatchBatch` | `Ensemble.AsIs.ConductorQueue.boundOperator` | operator 束の byte 上限 |
+| `packages/core/src/conductor/session/select-dispatch-batch.ts` | `dispatchBatchStateAfterSend` | `Ensemble.AsIs.ConductorQueue.afterSend` | 送信後の状態 |
+| `packages/core/src/conductor/session/select-dispatch-batch.ts` | `markContinuationConsumed` | `Ensemble.AsIs.ConductorQueue.consumeContinuation` | continuation の消費 |
+| `packages/core/src/conductor/session/dispatch-mode.ts` | `sessionEventDispatchMode` | `Ensemble.AsIs.ConductorQueue.Event.mode` | mode は明示入力 |
+| `packages/core/src/conductor/session/dispatch-mode.ts` | `isTriggerSessionEvent` | `Ensemble.AsIs.ConductorQueue.isTrigger` | trigger の判定 |
+| `packages/core/src/conductor/session-policy.ts` | `canDispatchConductorSend` | `Ensemble.AsIs.ConductorQueue.canSend` | max-turns の判定 |
+| `packages/core/src/conductor/conductor-session-driver.ts` | `canDispatchIdleOperatorMessage` | `Ensemble.AsIs.ConductorQueue.allowIdle` | idle operator の可否 |
+| `packages/core/src/conductor/conductor-session-driver.ts` | `isImmediateDispatchSource` | `Ensemble.AsIs.ConductorQueue.immediate` | 即時優先 source の判定 |
+| `packages/core/src/conductor/conductor-session-driver.ts` | `waitForDispatchBatch` | `Ensemble.AsIs.ConductorQueue.chooseDispatch` | 同期的な queue / held 選択。待機・通知・予約処理の内部は省略 |
+| `packages/core/src/conductor/conductor-session-driver.ts` | `runConductorSessionDriver` | `Ensemble.AsIs.ConductorQueue.beginDispatch` | send / reconnect の lease 取得と選択 event の除去 |
+| `packages/core/src/conductor/conductor-session-driver.ts` | `runConductorSessionDriver` | `Ensemble.AsIs.ConductorQueue.recordSend` | send 開始後の batch 状態更新 |
+| `packages/core/src/conductor/conductor-session-driver.ts` | `runConductorSessionDriver` | `Ensemble.AsIs.ConductorQueue.settleReconnect` | reconnect 結果と後着分の除去 |
+| `packages/core/src/conductor/conductor-session-driver.ts` | `runOperatorReconnect` | `Ensemble.AsIs.ConductorQueue.settleReconnect` | 外部入力の成否を lifecycle に反映。実接続は対象外 |
+| `packages/core/src/conductor/session/dispatch-hold-reminder-monitor.ts` | `createDispatchHoldReminderMonitor` | — | 通知のみで dispatch 状態を変えないため対象外 |
 
 queue の要素 ID は TS の object identity に対応する。同じ ID は同じ event object を表す必要がある。operator の入力は UTF-8 byte 数を保持し、表示内容や payload は省略する。pending の生存集合、予約の可否、停止信号、reconnect の成否、実行中 worker 数と lease token は外部から与える。負の max-turns は 0 に正規化し、負の byte 上限は `none` で表す。byte 上限の未指定には既定値 1048576 を使う。通知、timer、非同期 waiter、例外および recovery inbox の内部は扱わない。waiter に配送される到着は呼び出し側が別途表現する。reminder は operator への通知だけで dispatch 状態を変更しないため対象外とする。選択後に queue に追加された event は `removeEvents` で維持する。
 -/
