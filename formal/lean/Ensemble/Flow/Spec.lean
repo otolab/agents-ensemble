@@ -74,6 +74,7 @@ inductive Observation where
   | accepted (id : EventId) (kind : ItemKind)
   | dispatched (id : EventId) (attempt : AttemptId)
   | discarded (id : EventId)
+  | requeued (id : EventId)
   deriving DecidableEq
 /-- 具体的モデルが与える遷移関係。1 遷移で複数の観測が生じてよい。 -/
 abbrev Transition := State → Event → List Observation → State → Prop
@@ -106,32 +107,50 @@ def LifecycleReady (s : State) : Prop :=
 /-- 項目別の hold と retry を含めた dispatch 可能性。 -/
 def Eligible (s : State) (id : EventId) : Prop :=
   ∃ kind, Pending s id kind ∧ LifecycleReady s ∧
-    (kind = .operatorInput ∨ kind = .permissionStall ∨ s.dispatchHold = false) ∧
+    (kind = .operatorInput ∨ kind = .permissionStall ∨
+      (s.dispatchHold = false ∧ ¬ s.held id)) ∧
     (kind ≠ .watchReport ∨ (s.conversationHold = false ∧ s.reportHold = false ∧
-      (s.retry = .none ∨ ∃ deadline, s.retry = .send deadline ∧ deadline ≤ s.now)))
+      (s.retry = .none ∨ ∃ deadline, s.retry = .send deadline ∧ deadline ≤ s.now) ∧
+      ((∀ other, ¬ s.frozen other) ∨ s.frozen id)))
 /--
-受理 ID の種類は変わらず、dispatch・明示破棄の観測なしには保留項目が消えない。
-各遷移の受理・dispatch・破棄は遷移後の状態に反映され、未受理 ID の dispatch や
-同じ ID の再受理はしない。これは観測の意味を揃える整合条件であり、永続化や配信を
-保証しない。watch report は dispatch 後に同じ ID を再び pending にしてよい。
+状態と観測を両方向に対応させる。新しい ID の出現は受理観測を要し、保留からの
+状態変更は dispatch または破棄を要する。dispatch 済み watch report の再投入だけを
+明示的な requeue 観測で許し、operator input の再投入は許さない。再投入は未完了
+send の結果に限る（ack-only retry は再投入しない）。各観測は同じ遷移の
+状態変化に対応する。ID の再利用、永続化、配信成功は保証しない。
 -/
 def ObservationConsistent (step : Transition) : Prop :=
   ∀ s e obs t, step s e obs t →
-    (∀ id kind, .accepted id kind ∈ obs → s.items id = none ∧ t.items id = some ⟨kind, .pending⟩) ∧
+    (∀ id kind, .accepted id kind ∈ obs ↔ s.items id = none ∧ t.items id = some ⟨kind, .pending⟩) ∧
     (∀ id attempt, .dispatched id attempt ∈ obs →
       ∃ kind, Pending s id kind ∧ t.items id = some ⟨kind, .dispatched⟩) ∧
-    (∀ id, .discarded id ∈ obs → ∃ kind, Pending s id kind ∧ t.items id = some ⟨kind, .discarded⟩) ∧
-    (∀ id kind, Pending s id kind → (∀ a, .dispatched id a ∉ obs) →
-      .discarded id ∉ obs → Pending t id kind) ∧
-    (∀ id item, s.items id = some item → ∃ next, t.items id = some next ∧ next.kind = item.kind)
+    (∀ id, .discarded id ∈ obs ↔ ∃ kind, Pending s id kind ∧ t.items id = some ⟨kind, .discarded⟩) ∧
+    (∀ id, .requeued id ∈ obs ↔ s.items id = some ⟨.watchReport, .dispatched⟩ ∧
+      t.items id = some ⟨.watchReport, .pending⟩) ∧
+    (∀ id, .requeued id ∈ obs → ∃ attempt result, e = .sendResult attempt result ∧ result ≠ .completed) ∧
+    (∀ id, (s.items id = none ∧ t.items id = none) ∨
+      (∃ kind, s.items id = none ∧ t.items id = some ⟨kind, .pending⟩ ∧ .accepted id kind ∈ obs) ∨
+      (∃ item, s.items id = some item ∧ t.items id = some item) ∨
+      (∃ kind attempt, Pending s id kind ∧ t.items id = some ⟨kind, .dispatched⟩ ∧
+        .dispatched id attempt ∈ obs) ∨
+      (∃ kind, Pending s id kind ∧ t.items id = some ⟨kind, .discarded⟩ ∧ .discarded id ∈ obs) ∨
+      (s.items id = some ⟨.watchReport, .dispatched⟩ ∧
+        t.items id = some ⟨.watchReport, .pending⟩ ∧ .requeued id ∈ obs))
 /--
-到達可能な各状態から、解除操作と環境結果・時刻の有限列で lifecycle が再び send を
-受け付けられる状態への経路が存在する。環境がその経路を実際に選ぶこと、個別項目の
-配信、任意の失敗列からの回復や有限時間での回復は保証しない。
+到達可能な状態の保留項目ごとに、解除操作と環境結果・時刻からなる有限列を経て
+その項目が dispatch 可能になる経路が存在する。hold、held、retry、frozen も判定する。
+環境が実際に成功すること、経路が実行されること、配信や有限時間での回復は保証しない。
+項目が存在しない状態に特定の配信先を要求しない。環境結果を含む緩和の採否は要レビュー。
 -/
 def RecoveryPossible (initial : State → Prop) (step : Transition) : Prop :=
-  ∀ s, Reachable initial step s → ∃ trace t,
-    Run step s trace t ∧ (∀ entry ∈ trace, RecoveryEvent entry.1) ∧ LifecycleReady t
+  ∀ s id kind, Reachable initial step s → Pending s id kind → ∃ trace t,
+    Run step s trace t ∧ (∀ entry ∈ trace, RecoveryEvent entry.1) ∧ Eligible t id
+/--
+reconnect の成功は availability を回復する。他の停止要因の解除や実際の配信、
+成功そのものは保証しない。成功後も unavailable のままの遷移を排除する。
+-/
+def ReconnectRestoresAvailability (step : Transition) : Prop :=
+  ∀ s t obs, step s (.reconnectResult true) obs t → t.available = true
 /-- 無限実行の各時点の状態・入力・観測。各遷移の整合性は `ValidExecution` で確認する。 -/
 structure Execution where
   state : Nat → State
@@ -168,7 +187,7 @@ def ScheduledDispatches (step : Transition) : Prop :=
 /--
 hold 中の permission stall は、dispatch まで他の停止要因がなく、scheduler が弱公平な
 無限実行ではいつか dispatch される。公平性は選択についての前提で、配信を前提にしない。
-時間や遷移回数の上限、send の完了、hold の解除は保証しない。
+時間や遷移回数の上限、send の完了、hold の解除は保証しない。有限実行しかないモデルでは空虚に成立する。
 -/
 def HoldExemptDelivered (step : Transition) : Prop :=
   ∀ run n id, ValidExecution step run → (run.state n).dispatchHold = true →
@@ -182,20 +201,30 @@ def NoEventLoss (initial : State → Prop) (step : Transition) : Prop :=
   ∀ s trace t id kind, Reachable initial step s → Pending s id kind → Run step s trace t →
     ¬ Dispatched trace id → ¬ Observed trace (.discarded id) → Pending t id kind
 /--
-失敗または結果不明の send に含まれた operator input の同一 ID は、その後 dispatch
-されない。別 ID の再入力、watch report の再送、受信側の副作用の重複は対象外。
-失敗した試行への所属は、過去の dispatch 観測から判定する。
+受理観測の直後から、dispatch または明示破棄まで同じ種類の項目が残る。受理遷移の
+状態への反映と、その後の保持をともに要求する。永続化や最終的な配信は保証しない。
+-/
+def AcceptedEventRetained (initial : State → Prop) (step : Transition) : Prop :=
+  ∀ s t u e obs trace id kind, Reachable initial step s → step s e obs t →
+    .accepted id kind ∈ obs → Run step t trace u → ¬ Dispatched trace id →
+    ¬ Observed trace (.discarded id) → Pending u id kind
+/--
+失敗または結果不明の attempt に dispatch された operator input の同一 ID は、結果と
+同じ遷移にも、その後にも再 dispatch されない。履歴上の受理・dispatch で判別し、
+失敗直前の状態に依存しない。別 ID の再入力、watch report の再送、受信側の副作用の
+重複は対象外。観測の完全性は別の `ObservationConsistent` が担う。
 -/
 def NoAutomaticInputReplay (initial : State → Prop) (step : Transition) : Prop :=
   ∀ start before s t u attempt result id obs after,
     initial start → Run step start before s →
-    Observed before (.dispatched id attempt) → s.items id = some ⟨.operatorInput, .dispatched⟩ →
+    Observed before (.accepted id .operatorInput) → Observed before (.dispatched id attempt) →
     result ≠ .completed → step s (.sendResult attempt result) obs t → Run step t after u →
-    ¬ Dispatched after id
+    (∀ next, .dispatched id next ∉ obs) ∧ ¬ Dispatched after id
 /--
 reconnect 成功後、対象が dispatch まで可能であり続け、scheduler が弱公平な無限実行
 ではいつか dispatch される。成功自体、他の停止要因の解消、send の完了、時間や遷移
-回数の上限は保証しない。公平性は選択を仮定し、配信を仮定しない。
+回数の上限は保証しない。公平性は選択を仮定し、配信を仮定しない。有限実行しか
+ないモデルではこの命題は空虚に成立する。availability 回復は別命題で検査する。
 -/
 def ReconnectResumes (step : Transition) : Prop :=
   ∀ run n id, ValidExecution step run → run.event n = .reconnectResult true →
@@ -208,8 +237,9 @@ def ReconnectResumes (step : Transition) : Prop :=
 def ResumeWatchPreservesReportHold (step : Transition) : Prop :=
   ∀ s t obs, step s (.operation .resumeWatch) obs t → t.reportHold = s.reportHold
 /--
-解除操作は対象外の hold や lifecycle 状態を変えない。send や reconnect の結果に
-伴う変更は対象外であり、解除操作自身が成功することも保証しない。
+解除操作は列挙された対象外の hold・availability・attention を変えない。lease、
+pending reconnect、retry、held、frozen と、結果イベントによる変更は対象外。
+解除操作自身が成功することも保証しない。
 -/
 def ReleaseIndependent (step : Transition) : Prop :=
   ∀ s t obs op, step s (.operation op) obs t →
