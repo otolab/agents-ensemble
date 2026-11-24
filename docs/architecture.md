@@ -18,9 +18,19 @@
 
 - **最小ユースケース**: `ensemble issue <url>` → worker 起動 → Issue / PR 上で作業
 - **Issue 非連動**: `ensemble run <brief>` → 起動 cwd・brief ファイルを正本とし、永続化は `~/.ensemble/workspaces/<slug-key>/`（GitHub monitor / Issue context なし、[ADR 0085](adr/0085-ensemble-run-workspaces-and-notes.md)）
-- **backend 選択**: `conductor.backend` は `pi`（既定）または `cursor`。backend によって system prompt・認証・resume の扱いは異なるが、選択後も harness → worker ACP の経路と `ensemble issue <url>` の利用フローは共通（詳細は [ADR 0025](adr/0025-conductor-agent-backend-sdk-and-pi.md) / [ADR 0075](adr/0075-pi-conductor-default-and-model-selection.md)、設定は [settings.md](settings.md)）。
+- **backend 選択**: `conductor.backend` は `pi`（既定）または `cursor`。backend によって system prompt・認証・resume の扱いは異なるが、選択後も harness → worker ACP の経路と `ensemble issue <url>` の利用フローは共通（設計の経緯は [ADR 0025](adr/0025-conductor-agent-backend-sdk-and-pi.md) / [ADR 0075](adr/0075-pi-conductor-default-and-model-selection.md)、設定は [settings.md](settings.md)）。ADR 0025 の resume 差分拒否は現行動作と異なり、現在は差分を通知して復元を試みる。
 - **スコープ**: 小さな作業単位の Issue ベースフロー
 - **対象外（初期）**: 汎用タスクオーケ、IDE 内 Agent の代替
+
+### `ensemble run` の conductor backend
+
+`run` の既定は ADR 0075 と同じ Pi で、Cursor SDK conductor は **experimental** とする。Cursor にも共通 session の実装経路はあるが、実 Cursor SDK を使った run の Notes・MCP・再開を通常 CI で縦断検証していないため、Pi と同等の動作保証は置かない。この位置付けは conductor に限り、worker の ACP preset 選択とは独立する。
+
+- **Notes**: workspace session は Notes tools を共通 registry に登録し、Cursor SDK の `local.customTools` に渡す。登録経路のテストはあるが、実 SDK とモデルによる Notes 操作の成功を保証するものではない。
+- **MCP**: 選択された server map を Cursor SDK に渡す。接続・tool discovery・認証や利用可能な transport は SDK と各 server に依存し、run での組み合わせは通常 CI で検証していない。
+- **resume**: `--continue` は workspace の最新 run を選び、現在の設定で backend の復元を試みる。保存時と backend または MCP 設定が異なる場合は通知するが、差分だけでは拒否しない。Cursor の保存 session を別 backend で復元できる保証はなく、復元失敗は失敗として扱う。Notes は workspace 単位で残るが、conductor の会話復元とは別である。
+
+Cursor 実接続 suite は認証・ネットワーク・隔離 HOME を必要とし、通常 CI の対象外である。run 専用の実 Cursor smoke も常時実行していない（[テスト戦略](testing-strategy.md)）。Pi の compaction 設定や動作を Cursor に適用できるという保証はない。
 
 ### CONDUCTOR_MODE との関係
 

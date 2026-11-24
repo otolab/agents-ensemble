@@ -36,6 +36,8 @@
 
 ### 2. バックエンド選択と resume
 
+> **現行動作への注記:** 以下の backend 不一致時の fail fast と MCP digest 不一致時の拒否は、現行実装とは異なる。現在は差分を通知し、現在の設定で復元を試みる。復元の成功は保証されない。現行仕様は [architecture.md の resume](../architecture.md#ensemble-run-の-conductor-backend) を参照。MCP 選択後の digest の扱いは [ADR 0084](0084-conductor-mcp-selection.md) も参照。
+
 - profile または ensemble 設定で `conductor.backend` を **`pi`（既定） | `cursor`** とする。省略時の既定 model は backend ごとに解決し、Pi は Pi resource settings に委ねる（選択の詳細は [ADR 0075](0075-pi-conductor-default-and-model-selection.md)）。
 - **セッション途中で backend を切り替えない**。sidecar に `conductorBackend` を保存し、resume 時に起動時解決と不一致なら **fail fast**。
 - Pi と SDK の **セッションログ形式の横断互換**は要求しない（[#348](https://github.com/otolab/agents-ensemble/issues/348) 合意）。
@@ -45,6 +47,8 @@
 - sidecar には harness が解決した MCP map の canonical SHA-256 digest を保存する。resume 時に現在の digest と比較し、変更があれば fail fast する。digest は map の秘密値そのものを保存しない。MCP なしの旧 sidecar は後方互換のため許容するが、MCP が設定された旧 sidecar は安全性のため拒否する。
 
 ### 3. MCP
+
+> **現行動作への注記:** 以下の MCP map の差分による resume 拒否は現行実装とは異なる。[ADR 0084](0084-conductor-mcp-selection.md) と [architecture.md](../architecture.md#ensemble-run-の-conductor-backend) を参照。
 
 - [ADR 0021](0021-conductor-mcp-config-resolution.md) の **2 層 `mcp.json` 解決**は両 backend 共通の正本とする。
 - SDK 経路は現行の inline `mcpServers` を維持する。
