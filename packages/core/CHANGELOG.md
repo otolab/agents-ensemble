@@ -1,5 +1,25 @@
 # @agents-ensemble/core
 
+## 0.25.0
+
+### Minor Changes
+
+- 8d1f0e6: Add `ensemble run` for workspace-scoped conductor sessions without GitHub Issue context. Persist harness state under `~/.ensemble/workspaces/<slug-key>/`, workspace Notes tools, and `ensemble run list`.
+- 4a65c18: Prevent concurrent session writers from overwriting each other. Core persistence callers must acquire the appropriate session or resource ownership and pass a write lease.
+- 7c7d0f8: Add a bundled workspace-research team profile for `ensemble run` and display declared profile modes in `ensemble profiles list`.
+
+### Patch Changes
+
+- 3a0d819: Avoid temporary file collisions when resume store writes overlap.
+- 559601b: Pi conductor の workspace session を起動・再開できるようにし、履歴と export が同じ transcript を参照するようにする。
+- 9f13880: Add workspace renaming with recoverable session migration and worker recreation.
+- a031efd: Record operator scheduling events and expose read-only scheduling statistics.
+- ee24180: Separate Issue-specific prompts from workspace worker prompts, including worker session resume.
+- 22ea40c: Separate shared session prompts from Issue-specific conductor guidance, and keep workspace worker recovery prompts independent of tickets.
+- 9106fb7: 表示中の harness 状態を更新し、conductor の compaction と retry を観測できるようにする。
+- 131237f: Track worker session generations, preserve handoff state across recovery, and allow prior transcripts to be inspected.
+- 89d6b1a: Add workspace Notes CLI access for operators and run workers, sharing the core Notes store and memo size limit.
+
 ## 0.24.2
 
 ### Patch Changes
