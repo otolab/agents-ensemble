@@ -4,12 +4,23 @@ import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { OpenQuestionRegistry } from '../escalation/open-question.js';
 import { resolveEnsemblePaths } from '../ensemble-paths.js';
+import { SessionOwnership } from './session-ownership.js';
 import {
   loadOpenQuestionsStore,
   OPEN_QUESTIONS_STORE_VERSION,
   openQuestionsStorePath,
-  saveOpenQuestionsStore,
+  saveOpenQuestionsStore as saveWithLease,
 } from './open-questions-store.js';
+
+async function saveOpenQuestionsStore(path: string, snapshot: Parameters<typeof saveWithLease>[1]) {
+  const owner = await SessionOwnership.acquireProvider(`${dirname(path)}.json`);
+  try {
+    await owner.runWrite((lease) => saveWithLease(path, snapshot, owner, lease));
+  } finally {
+    await owner.closeWritesAndDrain();
+    owner.release();
+  }
+}
 
 const ISSUE_URL = 'https://github.com/org/repo/issues/1';
 

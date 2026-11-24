@@ -43,6 +43,7 @@ child = subprocess.Popen(
     start_new_session=True,
 )
 os.close(slave_fd)
+os.write(sys.stdout.fileno(), ("FIXTURE_CLI_PID=" + str(child.pid) + "\n").encode())
 input_open = True
 
 def stop_child(signum, frame):
@@ -297,7 +298,7 @@ describe('Pi conductor TTY /close process lifecycle', () => {
   });
 
   it.skipIf(process.platform === 'win32')(
-    'closes a real TTY Pi + stdio MCP session and continues the saved Pi session',
+    'rejects a competing resume and recovers a real Pi session after SIGKILL',
     async () => {
       const model = await startFixtureModelServer();
       modelServer = model.server;
@@ -488,7 +489,7 @@ globalThis.fetch = async (input, init) => {
         );
       }
 
-      const runTtySession = async (continuing: boolean) => {
+      const runTtySession = async (continuing: boolean, crashAfterConflict = false) => {
         const cliArgs = [
           CLI_ENTRY,
           'issue',
@@ -535,6 +536,36 @@ globalThis.fetch = async (input, init) => {
           45_000,
         );
         expect(stripTerminalControls(output)).not.toContain('/reconnect · /close');
+        if (crashAfterConflict) {
+          const paths = resolveEnsemblePaths({ repoRoot, home: env.HOME });
+          const stores = (await readdir(paths.canonicalRepoSessionsDir(ISSUE_URL)))
+            .filter((name) => name.endsWith('.json'));
+          expect(stores).toHaveLength(1);
+          const storePath = join(paths.canonicalRepoSessionsDir(ISSUE_URL), stores[0]);
+          const before = await readFile(storePath, 'utf8');
+          const competitor = spawn(process.execPath, ['--import', bootstrapPath, ...cliArgs], {
+            cwd: repoRoot, env, stdio: ['ignore', 'pipe', 'pipe'],
+          });
+          let competitorOutput = '';
+          competitor.stdout?.on('data', (chunk) => { competitorOutput += String(chunk); });
+          competitor.stderr?.on('data', (chunk) => { competitorOutput += String(chunk); });
+          const competitorExit = await waitForProcessExit(competitor, 30_000);
+          expect(competitorExit.code).not.toBe(0);
+          expect(competitorOutput).toMatch(/Cannot acquire session ownership.*another process may own it/);
+          expect(await readFile(storePath, 'utf8')).toBe(before);
+          const pid = /FIXTURE_CLI_PID=(\d+)/.exec(output);
+          expect(pid).not.toBeNull();
+          process.kill(Number(pid![1]), 'SIGKILL');
+          await waitForProcessExit(runner, 10_000);
+          expect(await readFile(storePath, 'utf8')).toBe(before);
+          // SIGKILL bypasses CLI cleanup; reap any fixture MCP child left behind.
+          const fixturePids = (await readFile(pidFile, 'utf8')).trim().split(/\s+/).map(Number);
+          for (const fixturePid of fixturePids) {
+            if (await processIsAlive(fixturePid)) process.kill(fixturePid, 'SIGTERM');
+          }
+          await Promise.all(fixturePids.map(waitForProcessToDisappear));
+          return { summary: undefined };
+        }
         runner.stdin?.write('/close');
         await new Promise((resolve) => setTimeout(resolve, 100));
         runner.stdin?.write('\r');
@@ -552,7 +583,7 @@ globalThis.fetch = async (input, init) => {
       };
 
       const firstRun = await runTtySession(false);
-      expect(firstRun.summary.stopReason).toBe('completed');
+      expect(firstRun.summary!.stopReason).toBe('completed');
       expect(model.getRequests()).toBeGreaterThanOrEqual(1);
 
       const paths = resolveEnsemblePaths({
@@ -563,22 +594,22 @@ globalThis.fetch = async (input, init) => {
       const resumeStoreNames = (await readdir(resumeStoreDir)).filter((name) =>
         name.endsWith('.json'),
       );
-      expect(resumeStoreNames).toEqual([`${firstRun.summary.agentId}.json`]);
+      expect(resumeStoreNames).toEqual([`${firstRun.summary!.agentId}.json`]);
       const resumeStore = JSON.parse(
         await readFile(
           paths.canonicalSessionResumeStorePath(
             ISSUE_URL,
-            firstRun.summary.agentId,
+            firstRun.summary!.agentId,
           ),
           'utf8',
         ),
       ) as { conductorAgentId: string; conductorBackend: string };
       expect(resumeStore).toMatchObject({
-        conductorAgentId: firstRun.summary.agentId,
+        conductorAgentId: firstRun.summary!.agentId,
         conductorBackend: 'pi',
       });
       expect(
-        existsSync(paths.legacyHashSessionResumeStorePath(firstRun.summary.agentId)),
+        existsSync(paths.legacyHashSessionResumeStorePath(firstRun.summary!.agentId)),
       ).toBe(false);
       expect(
         (await readdir(paths.canonicalPiSessionsDir(ISSUE_URL))).length,
@@ -593,9 +624,10 @@ globalThis.fetch = async (input, init) => {
       expect(firstPids.length).toBeGreaterThan(0);
       await Promise.all(firstPids.map(waitForProcessToDisappear));
 
+      await runTtySession(true, true);
       const continuedRun = await runTtySession(true);
       expect(continuedRun.summary).toMatchObject({
-        agentId: firstRun.summary.agentId,
+        agentId: firstRun.summary!.agentId,
         stopReason: 'completed',
       });
       expect(model.getRequests()).toBe(1);

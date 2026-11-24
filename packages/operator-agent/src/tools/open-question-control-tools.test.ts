@@ -18,9 +18,21 @@ import {
   type OpenQuestionControlServer,
 } from '../../../core/src/session/open-question-control.js';
 import {
-  saveSessionResumeStore,
+  saveSessionResumeStore as saveOwnedSessionResumeStore,
   SESSION_RESUME_STORE_VERSION,
 } from '../../../core/src/session/session-resume-store.js';
+import { SessionOwnership } from '../../../core/src/session/session-ownership.js';
+
+async function saveSessionResumeStore(path: string, store: Parameters<typeof saveOwnedSessionResumeStore>[1]): Promise<void> {
+  const owner = await SessionOwnership.acquire(path);
+  try {
+    await owner.runWrite((lease) => saveOwnedSessionResumeStore(path, store, owner, lease));
+  } finally {
+    await owner.closeWritesAndDrain();
+    owner.release();
+  }
+}
+
 import {
   createAnswerLiveOpenQuestionTool,
   createGetLastConductorMessageTool,

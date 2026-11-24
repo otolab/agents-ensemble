@@ -1,5 +1,6 @@
 import { WORKSPACE_WORKER_PROMPT_VERSION } from '../workspace-run/worker-prompt-version.js';
 import { conductorFailureLogPath, createConductorFailureLog } from '../session/conductor-failure-log.js';
+import { SessionOwnership, type SessionWriteLease } from '../session/session-ownership.js';
 import { resolveUserEnsembleRoot } from '../resolve-user-ensemble-root.js';
 import { acquireSessionMigrationReadLock, acquireSessionOwnerLock } from '../session/session-owner-lock.js';
 import { readWorkspaceAnchor } from '../workspace-run/slug-key.js';
@@ -394,6 +395,10 @@ class StartupCleanupGuard {
     return this.cleanupFailed;
   }
 
+  get isHandedOff(): boolean {
+    return this.handedOff;
+  }
+
   add(action: StartupCleanupAction): void {
     if (this.handedOff) {
       throw new Error('Cannot register startup cleanup after session handoff');
@@ -432,11 +437,16 @@ class StartupCleanupGuard {
   }
 }
 
+const retainedGlobalSessionOwners = new Set<() => void>();
+
 export async function runConductorSession(
   options: RunConductorSessionOptions,
 ): Promise<ConductorSessionResult> {
   const startupCleanup = new StartupCleanupGuard();
-  const ownership: { release?: () => void; active: boolean } = { active: false };
+  let owner: SessionOwnership | undefined;
+  let providerOwner: SessionOwnership | undefined;
+  let safeToRelease = false;
+  let releaseGlobalOwner: (() => void) | undefined;
   let releaseWorkspaceGate: (() => void) | undefined;
   try {
     const workspace = parseWorkspaceSessionUrl(options.issueUrl);
@@ -448,27 +458,70 @@ export async function runConductorSession(
       }
     }
     if (options.resumeAgentId) {
-      ownership.release = await acquireSessionOwnerLock(options.resumeAgentId);
-      ownership.active = true;
+      releaseGlobalOwner = await acquireSessionOwnerLock(options.resumeAgentId);
+      owner = await SessionOwnership.acquire(canonicalSessionResumeStorePath({
+        repoRoot: options.repoRoot,
+        issueUrl: options.issueUrl,
+        conductorAgentId: options.resumeAgentId,
+      }));
     }
-    return await runConductorSessionWithStartupGuard(options, startupCleanup, ownership);
+    return await runConductorSessionWithStartupGuard(options, startupCleanup, {
+      get: () => {
+        if (!owner) throw new Error('Session ownership has not been acquired');
+        return owner;
+      },
+      acquire: async (path) => {
+        owner ??= await SessionOwnership.acquire(path);
+        await owner.assertStorePath(path);
+        return owner;
+      },
+      getProvider: () => {
+        if (!providerOwner) throw new Error('Provider ownership has not been acquired');
+        return providerOwner;
+      },
+      acquireProvider: async (path) => {
+        providerOwner = await SessionOwnership.acquireProvider(path);
+        return providerOwner;
+      },
+      markSafeToRelease: () => { safeToRelease = true; },
+      acquireGlobal: async (id) => { releaseGlobalOwner ??= await acquireSessionOwnerLock(id); },
+    });
   } catch (error) {
+    const startupWasActive = !startupCleanup.isHandedOff;
     await startupCleanup.cleanup();
+    if (startupWasActive && !startupCleanup.hasFailures) safeToRelease = true;
     throw error;
   } finally {
-    ownership.active = false;
-    try {
-      ownership.release?.();
-    } finally {
-      releaseWorkspaceGate?.();
+    const owners = [providerOwner, owner].filter((item): item is SessionOwnership => item !== undefined);
+    if (safeToRelease) {
+      await Promise.all(owners.map((item) => item.closeWritesAndDrain()));
+      try {
+        for (const item of owners) item.release();
+        releaseGlobalOwner?.();
+      } finally {
+        releaseWorkspaceGate?.();
+      }
+    } else {
+      for (const item of owners) item.retainUntilProcessExit();
+      if (releaseGlobalOwner) retainedGlobalSessionOwners.add(releaseGlobalOwner);
+      if (releaseWorkspaceGate) retainedGlobalSessionOwners.add(releaseWorkspaceGate);
     }
   }
+}
+
+interface SessionOwnershipLifecycle {
+  get(): SessionOwnership;
+  acquire(path: string): Promise<SessionOwnership>;
+  getProvider(): SessionOwnership;
+  acquireProvider(path: string): Promise<SessionOwnership>;
+  markSafeToRelease(): void;
+  acquireGlobal(id: string): Promise<void>;
 }
 
 async function runConductorSessionWithStartupGuard(
   options: RunConductorSessionOptions,
   startupCleanup: StartupCleanupGuard,
-  ownership: { release?: () => void; active: boolean },
+  ownershipLifecycle: SessionOwnershipLifecycle,
 ): Promise<ConductorSessionResult> {
   const workspaceSession = parseWorkspaceSessionUrl(options.issueUrl);
   const userInstructions = await loadUserInstructions({
@@ -524,6 +577,8 @@ async function runConductorSessionWithStartupGuard(
   const conductorFailureLog = createConductorFailureLog(() => {
     sessionLogger.emit({ type: 'harness.warning', message: 'conductor の失敗ログを保存できません。詳細は活動ログを確認してください。' });
   });
+
+  startupCleanup.add(() => conductorFailureLog.close());
 
   const expiredHistory = await pruneExpiredToolCallSnapshotHistoryFiles(
     { repoRoot: options.repoRoot, issueUrl: options.issueUrl },
@@ -621,12 +676,15 @@ async function runConductorSessionWithStartupGuard(
   let toolCallHistoryNeedsRewrite = false;
 
   if (options.resumeAgentId) {
-    const locatedResumeStore =
-      await requireLocatedSessionResumeStoreForResume({
+    const owner = ownershipLifecycle.get();
+    const locatedResumeStore = await owner.runWrite((lease) =>
+      requireLocatedSessionResumeStoreForResume({
       repoRoot: options.repoRoot,
-      conductorAgentId: options.resumeAgentId,
+      conductorAgentId: options.resumeAgentId!,
       issueUrl: options.issueUrl,
-    });
+      owner,
+      lease,
+    }));
     const loadedResumeStore = locatedResumeStore.resumeStore;
     activeResumeStoreVersion = loadedResumeStore.version;
     activeLocatedResumeStore = locatedResumeStore;
@@ -787,21 +845,20 @@ async function runConductorSessionWithStartupGuard(
         });
         return;
       }
-      await saveSessionResumeStore(
-        locatedResumeStore.path,
-        loadedResumeStore,
-      );
+      await owner.runWrite((lease) =>
+        saveSessionResumeStore(locatedResumeStore.path, loadedResumeStore, owner, lease));
     });
-    await saveSessionResumeStore(
-      activeResumeStorePath,
-      resumeStore,
-    );
+    await owner.runWrite((lease) =>
+      saveSessionResumeStore(activeResumeStorePath!, resumeStore, owner, lease));
     resumeStoreActivationCommitted = true;
-    const history = await loadToolCallSnapshotHistory({
-      repoRoot: options.repoRoot,
-      conductorAgentId: options.resumeAgentId,
-      issueUrl: options.issueUrl,
-    });
+    const historyOwner = await SessionOwnership.acquireProvider(activeResumeStorePath!);
+    let history: Awaited<ReturnType<typeof loadToolCallSnapshotHistory>>;
+    try {
+      history = await loadToolCallSnapshotHistory({
+        repoRoot: options.repoRoot,
+        conductorAgentId: options.resumeAgentId,
+        issueUrl: options.issueUrl,
+      });
     resumeToolCallSnapshots = history.entries;
     toolCallHistoryNeedsRewrite = history.needsRewrite;
     if (history.warning) {
@@ -825,7 +882,8 @@ async function runConductorSessionWithStartupGuard(
       };
       openQuestions.restore(legacySnapshot);
       try {
-        await saveOpenQuestionsStore(openQuestionsPath, legacySnapshot);
+        await historyOwner.runWrite((lease) =>
+          saveOpenQuestionsStore(openQuestionsPath, legacySnapshot, historyOwner, lease));
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error);
         sessionLogger.emit({
@@ -834,6 +892,10 @@ async function runConductorSessionWithStartupGuard(
             `旧形式の SessionResumeStore から復元した open question を YAML にバックフィルできませんでした。今回のセッションは継続します。 error=${detail}`,
         });
       }
+    }
+    } finally {
+      await historyOwner.closeWritesAndDrain();
+      historyOwner.release();
     }
     githubMonitorCursor = resumeStore.githubMonitor;
     for (const [name, worker] of Object.entries(resumeStore.workers)) {
@@ -1546,7 +1608,9 @@ async function runConductorSessionWithStartupGuard(
       if (teardownStarted) {
         throw new Error('report_session_state is unavailable during teardown');
       }
-      const write = sessionStateWriteQueue.then(() =>
+      const owner = ownershipLifecycle.getProvider();
+      const previousWrite = sessionStateWriteQueue;
+      const write = owner.runWrite((lease) => previousWrite.then(() =>
         saveSessionStatusLine(
           sessionStateStorePath({
             repoRoot: options.repoRoot,
@@ -1556,8 +1620,10 @@ async function runConductorSessionWithStartupGuard(
           }),
           statusLine,
           undefined,
+          owner,
+          lease,
         ),
-      );
+      ));
       sessionStateWriteQueue = write.catch(() => {});
       return write;
     },
@@ -1687,6 +1753,14 @@ async function runConductorSessionWithStartupGuard(
       forResume: Boolean(options.resumeAgentId),
     });
   });
+  if (!options.resumeAgentId) {
+    await ownershipLifecycle.acquire(canonicalSessionResumeStorePath({
+      repoRoot: options.repoRoot, issueUrl: options.issueUrl, conductorAgentId: conductorAgent.agentId,
+    }));
+  }
+  await ownershipLifecycle.acquireProvider(canonicalSessionResumeStorePath({
+    repoRoot: options.repoRoot, issueUrl: options.issueUrl, conductorAgentId: conductorAgent.agentId,
+  }));
   try {
     conductorFailureLog.setPath(conductorFailureLogPath({
       repoRoot: options.repoRoot, issueUrl: options.issueUrl, conductorAgentId: conductorAgent.agentId,
@@ -1729,10 +1803,7 @@ async function runConductorSessionWithStartupGuard(
     }
   }
   const conductorHandle: ConductorAgentHandle = { conductor: conductorAgent };
-  if (!ownership.release) {
-    ownership.release = await acquireSessionOwnerLock(conductorAgent.agentId);
-    ownership.active = true;
-  }
+  await ownershipLifecycle.acquireGlobal(conductorAgent.agentId);
   activeResumeStorePath ??= canonicalSessionResumeStorePath({
     repoRoot: options.repoRoot,
     issueUrl: options.issueUrl,
@@ -1831,12 +1902,11 @@ async function runConductorSessionWithStartupGuard(
   let terminalLifecycle: SessionLifecycle | undefined;
   let terminalResumeStoreFinalFlushQueued = false;
   const enqueueSessionResumeStoreWrite = (
-    write: () => Promise<void>,
+    write: (lease: SessionWriteLease, resourceLease: SessionWriteLease) => Promise<void>,
   ): Promise<void> => {
-    const nextWrite = sessionResumeStoreWriteQueue.then(() => {
-      if (!ownership.active) throw new Error('Session ownership has ended; refusing to write saved state.');
-      return write();
-    });
+    const previousWrite = sessionResumeStoreWriteQueue;
+    const nextWrite = ownershipLifecycle.get().runJointWrite(ownershipLifecycle.getProvider(), (lease, resourceLease) =>
+      previousWrite.then(() => write(lease, resourceLease)));
     sessionResumeStoreWriteQueue = nextWrite.catch(() => {});
     return nextWrite;
   };
@@ -1907,6 +1977,7 @@ async function runConductorSessionWithStartupGuard(
   };
   const persistOpenQuestionsSnapshot = async (
     snapshot: OpenQuestionRegistrySnapshot,
+    lease: SessionWriteLease,
   ): Promise<void> => {
     await saveOpenQuestionsStore(
       openQuestionsStorePath({
@@ -1916,19 +1987,24 @@ async function runConductorSessionWithStartupGuard(
         location: 'canonical-slug',
       }),
       snapshot,
+      ownershipLifecycle.getProvider(),
+      lease,
     );
   };
   const persistSessionResumeStore = async (
     snapshot: OpenQuestionRegistrySnapshot,
+    lease: SessionWriteLease,
     lifecycle?: SessionLifecycle,
   ): Promise<void> => {
     await saveSessionResumeStore(
       activeResumeStorePath!,
       createSessionResumeStore(snapshot, lifecycle),
+      ownershipLifecycle.get(),
+      lease,
     );
   };
   commitWorkerSessionRecovery = (notification) =>
-    enqueueSessionResumeStoreWrite(async () => {
+    enqueueSessionResumeStoreWrite(async (lease) => {
       if (terminalResumeStoreFinalFlushQueued || teardownStarted) {
         throw new Error('Cannot commit worker session recovery during shutdown; resume the prior session.');
       }
@@ -1974,7 +2050,7 @@ async function runConductorSessionWithStartupGuard(
       const snapshot = createSessionResumeStore(openQuestions.snapshot());
       snapshot.workers[notification.name] = replacement;
       try {
-        await saveSessionResumeStore(activeResumeStorePath!, snapshot);
+        await saveSessionResumeStore(activeResumeStorePath!, snapshot, ownershipLifecycle.get(), lease);
       } catch (error) {
         recoverySaveUncertain = true;
         shutdownIntentController.abort();
@@ -1988,7 +2064,7 @@ async function runConductorSessionWithStartupGuard(
       workerSessions.set(notification.name, replacement);
       workerSessionOrigins.set(notification.name, { repoRoot: options.repoRoot, issueUrl: options.issueUrl });
     });
-  commitWorkerHandoffConfirmed = (name, sessionId) => enqueueSessionResumeStoreWrite(async () => {
+  commitWorkerHandoffConfirmed = (name, sessionId) => enqueueSessionResumeStoreWrite(async (lease) => {
     if (terminalResumeStoreFinalFlushQueued || teardownStarted || recoverySaveUncertain) {
       throw new Error('Cannot confirm worker handoff during shutdown or an uncertain save.');
     }
@@ -1998,7 +2074,7 @@ async function runConductorSessionWithStartupGuard(
     const snapshot = createSessionResumeStore(openQuestions.snapshot());
     snapshot.workers[name] = replacement;
     try {
-      await saveSessionResumeStore(activeResumeStorePath!, snapshot);
+      await saveSessionResumeStore(activeResumeStorePath!, snapshot, ownershipLifecycle.get(), lease);
     } catch (error) {
       recoverySaveUncertain = true;
       shutdownIntentController.abort();
@@ -2015,7 +2091,7 @@ async function runConductorSessionWithStartupGuard(
     if (lifecycle !== undefined && lifecycle !== 'unknown') {
       terminalResumeStoreFinalFlushQueued = true;
     }
-    return enqueueSessionResumeStoreWrite(async () => {
+    return enqueueSessionResumeStoreWrite(async (lease, resourceLease) => {
       if (recoverySaveUncertain) {
         throw new Error('Worker session switch outcome is unknown; refusing to overwrite the saved state.');
       }
@@ -2032,8 +2108,8 @@ async function runConductorSessionWithStartupGuard(
         harnessModifiedAt = harnessPhase ? Date.now() : undefined;
       }
       const snapshot = openQuestions.snapshot();
-      await persistOpenQuestionsSnapshot(snapshot);
-      await persistSessionResumeStore(snapshot, lifecycle);
+      await persistOpenQuestionsSnapshot(snapshot, resourceLease);
+      await persistSessionResumeStore(snapshot, lease, lifecycle);
     });
   };
   const reportResumeStoreFlushFailure = (error: unknown): void => {
@@ -2115,9 +2191,11 @@ async function runConductorSessionWithStartupGuard(
     if (!toolCallHistoryDirty) return toolCallHistoryFlushQueue;
 
     toolCallHistoryDirty = false;
-    const nextFlush = toolCallHistoryFlushQueue.then(() =>
-      saveToolCallSnapshotHistory(toolCallHistoryPath, toolCallSnapshots.snapshot()),
-    );
+    const owner = ownershipLifecycle.getProvider();
+    const previousFlush = toolCallHistoryFlushQueue;
+    const nextFlush = owner.runWrite((lease) => previousFlush.then(() =>
+      saveToolCallSnapshotHistory(toolCallHistoryPath, toolCallSnapshots.snapshot(), owner, lease),
+    ));
     toolCallHistoryFlushQueue = nextFlush.catch(() => {});
     return nextFlush;
   };
@@ -2663,7 +2741,7 @@ async function runConductorSessionWithStartupGuard(
         let answered: OpenQuestion | undefined;
         const escalatedRecords: EscalationRecord[] = [];
 
-        await enqueueSessionResumeStoreWrite(async () => {
+        await enqueueSessionResumeStoreWrite(async (lease, resourceLease) => {
           const stagedOpenQuestions = new OpenQuestionRegistry();
           stagedOpenQuestions.restore(openQuestions.snapshot());
           const stagedAccepted = submitOperatorInput({
@@ -2686,12 +2764,12 @@ async function runConductorSessionWithStartupGuard(
 
           // The Open Questions YAML is the durable commit point. Do not expose
           // the answer in the live Registry or event queue until this succeeds.
-          await persistOpenQuestionsSnapshot(stagedOpenQuestions.snapshot());
+          await persistOpenQuestionsSnapshot(stagedOpenQuestions.snapshot(), resourceLease);
 
           // Another answer path may have won while the atomic YAML write was
           // in flight. Restore the current Registry snapshot before rejecting.
           if (openQuestions.get(questionId)?.status !== 'open') {
-            await persistOpenQuestionsSnapshot(openQuestions.snapshot());
+            await persistOpenQuestionsSnapshot(openQuestions.snapshot(), resourceLease);
             return;
           }
 
@@ -2719,13 +2797,13 @@ async function runConductorSessionWithStartupGuard(
           });
           answered = openQuestions.get(questionId);
           if (!accepted || !answered || answered.status !== 'answered') {
-            await persistOpenQuestionsSnapshot(openQuestions.snapshot());
+            await persistOpenQuestionsSnapshot(openQuestions.snapshot(), resourceLease);
             accepted = false;
             return;
           }
 
           try {
-            await persistSessionResumeStore(openQuestions.snapshot());
+            await persistSessionResumeStore(openQuestions.snapshot(), lease);
           } catch (error) {
             // YAML is authoritative and is already durable. Keep the accepted
             // answer/notification, report the mirror failure, then repair it.
@@ -3152,6 +3230,8 @@ async function runConductorSessionWithStartupGuard(
       shutdownSignal.aborted;
     const teardownStartedAt = Date.now();
     const teardownPhases: Record<string, number> = {};
+    let teardownCompleted = false;
+    let cleanupFailed = false;
 
     unregisterProcessSignalHandlers();
 
@@ -3185,6 +3265,7 @@ async function runConductorSessionWithStartupGuard(
         try {
           await activeSecretControlServer.close();
         } catch {
+          cleanupFailed = true;
           sessionLogger.emit({
             type: 'harness.warning',
             message: 'One-time secret IPC cleanup failed.',
@@ -3203,6 +3284,7 @@ async function runConductorSessionWithStartupGuard(
         try {
           await activeControlServer.close();
         } catch (error) {
+          cleanupFailed = true;
           const detail = error instanceof Error ? error.message : String(error);
           sessionLogger.emit({
             type: 'harness.warning',
@@ -3310,19 +3392,37 @@ async function runConductorSessionWithStartupGuard(
       };
 
       if (forceShutdown) {
-        await Promise.all([
+        const results = await Promise.allSettled([
           runGithubMonitorStop(),
           runWorkerStop(),
           runConductorClose(),
         ]);
+        const failures = results.filter((result) => result.status === 'rejected');
+        if (failures.length) {
+          throw new AggregateError(failures.map((failure) => failure.reason), 'Session shutdown failed or worker ACP shutdown is unconfirmed; ownership is retained until process exit; restart the owning process before resuming.');
+        }
       } else {
-        await runGithubMonitorStop();
+        const failures: unknown[] = [];
+        try {
+          await runGithubMonitorStop();
+        } catch (error) {
+          failures.push(error);
+        }
         // A monitor stop callback can synchronously dispatch a worker prompt.
         // Cancel that prompt before WorkerRuntime waits for idle and closes
         // the ACP bridge.
         workerSession.runtime.cancelAllActivePrompts();
-        await runWorkerStop();
-        await runConductorClose();
+        try {
+          await runWorkerStop();
+        } catch (error) {
+          failures.push(error);
+        }
+        try {
+          await runConductorClose();
+        } catch (error) {
+          failures.push(error);
+        }
+        if (failures.length) throw new AggregateError(failures, 'Session shutdown failed or worker ACP shutdown is unconfirmed; ownership is retained until process exit; restart the owning process before resuming.');
       }
 
       // ACP updates can arrive while cancellation and bridge shutdown settle.
@@ -3345,16 +3445,22 @@ async function runConductorSessionWithStartupGuard(
         emitTeardownPhase('worktree');
         await emitWorktreeRemoval(sessionLogger, options.repoRoot, workerWorktree);
       }
+      teardownCompleted = true;
     } finally {
       try {
         emitTeardownPhase('flushSessionResumeStore');
         await sessionStateWriteQueue;
         await flushSessionResumeStore(lifecycle);
       } catch (error) {
+        cleanupFailed = true;
         reportResumeStoreFlushFailure(error);
       }
       process.off('SIGINT', onTeardownSignal);
       process.off('SIGTERM', onTeardownSignal);
+      conductorFailureLog.close();
+      if (teardownCompleted && !cleanupFailed) {
+        ownershipLifecycle.markSafeToRelease();
+      }
     }
   }
 }

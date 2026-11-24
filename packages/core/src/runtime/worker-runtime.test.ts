@@ -1,4 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { AcpBridge } from '../acp/acp-bridge.js';
 import { ConductorInbox } from './conductor-inbox.js';
 import { WorkerRuntime } from './worker-runtime.js';
@@ -150,6 +153,74 @@ describe('WorkerRuntime', () => {
       await runtime.shutdown();
     },
   );
+  it('closes a delayed attach without starting its prompt after forced shutdown', async () => {
+    const connection = createDeferred<AcpBridge>();
+    const close = vi.fn().mockResolvedValue(undefined);
+    const bridge = createMockBridge(close);
+    const connectAcp = vi.fn(() => connection.promise);
+    const runtime = new WorkerRuntime({ inbox: new ConductorInbox(), connectAcp });
+    runtime.start({
+      name: 'ping-1',
+      issueUrl: TEST_WORKTREE.issue.url,
+      kind: 'ping',
+      prompt: { instructions: ['pong'] },
+      worktree: TEST_WORKTREE,
+      sessionState: { workers: [{ name: 'ping-1', kind: 'ping' }], kinds: ['ping'] },
+    });
+    await vi.waitFor(() => expect(connectAcp).toHaveBeenCalledOnce());
+    await expect(runtime.shutdown({ force: true })).rejects.toThrow(/shutdown failed/);
+    connection.resolve(bridge);
+    await vi.waitFor(() => expect(close).toHaveBeenCalledOnce());
+    expect(bridge.promptSession).not.toHaveBeenCalled();
+  });
+
+  it('does not deliver delayed ACP updates after forced shutdown', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'late-worker-save-'));
+    const path = join(directory, 'history');
+    await writeFile(path, 'before');
+    const inbox = new ConductorInbox();
+    const result = createDeferred<{ stopReason: string }>();
+    let lateUpdate: ((update: unknown) => void) | undefined;
+    const writes: Promise<void>[] = [];
+    const onAcpUpdate = vi.fn(() => {
+      writes.push(writeFile(path, 'late update'));
+    });
+    const runtime = new WorkerRuntime({
+      inbox,
+      onAcpUpdate,
+      connectAcp: async () => ({
+        ...createMockBridge(vi.fn().mockResolvedValue(undefined)),
+        promptSession: vi.fn((_id: string, _prompt: string, options: { onUpdate: (update: unknown) => void }) => {
+          lateUpdate = options.onUpdate;
+          return result.promise;
+        }),
+        cancelSession: vi.fn(),
+      }) as unknown as AcpBridge,
+    });
+    try {
+      runtime.start({
+        name: 'ping-1',
+        issueUrl: TEST_WORKTREE.issue.url,
+        kind: 'ping',
+        prompt: { instructions: ['pong'] },
+        worktree: TEST_WORKTREE,
+        sessionState: { workers: [{ name: 'ping-1', kind: 'ping' }], kinds: ['ping'] },
+      });
+      await vi.waitFor(() => expect(lateUpdate).toBeDefined());
+      await runtime.shutdown({ force: true });
+      lateUpdate!({
+        sessionId: 'sess-1',
+        update: { sessionUpdate: 'tool_call', toolCallId: 'late' },
+      });
+      await Promise.all(writes);
+      expect(await readFile(path, 'utf8')).toBe('before');
+      expect(onAcpUpdate).not.toHaveBeenCalled();
+      result.resolve({ stopReason: 'cancelled' });
+      await runtime.waitForIdle();
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
 
   it('does not load or dispatch a worker awaiting recreation after a rename', async () => {
     const bridge = createMockBridge(vi.fn().mockResolvedValue(undefined));
@@ -298,7 +369,31 @@ describe('WorkerRuntime', () => {
     expect(confirmed).not.toHaveBeenCalled();
     expect(runtime.sendWorkerMessage('ping-1', 'old instruction').status).toBe('error');
     expect(runtime.inspectWorkerHandoff('ping-1').report).toBe('new report');
-    await runtime.shutdown();
+    await expect(runtime.shutdown()).rejects.toThrow(/restart the owning process/);
+  });
+
+  it('reports an unconfirmed old ACP close during forced shutdown', async () => {
+    const closeGate = createDeferred<void>();
+    const oldBridge = createMockBridge(vi.fn(() => closeGate.promise));
+    const candidate = createMockBridge(vi.fn().mockResolvedValue(undefined));
+    candidate.cancelSession = vi.fn();
+    vi.mocked(candidate.newSession).mockResolvedValue('new-id');
+    vi.mocked(candidate.promptSession).mockResolvedValue({ stopReason: 'end_turn', responseText: 'handoff' });
+    const runtime = new WorkerRuntime({
+      inbox: new ConductorInbox(), connectAcp: vi.fn().mockResolvedValueOnce(oldBridge).mockResolvedValueOnce(candidate),
+      onWorkerSessionRecovered: vi.fn().mockResolvedValue(undefined),
+    });
+    runtime.start({
+      name: 'ping-1', issueUrl: TEST_WORKTREE.issue.url, kind: 'ping', worktree: TEST_WORKTREE,
+      resumeAcpSessionId: 'sess-1',
+      sessionState: { workers: [{ name: 'ping-1', kind: 'ping' }], kinds: ['ping'] },
+    });
+    await runtime.waitForIdle();
+    const recreation = runtime.recreateWorker('ping-1', 'sess-1');
+    await vi.waitFor(() => expect(oldBridge.close).toHaveBeenCalledOnce());
+    await expect(runtime.shutdown({ force: true })).rejects.toThrow(/shutdown failed/);
+    closeGate.resolve();
+    await recreation;
   });
 
   it('serializes confirmation against recreation and rejects a second confirmation', async () => {

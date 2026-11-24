@@ -233,6 +233,28 @@ permission の ACP variant と抽出優先順位は
 
 SessionResumeStore は、harness がセッション再開に必要な情報を保存する JSON ファイル（`~/.ensemble/sessions/github.com/<owner>/<repo>/{conductorAgentId}.json`）です。会話 transcript の保存先ではなく、記録された socket path だけでは harness の稼働や接続可能性も分かりません。
 
+同一 session の書き手は SQLite の lock で排他します。通常終了時は新しい書き込みを封鎖し、受理済みの書き込みを待ってから解放します。`/close` を含め、書き込みの封鎖と受理済み操作の完了を確認できた場合は解放します。後始末を確認できない場合はプロセス終了まで保持します。lock は SQLite の file locking が機能するローカル filesystem を前提とし、旧版や直接ファイルを編集するツールは参加しません。親 directory の symlink は実体に解決して同一視します。保存ファイル自体の symlink・hard link は使用しないでください。lock ファイルを稼働中に削除・移動しないでください。複数ファイル間のクラッシュ時の原子性や、別々にコピーした保存先の同期は保証しません。
+
+`@agents-ensemble/core` の公開保存 API は `SessionOwnership` と、その `runWrite` が渡す lease を受け取ります。所有権を取得してから読み直し、変更と保存を同じ操作内で行ってください。所有権を共有した独立の stale snapshot を自動で統合する機能はありません。
+
+```typescript
+const owner = await SessionOwnership.acquire(storePath);
+try {
+  await owner.runWrite(async (lease) => {
+    const store = await loadSessionResumeStore(storePath);
+    if (!store) throw new Error('Session not found');
+    await saveSessionResumeStore(storePath, store, owner, lease);
+  });
+} finally {
+  await owner.closeWritesAndDrain();
+  owner.release();
+}
+```
+
+`saveOpenQuestionsStore` と `saveSessionStatusLine` は対象 ID の store path を `SessionOwnership.acquireProvider(storePath)` に渡して resource 所有権を取得し、その `runWrite` の lease を渡します。resume store と YAML を一つの操作で更新する場合は、session 所有権の `runJointWrite(resourceOwner, async (sessionLease, resourceLease) => ...)` を使います。両所有権を取得後、同じ操作内で読み直して保存し、両 gate を閉じて drain してから解放します。`acquire` は resume store 用、`acquireProvider` は YAML・history 用です。
+
+resume 時に legacy 情報を除去する `requireSessionResumeStoreForResume` / `requireLocatedSessionResumeStoreForResume` にも所有権と lease が必要です。旧 `saveSessionSidecar` と `requireSessionSidecarForResume` も同じ契約です。
+
 `ensemble session list/show` は core の SessionResumeStore / YAML 読取 API を使う読み取り専用 CLI です。`list` は省略時に全てのローカル canonical GitHub slug group を対象とし、`githubRepo` / `issueUrl` / `conductorAgentId` と `limit` / `cursor` で絞り込み・ページングできます。GitHub API による repository 探索はしません。session ID を受け取る `show` / `export` / `messages` / `workers messages` / `timeline` は `githubRepo` または `issueUrl` の scope を必須とし、ID だけで repository を推測しません。両方の filter が異なる slug を指す場合はエラーです。harness への接続や agent 起動は行わず、sidecar は許可したメタデータだけ、YAML は件数・時刻だけを表示します。旧形式の SessionResumeStore に残る ACP 環境変数の平文値も読取 API が除外します。`show` の `workerReaders` は、保存 preset に対応する transcript reader の有無と未対応理由を worker ごとに示します。transcript の保存先が現在読めるかどうかは、この表示では確認しません。
 
 `ensemble session messages` は operator-agent の `list_conductor_messages` と同じ `listConductorProviderHistory` を使い、provider が保存した user inbound / final response の本文をそのまま返すローカルデバッグ表示です。Pi conductor transcript は canonical repository slug だけを読みます。`Pi SessionManager` に渡す cwd は保存済み `conductorCwd` です。旧 path-hash / project-local transcript を移行していない場合、履歴は見つからず利用できません。テキストと JSON の両方で redaction は行いません。会話本文に秘密値や repository 内の非公開情報があれば、そのまま stdout に出ます。pipe / redirect 先も生データとして扱い、集計・蓄積・共有する前に利用側でサニタイズしてください。構造化された SessionResumeStore の秘密値保護は、この会話本文には適用されません。core API から後段へ渡す前に sanitizer を適用する契約は [provider history list API](live-open-question-control-api.md#operator-agent-の-provider-history-list)を参照してください。
@@ -328,6 +350,8 @@ operator-agent の `list_operator_sessions` は `issueUrl` / `conductorAgentId` 
 `scripts/migrate-project-ensemble-runtime-to-user.mjs` は user path-hash に残る Issue session data と旧 operator watch state に加え、operator が指定した checkout の `.ensemble/sessions/`・`.ensemble/pi/sessions/`・`.ensemble/operator-agent/watch-state.json` を inventory し、安全に対応づけられる data を user storage へ copy します。これは明示的に実行する migration です。起動時・継続実行の自動 migration は行いません。release 前にこのマシンや全利用者の実データを移行・照合することも条件ではありません。
 
 この release で legacy read fallback を外した後、未移行データは通常の session list / show / resume / provider history / watch から見えません。legacy source はディスクに残り、自動削除・rename は行いません。後から移行して通常の reader から使いたい場合は、migration tool を含む repository checkout から次の手順を実行してください。
+
+**実行前の停止:** この tool の apply は現行 CLI の session と排他しますが、dry-run や旧版・公開保存 API の直接利用は同じ排他に参加しません。dry-run を含め inventory から apply の完了まで、対象 checkout と移行先 user root に関係する session、operator watch、旧版を含むすべての writer と直接編集ツールを停止してください。各 CLI の `/close` などで通常終了し、別 terminal・clone・常駐サービスを含めて対象 process が終了したことを確認します。ライブラリ組み込みの場合はそのホスト process も停止してください。停止を確認できない場合は実行しないでください。apply 後に manifest と checksum を確認してから session や watch を再開します。稼働中の lock ファイルを削除して停止の代わりにしてはいけません。
 
 **manifest / archive の取り扱い:** tool は manifest を既定の user root、または `--manifest` で指定した filesystem path に書き、watch archive は user root 配下へ保存します。これらはローカルのファイル出力で、自動で外部へ upload しません。manifest には source / destination などのローカル path、Issue URL / ID、`conductorAgentId`、SHA-256 checksum、provenance、filesystem error details が含まれることがあります。watch archive には pending report の本文も含まれます。公開 Issue / PR や共有先へ渡す前に内容を確認し、必要な箇所を redact してください。tool は directory `0700` / file `0600` の権限を設定しようとしますが、chmod が使えない場合は失敗を許容します。filesystem や platform の ACL / mode の違いもあるため、この制限は best-effort であり、他ユーザーからのアクセスを防ぐ保証ではありません。必要な ACL が設定された保存先を選び、共有前に実際の権限を確認してください。
 
