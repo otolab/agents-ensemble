@@ -2522,6 +2522,17 @@ async function runConductorSessionWithStartupGuard(
       socketPath: oneTimeSecretControlServer?.socketPath,
       cliEntrypoint: options.secretCliEntrypoint,
     });
+    for (const worker of workers) {
+      const env = worker.spawn!.env!;
+      delete env.ENSEMBLE_WORKSPACE_SLUG;
+      delete env.ENSEMBLE_WORKSPACE_REPO_ROOT;
+      delete env.ENSEMBLE_WORKSPACE_CONDUCTOR_CWD;
+      if (workspaceSession) {
+        env.ENSEMBLE_WORKSPACE_SLUG = workspaceSession.slugKey;
+        env.ENSEMBLE_WORKSPACE_REPO_ROOT = resolvePath(options.repoRoot);
+        env.ENSEMBLE_WORKSPACE_CONDUCTOR_CWD = resolvePath(conductorCwd);
+      }
+    }
     // Keep startup cleanup active through startup logging and the final
     // shutdown check. No await follows this check before workers start.
     shutdownSignal.throwIfAborted();

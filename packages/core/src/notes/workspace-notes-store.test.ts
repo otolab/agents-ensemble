@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   createWorkspaceNote,
+  NOTE_MEMO_MAX_BYTES,
   listWorkspaceNotes,
   pushWorkspaceMemo,
   readWorkspaceNote,
@@ -53,6 +54,33 @@ describe('workspace notes store', () => {
     });
     expect(read.memos).toHaveLength(1);
     expect(read.memos[0]!.body).toBe('Second finding');
+  });
+
+  it('enforces the UTF-8 byte limit through the store and conductor tool', async () => {
+    const repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-notes-'));
+    temps.push(repoRoot);
+    vi.stubEnv('HOME', repoRoot);
+    vi.stubEnv('ENSEMBLE_USER_ROOT', join(repoRoot, 'user'));
+    const scope = { repoRoot, slugKey: 'size' };
+    const note = await createWorkspaceNote({ ...scope, summary: 'limit' });
+    await pushWorkspaceMemo({ ...scope, noteId: note.id, body: 'é'.repeat(NOTE_MEMO_MAX_BYTES / 2) });
+    const body = 'é'.repeat(NOTE_MEMO_MAX_BYTES / 2 + 1);
+    await expect(pushWorkspaceMemo({ ...scope, noteId: note.id, body })).rejects.toThrow('exceeds');
+    const tools = createWorkspaceNotesTools(scope);
+    await expect(tools.push_memo!.execute({ noteId: note.id, body })).rejects.toThrow('exceeds');
+  });
+
+  it('caps note and history page sizes', async () => {
+    const repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-notes-'));
+    temps.push(repoRoot);
+    vi.stubEnv('ENSEMBLE_USER_ROOT', join(repoRoot, 'user'));
+    const scope = { repoRoot, slugKey: 'pages' };
+    const notes = await Promise.all(Array.from({ length: 51 }, (_, i) => createWorkspaceNote({ ...scope, summary: `note ${i}` })));
+    for (let i = 0; i < 101; i++) {
+      await pushWorkspaceMemo({ ...scope, noteId: notes[0]!.id, body: `memo ${i}` });
+    }
+    expect((await listWorkspaceNotes({ ...scope, limit: 1000 })).items).toHaveLength(50);
+    expect((await readWorkspaceNote({ ...scope, noteId: notes[0]!.id, includeHistory: true, historyLimit: 1000 })).memos).toHaveLength(100);
   });
 
   it('preserves concurrent updates and pages archived history without leaking it', async () => {

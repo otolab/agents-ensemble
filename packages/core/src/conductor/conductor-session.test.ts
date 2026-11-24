@@ -1932,6 +1932,37 @@ describe('runConductorSession resume / shutdown', () => {
     },
   );
 
+  it.each([true, false])('injects workspace context only for workspace sessions (%s)', async (workspace) => {
+    stubUnusedControlServer();
+    vi.spyOn(acpBinModule, 'resolveBundledAcpBin').mockReturnValue(process.execPath);
+    vi.stubEnv('ENSEMBLE_WORKSPACE_SLUG', 'stale');
+    mockSend.mockResolvedValue({ runId: 'workspace-env', status: 'finished', result: 'done' });
+    const config = {
+      ...DEFAULT_ENSEMBLE_CONFIG,
+      acp: { ...DEFAULT_ENSEMBLE_CONFIG.acp, defaultPreset: 'codex' as const },
+      session: { ...DEFAULT_ENSEMBLE_CONFIG.session, lazyWorkers: true },
+    };
+    let observed: NodeJS.ProcessEnv | undefined;
+    const startWorkers = WorkerSession.prototype.startWorkers;
+    vi.spyOn(WorkerSession.prototype, 'startWorkers').mockImplementation(function (this: WorkerSession) {
+      const options = (this as unknown as { options: { workers: Array<{ spawn?: { env?: NodeJS.ProcessEnv } }> } }).options;
+      observed = { ...options.workers[0]?.spawn?.env };
+      startWorkers.call(this);
+    });
+    await runConductorSession({
+      issueUrl: workspace ? 'workspace://research' : TEST_ISSUE.url,
+      repoRoot, conductorCwd: repoRoot,
+      profile: { workers: [{ name: 'implementer', kind: 'implementer' }] },
+      ensembleConfig: config, defaultAcp: { config, env: {} },
+      workerWorktree: { path: repoRoot, branch: 'main', issue: TEST_ISSUE, inRepo: true },
+      permissionPipeline: new PermissionPipeline({}),
+      registerProcessSignalHandlers: false, waitForOperatorExit: false,
+    });
+    expect(observed?.ENSEMBLE_WORKSPACE_SLUG).toBe(workspace ? 'research' : undefined);
+    expect(observed?.ENSEMBLE_WORKSPACE_REPO_ROOT).toBe(workspace ? repoRoot : undefined);
+    expect(observed?.ENSEMBLE_WORKSPACE_CONDUCTOR_CWD).toBe(workspace ? repoRoot : undefined);
+  });
+
   it('keeps one-time secret helper credentials out of worker fingerprints and resume state', async () => {
     if (!isOneTimeSecretPlatformSupported()) return;
     stubUnusedControlServer();
