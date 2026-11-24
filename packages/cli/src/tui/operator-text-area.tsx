@@ -3,8 +3,10 @@ import { Box, Text } from 'ink';
 import stringWidth from 'string-width';
 import { TextArea, type TKeybindings, type TLinePrefixProps } from 'react-ink-textarea';
 import {
-  computeOperatorInputLayout,
+  computeTextAreaDisplayLineCount,
   isCursorAtVisualBoundary,
+  getVisibleOperatorPrompt,
+  OPERATOR_INPUT_TAB_WIDTH,
 } from './operator-input-layout.js';
 import { INPUT_PANE_PROMPT_COLOR } from './tui-layout-constants.js';
 
@@ -88,31 +90,42 @@ export function OperatorTextArea({
   onCursorChange,
   cursorStart,
 }: OperatorTextAreaProps) {
-  const promptWidth = stringWidth(promptPrefix);
+  const visiblePrompt = getVisibleOperatorPrompt(promptPrefix, contentWidth);
+  const promptWidth = stringWidth(visiblePrompt);
 
-  const layout = useMemo(
-    () => computeOperatorInputLayout(value, contentWidth, promptWidth),
-    [value, contentWidth, promptWidth],
+  const displayLineCount = useMemo(
+    () => computeTextAreaDisplayLineCount(value, contentWidth, promptWidth, cursorPosition, focus),
+    [value, contentWidth, promptWidth, cursorPosition, focus],
   );
 
   useEffect(() => {
-    onDisplayLineCountChange?.(layout.displayLines.length);
-  }, [layout.displayLines.length, onDisplayLineCountChange]);
+    onDisplayLineCountChange?.(displayLineCount);
+  }, [displayLineCount, onDisplayLineCountChange]);
 
   const linePrefix = useCallback(
     ({ lineNumber, isContinuationLine }: TLinePrefixProps) => {
-      if (lineNumber === 0 && !isContinuationLine && promptPrefix.length > 0) {
-        return <Text color={INPUT_PANE_PROMPT_COLOR}>{promptPrefix}</Text>;
+      if (lineNumber === 0 && !isContinuationLine && visiblePrompt.length > 0) {
+        return <Text color={INPUT_PANE_PROMPT_COLOR}>{visiblePrompt}</Text>;
       }
       return null;
     },
-    [promptPrefix],
+    [visiblePrompt],
+  );
+
+  // Keep all text boxes equally wide, including when the first row scrolls out
+  // of view. TextArea otherwise falls back to a wider off-screen measurement.
+  const lineSuffix = useCallback(
+    ({ lineNumber, isContinuationLine }: TLinePrefixProps) =>
+      lineNumber === 0 && !isContinuationLine
+        ? null
+        : <Text>{' '.repeat(promptWidth)}</Text>,
+    [promptWidth],
   );
 
   const textAreaCursorStart =
     focus && cursorStart !== undefined
       ? {
-          x: (cursorStart.x ?? 0) - promptWidth,
+          x: (cursorStart.x ?? 0) - stringWidth(promptPrefix),
           y: cursorStart.y,
         }
       : undefined;
@@ -135,7 +148,9 @@ export function OperatorTextArea({
         keybindings={keybindings}
         cursorPosition={cursorPosition}
         onCursorChange={onCursorChange}
-        linePrefix={promptPrefix ? linePrefix : undefined}
+        linePrefix={visiblePrompt ? linePrefix : undefined}
+        lineSuffix={visiblePrompt ? lineSuffix : undefined}
+        tabWidth={OPERATOR_INPUT_TAB_WIDTH}
         viewportLines={maxDisplayLines}
         initialLineCount={1}
         cursorStart={textAreaCursorStart}
