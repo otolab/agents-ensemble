@@ -152,9 +152,9 @@ candidate は既存の session report queue / batch / hold / retry / ack 経路�
 
 #### 検証範囲と待ち時間の比較
 
-[場面別の比較 test](../packages/operator-agent/src/operator-idle-candidate-scenarios.test.ts) は、同じ fake-clock timeline を baseline（idle candidate なし）と統合後（条件を満たす candidate を登録）で再生します。実 `OperatorDispatchQueue` と fake `agent.send` を使います。ここで dispatch は選択された user/report batch、report batch は distinct な frozen `batchId`、turn は fake `agent.send` 呼び出しです。失敗した send retry も turn proxy に数えます。重要通知の待ち時間は OQ の投入から、それを含む最初の成功 send までです。
+[場面別の比較 test](../packages/operator-agent/src/dispatch/operator-idle-candidate-scenarios.test.ts) は、同じ fake-clock timeline を baseline（idle candidate なし）と統合後（条件を満たす candidate を登録）で再生します。実 `OperatorDispatchQueue` と fake `agent.send` を使います。ここで dispatch は選択された user/report batch、report batch は distinct な frozen `batchId`、turn は fake `agent.send` 呼び出しです。失敗した send retry も turn proxy に数えます。重要通知の待ち時間は OQ の投入から、それを含む最初の成功 send までです。
 
-この場面表は `OperatorDispatchQueue` の実 `selectBatch` / `commitBatch` を直接呼ぶ synthetic harness で、`agent.send` は fake です。selector の規則を同じ fake-clock timeline で比較しますが、watch pool や run loop の非同期競合を再現するものではありません。実 `runOperatorAgent` を通す比較は別の [run-loop integration test](../packages/operator-agent/src/operator-idle-run-loop.test.ts) で行います。後者は手動 watch の比較条件を保つため自動発見を無効にし、push 閾値を1に設定しています。どちらも実 provider の待ち時間・turn 数を測るものではありません。
+この場面表は `OperatorDispatchQueue` の実 `selectBatch` / `commitBatch` を直接呼ぶ synthetic harness で、`agent.send` は fake です。selector の規則を同じ fake-clock timeline で比較しますが、watch pool や run loop の非同期競合を再現するものではありません。実 `runOperatorAgent` を通す比較は別の [run-loop integration test](../packages/operator-agent/src/dispatch/operator-idle-run-loop.test.ts) で行います。後者は手動 watch の比較条件を保つため自動発見を無効にし、push 閾値を1に設定しています。どちらも実 provider の待ち時間・turn 数を測るものではありません。
 
 状態不変の行は実 watch pool も通します。同じ stale-running evidence を4回 UDS observation し、実 `enqueueIdleCandidate` の durable fingerprint gate が candidate を一度だけ受け付けることを確認します。OQ のみの baseline と統合後は、ともに1 dispatch / 1 report batch / 1 fake turn、OQ 待ち3,000 msです。
 

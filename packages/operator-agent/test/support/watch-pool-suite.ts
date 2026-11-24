@@ -15,7 +15,7 @@ import { afterEach, beforeEach, describe, vi } from 'vitest';
 import {
   createOperatorWatchPool as createWatchPool,
   operatorWatchStatePath
-} from '../../src/operator-watch-pool.js';
+} from '../../src/watch/operator-watch-pool.js';
 
 export const DEFAULT_ISSUE_URL = 'https://github.com/example/repo/issues/1';
 

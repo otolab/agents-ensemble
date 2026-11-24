@@ -562,10 +562,10 @@ describe('runConductorSession resume / shutdown', () => {
   });
 
   it('observes real worker rounds, permissions and failure through operator listing', async () => {
-    const { createListOperatorSessionsTool } = await import('../../../operator-agent/src/list-operator-sessions-tool.js');
-    const { createOperatorWatchPool } = await import('../../../operator-agent/src/operator-watch-pool.js');
-    const { createOperatorDispatchQueue } = await import('../../../operator-agent/src/operator-dispatch.js');
-    const { evaluateOperatorIdleCandidate } = await import('../../../operator-agent/src/operator-idle-candidates.js');
+    const { createListOperatorSessionsTool } = await import('../../../operator-agent/src/tools/list-operator-sessions-tool.js');
+    const { createOperatorWatchPool } = await import('../../../operator-agent/src/watch/operator-watch-pool.js');
+    const { createOperatorDispatchQueue } = await import('../../../operator-agent/src/dispatch/operator-dispatch.js');
+    const { evaluateOperatorIdleCandidate } = await import('../../../operator-agent/src/dispatch/operator-idle-candidates.js');
     let tools: ConductorAgentCreateOptions['customTools'];
     let api: OperatorInputBindingApi | undefined;
     const pipeline = new PermissionPipeline({});
