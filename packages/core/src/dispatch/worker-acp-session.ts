@@ -53,7 +53,8 @@ export interface OpenWorkerAcpSessionOptions {
 
 export type WorkerSessionRecoveryReason =
   | 'session_load_failed'
-  | 'prompt_history_unreadable';
+  | 'prompt_history_unreadable'
+  | 'explicit';
 
 export interface WorkerSessionRecovery {
   reason: WorkerSessionRecoveryReason;

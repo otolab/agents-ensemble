@@ -20,6 +20,7 @@ export interface WorkerStartParams {
   expectedResumeAcpCwd?: string;
   expectedResumeAcpSpawn?: AcpSpawnFingerprint;
   resumeAcpSessionId?: string;
+  handoffPending?: boolean;
   spawn?: SpawnAcpProcessOptions;
   acpFingerprint?: AcpSpawnFingerprint;
 }
@@ -41,6 +42,7 @@ export interface WorkerSessionRecoveredNotification {
   name: string;
   kind: string;
   reason: WorkerSessionRecoveryReason;
+  previousSessionId: string;
   acpSessionId: string;
   acpCwd: string;
 }

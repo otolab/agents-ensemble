@@ -39,6 +39,7 @@ import {
   formatSessionWorkerMessagesText,
   listSavedSessionMessages,
   listSavedSessions,
+  listSavedWorkerGenerations,
   readSavedSessionWorkerMessages,
   showSavedSession,
 } from './session-command.js';
@@ -408,6 +409,29 @@ const sessionWorkers = session
   .description('Read saved worker ACP session data');
 
 sessionWorkers
+  .command('generations')
+  .description('List known worker session generations, oldest first')
+  .argument('<conductorAgentId>', 'Conductor session id')
+  .requiredOption('--worker <name>', 'Worker name')
+  .option('--repo-root <path>', 'Current clone', process.cwd())
+  .option('--github-repo <owner/repo>', 'Repository scope')
+  .option('--issue-url <url>', 'Issue or workspace scope')
+  .action(async (conductorAgentId: string, options: {
+    worker: string; repoRoot: string; githubRepo?: string; issueUrl?: string;
+  }) => {
+    try {
+      const result = await listSavedWorkerGenerations({
+        conductorAgentId, workerName: options.worker, repoRoot: options.repoRoot,
+        githubRepo: options.githubRepo, issueUrl: options.issueUrl,
+      });
+      console.log(JSON.stringify(result, null, 2));
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : error);
+      process.exitCode = 1;
+    }
+  });
+
+sessionWorkers
   .command('messages')
   .description(
     'Read saved worker history for supported ACP presets (currently Pi, Codex, and Cursor; may contain secrets)',
@@ -421,6 +445,7 @@ sessionWorkers
   )
   .option('--github-repo <owner/repo>', 'Repository scope for the saved session')
   .option('--issue-url <url>', 'Issue scope for the saved session')
+  .option('--generation <number>', 'Known generation number, oldest first')
   .option('--json', 'Output JSON')
   .action(
     async (
@@ -430,6 +455,7 @@ sessionWorkers
         repoRoot: string;
         githubRepo?: string;
         issueUrl?: string;
+        generation?: string;
         json?: boolean;
       },
     ) => {
@@ -440,6 +466,7 @@ sessionWorkers
           workerName: options.worker,
           githubRepo: options.githubRepo,
           issueUrl: options.issueUrl,
+          ...(options.generation === undefined ? {} : { generation: Number(options.generation) }),
         });
         console.log(
           options.json

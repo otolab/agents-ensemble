@@ -1,6 +1,7 @@
 import { conductorFailureLogPath, createConductorFailureLog } from '../session/conductor-failure-log.js';
 import { SessionOwnership, type SessionWriteLease } from '../session/session-ownership.js';
 import { resolveUserEnsembleRoot } from '../resolve-user-ensemble-root.js';
+import { acquireSessionOwnerLock } from '../session/session-owner-lock.js';
 import { stat } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
 import { isAbsolute, resolve as resolvePath } from 'node:path';
@@ -146,6 +147,7 @@ import {
   type SessionLifecycle,
   type EnsembleConfigDigestScheme,
   type SessionResumeStore,
+  type WorkerSessionResumeStore,
   type LocatedSessionResumeStore,
 } from '../session/session-resume-store.js';
 import {
@@ -432,6 +434,8 @@ class StartupCleanupGuard {
   }
 }
 
+const retainedGlobalSessionOwners = new Set<() => void>();
+
 export async function runConductorSession(
   options: RunConductorSessionOptions,
 ): Promise<ConductorSessionResult> {
@@ -439,8 +443,10 @@ export async function runConductorSession(
   let owner: SessionOwnership | undefined;
   let providerOwner: SessionOwnership | undefined;
   let safeToRelease = false;
+  let releaseGlobalOwner: (() => void) | undefined;
   try {
     if (options.resumeAgentId) {
+      releaseGlobalOwner = await acquireSessionOwnerLock(options.resumeAgentId);
       owner = await SessionOwnership.acquire(canonicalSessionResumeStorePath({
         repoRoot: options.repoRoot,
         issueUrl: options.issueUrl,
@@ -466,6 +472,7 @@ export async function runConductorSession(
         return providerOwner;
       },
       markSafeToRelease: () => { safeToRelease = true; },
+      acquireGlobal: async (id) => { releaseGlobalOwner ??= await acquireSessionOwnerLock(id); },
     });
   } catch (error) {
     const startupWasActive = !startupCleanup.isHandedOff;
@@ -477,8 +484,10 @@ export async function runConductorSession(
     if (safeToRelease) {
       await Promise.all(owners.map((item) => item.closeWritesAndDrain()));
       for (const item of owners) item.release();
+      releaseGlobalOwner?.();
     } else {
       for (const item of owners) item.retainUntilProcessExit();
+      if (releaseGlobalOwner) retainedGlobalSessionOwners.add(releaseGlobalOwner);
     }
   }
 }
@@ -489,6 +498,7 @@ interface SessionOwnershipLifecycle {
   getProvider(): SessionOwnership;
   acquireProvider(path: string): Promise<SessionOwnership>;
   markSafeToRelease(): void;
+  acquireGlobal(id: string): Promise<void>;
 }
 
 async function runConductorSessionWithStartupGuard(
@@ -623,8 +633,9 @@ async function runConductorSessionWithStartupGuard(
   let activeLazyWorkers = ensembleConfig.session.lazyWorkers;
   const workerSessions = new Map<
     string,
-    { acpSessionId: string; acpCwd?: string; acpSpawn?: AcpSpawnFingerprint }
+    WorkerSessionResumeStore
   >();
+  const workerSessionOrigins = new Map<string, { repoRoot: string; issueUrl: string }>();
   let githubMonitorCursor: GitHubMonitorCursor | undefined;
   let githubMonitor: GitHubMonitor | undefined;
   let activeResumeStorePath: string | undefined;
@@ -870,9 +881,17 @@ async function runConductorSessionWithStartupGuard(
     githubMonitorCursor = resumeStore.githubMonitor;
     for (const [name, worker] of Object.entries(resumeStore.workers)) {
       workerSessions.set(name, {
-        acpSessionId: worker.acpSessionId,
-        ...(worker.acpCwd ? { acpCwd: worker.acpCwd } : {}),
-        ...(worker.acpSpawn ? { acpSpawn: worker.acpSpawn } : {}),
+        ...worker,
+        ...(worker.originAcpCwd || worker.acpCwd
+          ? { originAcpCwd: worker.originAcpCwd ?? worker.acpCwd }
+          : {}),
+        ...(worker.originAcpSpawn || worker.acpSpawn
+          ? { originAcpSpawn: historySpawnFingerprint((worker.originAcpSpawn ?? worker.acpSpawn)!) }
+          : {}),
+      });
+      workerSessionOrigins.set(name, {
+        repoRoot: worker.repoRoot ?? resumeStore.repoRoot,
+        issueUrl: worker.issueUrl ?? resumeStore.issueUrl,
       });
     }
   }
@@ -1006,6 +1025,11 @@ async function runConductorSessionWithStartupGuard(
   let scheduleSessionResumeStoreFlush = () => {};
   let flushSessionResumeStore: (lifecycle?: SessionLifecycle) => Promise<void> =
     async () => {};
+  let commitWorkerSessionRecovery: (
+    notification: import('../runtime/types.js').WorkerSessionRecoveredNotification,
+  ) => Promise<void> = async () => { throw new Error('Resume store is not ready'); };
+  let commitWorkerHandoffConfirmed: (name: string, sessionId: string) => Promise<void> =
+    async () => { throw new Error('Resume store is not ready'); };
   let scheduleToolCallHistoryFlush = () => {};
   let flushToolCallHistory = async () => {};
   let toolCallHistoryDirty = toolCallHistoryNeedsRewrite;
@@ -1242,9 +1266,24 @@ async function runConductorSessionWithStartupGuard(
       });
       sessionLogger.emit({ type: 'worker.round', dispatch: result });
       const attached = workerSession.runtime.getAttached(result.name);
+      const savedWorker = workerSessions.get(result.name);
+      if (savedWorker && savedWorker.acpSessionId !== result.acpSessionId) {
+        sessionLogger.emit({
+          type: 'harness.warning',
+          message: `worker ${result.name} の古い session 完了通知を保存せず破棄しました。`,
+        });
+        return;
+      }
       workerSessions.set(result.name, {
+        ...workerSessions.get(result.name),
         acpSessionId: result.acpSessionId,
         acpCwd: attached?.session.acpCwd ?? workerWorktree?.path,
+        ...(!savedWorker?.originAcpCwd
+          ? { originAcpCwd: attached?.session.acpCwd ?? workerWorktree?.path }
+          : {}),
+        ...(!savedWorker?.originAcpSpawn && workerAcpFingerprints.get(result.name)
+          ? { originAcpSpawn: historySpawnFingerprint(workerAcpFingerprints.get(result.name)!) }
+          : {}),
         ...(workerAcpFingerprints.get(result.name)
           ? { acpSpawn: workerAcpFingerprints.get(result.name) }
           : {}),
@@ -1253,25 +1292,21 @@ async function runConductorSessionWithStartupGuard(
       scheduleSessionResumeStoreFlush();
     },
     onWorkerSessionRecovered: async (notification) => {
-      workerSessions.set(notification.name, {
-        acpSessionId: notification.acpSessionId,
-        acpCwd: notification.acpCwd,
-        ...(workerAcpFingerprints.get(notification.name)
-          ? { acpSpawn: workerAcpFingerprints.get(notification.name) }
-          : {}),
-      });
       try {
-        await flushSessionResumeStore();
+        await commitWorkerSessionRecovery(notification);
       } catch (error) {
         reportResumeStoreFlushFailure(error);
+        throw error;
       }
       const detail =
         notification.reason === 'session_load_failed'
           ? '保存済み ACP session を読み込めなかったため'
-          : '保存済み ACP thread の履歴を読めなかったため';
+          : notification.reason === 'prompt_history_unreadable'
+            ? '保存済み ACP thread の履歴を読めなかったため'
+            : '明示的な再作成が指示されたため';
       sessionLogger.emit({
         type: 'harness.warning',
-        message: `worker.session.recovered name=${notification.name} kind=${notification.kind}: ${detail}新しい session で再開します。`,
+        message: `worker.session.recovered name=${notification.name} kind=${notification.kind}: ${detail}新しい session に切り替えました。inspect_worker_handoff で報告を読み、中断操作と不足情報を確認して confirm_worker_handoff を呼ぶまで新しい指示は受け付けません。`,
       });
       eventQueue.enqueue({
         type: 'worker.session.recovered',
@@ -1280,6 +1315,7 @@ async function runConductorSessionWithStartupGuard(
         reason: notification.reason,
       });
     },
+    onWorkerHandoffConfirmed: (name, sessionId) => commitWorkerHandoffConfirmed(name, sessionId),
     onWorkerFailed: (failure) => {
       // Notifications are serialized by the inbox, preserving each worker's
       // telemetry order even if a later round fails before this one is sent.
@@ -1455,6 +1491,57 @@ async function runConductorSessionWithStartupGuard(
     workerNames: activeProfile.workers.map((worker) => worker.name),
     getWorkerFailures: () => sessionLogger.workerFailures,
   });
+  const recreateWorkerTools: import('./conductor-tool.js').ConductorToolSet = {
+    recreate_worker: {
+      name: 'recreate_worker',
+      description: 'Explicitly create a new worker session. The worker must be idle or failed. The prior conversation is not restored; inspect interrupted operations before issuing new work.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          worker: { type: 'string', enum: activeProfile.workers.map((worker) => worker.name) },
+        },
+        required: ['worker'],
+      },
+      async execute(args) {
+        if (teardownStarted) throw new Error('Worker recreation is unavailable during shutdown.');
+        const name = String(args.worker ?? '').trim();
+        const previous = workerSessions.get(name);
+        if (!previous) throw new Error(`No saved worker session for "${name}".`);
+        const handoff = await workerSession.runtime.recreateWorker(name, previous.acpSessionId);
+        return {
+          content: [{ type: 'text', text: `Worker "${name}" was recreated. Its old conversation is unavailable; inspect interrupted work before sending instructions.\nWorker handoff:\n${handoff || '(no response)'}` }],
+        };
+      },
+    },
+    inspect_worker_handoff: {
+      name: 'inspect_worker_handoff',
+      description: 'Read the completed worker handoff report and obtain its confirmation token.',
+      inputSchema: {
+        type: 'object',
+        properties: { worker: { type: 'string', enum: activeProfile.workers.map((worker) => worker.name) } },
+        required: ['worker'],
+      },
+      async execute(args) {
+        const name = String(args.worker ?? '').trim();
+        const { report, token } = workerSession.runtime.inspectWorkerHandoff(name);
+        return { content: [{ type: 'text', text: `Worker handoff:\n${report}\nConfirmation token: ${token}` }] };
+      },
+    },
+    confirm_worker_handoff: {
+      name: 'confirm_worker_handoff',
+      description: 'After reviewing the worker handoff and checking interrupted operations and missing information, allow new instructions for the recreated worker.',
+      inputSchema: {
+        type: 'object',
+        properties: { worker: { type: 'string', enum: activeProfile.workers.map((worker) => worker.name) }, token: { type: 'string' } },
+        required: ['worker', 'token'],
+      },
+      async execute(args) {
+        const name = String(args.worker ?? '').trim();
+        await workerSession.runtime.confirmWorkerHandoff(name, String(args.token ?? ''));
+        return { content: [{ type: 'text', text: `Handoff confirmed for worker "${name}".` }] };
+      },
+    },
+  };
 
   const registerGitHubWatchTools = createRegisterGitHubWatchTool({
     issueUrl: options.issueUrl,
@@ -1547,7 +1634,8 @@ async function runConductorSessionWithStartupGuard(
     .registerAll(resolvePermissionTools)
     .registerAll(getToolCallTools)
     .registerAll(promptWorkerTools)
-    .registerAll(workerStatusTools);
+    .registerAll(workerStatusTools)
+    .registerAll(recreateWorkerTools);
   if (!workspaceSession) {
     conductorToolRegistry
       .registerAll(registerGitHubWatchTools)
@@ -1693,6 +1781,7 @@ async function runConductorSessionWithStartupGuard(
     }
   }
   const conductorHandle: ConductorAgentHandle = { conductor: conductorAgent };
+  await ownershipLifecycle.acquireGlobal(conductorAgent.agentId);
   activeResumeStorePath ??= canonicalSessionResumeStorePath({
     repoRoot: options.repoRoot,
     issueUrl: options.issueUrl,
@@ -1784,6 +1873,7 @@ async function runConductorSessionWithStartupGuard(
   };
 
   let sessionResumeStoreWriteQueue: Promise<void> = Promise.resolve();
+  let recoverySaveUncertain = false;
   drainStartupResumeStoreWrites = async () => {
     await sessionResumeStoreWriteQueue;
   };
@@ -1805,9 +1895,8 @@ async function runConductorSessionWithStartupGuard(
     const workers: SessionResumeStore['workers'] = {};
     for (const [name, worker] of workerSessions) {
       workers[name] = {
-        acpSessionId: worker.acpSessionId,
-        ...(worker.acpCwd ? { acpCwd: worker.acpCwd } : {}),
-        ...(worker.acpSpawn ? { acpSpawn: worker.acpSpawn } : {}),
+        ...worker,
+        ...(workerSessionOrigins.get(name) ?? { repoRoot: options.repoRoot, issueUrl: options.issueUrl }),
       };
     }
     const persistedLifecycle =
@@ -1889,6 +1978,86 @@ async function runConductorSessionWithStartupGuard(
       lease,
     );
   };
+  commitWorkerSessionRecovery = (notification) =>
+    enqueueSessionResumeStoreWrite(async (lease) => {
+      if (terminalResumeStoreFinalFlushQueued || teardownStarted) {
+        throw new Error('Cannot commit worker session recovery during shutdown; resume the prior session.');
+      }
+      const previous = workerSessions.get(notification.name);
+      if (!previous || previous.acpSessionId !== notification.previousSessionId) {
+        throw new Error(`Worker "${notification.name}" session changed during recovery; inspect saved state before retrying.`);
+      }
+      const origin = workerSessionOrigins.get(notification.name) ?? {
+        repoRoot: options.repoRoot,
+        issueUrl: options.issueUrl,
+      };
+      const replacement: WorkerSessionResumeStore = {
+        acpSessionId: notification.acpSessionId,
+        acpCwd: notification.acpCwd,
+        handoffPending: true,
+        originAcpCwd: notification.acpCwd,
+        repoRoot: options.repoRoot,
+        issueUrl: options.issueUrl,
+        ...(workerAcpFingerprints.get(notification.name)
+          ? {
+              acpSpawn: workerAcpFingerprints.get(notification.name),
+              originAcpSpawn: historySpawnFingerprint(workerAcpFingerprints.get(notification.name)!),
+            }
+          : {}),
+        generations: [
+          ...(previous.generations ?? []),
+          {
+            acpSessionId: previous.acpSessionId,
+            ...(previous.originAcpCwd ?? previous.acpCwd
+              ? { acpCwd: previous.originAcpCwd ?? previous.acpCwd }
+              : {}),
+            ...(previous.originAcpSpawn ?? previous.acpSpawn
+              ? { acpSpawn: historySpawnFingerprint((previous.originAcpSpawn ?? previous.acpSpawn)!) }
+              : {}),
+            ...origin,
+            replacedAt: Date.now(),
+            reason: notification.reason,
+            nextSessionId: notification.acpSessionId,
+          },
+        ],
+      };
+      const snapshot = createSessionResumeStore(openQuestions.snapshot());
+      snapshot.workers[notification.name] = replacement;
+      try {
+        await saveSessionResumeStore(activeResumeStorePath!, snapshot, ownershipLifecycle.get(), lease);
+      } catch (error) {
+        recoverySaveUncertain = true;
+        shutdownIntentController.abort();
+        operatorTerminationController.abort();
+        workerSession.runtime.cancelAllActivePrompts();
+        throw new Error(
+          'Worker session switch could not be confirmed. Stop this session, inspect the saved worker ID and generation history, and resume from the saved state.',
+          { cause: error },
+        );
+      }
+      workerSessions.set(notification.name, replacement);
+      workerSessionOrigins.set(notification.name, { repoRoot: options.repoRoot, issueUrl: options.issueUrl });
+    });
+  commitWorkerHandoffConfirmed = (name, sessionId) => enqueueSessionResumeStoreWrite(async (lease) => {
+    if (terminalResumeStoreFinalFlushQueued || teardownStarted || recoverySaveUncertain) {
+      throw new Error('Cannot confirm worker handoff during shutdown or an uncertain save.');
+    }
+    const previous = workerSessions.get(name);
+    if (!previous?.handoffPending || previous.acpSessionId !== sessionId) throw new Error(`Worker "${name}" has no saved pending handoff for the expected session.`);
+    const replacement = { ...previous, handoffPending: false };
+    const snapshot = createSessionResumeStore(openQuestions.snapshot());
+    snapshot.workers[name] = replacement;
+    try {
+      await saveSessionResumeStore(activeResumeStorePath!, snapshot, ownershipLifecycle.get(), lease);
+    } catch (error) {
+      recoverySaveUncertain = true;
+      shutdownIntentController.abort();
+      operatorTerminationController.abort();
+      workerSession.runtime.cancelAllActivePrompts();
+      throw new Error('Handoff confirmation outcome is unknown. Stop and inspect the saved session before retrying.', { cause: error });
+    }
+    workerSessions.set(name, replacement);
+  });
   flushSessionResumeStore = (lifecycle): Promise<void> => {
     if (terminalResumeStoreFinalFlushQueued && lifecycle === undefined) {
       return sessionResumeStoreWriteQueue;
@@ -1897,6 +2066,9 @@ async function runConductorSessionWithStartupGuard(
       terminalResumeStoreFinalFlushQueued = true;
     }
     return enqueueSessionResumeStoreWrite(async (lease, resourceLease) => {
+      if (recoverySaveUncertain) {
+        throw new Error('Worker session switch outcome is unknown; refusing to overwrite the saved state.');
+      }
       if (lifecycle !== undefined) {
         terminalLifecycle = lifecycle;
         harnessPhase =
@@ -2432,6 +2604,17 @@ async function runConductorSessionWithStartupGuard(
     shutdownSignal.throwIfAborted();
     startupCleanup.handoff();
     workerSession.startWorkers();
+    for (const [name, saved] of workerSessions) {
+      if (!saved.handoffPending) continue;
+      const worker = activeProfile.workers.find((entry) => entry.name === name);
+      if (!worker) continue;
+      eventQueue.enqueue({
+        type: 'worker.session.recovered',
+        name,
+        kind: worker.kind,
+        reason: saved.generations?.at(-1)?.reason ?? 'explicit',
+      });
+    }
     if (resumeToolCallSnapshots.length > 0) {
       const workerIdsByName = new Map<string, string>();
       workers.forEach((worker, index) => {
@@ -3092,9 +3275,16 @@ async function runConductorSessionWithStartupGuard(
         // bootstrap replacements are excluded until initialized; their prior
         // workerSessions entry remains available for the next resume.
         for (const attached of workerSession.runtime.listAttachedForResume()) {
+          const savedWorker = workerSessions.get(attached.name);
+          if (savedWorker && savedWorker.acpSessionId !== attached.session.sessionId) continue;
           workerSessions.set(attached.name, {
+            ...workerSessions.get(attached.name),
             acpSessionId: attached.session.sessionId,
             acpCwd: attached.session.acpCwd,
+            ...(!savedWorker?.originAcpCwd ? { originAcpCwd: attached.session.acpCwd } : {}),
+            ...(!savedWorker?.originAcpSpawn && workerAcpFingerprints.get(attached.name)
+              ? { originAcpSpawn: historySpawnFingerprint(workerAcpFingerprints.get(attached.name)!) }
+              : {}),
             ...(workerAcpFingerprints.get(attached.name)
               ? { acpSpawn: workerAcpFingerprints.get(attached.name) }
               : {}),
@@ -3445,4 +3635,9 @@ async function pathExists(path: string): Promise<boolean> {
     }
     throw error;
   }
+}
+
+/** Retain only the backend identity required to locate historical transcripts. */
+function historySpawnFingerprint(spawn: AcpSpawnFingerprint): AcpSpawnFingerprint {
+  return { preset: spawn.preset, command: '', args: [], ...(spawn.piRuntime ? { piRuntime: spawn.piRuntime } : {}) };
 }

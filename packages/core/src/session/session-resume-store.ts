@@ -95,6 +95,51 @@ export interface WorkerSessionResumeStore {
   acpCwd?: string;
   /** resume 時の ACP spawn fingerprint（env は canonical digest のみ保存）。 */
   acpSpawn?: AcpSpawnFingerprint;
+  originAcpCwd?: string;
+  originAcpSpawn?: AcpSpawnFingerprint;
+  repoRoot?: string;
+  issueUrl?: string;
+  handoffPending?: boolean;
+  generations?: WorkerSessionGeneration[];
+}
+
+export interface WorkerSessionGeneration {
+  acpSessionId: string;
+  acpCwd?: string;
+  acpSpawn?: AcpSpawnFingerprint;
+  repoRoot: string;
+  issueUrl: string;
+  replacedAt: number;
+  reason: 'session_load_failed' | 'prompt_history_unreadable' | 'explicit';
+  nextSessionId: string;
+}
+
+function parseWorkerSessionGenerations(value: unknown, name: string): WorkerSessionGeneration[] {
+  if (!Array.isArray(value)) throw new Error(`Invalid worker session generations: ${name}`);
+  return value.map((item: unknown) => {
+    if (!item || typeof item !== 'object') throw new Error(`Invalid worker session generation: ${name}`);
+    const generation = item as Record<string, unknown>;
+    if (
+      typeof generation.acpSessionId !== 'string' ||
+      typeof generation.nextSessionId !== 'string' ||
+      typeof generation.repoRoot !== 'string' ||
+      typeof generation.issueUrl !== 'string' ||
+      typeof generation.replacedAt !== 'number' ||
+      !Number.isFinite(generation.replacedAt) ||
+      !['session_load_failed', 'prompt_history_unreadable', 'explicit'].includes(String(generation.reason))
+    ) throw new Error(`Invalid worker session generation: ${name}`);
+    const acpSpawn = parseAcpSpawnFingerprint(generation.acpSpawn, name);
+    return {
+      acpSessionId: generation.acpSessionId,
+      nextSessionId: generation.nextSessionId,
+      repoRoot: generation.repoRoot,
+      issueUrl: generation.issueUrl,
+      replacedAt: generation.replacedAt,
+      reason: generation.reason as WorkerSessionGeneration['reason'],
+      ...(typeof generation.acpCwd === 'string' ? { acpCwd: generation.acpCwd } : {}),
+      ...(acpSpawn ? { acpSpawn } : {}),
+    };
+  });
 }
 
 export interface SessionResumeStore {
@@ -483,6 +528,7 @@ export async function listLocatedSessionResumeStoresPage(
   query: SessionResumeStoreQuery = {},
   options: {
     onDuplicate?: (diagnostic: SessionResumeStoreDuplicateDiagnostic) => void;
+    userEnsembleRoot?: string;
   } = {},
 ): Promise<SessionResumeStorePage<LocatedSessionResumeStore>> {
   const scope = resolveSessionResumeStoreScope(query);
@@ -1321,11 +1367,24 @@ function parseSessionResumeStore(value: unknown): SessionResumeStore {
     if (typeof worker.acpSessionId !== 'string') {
       throw new Error(`Invalid session resume store worker acpSessionId: ${name}`);
     }
+    if (worker.handoffPending !== undefined && typeof worker.handoffPending !== 'boolean') {
+      throw new Error(`Invalid session resume store worker handoffPending: ${name}`);
+    }
     workers[name] = {
       acpSessionId: worker.acpSessionId,
       ...(typeof worker.acpCwd === 'string' ? { acpCwd: worker.acpCwd } : {}),
+      ...(typeof worker.repoRoot === 'string' ? { repoRoot: worker.repoRoot } : {}),
+      ...(typeof worker.issueUrl === 'string' ? { issueUrl: worker.issueUrl } : {}),
+      ...(worker.handoffPending === true ? { handoffPending: true } : {}),
+      ...(typeof worker.originAcpCwd === 'string' ? { originAcpCwd: worker.originAcpCwd } : {}),
+      ...(parseAcpSpawnFingerprint(worker.originAcpSpawn, name)
+        ? { originAcpSpawn: parseAcpSpawnFingerprint(worker.originAcpSpawn, name) }
+        : {}),
       ...(parseAcpSpawnFingerprint(worker.acpSpawn, name)
         ? { acpSpawn: parseAcpSpawnFingerprint(worker.acpSpawn, name) }
+        : {}),
+      ...(worker.generations !== undefined
+        ? { generations: parseWorkerSessionGenerations(worker.generations, name) }
         : {}),
     };
   }

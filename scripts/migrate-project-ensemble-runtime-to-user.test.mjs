@@ -17,6 +17,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, test } from 'node:test';
+import { DatabaseSync } from 'node:sqlite';
 
 const scriptPath = fileURLToPath(
   new URL('./migrate-project-ensemble-runtime-to-user.mjs', import.meta.url),
@@ -30,6 +31,47 @@ afterEach(async () => {
       rm(path, { recursive: true, force: true }),
     ),
   );
+});
+
+test('apply refuses to migrate a session owned by a running process', async () => {
+  const root = await makeRoot();
+  const id = 'migration-owned-session';
+  const source = join(root.sessionRoot, `${id}.json`);
+  await mkdir(root.sessionRoot, { recursive: true });
+  await writeFile(source, JSON.stringify(makeStore(id, issueUrl, '/old/clone')));
+  const lockDir = join(root.userRoot, 'session-locks');
+  await mkdir(lockDir, { recursive: true });
+  const key = createHash('sha256').update(id).digest('hex');
+  const db = new DatabaseSync(join(lockDir, `${key}.sqlite`));
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    const result = runMigration(root, { apply: true });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /another process owns it/u);
+    await assert.rejects(readFile(join(
+      root.userRoot, 'sessions', 'github.com', 'example', 'repo', `${id}.json`,
+    )));
+  } finally {
+    db.exec('ROLLBACK');
+    db.close();
+  }
+});
+
+test('apply obtains the migration gate before reading session stores', async () => {
+  const root = await makeRoot();
+  const lockDir = join(root.userRoot, 'session-locks');
+  await mkdir(lockDir, { recursive: true });
+  const gate = new DatabaseSync(join(lockDir, 'migration.sqlite'));
+  gate.exec('BEGIN');
+  gate.prepare('SELECT count(*) FROM sqlite_master').get();
+  try {
+    const result = runMigration(root, { apply: true });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /while an ensemble session is owned/u);
+  } finally {
+    gate.exec('ROLLBACK');
+    gate.close();
+  }
 });
 
 test('dry-run inventories copy candidates, unresolved transcripts, and incomplete checkout roots', async () => {

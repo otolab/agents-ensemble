@@ -20,6 +20,7 @@ import {
 import { resolveEnsemblePaths } from '../ensemble-paths.js';
 import {
   saveSessionResumeStore as saveOwnedSessionResumeStore,
+  loadSessionResumeStore,
   type SessionResumeStore,
 } from './session-resume-store.js';
 import {
@@ -673,6 +674,119 @@ describe('worker session history', () => {
         'pi-acp-worker-session.jsonl',
       ),
     );
+  });
+
+  it('reads builtin Pi transcripts from workspace scoped storage', async () => {
+    const issueUrl = 'workspace://test-workspace';
+    const paths = resolveEnsemblePaths({ repoRoot, userEnsembleRoot: userRoot });
+    const transcriptPath = join(
+      paths.piWorkspaceWorkerSessionsDir(WORKER_NAME, 'test-workspace'),
+      'session.jsonl',
+    );
+    const mapPath = join(
+      paths.piWorkspaceWorkerDir(WORKER_NAME, 'test-workspace'),
+      '.pi', 'pi-acp', 'session-map.json',
+    );
+    await mkdir(dirname(transcriptPath), { recursive: true });
+    await writeFile(transcriptPath, await readFile(FIXTURE_PATH));
+    await mkdir(dirname(mapPath), { recursive: true });
+    await writeFile(mapPath, JSON.stringify({
+      version: 1,
+      sessions: {
+        [ACP_SESSION_ID]: {
+          sessionId: ACP_SESSION_ID,
+          cwd: ACP_CWD,
+          sessionFile: transcriptPath,
+          updatedAt: '2027-01-15T08:00:00.000Z',
+        },
+      },
+    }));
+    const store: SessionResumeStore = {
+      version: 1,
+      conductorAgentId: CONDUCTOR_AGENT_ID,
+      issueUrl,
+      repoRoot,
+      profile: { workers: [{ name: WORKER_NAME, kind: 'implementer' }] },
+      openQuestions: [],
+      sequence: 0,
+      workers: {
+        [WORKER_NAME]: {
+          acpSessionId: ACP_SESSION_ID,
+          acpCwd: ACP_CWD,
+          acpSpawn: { preset: 'pi', command: 'pi-acp', args: [], piRuntime: 'builtin' },
+        },
+      },
+      updatedAt: Date.now(),
+    };
+    await saveSessionResumeStore(
+      paths.workspaceSessionResumeStorePath('test-workspace', CONDUCTOR_AGENT_ID),
+      store,
+    );
+    const result = await readWorkerSessionHistory({
+      repoRoot, issueUrl, conductorAgentId: CONDUCTOR_AGENT_ID, workerName: WORKER_NAME,
+    });
+    expect(result.status).toBe('supported');
+    expect(result.messages).toEqual(expect.arrayContaining([
+      expect.objectContaining({ text: 'Pi ACP fixture user message.' }),
+    ]));
+    const current = store.workers[WORKER_NAME]!;
+    store.workers[WORKER_NAME] = {
+      ...current,
+      acpSessionId: 'workspace-new',
+      generations: [{
+        acpSessionId: current.acpSessionId,
+        acpCwd: current.acpCwd,
+        acpSpawn: current.acpSpawn,
+        repoRoot, issueUrl, replacedAt: Date.now(),
+        reason: 'explicit', nextSessionId: 'workspace-new',
+      }],
+    };
+    await saveSessionResumeStore(
+      paths.workspaceSessionResumeStorePath('test-workspace', CONDUCTOR_AGENT_ID),
+      store,
+    );
+    const old = await readWorkerSessionHistory({
+      userEnsembleRoot: userRoot, issueUrl, conductorAgentId: CONDUCTOR_AGENT_ID,
+      workerName: WORKER_NAME, generation: 1,
+    });
+    expect(old.status).toBe('supported');
+    expect(old.messages).toEqual(expect.arrayContaining([
+      expect.objectContaining({ text: 'Pi ACP fixture user message.' }),
+    ]));
+  });
+
+  it('selects a prior generation using its original repository and cwd', async () => {
+    const oldRoot = join(tempRoot, 'old-clone');
+    await mkdir(oldRoot, { recursive: true });
+    await writePiAcpSessionMap({ runtime: 'builtin', repoRoot: oldRoot });
+    const paths = resolveEnsemblePaths({ repoRoot, userEnsembleRoot: userRoot });
+    const issueUrl = `https://github.com/otolab/agents-ensemble/issues/${ISSUE_NUMBER}`;
+    const path = paths.canonicalSessionResumeStorePath(issueUrl, CONDUCTOR_AGENT_ID);
+    const store = (await loadSessionResumeStore(path))!;
+    const old = store.workers[WORKER_NAME]!;
+    store.repoRoot = repoRoot;
+    store.workers[WORKER_NAME] = {
+      ...old,
+      acpSessionId: 'new-session',
+      generations: [{
+        acpSessionId: old.acpSessionId, acpCwd: old.acpCwd, acpSpawn: old.acpSpawn,
+        repoRoot: oldRoot, issueUrl, replacedAt: Date.now(),
+        reason: 'session_load_failed', nextSessionId: 'new-session',
+      }],
+    };
+    await saveSessionResumeStore(path, store);
+    const result = await readWorkerSessionHistory({
+      repoRoot, issueUrl, conductorAgentId: CONDUCTOR_AGENT_ID,
+      workerName: WORKER_NAME, generation: 1,
+    });
+    expect(result.status).toBe('supported');
+    expect(result.messages).toEqual(expect.arrayContaining([
+      expect.objectContaining({ text: 'Pi ACP fixture user message.' }),
+    ]));
+    await expect(readWorkerSessionHistory({
+      repoRoot, issueUrl, conductorAgentId: CONDUCTOR_AGENT_ID,
+      workerName: WORKER_NAME, generation: 3,
+    })).rejects.toThrow('Unknown worker session generation');
   });
 
   it('reads builtin Pi worker history from the saved clone path-hash', async () => {

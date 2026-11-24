@@ -551,7 +551,7 @@ globalThis.fetch = async (input, init) => {
           competitor.stderr?.on('data', (chunk) => { competitorOutput += String(chunk); });
           const competitorExit = await waitForProcessExit(competitor, 30_000);
           expect(competitorExit.code).not.toBe(0);
-          expect(competitorOutput).toContain('Session is already in use');
+          expect(competitorOutput).toMatch(/Cannot acquire session ownership.*another process may own it/);
           expect(await readFile(storePath, 'utf8')).toBe(before);
           const pid = /FIXTURE_CLI_PID=(\d+)/.exec(output);
           expect(pid).not.toBeNull();
