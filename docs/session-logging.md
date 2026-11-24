@@ -349,6 +349,8 @@ operator-agent の `list_operator_sessions` は `issueUrl` / `conductorAgentId` 
 
 この release で legacy read fallback を外した後、未移行データは通常の session list / show / resume / provider history / watch から見えません。legacy source はディスクに残り、自動削除・rename は行いません。後から移行して通常の reader から使いたい場合は、migration tool を含む repository checkout から次の手順を実行してください。
 
+**実行前の停止:** この tool は session の所有権を取得しません。dry-run を含め inventory から apply の完了まで、対象 checkout と移行先 user root に関係する session、operator watch、旧版を含むすべての writer と直接編集ツールを停止してください。各 CLI の `/close` などで通常終了し、別 terminal・clone・常駐サービスを含めて対象 process が終了したことを確認します。ライブラリ組み込みの場合はそのホスト process も停止してください。停止を確認できない場合は実行しないでください。apply 後に manifest と checksum を確認してから session や watch を再開します。稼働中の lock ファイルを削除して停止の代わりにしてはいけません。
+
 **manifest / archive の取り扱い:** tool は manifest を既定の user root、または `--manifest` で指定した filesystem path に書き、watch archive は user root 配下へ保存します。これらはローカルのファイル出力で、自動で外部へ upload しません。manifest には source / destination などのローカル path、Issue URL / ID、`conductorAgentId`、SHA-256 checksum、provenance、filesystem error details が含まれることがあります。watch archive には pending report の本文も含まれます。公開 Issue / PR や共有先へ渡す前に内容を確認し、必要な箇所を redact してください。tool は directory `0700` / file `0600` の権限を設定しようとしますが、chmod が使えない場合は失敗を許容します。filesystem や platform の ACL / mode の違いもあるため、この制限は best-effort であり、他ユーザーからのアクセスを防ぐ保証ではありません。必要な ACL が設定された保存先を選び、共有前に実際の権限を確認してください。
 
 1. **対象 checkout を選ぶ。** Issue を実行した clone、worktree の元 repository、ほかに使った clone を確認します。checkout inventory が網羅的だと確認できる場合にだけ、全 root を `--checkout-root` で指定して `--checkout-roots-complete` を付けます。完全性に確信がなければ complete を申告せず、manifest に未確認として残します。
