@@ -2,6 +2,34 @@
 
 この文書は作業途中の対応表であり、TS 全体の形式化や #855 の全命題の判定を示すものではない。TS を現状の基準とし、抽象仕様との違いは検査結果として扱う。
 
+## TS の関数と Lean 定義の対応
+
+パスはリポジトリルートから記す。Lean の名前は `Ensemble.AsIs.` を省略する。
+`Composition.step` は主体別の既存モデルを合成する部分モデルで、TS の driver 全体との等価性は未証明である。
+`ObservedHistory` の列は具体状態を保持する観測接続の試作であり、全遷移の写像ではない。
+
+| TS ファイル | 関数・操作 | Lean 定義 | 接続範囲と未対応 |
+| --- | --- | --- | --- |
+| `packages/core/src/conductor/session/session-event-queue.ts` | `enqueue` | `Composition.step` の `conductorEnqueue`、`ObservedHistory.conductorAcceptWorker` | 履歴の受理観測は単一 worker 完了に限定。waiter への直接配送は未接続。 |
+| `packages/core/src/conductor/session/select-dispatch-batch.ts` | `selectDispatchBatch` | `ConductorQueue.chooseDispatch`、`Composition.step` の `conductorBeginSend`、`ObservedHistory.conductorDispatch` | 履歴は単一 worker のみ。複数項目、permission stall、予約・時刻の全条件は未接続。 |
+| `packages/core/src/conductor/session/dispatch-hold.ts` | `bufferDispatchHoldEvents` | `ConductorQueue.bufferHold`、`Composition.step` の `conductorHold`、`ObservedHistory.conductorDispatchHold` | held の操作を部分的に接続。permission の失効・通知と全項目の観測は未検査。 |
+| `packages/core/src/dispatch/set-dispatch-hold-tool.ts` | `createSetDispatchHoldTool` 内の `execute` | `ConductorQueue.setHold`、`ObservedHistory.conductorDispatchHold` | hold 切替の結果のみ。ツール出力・通知は対象外。 |
+| `packages/core/src/conductor/conductor-session-driver.ts` | `runConductorSessionDriver` 内の reconnect 選択・結果 | `Composition.step` の `conductorBeginReconnect` / `conductorReconnectResult` | 成功 settle の局所定理あり。conductor の主体別履歴への接続、非同期中断は未実装。 |
+| `packages/core/src/conductor/conductor-session-driver.ts` | `runConductorSessionDriver` 内の send・結果処理 | `Composition.step` の `conductorBeginSend` / `conductorSendResult`、`ObservedHistory.conductorCompleted` | 観測履歴は単一 worker の成功のみ。失敗・例外と driver の全停止境界は未接続。 |
+| `packages/core/src/conductor/conductor-dispatch-lifecycle.ts` | `settleConductorDispatch` | `ConductorDispatchLifecycle.settleConductorDispatch`、`Composition.step` の send 結果 | lease と結果を合成。inbox の実容量・期限・dispose は外部結果で過大近似。 |
+| `packages/core/src/conductor/conductor-recovery-inbox.ts` | `ConductorRecoveryInbox.reserve` / `release` | `Composition.Reservation`、`Composition.step` の `operatorBeginCommit` / `operatorCommitStopped` | token と byte 数は保持。容量・期限・dispose は `reservationOk` で外部から与え、実行可能性は別途確認が必要。 |
+| `packages/core/src/conductor/session-policy.ts` | `canDispatchConductorSend` / `autonomousTurnsAfterConductorBatch` | `ConductorQueue.canSend`、`Composition.step` の `conductorBeginSend` / `conductorSendResult` | 自律ターン数と上限を保持。全セッション制御の実行順は未接続。 |
+| `packages/operator-agent/src/run/run-operator-conversation.ts` | `runTtyConversation` 内の `handleSubmittedInput` | `Composition.step` の `operatorInput`、`ObservedHistory.accept` | 通常入力の受理を記録。入力文字列の表示、全コマンドと外部 I/O は未接続。 |
+| `packages/operator-agent/src/dispatch/operator-dispatch.ts` | `selectOperatorDispatchBatch`、`createOperatorDispatchQueue` の `selectBatch` | `OperatorDispatch.Queue.selectBatch`、`Composition.step` の `operatorBeginCommit`、`ObservedHistory.internal` | 選択と send 開始を分離。全 focus・時刻・入力条件との履歴対応は未証明。 |
+| `packages/operator-agent/src/watch/operator-watch-dispatch.ts` | `createWatchDispatchOperations` の `commitBatch` | `Composition.step` の `operatorBeginCommit` / `operatorCommitApply` | user・凍結 batch と未凍結 report の commit 境界を区別。lock 競合・永続化例外の全順序は未接続。 |
+| `packages/operator-agent/src/dispatch/operator-dispatch.ts` | `createOperatorDispatchQueue` の `commitBatch` / `rollbackBatchCommit` | `OperatorDispatch.Queue.commitBatch` / `afterCommitError`、`Composition.step` の `operatorCommitException` | queue 更新と rollback をモデル化。例外の実到達性と全保存先は未証明。 |
+| `packages/operator-agent/src/run/run-operator-waiters.ts` | `createOperatorWaiters` の `retryWatchLock` | `Composition.step` の `operatorCommitStopped` / `operatorRetryStopped` / `operatorRetryException`、`ObservedHistory.retryStopped` / `retryException` | 停止・例外を区別。同期 user commit 後に停止通知が先行する候補の TS 実到達性は未確認。 |
+| `packages/operator-agent/src/run/run-operator-conversation.ts` | `runTtyConversation` 内の send 開始・結果・中断 | `Composition.step` の `operatorCommitSuccess` / `operatorSendResult` / `operatorInterruptSend`、`ObservedHistory.dispatch` / `sendResult` / `interruptSend` | 正常・未完了・中断の限定列。race の全実行順序は未証明。 |
+| `packages/operator-agent/src/dispatch/operator-dispatch.ts` | `createOperatorDispatchQueue` の `requeue` | `OperatorDispatch.Queue.requeueReport`、`Composition.step` の `operatorRetryResult`、`ObservedHistory.retrySaved` | 非空 report ID のみ論理 ID を保持。空 ID・重複や時刻の全組合せは未接続。 |
+| `packages/operator-agent/src/watch/operator-watch-ack.ts` | `retryOperatorWatchAcknowledgement` | `OperatorDispatch.Runner.ackResult` / `advanceAck` / `finishAcknowledged`、`ObservedHistory.operatorAckStep` | ack 待機と再試行の限定列。実時間の単調性・全例外順序は未証明。 |
+| `packages/operator-agent/src/run/run-operator-conversation.ts` | `runTtyConversation` 内の `handleInputEnd` / `requestStop`、`/reconnect` | `Composition.step` の `operatorInputEnd` / `operatorRequestStop` / reconnect 各操作、`ObservedHistory.operatorRequestReconnect` / `operatorBeginReconnect` / `operatorReconnectResult` | 入力終了と停止要求を分離。reconnect・idle 待機中の停止 signal や全 callback 順序は未接続。 |
+| `packages/operator-agent/src/run/run-operator-conversation.ts` | `runTtyConversation` 内の `/resume-watch` | `Composition.step` の `operatorResumeWatch`、`ObservedHistory.operatorResumeWatch` | report hold 保持を局所的に証明。全解除操作の観測接続は未証明。 |
+
 ## TS と Lean の対応
 
 | TS の対象 | 合成モデルの状況と限界 |
@@ -37,7 +65,7 @@ user batch と凍結済み batch の queue commit は `commitBatch` の呼び出
 
 | 性質 | 現時点の検査 |
 | --- | --- |
-| `ObservationConsistent` | **限定例・未判定**。`DelayedRetry` の限定例は成立。残作業は主体別履歴の全遷移と項目・attempt の全 ID について観測と状態変化の双方向対応を検査すること。 |
+| `ObservationConsistent` | **限定例・未判定**。`DelayedRetry` の限定例は成立する一方、commit 後停止の固定射影は不成立。後者の TS 到達性と全体の観測接続は未確認。 |
 | `RecoveryPossible` | **到達反例・未判定**。停止後に限定回復操作の任意長の列で具体回復しない例がある。残作業は停止・実行可能性と元命題の量化の対応を構成すること。元命題自体の反例ではない。 |
 | `ReconnectRestoresAvailability` | **局所証明・未判定**。operator の有効な成功結果は主体別履歴の観測でも availability を回復する。conductor は具体状態の局所定理まで。残作業は両主体の全結果イベントの観測条件を接続すること。 |
 | `ResumeWatchPreservesReportHold` | **局所証明・未判定**。任意の主体別履歴で resume-watch 前後の観測が report hold を保持することを証明。残作業は全体遷移との対応を証明すること。 |
@@ -88,7 +116,7 @@ operator の具体履歴は batch の選択と send 開始を別々に保持す�
 | 条件 | 現状 |
 | --- | --- |
 | #855 の全性質を合成モデル上で検査 | 未達。主体別の全履歴の観測接続がなく、上表の未判定を残す。 |
-| 破れる性質ごとの最小反例と日本語説明 | 部分的。限定例は記録済みだが、#855 の命題違反を確定できず、停止例の最小性も未検査。 |
+| 破れる性質ごとの最小反例と日本語説明 | 部分的。commit 後停止の**固定射影**では #855 の3命題の不成立を証明し、固定4操作・固定値では提示列が最短。一方、合成モデル全体・TS 実行時での命題違反と一般的な最小性は未確定。別の retry 保存待ち停止例は最小性未検査。 |
 | reconnect 後の再開 | 限定された具体列と、その範囲での最小性を記録済み。弱公平な無限実行の命題に対する判定は未達。 |
 | 探索範囲外と抽象化の限界の一覧 | 本文書に記載。追加の未対応が見つかれば更新する。 |
 | #848 の Phase 1 判断材料 | 途中経過を記録済み。全性質の判定・重大度を欠き、最終材料は未達。 |
