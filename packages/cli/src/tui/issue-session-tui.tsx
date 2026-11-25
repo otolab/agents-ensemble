@@ -317,6 +317,7 @@ function sortWorkerEntries(
 }
 
 export function WorkerStatusPane({
+  now,
   workers,
   dispatchHold,
   conductorStatus,
@@ -325,6 +326,7 @@ export function WorkerStatusPane({
   issueUrl,
   issueLinkMode = 'label',
 }: {
+  now: number;
   workers: TuiViewSnapshot['displayState']['workers'];
   dispatchHold?: TuiViewSnapshot['displayState']['dispatchHold'];
   conductorStatus?: TuiViewSnapshot['conductorStatus'];
@@ -333,11 +335,6 @@ export function WorkerStatusPane({
   issueUrl?: string;
   issueLinkMode?: IssueLinkMode;
 }) {
-  const [now, setNow] = useState(Date.now());
-  useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(timer);
-  }, []);
   const visibleWorkers = conductorStatus && !workers.conductor
     ? { ...workers, conductor: { kind: 'conductor', status: 'idle' as const } }
     : workers;
@@ -522,6 +519,16 @@ export function IssueSessionTui({
   // leaving a fullscreen frame; reserving a row avoids that scrollback-clearing
   // branch while preserving the main-screen layout.
   const liveFrameRows = Math.max(1, terminalRows - 1);
+  const statusClockEnabled =
+    snapshot.conductorStatus !== undefined &&
+    !(snapshot.recoveryInspection && liveFrameRows < PANE_BORDER_ROWS * 2 + 2);
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    if (!statusClockEnabled) return;
+    setNow(Date.now());
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [statusClockEnabled]);
   const contentWidth = usePaneContentWidth(terminalColumns);
   const operatorPrompt = OPERATOR_INPUT_PROMPT;
   const maxInputDisplayLines = computeMaxInputDisplayLines(liveFrameRows);
@@ -1010,6 +1017,7 @@ export function IssueSessionTui({
       ) : (
         <>
           <WorkerStatusPane
+            now={now}
             workers={snapshot.displayState.workers}
             dispatchHold={snapshot.displayState.dispatchHold}
             conductorStatus={snapshot.conductorStatus}

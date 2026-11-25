@@ -149,6 +149,15 @@ export function IssueSessionTuiStream({
     viewModel.getSnapshot,
     viewModel.getSnapshot,
   );
+  const statusClockEnabled =
+    snapshot.conductorStatus !== undefined && snapshot.recoveryInspection === undefined;
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    if (!statusClockEnabled) return;
+    setNow(Date.now());
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [statusClockEnabled]);
   const [inputValue, setInputValue] = useState('');
   const [queueOffset, setQueueOffset] = useState(0);
   const [inputCursorPosition, setInputCursorPosition] = useState<[number, number]>([0, 0]);
@@ -731,6 +740,7 @@ export function IssueSessionTuiStream({
         )}
         {snapshot.recoveryInspection ? null : (
           <WorkerStatusPane
+            now={now}
             workers={snapshot.displayState.workers}
             dispatchHold={snapshot.displayState.dispatchHold}
             conductorStatus={snapshot.conductorStatus}
