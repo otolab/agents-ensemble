@@ -169,15 +169,16 @@ try:
     if len(redraws) < 2:
         raise RuntimeError('clock redraws did not re-report a physical cursor after each elapsed value: ' + repr(redraws))
     expected_x, expected_y = int(sys.argv[4]), int(sys.argv[5])
+    expected_caret = ((expected_x, expected_y),)
     wrong = [
         frame for frame in redraws
         if frame[1:4] != (expected_x, expected_y, True)
-        or (frame[4] and (expected_x, expected_y) not in frame[4])
+        or (frame[4] and frame[4] != expected_caret)
     ]
     if wrong:
-        raise RuntimeError('physical cursor left the input cell during completed clock frames; expected ' +
-            repr((expected_x, expected_y)) + ', observed ' + repr(redraws))
-    if not any((expected_x, expected_y) in frame[4] for frame in redraws):
+        raise RuntimeError('physical cursor or visible caret left the input cell during completed clock frames; ' +
+            'visible inverse cells must contain only ' + repr(expected_caret) + ', observed ' + repr(redraws))
+    if not any(frame[4] for frame in redraws):
         raise RuntimeError('no visible caret was captured in completed clock frames: ' + repr(redraws))
 finally:
     if child.poll() is None: os.killpg(child.pid, signal.SIGKILL)
