@@ -332,7 +332,7 @@ harness は macOS / Linux 上の既知 builtin ACP preset（Cursor / Claude / Co
 |------------------|----------------------------|-----------------|
 | Cursor `agent acp` | harness が外部 CLI を `spawn(command, args, { cwd, env })` で起動。[公式 ACP docs](https://cursor.com/docs/cli/acp) は stdio の ACP server として起動することを説明しています | Shell tool が任意の parent environment を保持する契約は公開 docs で確認できません。helper が `ENSEMBLE_SECRET_ACTIVE` を受け取れない場合、target 起動前に「unavailable」で失敗します |
 | Claude `@agentclientprotocol/claude-agent-acp@0.70.0` | adapter が Claude CLI を `spawn(..., { stdio: 'inherit' })` し、Node の既定どおり親 `process.env` を継承 | Bash child 内で marker が欠ければ target 起動前に失敗します |
-| Codex `@agentclientprotocol/codex-acp@2.3.0` | adapter が Codex CLI を `spawn(..., { env: process.env })` で起動 | Bash child 内で marker が欠ければ target 起動前に失敗します |
+| Codex `@agentclientprotocol/codex-acp@2.12.0` | adapter が Codex CLI を `spawn(..., { env: process.env })` で起動 | Bash child 内で marker が欠ければ target 起動前に失敗します |
 | Pi BYO `pi-acp@0.0.33` / builtin `pi-acp@0.0.34` | どちらの `PiRpcProcess.spawn` も Pi CLI に `env: process.env` を設定 | Pi の Bash tool child 内で marker が欠ければ target 起動前に失敗します |
 
 Claude / Codex / Pi の確認は現在 lock されている adapter package の起動コードに基づき、live backend を使った end-to-end 実行ではありません。Cursor は外部 `agent acp` CLI の内部動作に依存します。custom ACP、Windows、他 OS は対象外で、CLI から直接 Bash に使える機能ではありません。全 preset で helper 自身が必要な環境値を検査し、欠けていれば target は spawn しません。詳細な利用手順、方式比較、脅威モデル、残余リスクは [CLI の secret exec](cli/README.md#worker-の-bash-command-に一度だけ-secret-を渡す) を参照してください。
