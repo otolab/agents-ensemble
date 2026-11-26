@@ -51,7 +51,8 @@ exports[`buildWorkerPrompt > builds workspace dispatch without Issue defaults 1`
 - \`ensemble notes list\` で一覧を確認し、\`ensemble notes show <noteId>\` で読む
 - \`printf '%s\\n' '記録する内容' | ensemble notes push --note <noteId>\` で本文を stdin から追記する。conductor の指示があれば \`ensemble notes create --summary '要約'\` で note を作成できる
 - 作業場 slug は環境変数から自動で解決されるため、\`--slug\` の指定は不要
-- サンドボックスなどの権限により Notes に書き込めない場合は、conductor に相談する
+- \`ensemble notes\` が権限エラー（EPERM など）で失敗した場合は、サンドボックス外での実行に切り替えて再試行する
+- それでも書き込めない場合は、記録する内容と書き先の note ID を conductor に渡し、Notes への記録を依頼する
 作業ディレクトリ: /repo
 
 ## Current State

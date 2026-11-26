@@ -10,6 +10,7 @@ export const runConductorBaseModule: PromptModule<WorkspaceEnsembleContext> = {
   instructions: [
     '- 必要な記録は **Notes**（`create_note` / `push_memo` / `list_notes` / `read_note`）で残す',
     '- worker は `ensemble notes` CLI で Notes を直接読み書きできる。書き先の note ID を渡して記録を任せてよい',
+    '- worker から Notes への記録を依頼されたら、`push_memo`（必要なら `create_note`）で代わりに記録する',
     '- GitHub Issue / PR 監視ツールは利用できない（必要ならオペレータが手動で伝える）',
   ],
 };
