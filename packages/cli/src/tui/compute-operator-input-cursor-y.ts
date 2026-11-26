@@ -2,7 +2,6 @@ import stringWidth from 'string-width';
 import {
   INPUT_PANE_BORDER_ROWS,
   INPUT_PANE_LEFT_COLUMNS,
-  OPERATOR_INPUT_CURSOR_Y_OFFSET,
   PANE_BORDER_ROWS,
   WORKER_PANE_HEIGHT,
 } from './tui-layout-constants.js';
@@ -63,11 +62,22 @@ export function computeOperatorInputCursorX(operatorPrompt: string): number {
 
 /**
  * オペレータ入力行の Y 座標（Ink `useCursor` 向け。Ink 出力原点から 0 始まり）。
- *
- * 描画フレーム上の入力行インデックスに {@link OPERATOR_INPUT_CURSOR_Y_OFFSET} を加算する。
- * Ink `log-update` の `visibleLineCount` と実入力行の差を補正（オペレータ手動確認 iTerm2+tmux）。
+ * 描画フレーム上で入力 caret を描く行と一致させる。
  */
 export function computeOperatorInputCursorY(params: {
+  terminalRows: number;
+  hintLineCount: number;
+  inputDisplayLineCount?: number;
+  openQuestionsPaneHeight: number;
+  workerPaneHeight?: number;
+  activityPaneHeight?: number;
+  cursorLineOffset?: number;
+}): number {
+  return computeOperatorInputLineIndex(params);
+}
+
+/** 描画フレーム上のオペレータ入力行インデックス（Ink 出力原点から 0 始まり）。 */
+export function computeOperatorInputLineIndex(params: {
   terminalRows: number;
   hintLineCount: number;
   inputDisplayLineCount?: number;
@@ -88,7 +98,7 @@ export function computeOperatorInputCursorY(params: {
   const inputLineIndex =
     panesAboveInput + PANE_BORDER_ROWS / 2 + params.hintLineCount + cursorLineOffset;
 
-  return inputLineIndex + OPERATOR_INPUT_CURSOR_Y_OFFSET;
+  return inputLineIndex;
 }
 
 /**
@@ -97,8 +107,7 @@ export function computeOperatorInputCursorY(params: {
  * Static 出力は Ink の dynamic output の外側へ追記されるため、stream の
  * `cursorStart` は端末全体ではなく live frame 内の行として計算する。
  * Open questions は入力欄の上に表示する。空状態では追加の本文行を持たない。
- * Stream の dynamic root は pane の log-update 補正を持たないため、
- * `OPERATOR_INPUT_CURSOR_Y_OFFSET` は加算しない。
+ * Stream の dynamic root は pane の layout を通らないため、独立して座標を計算する。
  */
 export function computeStreamOperatorInputCursorY(params: {
   openQuestionsPaneHeight: number;
@@ -113,17 +122,4 @@ export function computeStreamOperatorInputCursorY(params: {
     cursorLineOffset;
 
   return inputLineIndex;
-}
-
-/** 描画フレーム上のオペレータ入力行インデックス（`useCursor` の Y 補正前）。 */
-export function computeOperatorInputLineIndex(params: {
-  terminalRows: number;
-  hintLineCount: number;
-  inputDisplayLineCount?: number;
-  openQuestionsPaneHeight: number;
-  workerPaneHeight?: number;
-  activityPaneHeight?: number;
-  cursorLineOffset?: number;
-}): number {
-  return computeOperatorInputCursorY(params) - OPERATOR_INPUT_CURSOR_Y_OFFSET;
 }

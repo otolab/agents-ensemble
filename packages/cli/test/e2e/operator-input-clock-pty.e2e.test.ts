@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 // The clock must trigger a real Ink commit in the same TUI tree as OperatorTextArea.
-// Inspect the PTY's physical cursor after each complete elapsed-second redraw.
+// Inspect the visible caret and physical cursor after each complete elapsed-second redraw.
 const runner = String.raw`
 import codecs, fcntl, os, pty, re, select, signal, struct, subprocess, sys, termios, time, unicodedata
 
@@ -13,6 +13,8 @@ class Terminal:
         self.x = 0
         self.y = 0
         self.visible = False
+        self.inverse = False
+        self.inverse_cells = []
         self.frame_events = []
 
     def feed(self, text):
@@ -40,7 +42,9 @@ class Terminal:
                     end = min(candidates)
                     osc = text[index + 2:end]
                     if osc == '777;ensemble-frame':
-                        self.frame_events.append((index, self.x, self.y, self.visible))
+                        self.frame_events.append((
+                            index, self.x, self.y, self.visible, tuple(self.inverse_cells)))
+                        self.inverse_cells = []
                     index = end + (2 if end == end_st else 1)
                     continue
                 if next_char == 'M':
@@ -67,6 +71,8 @@ class Terminal:
                 if width and self.x + width > self.columns:
                     self.x = 0
                     self.y += 1
+                if width and self.inverse:
+                    self.inverse_cells.append((self.x, self.y))
                 self.x = min(self.columns - 1, self.x + width)
             index += 1
 
@@ -75,6 +81,13 @@ class Terminal:
             modes = [part for part in params[1:].split(';') if part]
             if '25' in modes:
                 self.visible = final == 'h'
+            return
+        if final == 'm':
+            for mode in params.split(';') if params else ['0']:
+                if mode in ('0', '27'):
+                    self.inverse = False
+                elif mode == '7':
+                    self.inverse = True
             return
         numbers = params.lstrip('?').split(';') if params else []
         def number(position, default=1):
@@ -128,7 +141,7 @@ def completed_clock_redraws():
         marker_end = current.end()
         event = next((item for item in events if marker_end <= item[0] < end), None)
         if event is not None:
-            completed.append((current.group(1), event[1], event[2], event[3]))
+            completed.append((current.group(1), event[1], event[2], event[3], event[4]))
     return completed
 
 try:
@@ -156,10 +169,17 @@ try:
     if len(redraws) < 2:
         raise RuntimeError('clock redraws did not re-report a physical cursor after each elapsed value: ' + repr(redraws))
     expected_x, expected_y = int(sys.argv[4]), int(sys.argv[5])
-    wrong = [frame for frame in redraws if frame[1:] != (expected_x, expected_y, True)]
+    expected_caret = ((expected_x, expected_y),)
+    wrong = [
+        frame for frame in redraws
+        if frame[1:4] != (expected_x, expected_y, True)
+        or (frame[4] and frame[4] != expected_caret)
+    ]
     if wrong:
-        raise RuntimeError('physical cursor moved during completed clock frames; expected ' +
-            repr((expected_x, expected_y)) + ', observed ' + repr(redraws))
+        raise RuntimeError('physical cursor or visible caret left the input cell during completed clock frames; ' +
+            'visible inverse cells must contain only ' + repr(expected_caret) + ', observed ' + repr(redraws))
+    if not any(frame[4] for frame in redraws):
+        raise RuntimeError('no visible caret was captured in completed clock frames: ' + repr(redraws))
 finally:
     if child.poll() is None: os.killpg(child.pid, signal.SIGKILL)
     child.wait(timeout=5)
@@ -168,9 +188,9 @@ finally:
 
 describe('operator input cursor during conductor clock PTY redraws', () => {
   it.skipIf(process.platform === 'win32').each([
-    ['pane', 7, 23],
+    ['pane', 7, 22],
     ['stream', 7, 1],
-  ])('keeps the physical cursor at the input after each seconds update in %s mode', (mode, x, y) => {
+  ])('keeps the physical cursor on the input cell and aligns the visible caret in %s mode', (mode, x, y) => {
     const fixture = fileURLToPath(new URL('../process-fixtures/operator-input-clock-pty.mjs', import.meta.url));
     expect(() => execFileSync('python3', ['-c', runner, process.execPath, fixture, mode, String(x), String(y)], {
       timeout: 20_000,
