@@ -1,5 +1,16 @@
 # @agents-ensemble/cli
 
+## 0.25.1
+
+### Patch Changes
+
+- b2c34d6: Align the pane IME cursor with the rendered input caret.
+- 54dacdf: Keep conductor elapsed-time updates in the TUI parent so each status redraw also refreshes the operator input cursor.
+- Updated dependencies [2e955c5]
+- Updated dependencies [0d04485]
+  - @agents-ensemble/core@0.25.1
+  - @agents-ensemble/operator-agent@0.8.1
+
 ## 0.25.0
 
 ### Minor Changes
