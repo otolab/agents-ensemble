@@ -13,7 +13,7 @@
 | `cacheReadTokens` | backend が cache から読んだ input として報告した件数 |
 | `cacheWriteTokens` | backend が cache に書いた input として報告した件数 |
 | `totalTokens` | backend が返した total。ACP が省略した場合は harness が input と output の和を使い、テキスト推定では推定 input と推定 output の和 |
-| `reasoningTokens` | backend が分離して報告し harness が記録した reasoning 件数。Pi と codex-acp 2.3.0 では `outputTokens` の内数として扱う |
+| `reasoningTokens` | backend が分離して報告し harness が記録した reasoning 件数。Pi と codex-acp 2.12.0 では `outputTokens` の内数として扱う |
 
 raw backend usage では、cache read / write が `inputTokens` に含まれるか別枠かは一律ではありません。ensemble の排他的バケットとして扱う条件と注意点は §3.3 に示します。source の意味を確かめずに raw fields を足し合わせて総 input を作らないでください。`totalTokens` も別 backend の値と直接比較できる共通の請求単位ではありません。
 
@@ -32,7 +32,7 @@ Cursor SDK は `inputTokens`、`outputTokens`、cache read / write、`totalToken
 
 ACP worker の `usage` は `session/prompt` 応答に任意で含まれるデータとして本リポジトリが読み取ります。usage が無い応答は、harness が prompt と応答テキストから推定します。ACP v1 の公式 schema は token usage / cache 計上を共通フィールドとして定義していないため、preset ごとの報告値を provider の usage 定義と照らして読む必要があります（[ACP v1 schema](https://github.com/agentclientprotocol/agent-client-protocol/blob/main/schema/v1/schema.json)、実装上の型は `packages/core/src/acp/types.ts`）。
 
-Codex preset が使う codex-acp 2.3.0 は、wire の `cachedReadTokens` を内部の `cacheReadTokens` に、`cachedWriteTokens` を `cacheWriteTokens` に、`thoughtTokens` を `reasoningTokens` に写します。2.3.0 の Codex usage では `inputTokens` は cache read / write を除いた input、cache counters は別 bucket です。`thoughtTokens` は `outputTokens` に含まれる reasoning の内数です。変換後も `outputTokens` と wire の `totalTokens` はそのまま保ち、`reasoningTokens` をどちらにも足しません。harness は各項目を独立して集計し、wire に `totalTokens` がない場合の既定値だけ `inputTokens + outputTokens` とします（[codex-acp 2.3.0 token usage](https://github.com/agentclientprotocol/codex-acp/blob/v2.3.0/src/TokenCount.ts)、[adapter の変換](../packages/core/src/acp/acp-client.ts)、[集計実装](../packages/core/src/usage/session-usage-tracker.ts)）。
+Codex preset が使う codex-acp 2.12.0 は、wire の `cachedReadTokens` を内部の `cacheReadTokens` に、`cachedWriteTokens` を `cacheWriteTokens` に、`thoughtTokens` を `reasoningTokens` に写します。2.12.0 の Codex usage では `inputTokens` は cache read / write を除いた input、cache counters は別 bucket です。`thoughtTokens` は `outputTokens` に含まれる reasoning の内数です。これらの意味と変換は 2.3.0 から変わっていません。変換後も `outputTokens` と wire の `totalTokens` はそのまま保ち、`reasoningTokens` をどちらにも足しません。harness は各項目を独立して集計し、wire に `totalTokens` がない場合の既定値だけ `inputTokens + outputTokens` とします（[codex-acp 2.12.0 token usage](https://github.com/agentclientprotocol/codex-acp/blob/v2.12.0/src/TokenCount.ts)、[2.3.0 token usage](https://github.com/agentclientprotocol/codex-acp/blob/v2.3.0/src/TokenCount.ts)、[adapter の変換](../packages/core/src/acp/acp-client.ts)、[集計実装](../packages/core/src/usage/session-usage-tracker.ts)）。
 
 推定値は [estimateTokenUsageFromText](../packages/core/src/usage/estimate-token-usage.ts) が UTF‑8 byte 数から計算します。モデル tokenizer を使わず、画像などの非テキスト入力、内部 tool call、provider が追加する prompt 要素、非表示の reasoning も数えません。完了せず usage が記録されなかった worker ラウンドは、このテキスト推定にも含まれません。
 

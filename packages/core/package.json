@@ -52,7 +52,7 @@
   },
   "optionalDependencies": {
     "@agentclientprotocol/claude-agent-acp": "0.70.0",
-    "@agentclientprotocol/codex-acp": "2.3.0"
+    "@agentclientprotocol/codex-acp": "2.12.0"
   },
   "files": [
     "assets",
