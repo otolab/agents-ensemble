@@ -86,7 +86,7 @@ describe('builtin Pi runtime helpers', () => {
       join(packageRoot, 'package.json'),
       JSON.stringify({
         name: 'pi-acp',
-        version: '0.0.34',
+        version: '0.0.35',
         bin: { 'pi-acp': 'dist/index.js' },
       }),
     );
@@ -98,7 +98,7 @@ describe('builtin Pi runtime helpers', () => {
     ).toBe(realpathSync(entrypoint));
   });
 
-  it('resolves the installed builtin adapter alias to upstream pi-acp@0.0.34', () => {
+  it('resolves the installed builtin adapter alias to upstream pi-acp@0.0.35', () => {
     const require = createRequire(import.meta.url);
     const manifestPath = require.resolve('pi-acp-builtin/package.json');
     const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as {
@@ -106,7 +106,7 @@ describe('builtin Pi runtime helpers', () => {
       version: string;
     };
 
-    expect(manifest).toMatchObject({ name: 'pi-acp', version: '0.0.34' });
+    expect(manifest).toMatchObject({ name: 'pi-acp', version: '0.0.35' });
     expect(resolveBuiltinPiAcpEntrypointPath()).toBe(
       realpathSync(join(dirname(manifestPath), 'dist', 'index.js')),
     );

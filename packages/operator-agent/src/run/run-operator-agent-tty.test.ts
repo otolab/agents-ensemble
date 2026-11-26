@@ -1,4 +1,6 @@
 import { setupRunnerSuite } from '../../test/support/runner-suite.js';
+import { once } from 'node:events';
+import { createServer } from 'node:http';
 import { readSchedulingStats } from '../../../cli/src/session-scheduling-stats.js';
 import { createFakeAgent, createOutput, writeOperatorSettings } from '../../test/support/operator-fixtures.js';
 import { waitForNotification } from '../../test/support/wait.js';
@@ -107,6 +109,188 @@ function nextWatchPoll(minimumReports = 0): Promise<void> {
 describe('runOperatorAgent', () => {
   const fixture = setupRunnerSuite(watchPollHarness);
 
+
+  it('runs the real Pi operator path through a loopback tool call and final answer', async () => {
+    const modelId = 'fixture-tool-model';
+    const provider = 'loopback-fixture';
+    const agentDir = join(fixture.repoRoot, '.ensemble', 'pi-user');
+    const workspace = join(
+      fixture.repoRoot,
+      '.ensemble',
+      'operator-agents',
+      'smoke',
+    );
+    const projectDir = join(workspace, 'pi-project');
+    await Promise.all([
+      mkdir(agentDir, { recursive: true }),
+      mkdir(projectDir, { recursive: true }),
+      mkdir(workspace, { recursive: true }),
+    ]);
+    await writeFile(join(workspace, 'fixture-input.txt'), 'operator-fixture-readable');
+    await writeFile(
+      join(fixture.repoRoot, '.ensemble', 'operator-agents.config.yaml'),
+      [
+        'version: 1',
+        'defaultProfile: smoke',
+        'common:',
+        '  conductor:',
+        '    backend: pi',
+        `    model: ${provider}/${modelId}`,
+        '  pi:',
+        '    agentDir: pi-user',
+        'profiles:',
+        '  smoke:',
+        '    prompt:',
+        '      instructions:',
+        '        - Use tools only for the operator task.',
+        '    pi:',
+        '      projectDir: pi-project',
+        '      skills: false',
+        '',
+      ].join('\n'),
+    );
+
+    let requestCount = 0;
+    const requestHosts: string[] = [];
+    const requestBodies: string[] = [];
+    const server = createServer((request, response) => {
+      if (request.method !== 'POST' || request.url !== '/v1/chat/completions') {
+        response.writeHead(404).end();
+        return;
+      }
+      requestCount += 1;
+      requestHosts.push(request.headers.host ?? '');
+      void (async () => {
+        let requestBody = '';
+        for await (const _chunk of request) {
+          // This deterministic provider fixture accepts loopback requests only.
+          requestBody += _chunk.toString();
+        }
+        requestBodies.push(requestBody);
+        const chunks =
+          requestCount === 1
+            ? [
+                {
+                  id: 'local-operator-tool',
+                  object: 'chat.completion.chunk',
+                  created: 1,
+                  model: modelId,
+                  choices: [{
+                    index: 0,
+                    delta: {
+                      tool_calls: [{
+                        index: 0,
+                        id: 'operator-call-1',
+                        type: 'function',
+                        function: {
+                          name: 'read_operator_workspace_file',
+                          arguments: '{"path":"fixture-input.txt"}',
+                        },
+                      }],
+                    },
+                    finish_reason: null,
+                  }],
+                },
+                {
+                  id: 'local-operator-tool',
+                  object: 'chat.completion.chunk',
+                  created: 1,
+                  model: modelId,
+                  choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }],
+                },
+              ]
+            : [{
+                id: 'local-operator-final',
+                object: 'chat.completion.chunk',
+                created: 2,
+                model: modelId,
+                choices: [{
+                  index: 0,
+                  delta: { content: 'local operator runtime completed the tool round trip' },
+                  finish_reason: 'stop',
+                }],
+              }];
+        response.writeHead(200, {
+          'content-type': 'text/event-stream',
+          'cache-control': 'no-cache',
+        });
+        for (const chunk of chunks) {
+          response.write(`data: ${JSON.stringify(chunk)}\n\n`);
+        }
+        response.end('data: [DONE]\n\n');
+      })().catch((error: unknown) => {
+        response.writeHead(500).end(error instanceof Error ? error.message : String(error));
+      });
+    });
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+    const address = server.address();
+    if (!address || typeof address === 'string') {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      throw new Error('Loopback operator fixture did not bind a TCP port.');
+    }
+    try {
+      await writeFile(
+        join(projectDir, 'models.json'),
+        JSON.stringify({
+          providers: {
+            [provider]: {
+              api: 'openai-completions',
+              baseUrl: `http://127.0.0.1:${address.port}/v1`,
+              authHeader: true,
+              models: [{
+                id: modelId,
+                name: 'Loopback fixture model',
+                contextWindow: 16_000,
+                maxTokens: 1_000,
+                reasoning: false,
+              }],
+            },
+          },
+        }),
+      );
+      await writeFile(
+        join(agentDir, 'settings.json'),
+        JSON.stringify({ apiKeys: { [provider]: 'not-a-provider-credential' } }),
+      );
+
+      const input = createInteractiveInput();
+      const output = createOutput();
+      const run = runOperatorAgent(
+        { repoRoot: fixture.repoRoot, newSession: true },
+        {
+          stdin: input,
+          stdout: output,
+          userEnsembleRoot: join(fixture.repoRoot, '.ensemble'),
+          autoDiscoverSessions: false,
+        },
+      );
+      await vi.waitFor(() =>
+        expect(output.capturedText()).toContain('user>'),
+      );
+      input.write('Check the local fixture file');
+      input.write('\r');
+      await vi.waitFor(() =>
+        expect(normalizeTtyText(output.capturedText())).toContain(
+          'local operator runtime completed the tool round trip',
+        ),
+      );
+      input.write('/exit\n');
+      await run;
+
+      expect(requestCount).toBe(2);
+      expect(requestBodies[0]).toContain('read_operator_workspace_file');
+      expect(requestBodies[1]).toContain('operator-fixture-readable');
+      expect(requestHosts).toEqual([
+        `127.0.0.1:${address.port}`,
+        `127.0.0.1:${address.port}`,
+      ]);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
 
   it('runs a Pi-backed TTY conversation with profile prompt and saved session summaries', async () => {
     const input = createInteractiveInput();
