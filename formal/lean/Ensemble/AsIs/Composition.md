@@ -32,7 +32,7 @@
 
 ## 現行 TS の idle・停止・終了・通信・回復
 
-調査対象のコードは開始時の commit `8657a347ae6a8e63295513dfacf3e98102e369f8`。Issue #881 本文・履歴を基準にし、#855 / #859 / #848 の Issue 記録、PR #879 の差分・説明・レビュー、ADR 0086、`Flow/Spec.lean` と As-Is モジュール、関連する TS 関数を照合した。調査中に `origin/main` が3 commit進んでいたため、PR #880 で入った TUI clock 表示変更も確認した。この変更は表示更新・cursor 維持の範囲で、ここで扱う session lifecycle / harness idle state の更新ではない。以下は関数と分岐の静的な読み取りであり、runtime trace、Lean build、非同期順序の実測は今回行っていない。根拠となるコードパスはリポジトリルートから記す。
+調査対象のコードは開始時の commit `8657a347ae6a8e63295513dfacf3e98102e369f8`。Issue #881 本文・履歴を基準にし、#855 / #859 / #848 の Issue 記録、PR #879 の差分・説明・レビュー、ADR 0086、`Flow/Spec.lean` と As-Is モジュール、関連する TS 関数を照合した。調査中に `origin/main` が3 commit進んでいたため、PR #880 で入った TUI clock 表示変更も確認した。この変更は表示更新・cursor 維持の範囲で、ここで扱う session lifecycle / harness idle state の更新ではない。PR #884 のレビューで指摘された3経路は、レビュー時点の head `fe4949bad55eb930089f34baac8e6b76706aab1c` の TS を改めて読み、以下に追補した。これらも関数と分岐の静的な照合であり、runtime trace、Lean build、非同期順序の実測は行っていない。根拠となるコードパスはリポジトリルートから記す。
 
 | Issue #881 の確認項目 | 本文書での記録先 |
 | --- | --- |
@@ -51,12 +51,13 @@
 | conductor driver の待機 | `waitForDispatchBatch` (`packages/core/src/conductor/conductor-session-driver.ts`) が選べる batch を得ず、queue・lifecycle 等の変更を待つ。lifecycle が dispatch 不可でも reconnect は別に返す。 | 「idle」を示す永続 lifecycle 値ではない。待機が解けても選択・send・成功は保証されない。 |
 | `delivery: 'idle'` | `canDispatchIdleOperatorMessage` (`packages/core/src/conductor/conductor-session-driver.ts`) が worker 実行中でなく、解除済み held batch も他の eligible trigger もないと判定した operator message の配送条件。 | agent や session の停止判定ではない。選択後に lifecycle、turn 上限、予約等で送信に至らない場合がある。 |
 | operator-agent UI の `待機中` | `runTtyConversation` (`packages/operator-agent/src/run/run-operator-conversation.ts`) が reconnect 後や send 処理の `finally` などで設定する表示 status。 | queue が空、send lease がない、input が開いている、次の batch を送れる、を保証しない。 |
+| operator-agent の no-batch 待機 | `runTtyConversation` が `selectBatch` から batch を得ず、`nextReadyAt` に基づく期限または queue change を待つ状態。詳細は次の「operator-agent の batch 待機」。 | UI status ではなく、conductor の `waitForDispatchBatch` とも別の待機。待機解除は batch 選択や送信成功を意味しない。 |
 | Issue-session TUI の conductor status 時計 | `IssueSessionTui` / `IssueSessionTuiStream` (`packages/cli/src/tui/issue-session-tui.tsx`, `packages/cli/src/tui/issue-session-tui-stream.tsx`) が `conductorStatus.since` からの経過秒を定期再描画する。 | 秒表示の更新は status 本体の更新や harness phase の遷移ではない。 |
 | watch の idle candidate | `evaluateOperatorIdleCandidate` (`packages/operator-agent/src/dispatch/operator-idle-candidates.ts`) が live UDS 観測の `harnessPhase: idle` が閾値を超えた場合等に作る確認 report。`running` の古い statusLine も別 candidate になる。 | worker 停止・失敗・停滞、Issue 作業の未完了の証拠ではない。長い正常処理もあり得る。 |
 | operator-agent の `inputEnded` | `runTtyConversation` (`packages/operator-agent/src/run/run-operator-conversation.ts`) の stdin `end` または `/exit` 後に、新しい入力を受け付けない状態。loop は pending user と reconnect がなくなると return 可能。 | send suppression、process teardown、`/exit` であること、pending report の処理完了と同義ではない。 |
 | operator-agent の `requestStop` / `stopping` | `runTtyConversation` (`packages/operator-agent/src/run/run-operator-conversation.ts`) の SIGINT・SIGTERM・TUI interrupt 等による send 抑止。input を無効化し、`sendSuppression` を abort して競合待機を起こす。 | stdin の end や `/exit` と同じ意味ではない。send 結果を得ないまま return し、lifecycle lease が残る経路もある。 |
 | Issue loop の停止 | `shouldStopIssueLoop` (`packages/core/src/conductor/session-policy.ts`) と `shouldBreakAfterLoopState` (`packages/core/src/conductor/conductor-session-driver.ts`) が Issue conductor の自律ループを抜けるか判定する。 | conductor session 全体や harness process の終了ではない。`continueAfterIssueLoopStop` や pending event により待機を続ける場合がある。 |
-| session の close / exit / interrupted | `conductor-session.ts` (`packages/core/src/conductor/conductor-session.ts`) の要求・shutdown signal と teardown が作る session lifecycle。 | Issue loop の stop reason や operator-agent の会話 return 値だけからは決まらない。 |
+| session の close / exit / interrupted | `requestOperatorShutdown` または process shutdown signal が driver を止め、`conductor-session.ts` の `finally` teardown が `closed` / `exited` / `interrupted` を保存する。 | Issue loop の stop reason や operator-agent の会話 return 値だけからは決まらない。close / exit / signal interruption の差は「conductor session の shutdown handoff」に記す。 |
 
 ### conductor 側の状態遷移と非同期境界
 
@@ -73,12 +74,27 @@
 
 `shouldStopIssueLoop` の条件は、`cancelled` / `send_rejected`、継続設定のない `error`、one-shot の未回答条件、worker / permission / open question、turn 内 dispatch 数等である。`maxTurns` 到達は許可 event の選別に影響する一方、operator message・reconnect・permission・recovery report は送れる経路がある。したがって「turn 上限に達した」「Issue loop が止まった」「session が終わった」を同一視できない。
 
+#### conductor session の shutdown handoff
+
+`/close` と `/exit` は `bindOperatorInput` の command 分岐から、UDS の `operator.session.shutdown` は同じ `requestOperatorShutdown(mode)` から入る。要求を受けると mode 別の `operatorRequestedClose` / `operatorRequestedExit` を設定し、worker の active prompt を cancel し、Open Question control を quiesce してから driver 用 signal を abort する。control server に in-flight request がなければ quiesce 開始後すぐ abort する。in-flight request があれば drain の成功・失敗または timeout まで待って abort する。timeout / drain failure は warning を記録しても abort に進むため、受理済み Open Question の通知結果が不明なまま残る場合がある。
+
+内部 shutdown controller を使う通常の process signal 経路では、SIGINT / SIGTERM handler が controller を abort し、`onShutdownSignal` が `shutdownIntentController` を abort したうえで同じ drain 手順を `drainedShutdownController` に対して始める。`driverShutdownSignal` は `drainedShutdownController.signal` と operator 用 `operatorTerminationController.signal` の `AbortSignal.any` である。signal handler は session が controller を所有し、`registerProcessSignalHandlers` が false でない場合に限り登録される。
+
+| 契機 | driver と teardown の見える遷移 | 確認できる差・限界 |
+| --- | --- | --- |
+| operator `/close` | drain 後に driver は shutdown を `interrupted` として返す。session は operator が close / exit を要求している場合、その `interrupted` を result 作成前に `completed` へ写し替える。teardown は `closed` を保存し、attached worker の ACP session 情報を resume state に写し、`closeConductorAgentOnce(..., { forResume: true })` を呼ぶ。 | close 固有の resume handoff がある。isolated worktree を削除する exit 分岐には入らない。実際に provider session が後続 process で復元できるかはここだけでは証明しない。 |
+| operator `/exit` | driver と `stopReason` の写し替えは close と同じ。teardown は `exited` を保存し、通常の `closeConductorAgentOnce` を呼ぶ。stop reason が `interrupted` でなければ isolated worktree の削除を試す。 | close 固有の attached-session snapshot / `forResume` は行わず、exit の worktree cleanup がある。remove の実成否は別結果であり、失敗時は warning として処理される。 |
+| SIGINT / SIGTERM 等の session shutdown signal（operator close / exit flag なし） | drain 後 driver は `interrupted` を返し、result も `interrupted` のまま。teardown は `interrupted` を保存し、force shutdown を行う。 | close 専用の resume snapshot / `forResume` と exit 専用の worktree cleanup のどちらも実行されない。保存済み state からの再開可否や provider 側の実状態は静的コード読解だけでは確定しない。 |
+
+この shutdown handoff は `shouldStopIssueLoop` とは別である。Issue loop の stop 条件は `shouldBreakAfterLoopState` が判定し、`waitForOperatorExit` が true なら driver は post-loop wait を続ける。したがって Issue loop が止まっても session shutdown signal は発生しない。false なら driver は loop を終えて teardown へ進み得るが、close / exit / process signal の lifecycle label は operator flag または shutdown signal によって別に決まる。実際の signal と Open Question request の race、外部 agent の cancel / close の結果、teardown 中の process 強制終了を含む順序は runtime で確認していない。
+
 ### operator-agent 側の状態遷移と非同期境界
 
 | TS 関数・操作 | trigger / guard | 状態更新・次の境界 | Lean との関係 |
 | --- | --- | --- | --- |
 | `handleSubmittedInput` (`packages/operator-agent/src/run/run-operator-conversation.ts`) | 空白でなく `inputEnded` 前。通常入力は recovery byte limit を queue 側でも検査。 | UI に表示し、user event を queue へ加え、conversation hold を設定する。`/exit` は `inputEnded` と `exitContinuity` を設定し、hold 解除や新規入力は受け付けない。`/reconnect` は pending count を増やす。`/resume-watch` は conversation hold のみ解除する。 | `operatorInput` / `operatorInputEnd` / reconnect / resume-watch。表示、command parsing、全 input guard は未接続。 |
 | `selectBatch` (`packages/operator-agent/src/dispatch/operator-dispatch.ts`) | lifecycle が dispatch 可。selection clock で deadline を評価。 | user が report より優先。focus、Open Question、continuation、normal / aged idle / FIFO 等で report を選ぶ。戻り値は選択に過ぎず、queue commit も send もまだ行わない。 | `OperatorDispatch.Queue.selectBatch`。実 `Date.now`、focus timeout、全重み設定は限定抽象。 |
+| `runTtyConversation` の selection loop (`packages/operator-agent/src/run/run-operator-conversation.ts`) | lifecycle が dispatch 可で、idle candidate gate refresh 後に `selectBatch` が `undefined`。 | 同じ `selectionTime` で `nextReadyAt` を問い合わせ、`waitForChange(waitMs)` と `stopping` を race する。最短の既知 deadline があれば timer で起きて再選択する。deadline が `undefined` なら queue notification か `stopping` まで timer なしで待つ。lifecycle / recovery inbox の subscription も queue を wake する。 | Lean に `selectBatch` の結果なしを独立した待機状態としては置いていない。deadline、queue wake、停止 race の対応は未接続。 |
 | reserve → `beginSend` → `commitBatch` (`packages/operator-agent/src/run/run-operator-conversation.ts`, `packages/operator-agent/src/watch/operator-watch-dispatch.ts`) | 選択 batch に対する recovery reservation を確保できる。 | lease を取ってから `retryWatchLock` 経由で commit を await。user / frozen report は同期 queue commit。通常 report は lock 取得後に再検証し、queue と manifest を更新する。commit 後、`agent.send` 呼び出しまでは同期区間として実装されている。 | `operatorBeginCommit` / `operatorCommitApply` / `operatorCommitSuccess` 等。lock・永続化・event-loop 順序は未接続。 |
 | `retryWatchLock` (`packages/operator-agent/src/run/run-operator-waiters.ts`) が停止を返す | `sendSuppression` abort、または操作開始後の `inputEnded`（retry 保存時は終了前からの inputEnded も停止条件）。 | commit 待機後に停止と判定すると reservation を release し lease を completed として settle して return。queue commit 済みなら user item を queue に戻す処理はない。 | `operatorCommitStopped` / `operatorRetryStopped` に対応。同期 commit 直後の停止が実際に await 継続より先行するかは未確認。 |
 | send race → `settleConductorDispatch` (`packages/operator-agent/src/run/run-operator-conversation.ts`) | commit 成功後に `sendConductorWithReconnect` と `stopping` を race。 | send 結果が先なら通常 settle。停止側が先なら result は未定義で return し、reservation を release するが、この経路では active lease を settle しない。send の外部完了順は未確認。 | `operatorSendResult` / `operatorInterruptSend`。実 Promise race 全順序は未証明。 |
@@ -86,14 +102,26 @@
 | `handleInputEnd` / loop top (`packages/operator-agent/src/run/run-operator-conversation.ts`) | stdin `end`。または `/exit` が `inputEnded` にする。 | `inputEnding` を abort して queue を wake。loop は `inputEnded && pendingUserCount === 0 && pendingReconnects === 0` で return 可能。条件式に pending report 数は含まれない。 | `operatorFinishInput` はモデル上の return 条件を抽象化するが、全 control point の照合は未完了。 |
 | `requestStop` / outer `finally` (`packages/operator-agent/src/run/run-operator-conversation.ts`, `packages/operator-agent/src/run-operator-agent.ts`) | SIGINT、SIGTERM、TUI interrupt、ack retry 枯渇など。 | `sendSuppression` を abort し、input を無効化する。`runTtyConversation` return 後は watch pool / agent を閉じる。`/exit` のみ `exitContinuity` を通じ operator-agent state を削除し、通常 return は次回選択用 state を残す。 | `operatorRequestStop` / `stopped` は簡略な抽象状態。保存 state、外部 resource teardown、再起動との連続性はモデル外。 |
 
+#### operator-agent の batch 待機
+
+上の no-batch 分岐は `runTtyConversation` の選択 loop 内で、send 可能な lifecycle を確認し、必要なら idle candidate gate refresh を終えた後に動く。`nextReadyAt` は queue 内の user `readyAt`、report の batch / retry / debounce / aging、focus inactivity など、queue が算出できる次の deadline の最小値を返す。deadline 到達は選択を確約せず、loop が再選択するだけである。held など現在 `pending` にない item や、selector が deadline を算出できない状態では timer が設定されず、queue wake を待ち続けることがある。
+
+`waitForChange` は queue mutation / `wake()` で解け、`runTtyConversation` は dispatch lifecycle と recovery inbox の change を queue wake に結び付けている。これに対して `stopping` を解くのは `requestStop` であり、SIGINT / SIGTERM / TUI interrupt 等から input 無効化と `sendSuppression.abort()` を行う。stdin `end` / `/exit` の `handleInputEnd` は `inputEnded` を立てて queue を wake するが、`stopping` は解かない。loop top は pending user と reconnect がなければ return でき、その判定に pending report 数は含まれない。pending user が残る場合は入力終了だけで no-batch wait を抜けるとは限らない。
+
+この待機中に UI status を `待機中` へ設定する処理はない。その status は reconnect 後や send の `finally` で設定される表示値である。また conductor の `waitForDispatchBatch` は `SessionEventQueue`、dispatch lifecycle、recovery inbox の change と shutdown signal を待つ別関数で、operator queue の `nextReadyAt` に相当する期限 timer は持たない。いずれも wait 中の永続 lifecycle label ではなく、wake 後の再選択・dispatch 成功も保証しない。
+
 ### 二つの主体の通信は明示的な handoff を通る
 
 | 向き | TS の経路 | 状態変化と境界 |
 | --- | --- | --- |
 | harness / operator → Issue conductor | UDS `operator.message.send` (`packages/core/src/session/open-question-control.ts`) → callback `sendOperatorMessage` (`packages/core/src/conductor/conductor-session.ts`) → `enqueueOperatorMessage` → `SessionEventQueue.enqueue`。 | UDS handler は callback を await し、text / delivery を検証する。この method は queue 受理専用で、Open Question を参照・更新しない。queue API は waiter への直接 resolve も持つが、現行 driver は queue change を待ち、batch を選択する。 |
+| operator message の `delivery: next / idle / interrupt` | TTY command parser (`packages/core/src/conductor/operator-command.ts`) または UDS input から `sendOperatorMessage` / `submitOperatorMessage` を経て queue へ入る。`enqueueOperatorMessage` が受理した後、`onOperatorMessageQueued` が interrupt 専用処理を行う。 | `next` は通常の operator trigger として選択される。`idle` は `canDispatchIdleOperatorMessage` が worker 実行中でない・dispatch 可能な held batch がない・他の eligible trigger がない場合だけ選択対象になる。`interrupt` は queue 受理後に `conductor.cancel?.()` を fire-and-forget で試す。呼び出し側は cancel 完了を待たない。cancel API がなければ warning を出し、拒否された場合も warning のうえ通常 dispatch に任せる。cancel 失敗時に interrupt event が特別な selector priority を得るわけではない。 |
+| conductor send の cancel 結果 → 次の operator dispatch | `conductor-session-driver.ts` の初回 / in-flight send 結果処理と `waitForDispatchBatch`。 | in-flight send は結果が `cancelled` で、その時点の queue snapshot に `delivery: interrupt` の operator message が残っていれば、現在の run の終了を Issue loop stop とせず loop を続けて次を選択する。初回 send の結果処理でも同じ event 条件で recovery confirmation を要求しない。判定は cancel 結果と queue 内 event の共存であり、特定の cancel 呼び出しとの因果 ID は照合しない。 |
 | operator → Open Question 回答 | UDS `open_questions.answer` (`packages/core/src/session/open-question-control.ts`) → `answerOpenQuestion` (`packages/core/src/conductor/conductor-session.ts`)。 | YAML へ回答を durable write した後、`submitOperatorMessage` / `submitOperatorInput` で回答を適用し、`operator.message` を enqueue。dispatch receipt が完了するまで待つ別経路。 |
 | operator-agent 内の利用者 → operator-agent model | `handleSubmittedInput` (`packages/operator-agent/src/run/run-operator-conversation.ts`) → operator dispatch queue → commit → `agentHandle.send`。 | これは operator-agent 自身の model turn。上記 UDS method を自動呼出しせず、Issue conductor event も自動生成しない。conductor への発話は別の明示 tool / UDS call が必要。 |
 | Issue conductor / watched session → operator-agent | watch pool の UDS poll / live observation → report persistence / dispatch queue → operator-agent model。 | report 到着、保存、ack は複数 await と lock を通る外部通信。watch report の受理を conductor の send 成功や利用者への到達確認と同一視しない。 |
+
+`operator.message.send` の `{ queued: true, delivery }` と TTY 側の受理結果は queue への受付を示し、conductor への dispatch receipt ではない。`interrupt` の cancel が成功しても、その外部 agent / provider が実行中 run をどう終端するかは API の返却と driver が受け取る `cancelled` 結果を越えて保証できない。cancel が起きない場合や失敗時の通常 dispatch も、turn 上限・lifecycle・queue の他 event による selector 判定を経るため即時送信を保証しない。process SIGINT / SIGTERM による session shutdown の `interrupted` と `delivery: interrupt` は別の操作である。
 
 この分離は `Composition.lean` の冒頭コメントとも一致する。`operatorMessageDelivered` と watch report は外部入力として与え、operator model の send から conductor への自動 handoff は仮定していない。
 
@@ -101,9 +129,9 @@
 
 | 区分 | 内容 |
 | --- | --- |
-| TS から確認できる事実 | lifecycle は lease / availability / attention を別々に保持する。reconnect settle は availability しか更新しない。operator-agent は選択、commit、send、settle、report ack を別の処理段階に分ける。入力表示、queue、recovery inbox、report manifest も別の保持先である。 |
+| TS から確認できる事実 | lifecycle は lease / availability / attention を別々に保持する。reconnect settle は availability しか更新しない。operator-agent は選択、commit、send、settle、report ack を別の処理段階に分ける。no-batch selection は deadline / queue change / `stopping` を race する。conductor shutdown は control drain 後に driver signal を abort し、teardown が mode 別 lifecycle を保存する。interrupt delivery は queue 受理後に cancel を試し、未対応・失敗時も通常 dispatch に残る。 |
 | Lean に置いたモデル上の仮定 | reconnect 結果、send 結果、到着、tick、reservation 可否、retry lock の停止・例外等を環境 event として選ぶ。`RecoveryPossible` は回復 event だけからなる有限列の存在を要求する。これらの環境 event が TS でいつ・どの状態から可能かは、現在の全体モデルでは制約されていない。 |
-| 未確認 | 同期 user commit の queue 更新後、解決済み Promise の await 継続より外部 stop callback が先行して `retryWatchLock` の停止分岐に入る実行があるか。停止通知が他の全 callback / poll / lock 競合に対しどの順序で起き得るか。保存と process teardown の race が再起動後に何を再配送するか。 |
+| 未確認 | 同期 user commit の queue 更新後、解決済み Promise の await 継続より外部 stop callback が先行して `retryWatchLock` の停止分岐に入る実行があるか。停止通知・Open Question request・teardown の全 callback 順序、cancel 呼び出しが provider 上で現在の run をどう終端するか、保存と process teardown の race が再起動後に何を再配送するかは未確認。 |
 | 有限探索からは言えない | 固定操作・固定値・有限深さで candidate が見つからないことは、無限実行での弱公平性や全 parameter の到達不能を示さない。有限実行だけのモデルで「いつか dispatch」の性質が空虚に真となる可能性もある。 |
 
 ### 回復可能性と「見かけ上の回復経路」
@@ -137,6 +165,9 @@
 | --- | --- |
 | conductor の batch 選択・send・reconnect | `ConductorQueue` と lifecycle を接続。非同期 driver の全停止・割り込み・予約失敗は未対応。 |
 | operator の input、hold、send、retry 保存、ack、reconnect | `OperatorDispatch` を接続。commit 待機を分離し、成功後の同期的な send 開始までを同じ遷移とする。永続化と外部通信の詳細は未対応。 |
+| operator `selectBatch` が no-batch を返す待機 | `selectBatch` のみを対応付ける。`nextReadyAt` の deadline timer、queue change / lifecycle wake、`stopping` との race はモデル化していない。 |
+| conductor `requestOperatorShutdown` / process signal / teardown | close / exit / interrupted の mode flag、Open Question control drain、driver abort、teardown label、close 専用 resume handoff と exit worktree cleanup はモデル化していない。 |
+| conductor operator message `delivery` | operator message 到着は外部入力として扱う。`next` / `idle` の dispatch gate と `interrupt` cancel / cancelled-result fallback の関数境界は合成 model に接続していない。 |
 | `handleInputEnd`、`/exit`、`handleSubmittedInput` | 入力終了後の通常入力・reconnect・resume-watch・recovery continue は受け付けない。`/exit` の戻り値 `exitContinuity` や focus 等の表示操作は未表現。 |
 | `retryWatchLock` の retry 保存 | 入力終了または `requestStop` 後の停止、timeout 以外の例外、成功を区別する。lock の timeout 回数や操作の開始・完了タイミングは外部から与え、実際の lock や保存自体は表さない。 |
 | 入力終了後のループ終了 | pending user と reconnect がなく、send・retry・ack 等の処理が終わった時点で終了可能とした。driver の control point を厳密には表しておらず、他の途中状態との網羅的な照合が必要。 |
