@@ -528,7 +528,9 @@ spawn 解決時、子プロセスへ渡す env は次の順でマージされま
 
 Codex worker の接続先は Codex の provider 設定で定義し、`acp.env.MODEL_PROVIDER` で使う provider ID を選びます。ensemble はこの環境変数を `codex-acp` に渡すだけで、TOML ファイルを選んだり読み込んだりはしません。
 
-`@agentclientprotocol/codex-acp` は `packages/core/package.json` で **2.12.0** に pin されています。`CODEX_CONFIG` は Codex session config に merge する **JSON オブジェクト文字列**として `JSON.parse` されます。TOML のパスを設定すると JSON parse に失敗します。`MODEL_PROVIDER` は新しい session に渡す **provider ID** で、設定ファイルの選択には使われません。`INITIAL_AGENT_MODE` は初期の承認・sandbox mode を選びます。有効な mode ID は `read-only`、`workspace-write`、`agent`、`agent-full-access`、`permission-profile:<profile-id>` です。空または未知の値は既定の `agent` に戻ります。ensemble はこれらの値を解釈せず、`acp.env` から子プロセスへ渡します。
+`@agentclientprotocol/codex-acp` は `packages/core/package.json` で **2.12.0** に pin されています。`CODEX_CONFIG` は Codex session config に merge する **JSON オブジェクト文字列**として `JSON.parse` されます。TOML のパスを設定すると JSON parse に失敗します。`MODEL_PROVIDER` は新しい session に渡す **provider ID** で、設定ファイルの選択には使われません。`INITIAL_AGENT_MODE` は初期の承認・sandbox mode を選びます。有効な mode ID は `read-only`、`workspace-write`、`agent`、`agent-full-access`、`permission-profile:<profile-id>` です。
+
+`INITIAL_AGENT_MODE` が未設定または空文字列の場合、Codex が現在利用可能な mode として返した permission profile のうち、config の active profile に一致するものがあればそれを選びます。一致する profile がなければ既定の `agent` を選びます。一方、未知の**非空**値が指定された場合は active profile を調べず、`agent` に戻ります。したがって、空文字列は未設定と同じ扱いですが、未知の値とは fallback の経路が異なります。ensemble は値を解釈せず、`acp.env` から子プロセスへ渡します。
 
 2.12.0 では、ACP session から渡された MCP server と Codex config の `mcp_servers` を併せて扱います。同名 server が Codex config にすでに定義されている場合は、既定で ACP 側の重複を除き、Codex config の定義を使います。そのため `CODEX_CONFIG` に置いた server / tool 単位の設定（`output_token_limit` など）を保持できます。`DISABLE_MCP_CONFIG_FILTERING=true` はこの重複除去を無効にします。この変更は MCP server 設定の解決方法に関するもので、Codex 本体の応答上限や切り詰め動作が変わることを意味しません。
 
