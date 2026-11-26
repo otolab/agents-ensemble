@@ -8,7 +8,7 @@ import type { ResolvedAcpSpawn } from './resolve-acp-spawn.js';
 
 const PI_CODING_AGENT_PACKAGE = '@earendil-works/pi-coding-agent';
 const BUILTIN_PI_ACP_PACKAGE = 'pi-acp-builtin';
-const BUILTIN_PI_ACP_VERSION = '0.0.34';
+const BUILTIN_PI_ACP_VERSION = '0.0.35';
 export const BUILTIN_PI_MIN_NODE_VERSION = '22.19.0';
 
 export function isBuiltinPiNodeVersionSupported(

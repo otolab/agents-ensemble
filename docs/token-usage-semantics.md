@@ -28,7 +28,7 @@ raw backend usage では、cache read / write が `inputTokens` に含まれる�
 | ACP worker (`acp`) | 本リポジトリが `session/prompt` 応答の `usage.inputTokens` / `outputTokens` として受け取った値。`totalTokens` が無ければ harness がこの2項目の和を設定 | ACP wire の `cachedReadTokens` / `cachedWriteTokens` / `thoughtTokens` を、それぞれ `cacheReadTokens` / `cacheWriteTokens` / `reasoningTokens` に変換して記録 | ACP preset / agent ごとに報告の有無と意味を確認する必要がある。共通の ACP usage 契約としては扱わない |
 | worker テキスト推定 (`estimated`) | prompt と応答テキストそれぞれの UTF‑8 byte 数を 4 で割って切り上げる | cache / reasoning は推定しない | model tokenizer を使わない粗い近似。provider が数えた token 数や課金量ではない |
 
-Cursor SDK は `inputTokens`、`outputTokens`、cache read / write、`totalTokens` を usage として公開します。Pi の `Usage` 型も同様の区分を持ちますが、対応する API や provider は一つではありません。したがって、同じ項目名でも provider をまたいだ意味の同一性は保証されません。[Cursor SDK usage](https://cursor.com/docs/sdk/typescript)、[Pi `Usage` 型 v1.5.2](https://github.com/earendil-works/pi/blob/v1.5.2/packages/ai/src/types.ts)
+Cursor SDK は `inputTokens`、`outputTokens`、cache read / write、`totalTokens` を usage として公開します。Pi の `Usage` 型も同様の区分を持ちますが、対応する API や provider は一つではありません。したがって、同じ項目名でも provider をまたいだ意味の同一性は保証されません。[Cursor SDK usage](https://cursor.com/docs/sdk/typescript)、[Pi `Usage` 型 v1.6.1](https://github.com/earendil-works/pi/blob/v1.6.1/packages/ai/src/types.ts)
 
 ACP worker の `usage` は `session/prompt` 応答に任意で含まれるデータとして本リポジトリが読み取ります。usage が無い応答は、harness が prompt と応答テキストから推定します。ACP v1 の公式 schema は token usage / cache 計上を共通フィールドとして定義していないため、preset ごとの報告値を provider の usage 定義と照らして読む必要があります（[ACP v1 schema](https://github.com/agentclientprotocol/agent-client-protocol/blob/main/schema/v1/schema.json)、実装上の型は `packages/core/src/acp/types.ts`）。
 

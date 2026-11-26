@@ -33,7 +33,7 @@ const piBuiltinAdapterManifest = require.resolve(
 );
 
 describe('Pi ACP upstream dependency selection', () => {
-  it('keeps BYO on 0.0.33 and builtin on 0.0.34', () => {
+  it('keeps BYO on 0.0.33 and updates builtin to 0.0.35', () => {
     const byo = JSON.parse(
       readFileSync(piByoAdapterManifest, 'utf8'),
     ) as { name: string; version: string };
@@ -42,7 +42,7 @@ describe('Pi ACP upstream dependency selection', () => {
     ) as { name: string; version: string };
 
     expect(byo).toMatchObject({ name: 'pi-acp', version: '0.0.33' });
-    expect(builtin).toMatchObject({ name: 'pi-acp', version: '0.0.34' });
+    expect(builtin).toMatchObject({ name: 'pi-acp', version: '0.0.35' });
   });
 });
 
@@ -308,6 +308,8 @@ describe.skipIf(process.platform === 'win32')(
         const eventsPath = join(tempRoot, 'pi-events.jsonl');
         const fakePiPath = join(tempRoot, 'fake-pi');
         const fakePiSourcePath = join(tempRoot, 'fake-pi.mjs');
+        const configuredSessionDir = join(tempRoot, 'configured-pi-sessions');
+        const adapterStderrLines: string[] = [];
         vi.stubEnv('ENSEMBLE_USER_ROOT', userRoot);
         vi.stubEnv('HOME', userHome);
         vi.stubEnv('USERPROFILE', userHome);
@@ -320,7 +322,16 @@ describe.skipIf(process.platform === 'win32')(
           }),
           mkdir(binDir, { recursive: true }),
           mkdir(customAgentDir, { recursive: true }),
+          mkdir(configuredSessionDir, { recursive: true }),
         ]);
+        await writeFile(
+          join(customAgentDir, 'settings.json'),
+          JSON.stringify({
+            defaultThinkingLevel: 'medium',
+            enableSkillCommands: true,
+            sessionDir: configuredSessionDir,
+          }),
+        );
         await Promise.all([
           writeFile(
             join(userHome, '.gitconfig'),
@@ -341,6 +352,30 @@ describe.skipIf(process.platform === 'win32')(
         await writeFile(
           join(customAgentDir, 'auth.json'),
           '{"fixture":"credential-path-probe"}\n',
+        );
+        const listedSessionId = 'shared-agent-session';
+        await writeFile(
+          join(configuredSessionDir, 'shared-session.jsonl'),
+          [
+            JSON.stringify({
+              type: 'session',
+              version: 3,
+              id: listedSessionId,
+              timestamp: new Date().toISOString(),
+              cwd: join(tempRoot, 'repo'),
+            }),
+            JSON.stringify({
+              type: 'message',
+              id: 'shared-user',
+              parentId: null,
+              timestamp: new Date().toISOString(),
+              message: {
+                role: 'user',
+                content: [{ type: 'text', text: 'shared session title' }],
+                timestamp: Date.now(),
+              },
+            }),
+          ].join('\n') + '\n',
         );
         await symlink(process.execPath, join(binDir, 'node'));
         await writeFile(
@@ -566,6 +601,7 @@ describe.skipIf(process.platform === 'win32')(
             ...clientSpawnOptions,
             cwd: repoRoot,
             env: clientEnv,
+            onProcessStdioLine: ({ line }) => adapterStderrLines.push(line),
           });
           clients.add(client);
           await client.connect();
@@ -582,6 +618,29 @@ describe.skipIf(process.platform === 'win32')(
           createdClient.newSession(repoRoot),
           issueTwoClient.newSession(issueTwoCwd),
         ]);
+        let sessionList: {
+          sessions: Array<{ sessionId: string; title?: string | null }>;
+        };
+        try {
+          sessionList = (await createdClient.peer.request(
+            'session/list',
+            {},
+          )) as typeof sessionList;
+        } catch (error) {
+          throw new Error(
+            `builtin pi-acp session/list failed:\n${adapterStderrLines.join('\n')}`,
+            { cause: error },
+          );
+        }
+        expect(sessionList.sessions).toContainEqual(
+          expect.objectContaining({
+            sessionId: listedSessionId,
+            title: 'shared session title',
+          }),
+        );
+        expect(
+          sessionList.sessions.map((session) => session.sessionId),
+        ).not.toContain(sessionId);
         await Promise.all([
           createdClient.close(),
           issueTwoClient.close(),

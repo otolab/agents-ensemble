@@ -211,7 +211,7 @@ profiles:
 
 Cursor SDK backend は SDK が受け付ける stdio / HTTP / SSE を使います。Cursor には `local.settingSources: []` を渡すため、SDK は明示した inline MCP server のみを読み込みます（[Cursor SDK の設定 source](https://cursor.com/docs/sdk/typescript#what-gets-loaded)）。Pi backend は stdio と Streamable HTTP を使い、Pi 公式 MCP extension が未対応の SSE は server 名を含むエラーにします。`${env:NAME}` は operator process の環境変数、`${workspaceFolder}` と `${workspaceFolderBasename}` は選択 profile の workspace（`~/.ensemble/operator-agents/<profile>/`）へ展開します。未定義の環境変数は、値をそのまま渡さず server 名・項目名とともにエラーにします。トークンなどの値は config に直接書かず、権限を絞った環境変数で渡してください。
 
-Pi backend の operator-agent は、選択した各 server の MCP tool を [Pi 1.5.2 の MCP extension](https://github.com/earendil-works/pi/blob/v1.5.2/packages/coding-agent/docs/mcp.md) の `direct` exposure で公開します。server が提示する tool は `mcp__<server>__<tool>` 名（名前の変換後に衝突または長さ制限がある場合は hash suffix 付き）でモデル向け tool declaration に載り、Pi の通常の tool call 経路で実行されます。server が提示する全 tool が対象なので、read-only が必要なら server 側の read-only mode と認証権限を設定してください。operator-agent の Pi 経路では Codemode extension を登録しないため、JavaScript 実行 tool と `models.*` API は利用できません。Pi の MCP `resources` は server が提供していれば `list_mcp_resources`、`list_mcp_resource_templates`、`read_mcp_resource` で公開されます。Pi 1.5.2 の MCP extension は MCP `prompts` を公開しません。
+Pi backend の operator-agent は、選択した各 server の MCP tool を [Pi 1.6.1 の MCP extension](https://github.com/earendil-works/pi/blob/v1.6.1/packages/coding-agent/docs/mcp.md) の `direct` exposure で公開します。server が提示する tool は `mcp__<server>__<tool>` 名（名前の変換後に衝突または長さ制限がある場合は hash suffix 付き）でモデル向け tool declaration に載り、Pi の通常の tool call 経路で実行されます。server が提示する全 tool が対象なので、read-only が必要なら server 側の read-only mode と認証権限を設定してください。operator-agent の Pi 経路では Codemode extension を登録しないため、JavaScript 実行 tool と `models.*` API は利用できません。Pi の MCP `resources` は server が提供していれば `list_mcp_resources`、`list_mcp_resource_templates`、`read_mcp_resource` で公開されます。Pi 1.6.1 の MCP extension は MCP `prompts` を公開しません。Pi 1.6.0 では resume / reload 後に MCP extension の tool が失われる問題も修正されています。
 
 Pi は初回 prompt の前に direct tool server の接続を最大 10 秒待ちます。direct MCP text result が 20 KiB を超えると、Pi はモデル向け本文を中央で切り詰め、全体を一時ファイルに保存した path を結果へ含めます。operator-agent には一般的な filesystem reader がなく、workspace file tool も active profile workspace 内に限定されるため、その一時ファイルを必ず読み戻せるとは限りません。大きな結果は server 側で検索・ページングして取得してください。
 
@@ -419,7 +419,7 @@ acp:
     runtime: builtin
 ```
 
-`builtin` は core に別名 dependency として同梱する upstream `pi-acp@0.0.34` を core 内の wrapper から起動し、core dependency に含まれる Pi CLI を adapter へ渡します。BYO adapter に `0.0.33` を維持するのは、`0.0.34` が追加した `get_available_thinking_levels` RPC を既存の Pi CLI `0.80.6` が提供していないためです。Pi CLI の global install、PATH 設定、`~/.pi` の事前準備は不要です。この runtime は Node.js **22.19.0 以上**を要求します。builtin を選んだときだけ起動前に upstream adapter、Pi CLI、Node.js の版を検証します。
+`builtin` は core に別名 dependency として同梱する upstream `pi-acp@0.0.35` を core 内の wrapper から起動し、core dependency に含まれる Pi CLI を adapter へ渡します。BYO adapter は引き続き `0.0.33` です。`0.0.35` も `0.0.34` と同じく `get_available_thinking_levels` RPC を `session/new` / `session/load` 時に要求しますが、既存の Pi CLI `0.80.6` はこの RPC を提供しません。BYO と builtin の版を分ける理由は [ADR 0069](adr/0069-pi-acp-version-split-for-byo-compatibility.md) に記録しています。Pi CLI の global install、PATH 設定、`~/.pi` の事前準備は不要です。この runtime は Node.js **22.19.0 以上**を要求します。builtin を選んだときだけ起動前に upstream adapter、Pi CLI、Node.js の版を検証します。
 
 builtin の user settings と認証には、Pi conductor と同じ user resource root を使い、解決順は `conductor.pi.agentDir` > `PI_CODING_AGENT_DIR` > `~/.ensemble/pi/` です。同梱する `defaultThinkingLevel: medium` と `enableSkillCommands: true` は初回のみ `settings.json` へコピーし、既存の設定を上書きしません。認証済み provider がない場合、Pi ACP は `AUTH_REQUIRED` で attach を拒否します。Pi CLI を別途用意する必要はありませんが、provider の認証は必要です。Pi backend が選択されている場合、`ensemble auth login --provider <provider-id>` は同じ user root の `auth.json` に credential を保存します。Cursor backend が選択中なら `--provider` だけでは Pi 認証へ切り替わらず、Pi credential は設定されません。provider 環境変数も利用できます。`acp.env.PI_CODING_AGENT_DIR` ではなく `conductor.pi.agentDir`（または `PI_CODING_AGENT_DIR`）で user root を設定してください。認証手順は [Pi conductor セットアップ](pi-conductor-setup.md)を参照してください。
 
@@ -429,7 +429,7 @@ worker の session map と transcript は `~/.ensemble/pi/worker/<repoKey>/issue
 
 POSIX では wrapper が専用 parent `~/.ensemble/pi/worker` と、起動した repository の worker storage tree にある既存 directory を `0700`、map・transcript file を `0600` に直します。新規 file は wrapper の `umask 077` を継承します。POSIX の保存先内に symlink または通常 file / directory 以外がある場合は、誤った場所を chmod しないよう builtin の起動を失敗させます。Windows では Node.js の mode 指定を ACL の代わりにせず、`icacls.exe` で専用 parent と repository storage tree の owner を現在の account SID に揃え、DACL をその account だけに制限します。Windows PowerShell の .NET ACL API で owner と ACE を読み戻して検証し、PowerShell / `icacls.exe` / ACL の設定・検証に失敗した場合は builtin adapter を起動しません。map / transcript が指定先内に通常の方法で作られる限り、既存と新規の directory / file にこの ACL が適用されます。対象は worker の map / transcript 保存先だけで、共有 Pi settings / auth root、BYO、同じ OS account の別 process、管理者 / SYSTEM / backup privilege、ACL を無視する storage、upstream が指定先外へ書く・ACL を明示的に広げる場合は対象外です。固定 upstream の更新時に保存先と permission の振る舞いを再確認してください（[ADR 0070](adr/0070-issue-scoped-builtin-pi-storage.md)、[ADR 0071](adr/0071-builtin-pi-storage-windows-acl.md)）。
 
-upstream `pi-acp` の `session/list` は `PI_CODING_AGENT_SESSION_DIR` を参照せず、Pi user root の `settings.json.sessionDir`（未指定なら `agentDir/sessions`）を探索します（BYO `0.0.33` / builtin `0.0.34`）。そのため worker map が失われると、transcript が残っていても upstream の discovery fallback からは見つかりません。builtin の保存 session を `session/load` できない場合、resume は worker failure として終了し、新しい session の作成や resume prompt の送信は行いません。ResumeStore の旧 session ID は保持されます。reader も map なしでは transcript を推測せず `unavailable` を返します。map がない場合の自動復旧は行わない、という制約は [ADR 0068](adr/0068-builtin-pi-home-and-resume-safety.md) に記録しています。
+upstream `pi-acp` の `session/list` は `PI_CODING_AGENT_SESSION_DIR` を参照せず、Pi user root の `settings.json.sessionDir`（未指定なら `agentDir/sessions`）を探索します（BYO `0.0.33` / builtin `0.0.35`）。そのため worker map が失われると、transcript が残っていても upstream の discovery fallback からは見つかりません。builtin の保存 session を `session/load` できない場合、resume は worker failure として終了し、新しい session の作成や resume prompt の送信は行いません。ResumeStore の旧 session ID は保持されます。reader も map なしでは transcript を推測せず `unavailable` を返します。map がない場合の自動復旧は行わない、という制約は [ADR 0068](adr/0068-builtin-pi-home-and-resume-safety.md) に記録しています。
 
 ### ACP model tag と model catalog
 
@@ -648,7 +648,7 @@ config digest と ACP spawn fingerprint の差は、`resume-feasibility` / 旧 `
 `conductor.pi.agentDir` / `conductor.pi.projectDir` は resource root のパスだけを上書きします。相対パスは `<repoRoot>` 基準、`~` はユーザ home 基準です。各 root の Pi 標準 resource を次のように解決します。
 
 - `settings.json` / `auth.json`: user → project の deep merge。credential は provider 単位で project entry を優先します。
-- `models.json`: Pi 標準の `providers` / `models` / built-in `modelOverrides` / request headers を model 解決へ反映します。
+- `models.json`: Pi 標準の `providers` / `models` / built-in `modelOverrides` / request headers を model 解決へ反映します。Google Gemini 3+ を model ID に世代が現れない名前で提供する場合は、`google-generative-ai` / `google-vertex` model の `compat.supportsStrictMode: true` で strict tool schema 対応を明示できます。
 - `extensions/`: ExtensionAPI の tool を読み込み、fixed harness tools と local extension tools を conductor の custom tools として追加します。同名の harness tool は上書きしません。MCP は下記の Pi 公式 extension が担当します。
 - `skills/`: Pi 標準の skill discovery（`DefaultResourceLoader`）で索引します。system prompt には name / description / location のカタログを載せ、本文は `read` または `/skill:<name>` で読みます。`settings.json` の `skills` 配列で `.claude/skills` 等の追加パスを指定できます。profile の `conductor.piSkills`（省略時は有効）で無効化できます。
 - `prompts/`: Markdown template を読み込み、`/name args` の user prompt を Pi 標準の引数置換で展開します。
@@ -692,7 +692,7 @@ Pi の `settings.md` にあるが headless conductor / operator-agent が適用�
 | 無視するキー（または prefix） | 適用されない挙動 |
 |------------------------------|------------------|
 | `defaultThinkingLevel` / `modelThinkingLevels` / `thinkingBudgets` / `enabledModels` | thinking level、budget、model cycling の設定 |
-| `hideThinkingBlock` / `showCacheMissNotices` / `cacheWarming` / `steeringMode` / `followUpMode` | transcript 表示、cache、対話キューの設定 |
+| `hideThinkingBlock` / `showCacheMissNotices` / `notices.*` / `cacheWarming` / `steeringMode` / `followUpMode` | transcript 表示、cache、対話キューの設定 |
 | `defaultTools` / `codemode.*` | `defaultTools` は headless conductor では無視します。built-in coding tools は profile の `conductor.builtinTools`（省略・未指定は有効、`false` のみ無効）で制御し、`config.yaml` には同キーを設けません。 |
 | `packages` | Pi package の install・解決。package が提供する resource は自動導入しません。 |
 | `enableSkillCommands` | skill command の登録 toggle。読み込んだ skill の `/skill:<name>` 展開可否はこのキーで変更できません。 |

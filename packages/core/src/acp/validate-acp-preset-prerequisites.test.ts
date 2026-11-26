@@ -128,7 +128,7 @@ describe('validate-acp-preset-prerequisites', () => {
       'resolveBuiltinPiAcpEntrypointPath',
     ).mockImplementation(() => {
       throw new Error(
-        '[acp] builtin Pi runtime could not resolve upstream pi-acp@0.0.34',
+        '[acp] builtin Pi runtime could not resolve upstream pi-acp@0.0.35',
       );
     });
     vi.spyOn(
@@ -146,7 +146,7 @@ describe('validate-acp-preset-prerequisites', () => {
         args: [],
         piRuntime: 'builtin',
       }),
-    ).toThrow(/could not resolve upstream pi-acp@0\.0\.34/u);
+    ).toThrow(/could not resolve upstream pi-acp@0\.0\.35/u);
   });
 
   it('runs the core wrapper for the builtin runtime', () => {
