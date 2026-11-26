@@ -74,12 +74,6 @@ export const INPUT_PANE_LEFT_BORDER_COLUMNS = 1;
  */
 export const INPUT_PANE_LEFT_COLUMNS = INPUT_PANE_LEFT_BORDER_COLUMNS + PANE_PADDING_X;
 
-/**
- * Ink `useCursor` の Y 補正。`log-update` の `visibleLineCount` が描画行数より 1 大きい場合、
- * 実カーソルが入力行より 1 行上にずれる（オペレータ手動確認 iTerm2+tmux）。
- */
-export const OPERATOR_INPUT_CURSOR_Y_OFFSET = 1;
-
 /** 入力ペインの表示行数上限（端末行数に対する比率）。 */
 export const INPUT_PANE_MAX_HEIGHT_RATIO = 0.35;
 

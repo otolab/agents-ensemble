@@ -15,7 +15,6 @@ import {
   INPUT_PANE_LEFT_COLUMNS,
   OPEN_QUESTIONS_PANE_MIN_HEIGHT,
   OPERATOR_INPUT_PROMPT,
-  OPERATOR_INPUT_CURSOR_Y_OFFSET,
   PANE_BORDER_ROWS,
   WORKER_PANE_HEIGHT,
 } from './tui-layout-constants.js';
@@ -132,7 +131,7 @@ describe('computeOperatorInputCursorX', () => {
 });
 
 describe('computeOperatorInputCursorY', () => {
-  it('offsets rendered input line index for Ink useCursor', () => {
+  it('places the Ink cursor on the rendered input line', () => {
     const terminalRows = 24;
     const hintLineCount = 1;
     const openQuestionsPaneHeight = OPEN_QUESTIONS_PANE_MIN_HEIGHT;
@@ -148,7 +147,7 @@ describe('computeOperatorInputCursorY', () => {
         hintLineCount,
         openQuestionsPaneHeight,
       }),
-    ).toBe(inputLineIndex + OPERATOR_INPUT_CURSOR_Y_OFFSET);
+    ).toBe(inputLineIndex);
   });
 
   it('keeps useCursor Y stable when hint wraps (activity pane shrinks)', () => {
@@ -165,13 +164,7 @@ describe('computeOperatorInputCursorY', () => {
     });
 
     expect(yOneHintLine).toBe(yTwoHintLines);
-    expect(
-      computeOperatorInputLineIndex({
-        terminalRows: 24,
-        hintLineCount: 1,
-        openQuestionsPaneHeight,
-      }),
-    ).toBe(22);
+    expect(yOneHintLine).toBe(22);
   });
 
   it('keeps the cursor anchored when the open-questions pane is omitted', () => {

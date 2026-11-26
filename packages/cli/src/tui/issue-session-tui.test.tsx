@@ -31,7 +31,6 @@ import {
   MAIN_PANE_TITLE,
   OPEN_QUESTIONS_PANE_MIN_HEIGHT,
   OPERATOR_INPUT_PROMPT,
-  OPERATOR_INPUT_CURSOR_Y_OFFSET,
   PANE_PADDING_X,
   ROUND_BORDER_WIDTH,
   WORKER_PANE_TITLE,
@@ -1518,7 +1517,7 @@ describe('IssueSessionTui', () => {
       openQuestionsPaneHeight,
     });
     const expectedCursorX = computeOperatorInputCursorX(operatorPrompt);
-    const expectedCursorY = expectedInputLineIndex + OPERATOR_INPUT_CURSOR_Y_OFFSET;
+    const expectedCursorY = expectedInputLineIndex;
 
     const { lastFrame } = render(
       <IssueSessionTui viewModel={viewModel} onSubmit={() => {}} />,
@@ -1529,7 +1528,7 @@ describe('IssueSessionTui', () => {
     expect(lineIndex).toBeGreaterThanOrEqual(0);
     expect(inputStartX).toBe(expectedCursorX);
     expect(lineIndex).toBe(expectedInputLineIndex);
-    expect(expectedCursorY).toBe(lineIndex + OPERATOR_INPUT_CURSOR_Y_OFFSET);
+    expect(expectedCursorY).toBe(lineIndex);
     expect(lines).toHaveLength(liveFrameRows);
   });
 
@@ -1565,7 +1564,7 @@ describe('IssueSessionTui', () => {
       openQuestionsPaneHeight,
     });
     const expectedCursorX = computeOperatorInputCursorX(operatorPrompt);
-    const expectedCursorY = expectedInputLineIndex + OPERATOR_INPUT_CURSOR_Y_OFFSET;
+    const expectedCursorY = expectedInputLineIndex;
 
     const { lastFrame } = render(
       <IssueSessionTui viewModel={viewModel} onSubmit={() => {}} />,
@@ -1577,7 +1576,7 @@ describe('IssueSessionTui', () => {
     expect(lineIndex).toBeGreaterThanOrEqual(0);
     expect(inputStartX).toBe(expectedCursorX);
     expect(lineIndex).toBe(expectedInputLineIndex);
-    expect(expectedCursorY).toBe(lineIndex + OPERATOR_INPUT_CURSOR_Y_OFFSET);
+    expect(expectedCursorY).toBe(lineIndex);
     expect(lines).toHaveLength(liveFrameRows);
   });
 
