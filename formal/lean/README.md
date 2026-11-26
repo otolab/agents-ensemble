@@ -6,7 +6,7 @@
 
 - `Ensemble.lean`: 各モジュールを読み込む入口。
 - `Ensemble/Flow/Spec.lean`: As-Is と To-Be に共通する抽象仕様と性質の文面。人がレビューする中心。
-- `Ensemble/AsIs/`: 現行 TypeScript の状態と遷移を忠実に写すモデル。仕様に反する場合もモデルを直さず、具体的なイベント列と日本語の説明を `Counterexamples.lean` に記録する。
+- `Ensemble/AsIs/`: 現行 TypeScript の状態と遷移を忠実に写すモデル。仕様に反する場合もモデルを直さず、具体的なイベント列と日本語の説明を `Counterexamples.lean` に記録する。TS 関数との対応・抽象化・未判定の性質は [`Composition.md`](Ensemble/AsIs/Composition.md) に整理する。
 - `Ensemble/ToBe/`: 再設計案と性質の証明。
 - `Ensemble/Oracle/`: 差分テスト用の JSON-lines オラクルを置く場所。
 
