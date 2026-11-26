@@ -76,7 +76,7 @@
 
 #### conductor session の shutdown handoff
 
-`/close` と `/exit` は `bindOperatorInput` の command 分岐から、UDS の `operator.session.shutdown` は同じ `requestOperatorShutdown(mode)` から入る。要求を受けると mode 別の `operatorRequestedClose` / `operatorRequestedExit` を設定し、worker の active prompt を cancel し、Open Question control を quiesce してから driver 用 signal を abort する。control server に in-flight request がなければ quiesce 開始後すぐ abort する。in-flight request があれば drain の成功・失敗または timeout まで待って abort する。timeout / drain failure は warning を記録しても abort に進むため、受理済み Open Question の通知結果が不明なまま残る場合がある。
+`/close` と `/exit` は `bindOperatorInput` の command 分岐から、UDS の `operator.session.shutdown` は同じ `requestOperatorShutdown(mode)` から入る。要求を受けると、まず mode 別の `session.operator_close` / `session.operator_exit` event を記録し、`workerSession.runtime.cancelAllActivePrompts()` を同期呼び出しして active prompt の `session/cancel` を開始する（cancel の完了は待たない）。その後で `operatorRequestedClose` / `operatorRequestedExit` を設定し、`shutdownIntentController.abort()` を呼んでから、`abortAfterOpenQuestionDrain(operatorTerminationController)` を開始する。control server に in-flight request がなければ `quiesce()` の開始後すぐ driver 用 controller を abort する。in-flight request があれば drain の成功・失敗または timeout まで待って abort する。timeout / drain failure は warning を記録しても abort に進むため、受理済み Open Question の通知結果が不明なまま残る場合がある。
 
 内部 shutdown controller を使う通常の process signal 経路では、SIGINT / SIGTERM handler が controller を abort し、`onShutdownSignal` が `shutdownIntentController` を abort したうえで同じ drain 手順を `drainedShutdownController` に対して始める。`driverShutdownSignal` は `drainedShutdownController.signal` と operator 用 `operatorTerminationController.signal` の `AbortSignal.any` である。signal handler は session が controller を所有し、`registerProcessSignalHandlers` が false でない場合に限り登録される。
 
