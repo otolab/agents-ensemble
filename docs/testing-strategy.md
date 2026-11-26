@@ -138,6 +138,7 @@ PTY e2e は外部認証や `test-acp.yaml` を必要としない。`conductor-au
 | Operator usage integration | `test/integration/usage-operator.integration.test.ts` |
 | Conductor auth login e2e | `test/e2e/conductor-auth-login.e2e.test.ts` — 実 CLI から Pi OAuth URL / hidden manual-code 入力 / login 完了までを fake runtime で検証し、Cursor login SDK dispatch も credential-free fake で確認 |
 | Pi conductor integration | `pi-conductor.integration.test.ts`、`pi-headless-settings.integration.test.ts`、`pi-conductor-agent-registry.integration.test.ts` |
+| Pi local provider tool integration | `test/integration/pi-local-provider-tool.integration.test.ts` — 127.0.0.1 限定の固定応答 fixture で conductor と builtin Pi ACP worker の tool round trip を確認。外部 provider・認証情報は使わない |
 | CLI TTY e2e | `tty-close-process.e2e.test.ts`、`issue-pi-tty-exit.e2e.test.ts`、`issue-pi-tty-close.e2e.test.ts` |
 
 常時実行の integration / e2e は Fake、ローカル fixture、または隔離された Codex を使い、Cursor / GitHub 認証や `test-acp.yaml` を要求しない。PTY suite には Ubuntu runner 上の Python 3 `pty`、POSIX process group、Git が必要であり、Pi TTY suites は localhost bind も使う。Issue workflow 全体、外部サービスへ接続する実 ACP、実 Cursor SDK の suite は通常 CI の対象外。`.github/scripts` の Node tests は対象だが、`scripts/pi/cached-auth.test.mjs` は対象外である。
