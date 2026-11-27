@@ -82,6 +82,7 @@ describe('stepConductorCore', () => {
       kind: 'send',
       attemptId: '1',
       id: 1,
+      payload: [operatorMessage],
     });
 
     const started = stepConductorCore(leased.state, {
@@ -102,7 +103,7 @@ describe('stepConductorCore', () => {
     expect(initial.queue).toEqual([operatorMessage]);
   });
 
-  it('keeps a selected queue item when shutdown wins before send start', () => {
+  it('keeps queue and held items when shutdown precedes lease acquisition', () => {
     const operatorMessage: SessionEvent = {
       type: 'operator.message',
       text: 'do not send after shutdown',
@@ -133,6 +134,7 @@ describe('stepConductorCore', () => {
     expect(actionEffects(requestAfterShutdown.effects)).toEqual([]);
     expect(requestAfterShutdown.state.lease).toBeUndefined();
     expect(requestAfterShutdown.state.queue).toEqual([operatorMessage]);
+
     const shutdownWinsStopCheck = stepConductorCore(
       {
         ...requestAfterShutdown.state,
@@ -153,55 +155,192 @@ describe('stepConductorCore', () => {
       },
     ]);
 
-    const pendingSend = stepConductorCore(selected.state, {
+    const heldEvent: SessionEvent = {
+      type: 'worker.completed',
+      result: {
+        name: 'implementer',
+        kind: 'implementer',
+        acpSessionId: 'worker-session',
+        status: 'finished',
+        result: 'held result',
+      },
+    };
+    const heldShutdown = stepConductorCore(
+      createConductorCoreState({
+        heldEvents: [heldEvent],
+      }),
+      { type: 'session.shutdown', mode: 'signal' },
+    );
+    const heldRequestAfterShutdown = stepConductorCore(heldShutdown.state, {
       type: 'send.requested',
-      attemptId: 'send-pending',
-      id: 3,
-      payload: [operatorMessage],
+      attemptId: 'held-after-shutdown',
+      id: 4,
+      payload: { events: [heldEvent], sourceKey: 'dispatch-hold' },
     });
-    const shutdownBeforeStarted = stepConductorCore(pendingSend.state, {
+    expect(actionEffects(heldRequestAfterShutdown.effects)).toEqual([]);
+    expect(heldRequestAfterShutdown.state.lease).toBeUndefined();
+    expect(heldRequestAfterShutdown.state.heldEvents).toEqual([heldEvent]);
+  });
+
+  it('keeps queue payload ownership and accepts started/result after reentrant shutdown', () => {
+    const operatorMessage: SessionEvent = {
+      type: 'operator.message',
+      text: 'selected input',
+    };
+    const payload = {
+      events: [operatorMessage],
+      sourceKey: 'operator',
+      operatorInputTexts: ['selected input'],
+    };
+    const leased = stepConductorCore(
+      createConductorCoreState({ queue: [operatorMessage] }),
+      {
+        type: 'send.requested',
+        attemptId: 'send-1',
+        id: 1,
+        payload,
+      },
+    );
+    expect(actionEffects(leased.effects)).toEqual([
+      { type: 'startSend', attemptId: 'send-1', payload },
+    ]);
+    expect(leased.state.lease).toEqual({
+      kind: 'send',
+      attemptId: 'send-1',
+      id: 1,
+      payload,
+    });
+
+    // Driver order after beginSend: remove the queue batch, then synchronous
+    // callbacks may re-enter and request shutdown before send.started.
+    const removed = stepConductorCore(leased.state, {
+      type: 'queue.remove',
+      events: [operatorMessage],
+    });
+    expect(removed.state.queue).toEqual([]);
+    const shutdownAfterRemoval = stepConductorCore(removed.state, {
       type: 'session.shutdown',
       mode: 'signal',
     });
-    expect(shutdownBeforeStarted.state.lease).toBeUndefined();
-    const lateStart = stepConductorCore(shutdownBeforeStarted.state, {
-      type: 'send.started',
-      attemptId: 'send-pending',
-      sourceKey: 'operator',
-      events: [operatorMessage],
-    });
-    expect(observations(lateStart.effects)).toEqual([]);
-    expect(lateStart.state.queue).toEqual([operatorMessage]);
+    expect(shutdownAfterRemoval.state.lease).toEqual(leased.state.lease);
 
-    const startedBeforeShutdown = stepConductorCore(pendingSend.state, {
-      type: 'send.started',
-      attemptId: 'send-pending',
-      sourceKey: 'operator',
-      events: [operatorMessage],
-    });
-    const shutdownDuringSend = stepConductorCore(startedBeforeShutdown.state, {
-      type: 'session.shutdown',
-      mode: 'exit',
-    });
-    expect(shutdownDuringSend.state.lease).toEqual({
-      kind: 'send',
-      attemptId: 'send-pending',
-      id: 3,
-    });
-    const settledAfterShutdown = stepConductorCore(shutdownDuringSend.state, {
+    const startedAfterShutdown = stepConductorCore(
+      shutdownAfterRemoval.state,
+      {
+        type: 'send.started',
+        attemptId: 'send-1',
+        sourceKey: 'operator',
+        events: [operatorMessage],
+      },
+    );
+    expect(observations(startedAfterShutdown.effects)).toEqual([
+      {
+        type: 'dispatched',
+        attemptId: 'send-1',
+        sourceKey: 'operator',
+        events: [operatorMessage],
+      },
+    ]);
+    expect(startedAfterShutdown.state.lease).toEqual(leased.state.lease);
+    expect(startedAfterShutdown.state.sendStartedAttemptId).toBe('send-1');
+
+    const settledAfterShutdown = stepConductorCore(startedAfterShutdown.state, {
       type: 'send.result',
-      attemptId: 'send-pending',
-      completed: false,
-      failureClass: 'transport',
+      attemptId: 'send-1',
+      completed: true,
     });
     expect(observations(settledAfterShutdown.effects)).toEqual([
       {
         type: 'send.result',
-        attemptId: 'send-pending',
+        attemptId: 'send-1',
+        completed: true,
+      },
+    ]);
+    expect(settledAfterShutdown.state.lease).toBeUndefined();
+    expect(settledAfterShutdown.state.queue).toEqual([]);
+  });
+
+  it('removes held payload only after lease and retains it through shutdown result', () => {
+    const heldEvent: SessionEvent = {
+      type: 'worker.completed',
+      result: {
+        name: 'implementer',
+        kind: 'implementer',
+        acpSessionId: 'worker-session',
+        status: 'finished',
+        result: 'held result',
+      },
+    };
+    const payload = {
+      events: [heldEvent],
+      sourceKey: 'dispatch-hold',
+    };
+    const leased = stepConductorCore(
+      createConductorCoreState({
+        heldEvents: [heldEvent],
+      }),
+      {
+        type: 'send.requested',
+        attemptId: 'held-send',
+        id: 1,
+        payload,
+      },
+    );
+    expect(actionEffects(leased.effects)).toEqual([
+      { type: 'startSend', attemptId: 'held-send', payload },
+    ]);
+    expect(leased.state.heldEvents).toEqual([heldEvent]);
+    expect(leased.state.lease).toMatchObject({ kind: 'send', payload });
+
+    const removed = stepConductorCore(leased.state, {
+      type: 'dispatchHold.remove',
+      events: [heldEvent],
+    });
+    expect(removed.state.heldEvents).toEqual([]);
+    expect(actionEffects(removed.effects)).toEqual([
+      {
+        type: 'dispatchHoldChanged',
+        status: 'updated',
+        hold: false,
+        heldEventCount: 0,
+      },
+    ]);
+    const shutdown = stepConductorCore(removed.state, {
+      type: 'session.shutdown',
+      mode: 'exit',
+    });
+    expect(shutdown.state.lease).toEqual(leased.state.lease);
+
+    const started = stepConductorCore(shutdown.state, {
+      type: 'send.started',
+      attemptId: 'held-send',
+      sourceKey: 'dispatch-hold',
+      events: [heldEvent],
+    });
+    const settled = stepConductorCore(started.state, {
+      type: 'send.result',
+      attemptId: 'held-send',
+      completed: false,
+      failureClass: 'transport',
+    });
+    expect(observations(started.effects)).toEqual([
+      {
+        type: 'dispatched',
+        attemptId: 'held-send',
+        sourceKey: 'dispatch-hold',
+        events: [heldEvent],
+      },
+    ]);
+    expect(observations(settled.effects)).toEqual([
+      {
+        type: 'send.result',
+        attemptId: 'held-send',
         completed: false,
         failureClass: 'transport',
       },
     ]);
+    expect(settled.state.lease).toBeUndefined();
+    expect(settled.state.heldEvents).toEqual([]);
   });
 
   it('models reconnect as a start effect and result event only', () => {

@@ -159,6 +159,98 @@ describe('runConductorSessionDriver', () => {
     expect(result.stopReason).toBe('completed');
   });
 
+  it('releases an inbox reservation when shutdown arrives after selection but before lease', async () => {
+    const shutdown = new AbortController();
+    const eventQueue = new SessionEventQueue();
+    const operatorMessage: SessionEvent = {
+      type: 'operator.message',
+      text: 'keep queued on shutdown',
+    };
+    eventQueue.enqueue(operatorMessage);
+    const recoveryInbox = new ConductorRecoveryInbox();
+    const reserve = recoveryInbox.reserve.bind(recoveryInbox);
+    const reserveSpy = vi
+      .spyOn(recoveryInbox, 'reserve')
+      .mockImplementation((inputTexts) => {
+        const result = reserve(inputTexts);
+        shutdown.abort();
+        return result;
+      });
+    const releaseSpy = vi.spyOn(recoveryInbox, 'release');
+    const send = vi.fn();
+    const conductor = {
+      agentId: 'agent-1',
+      send,
+      close: vi.fn(),
+    } as unknown as ConductorAgent;
+
+    try {
+      const result = await runConductorSessionDriver({
+        ...createDriverOptions({ eventQueue, conductor }),
+        skipInitialSend: true,
+        operatorCanInspectRecovery: true,
+        recoveryInbox,
+        shutdownSignal: shutdown.signal,
+      });
+
+      const reservationResult = reserveSpy.mock.results[0]?.value;
+      expect(reservationResult).toMatchObject({ ok: true });
+      expect(reservationResult.reservation).toBeDefined();
+      expect(releaseSpy).toHaveBeenCalledExactlyOnceWith(
+        reservationResult.reservation,
+      );
+      expect(releaseSpy.mock.results[0]?.value).toBe(true);
+      expect(eventQueue.snapshot()).toEqual([operatorMessage]);
+      expect(send).not.toHaveBeenCalled();
+      expect(result.stopReason).toBe('interrupted');
+    } finally {
+      recoveryInbox.dispose();
+    }
+  });
+
+  it('continues the leased send through synchronous shutdown reentry after queue removal', async () => {
+    const shutdown = new AbortController();
+    const eventQueue = new SessionEventQueue();
+    const operatorMessage: SessionEvent = {
+      type: 'operator.message',
+      text: 'send already leased',
+    };
+    eventQueue.enqueue(operatorMessage);
+    const trace: string[] = [];
+    const send = vi.fn().mockImplementation(() => {
+      trace.push('agent.send');
+      return Promise.resolve({
+        runId: 'run-operator',
+        status: 'finished',
+        result: 'sent',
+      });
+    });
+    const conductor = {
+      agentId: 'agent-1',
+      send,
+      close: vi.fn(),
+    } as unknown as ConductorAgent;
+
+    const result = await runConductorSessionDriver({
+      ...createDriverOptions({ eventQueue, conductor }),
+      skipInitialSend: true,
+      shutdownSignal: shutdown.signal,
+      onOperatorDispatched: (events) => {
+        expect(events).toEqual([operatorMessage]);
+        expect(eventQueue.snapshot()).toEqual([]);
+        trace.push('queue.removed');
+        shutdown.abort();
+      },
+      onSendStarted: () => {
+        trace.push('send.started');
+      },
+    });
+
+    expect(trace).toEqual(['queue.removed', 'send.started', 'agent.send']);
+    expect(send).toHaveBeenCalledOnce();
+    expect(result.stopReason).toBe('interrupted');
+  });
+
   it('summarizes the sources of a regular conductor inbound batch', async () => {
     const send = vi.fn().mockResolvedValue({
       runId: 'run-1',

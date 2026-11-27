@@ -152,7 +152,9 @@ Transition core は純粋な一段遷移として、概念上 `step(state, event
 
 `schedule(selection)` は選択の記録であり、実 send 開始を表す `sendStarted(attempt)` と同じ event にはしない。実行層は `startSend` effect を受けて agent API を呼び、その開始を `sendStarted`、返却 / reject を `sendResult` として戻す。`reconnect` も core は開始要求と成功 / 失敗結果だけを扱い、close / resume や transport の内部過程を表現しない。
 
-TypeScript core は `session.shutdown` event に shutdown mode（`close` / `exit` / `signal`）を記録する。選択後、send 開始前にこの event が届いた場合は `startSend` を出さず、選択項目は queue に残す。未開始 lease がある trace でも `dispatched` を観測しない。AbortSignal の伝達、listener の解除、実際の I/O の中断は execution layer の責務であり、この reducer だけでは provider 側の停止を保証しない。
+TypeScript core は `session.shutdown` event に shutdown mode（`close` / `exit` / `signal`）を記録する。選択後でも `send.requested` による lease 取得より前に shutdown が届けば、後続の lease 要求は拒否され、項目は queue または held buffer に残る。operator input 用の inbox reservation があれば、現行 Driver はこの境界で解放する。reservation は inbox が所有する実行層の状態で、reducer state には含めない。
+
+lease を取得した後は別の境界になる。core は `startSend` effect と payload を持つ lease を返し、shutdown event でどちらも取り消さない。現行 Driver は lease 取得後に項目を queue または held buffer から除き、同期 callback を呼んでから `conductor.send.started` を記録し、`agent.send` を呼ぶ。この callback が再入して shutdown を要求しても、Driver はその間に shutdown を再確認せず send 呼び出しへ進む。したがって core は、対応する `send.started` と `send.result` が後から届く trace を受け付ける。これは発行済み effect の実行や provider 側の受理・完了を保証するものではない。AbortSignal の伝達、listener の解除、I/O の中断や effect 実行順序の保証は execution layer の責務であり、#900 の配線対象とする。
 
 architect との相談を踏まえ、具体実装の複数遷移（選択、reservation、lease 取得、実 send 開始）を抽象 `.schedule` に写す案を候補として残す。この案では `Observation.dispatched` を実 send 開始として保ち、選択時の観測へ読み替えない。ただし、この抽象化が成り立つことや Lean / TS の整合は現時点で証明されていない。中断・停止・無限待機を含む全 trace の対応と、必要となる公平性条件の検証が別途必要である。今回、公平性条件も #855 の性質も追加・変更しない。次の Lean / TS モデルでこの対応を前提にする前に、差分と未証明条件を conductor / operator が確認する。ここに挙げた型は契約の初版であり、具体的なコード union や wire format の確定ではない。
 

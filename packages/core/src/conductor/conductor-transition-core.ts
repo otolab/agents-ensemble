@@ -3,7 +3,13 @@ import { CONDUCTOR_RECOVERY_INPUT_BYTE_LIMIT } from './conductor-recovery-consta
 import type { SessionEvent } from './session/session-event.js';
 
 export type ConductorCoreLease =
-  | { readonly kind: 'send'; readonly attemptId: string; readonly id: number }
+  | {
+      readonly kind: 'send';
+      readonly attemptId: string;
+      readonly id: number;
+      /** Payload remains owned by this lease until the matching result. */
+      readonly payload: unknown;
+    }
   | {
       readonly kind: 'reconnect';
       readonly attemptId: string;
@@ -190,6 +196,7 @@ export type ConductorCoreEvent =
   | { type: 'recovery.confirm'; expectedAttemptId?: string }
   | { type: 'dispatchHold.set'; enabled: boolean }
   | { type: 'dispatchHold.buffer'; queue: readonly SessionEvent[] }
+  | { type: 'dispatchHold.remove'; events: readonly SessionEvent[] }
   | {
       type: 'permissions.prune';
       queue: readonly SessionEvent[];
@@ -294,15 +301,11 @@ export function stepConductorCore(
         : { state: { ...state, queue }, effects: EMPTY_EFFECTS };
     }
     case 'session.shutdown': {
-      const sendHasNotStarted =
-        state.lease?.kind === 'send' &&
-        state.sendStartedAttemptId !== state.lease.attemptId;
+      // Shutdown prevents new work; it does not revoke an already issued send.
       return {
         state: {
           ...state,
           shutdownMode: state.shutdownMode ?? event.mode,
-          ...(sendHasNotStarted ? { lease: undefined } : {}),
-          ...(sendHasNotStarted ? { sendStartedAttemptId: undefined } : {}),
         },
         effects: EMPTY_EFFECTS,
       };
@@ -341,7 +344,12 @@ export function stepConductorCore(
       return {
         state: {
           ...state,
-          lease: { kind: 'send', attemptId: event.attemptId, id: event.id },
+          lease: {
+            kind: 'send',
+            attemptId: event.attemptId,
+            id: event.id,
+            payload: event.payload,
+          },
         },
         effects: [
           action({
@@ -354,7 +362,6 @@ export function stepConductorCore(
     }
     case 'send.started': {
       if (
-        state.shutdownMode !== undefined ||
         state.lease?.kind !== 'send' ||
         state.lease.attemptId !== event.attemptId
       ) {
@@ -500,6 +507,26 @@ export function stepConductorCore(
             type: 'dispatchHoldChanged',
             status: 'updated',
             hold: true,
+            heldEventCount: heldEvents.length,
+          }),
+        ],
+      };
+    }
+    case 'dispatchHold.remove': {
+      const selected = new Set(event.events);
+      const heldEvents = state.heldEvents.filter(
+        (item) => !selected.has(item),
+      );
+      if (heldEvents.length === state.heldEvents.length) {
+        return { state, effects: EMPTY_EFFECTS };
+      }
+      return {
+        state: { ...state, heldEvents },
+        effects: [
+          action({
+            type: 'dispatchHoldChanged',
+            status: 'updated',
+            hold: state.dispatchHold,
             heldEventCount: heldEvents.length,
           }),
         ],
