@@ -46,20 +46,41 @@ example : ¬ Ensemble.Flow.ObservationConsistent
 /-!
 ## 停止済み operator は限定した回復操作では戻れない
 
-利用者から見ると、input の送信が未完了になった後、retry 保存待ちの間に
-次の入力を受け、runner が停止すると、確認待ちと後から受けた入力が残る。
-停止済みの同じ runner に対する下記の回復操作では確認待ちを解除できない。
+利用者から見ると、input 1 の送信失敗後に confirmation が必要となり、
+その間に受けた input 2 が保留されたまま runner が終了する。終了した同じ
+runner では confirmation を解除できず、対象操作をいくら続けても input 2 を
+eligible にできない。
 
-具体列は `StoppedRecovery.stoppedExample` にある。input 1 を受理して送信し、
-未完了で settle、input 2 を受理し、入力終了を経て retry 保存待ちで停止する。
-retry 保存が完了する前に入力終了が起きる環境での列である。TS では
-`packages/operator-agent/src/run/run-operator-conversation.ts` の `runTtyConversation`、
-同 `run-operator-waiters.ts` の `retryWatchLock` が対応する。
+`StoppedRecovery.stoppedExample` は、初期状態から input 1 を選択・送信し、
+未完了結果を settle して confirmation を残し、user-only retry 処理を通った後に
+input 2 を受理する。
+user-only batch の `recordRetry` は TS で report がない場合に即時 return するため、
+この列では retry 保存待ちに EOF が割り込むとは仮定しない。その後 `canDispatch`
+が false の待機に入り、SIGINT 等の `requestStop` が `stopping` を解決して
+runner を return させる。Lean の `operatorWaitStopped` はこの wait 終了境界を表す。
 
-任意長の対象は `StoppedRecovery.Action` の10種類に限る。任意の send 結果と
-retry 保存結果は含むが、再起動やプロセス間競合は含まない。停止へ至る列の
-最小性は未検査。
-これは具体的な回復不能の反例で、#855 `RecoveryPossible` 自体の反例ではない。
+対応する TS は `packages/operator-agent/src/run/run-operator-conversation.ts` の
+`handleSubmittedInput`、send 結果後の `settleConductorDispatch`、`!canDispatch` の
+`waitForChange` / `stopping` race と `requestStop`、および
+`packages/operator-agent/src/watch/operator-watch-dispatch.ts` の `recordRetry`。
+既存 test `packages/operator-agent/src/run/run-operator-agent-recovery.test.ts` の
+`keeps only authored input after a failed first Cursor send and waits for confirmation`
+は失敗後の confirmation と後続入力を個別に確認する。停止までを同じ test で
+通す実行確認はなく、ここは静的な呼び出し経路を Lean に接続した結果と区別する。
+
+任意長の no-path 定理は `StoppedRecovery.Action` の10種類を対象とし、停止後の
+recovery continue、resume-watch、hold 解除、reconnect とその結果、send / retry
+結果および内部待機を同じ concrete state に適用する。再起動・process teardown・
+プロセス間競合は含まない。停止へ至る trace の全値域に対する最小性も未検査。
+
+別の有限列 `reportRetryWaitingStart` は report send の未完了後、retry lock 待機中に
+input 2、EOF、retry 停止を続ける。既存 test
+`packages/operator-agent/src/run/run-operator-agent-watch.test.ts` の
+`stops after retry lock acquisition races with eof` は report retry lock 中の EOF と
+runner 終了を実行確認するが、input 2 を追加してはいない。追加 input が retry
+wait 中に受理されて queue に残る点は実装経路に基づくモデル結果である。この固定
+待機状態・操作集合・値では長さ2以下の13列を探索し、提示した3操作が最短。
+どちらの concrete no-path も、#855 `RecoveryPossible` 自体の反例とは呼ばない。
 -/
 example : ¬ ∃ events,
     Ensemble.Flow.Eligible
@@ -70,13 +91,21 @@ example : ¬ ∃ events,
 /-!
 ## 射影された経路は停止済みの具体状態へ持ち上げられない
 
-上の停止状態と、同じ途中列の retry 保存が成功した稼働中状態は、限定観測が
-一致する。両端の射影を存在量化する抽象遷移は稼働中状態の解除操作を使える。
-そのため抽象上は保留 input が eligible に戻るが、停止済みの元の具体状態から
-上記の操作列で回復できることは意味しない。両状態はそれぞれ初期状態から
-到達する。停止側の履歴には入力終了もあり、この観測ではそれを区別していない。
-これは単純な射影接続と具体経路の対応に対する反例であり、全ての
-履歴付き接続の不可能性や、`RecoveryPossible` 全体の真偽は示していない。
+上の停止状態と、requestStop なしで同じ user failure / retry 保存成功に至った
+稼働中状態は、`observeExample` では一致する。稼働中の状態では recovery continue
+が confirmation を解除し、input 2 が eligible になる。停止済み状態では同じ具体
+操作が no-op であり、`StoppedRecovery.no_concrete_eligible_recovery` が任意長の
+対象操作列の後も候補観測上の `Eligible` に至らないことを示す。これは transport
+が実際に send を受け付けるかを直接判定する述語ではない。
+`HistoryRecovery.no_fixed_transition_exact_correspondence`
+は、この限定観測と操作集合の下では一つの固定 abstract `Transition` が両履歴の
+具体回復可能性を同時に正確に表せないことを証明する。
+
+これは #855 `RecoveryPossible` の不成立を示さない。#855 の式は指定された abstract
+initial / transition 上での存在量化であり、上記 Lean の「projected recovery」は
+同じ観測を持つ live concrete state から遷移を借りる候補射影である。全履歴を
+保つ abstract transition と TS との関係はまだなく、この経路を stopped history の
+実回復として扱わない。別の状態観測や履歴添字付き関係の不可能性も示していない。
 -/
 example : ∃ trace target,
     Ensemble.Flow.Run
@@ -102,7 +131,9 @@ example : ¬ ∃ step : Ensemble.Flow.Transition, ∀ h : HistoryRecovery.Histor
 利用者には reconnect が成功しても worker 通知が処理されないように見える。
 `ReconnectExploration.start` は、最初の worker を送って上限 1 に達した状態。
 ここから worker 到着、reconnect 要求、reconnect 開始、成功結果を与えると、
-次の send 試行でも worker が保留される。TS では
+availability は戻るが、次の send 試行でも worker は保留される。上限なしと
+上限 2 の対照では同じ列の後に send を開始でき、reconnect 自体は turn 数を
+リセットしない。TS では
 `packages/core/src/conductor/conductor-session-driver.ts` の
 `runConductorSessionDriver`、`packages/core/src/conductor/session/select-dispatch-batch.ts`
 の `selectDispatchBatch`、`packages/core/src/conductor/session-policy.ts` の
@@ -110,11 +141,16 @@ example : ¬ ∃ step : Ensemble.Flow.Transition, ∀ h : HistoryRecovery.Histor
 
 この開始状態と上記4種類・固定値の操作に限れば長さ3以下の85列に該当例はなく、
 提示した4操作は最短である。初期状態からの全操作・全値域での最小性ではない。
-通常入力処理で上限を戻せる。上限を記憶しない抽象 `Eligible` と具体選択の違いが
-あり、この有限列を #855 の弱公平性付き `ReconnectResumes` の反例と断定できない。
+operator input の到着・send・完了・後続 worker 選択という4操作で再開する。
+同じ4記号の長さ3以下85列では対象 worker send は始まらない。別の固定列では
+dispatch hold が reconnect 成功後にも残るため worker を held に保ち、hold 解除・
+send 開始の後に再開する。これらの列は #855 `ReconnectResumes` の
+`EligibleUntilDispatch` 前提を満たさず、弱公平性付き元命題の反例ではない。
+TS runner 全体での無限待機の実行可能性、全操作・全値域に対する最小性は未検査。
 -/
 #guard (ReconnectExploration.blockedAfterSuccessfulReconnect ReconnectExploration.alphabet)
 #guard ((Composition.tracesUpTo ReconnectExploration.alphabet 3).all
   (fun trace => !(ReconnectExploration.blockedAfterSuccessfulReconnect trace)))
+#guard (ReconnectExploration.targetWorkerStarted ReconnectExploration.operatorInputRecoveryTrace)
 
 end Ensemble.AsIs.Counterexamples
