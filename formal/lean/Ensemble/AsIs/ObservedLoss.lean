@@ -134,8 +134,21 @@ def missingFromDispatchInput (events : List Choice) : Bool :=
   let h := events.foldl perform ({} : History)
   h.items.any (fun item => item.logicalId == 7 && item.missingFromDispatch)
 
+/-- selector が対象を選んだ印を残したまま、send 開始の dispatch 印がないか。 -/
+def selectedWithoutDispatch (events : List Choice) : Bool :=
+  let h := events.foldl perform ({} : History)
+  h.concreteMarks.any (fun mark => mark == .selected .operator [7]) &&
+    !(h.concreteMarks.any fun mark => match mark with
+      | .dispatched .operator ids _ => ids.contains 7
+      | _ => false)
+
 #guard ((choicesUpTo 3).length == 85)
 #guard ((choicesUpTo 3).all (fun events => !missingFromDispatchInput events))
 #guard (missingFromDispatchInput [.input, .select, .stopRequest, .stopCommit])
+
+/- 固定操作 alphabet では受理前の選択は起きず、入力受理と次の選択で初めて選択印が残る。 -/
+#guard ((choicesUpTo 1).length == 5)
+#guard ((choicesUpTo 1).all (fun events => !selectedWithoutDispatch events))
+#guard (selectedWithoutDispatch [.input, .select])
 
 end Ensemble.AsIs.ObservedLoss

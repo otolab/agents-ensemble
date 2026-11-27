@@ -54,7 +54,7 @@ theorem actions_preserve_stopped_operator (s : System) (h : s.operator.stopped =
     have tail := ih (apply s first) remains
     exact tail.trans same
 
-/-- 初期状態から送信失敗・別入力・retry 保存待ちでの停止に至る。 -/
+/-- 初期状態から user 送信失敗後、確認待ちのまま停止する具体状態に至る。 -/
 def stoppedExample : System :=
   let config : Ensemble.AsIs.OperatorDispatch.Scheduling :=
     { maxWait := 0, idleAging := 10, maxUserBytes := 100 }
@@ -68,22 +68,25 @@ def stoppedExample : System :=
     .operatorCommitApply "batch" "payload" 0,
     .operatorCommitSuccess "batch" "payload",
     .operatorSendResult failure 0,
+    .operatorRetryResult (fun _ => 0) true,
     .operatorInput { id := 2, user := true } true 100,
-    .operatorInputEnd,
-    .operatorRetryStopped
+    .operatorRequestStop,
+    .operatorWaitStopped
   ]
 
 /-- この到達状態では停止と confirmation gate、後から受けた入力が残る。 -/
 theorem example_stopped : stoppedExample.operator.stopped = true := by decide +kernel
 
-/-- 入力終了を契機とする停止例であり、終了後の入力は受け付けない。 -/
-theorem example_input_ended : stoppedExample.operatorInputEnded = true := by decide +kernel
+/-- dispatch 不可時の requestStop を契機に停止し、TTY の EOF ではない。 -/
+theorem example_request_stop :
+    stoppedExample.operatorStopRequested = true ∧
+    stoppedExample.operatorInputEnded = false := by decide +kernel
 
 /-- 入力終了後は新たな通常入力を受理しない。 -/
 theorem stopped_example_rejects_input (event : Ensemble.AsIs.OperatorDispatch.Event)
     (nonblank : Bool) (limit : Nat) :
     step stoppedExample (.operatorInput event nonblank limit) = stoppedExample := by
-  simp [step, example_input_ended]
+  simp [step, example_request_stop, example_stopped]
 
 /-- 停止例では確認待ちが残る。 -/
 theorem example_attention : stoppedExample.operator.lifecycle.pendingAttemptId.isSome = true := by
@@ -94,11 +97,57 @@ theorem example_pending :
     stoppedExample.operator.queue.pending.any (fun e => e.user && e.id == 2) = true := by
   decide +kernel
 
+/-- report send が未完了になり、retry 保存を待つ具体状態。 -/
+def reportRetryWaitingStart : System :=
+  let config : Ensemble.AsIs.OperatorDispatch.Scheduling :=
+    { maxWait := 0, idleAging := 10, maxUserBytes := 100 }
+  let failure : SettlementInput :=
+    { lease := ⟨0, "", .send, 0⟩, workflow := .operatorAgent,
+      status := .other, failureClass := .transport, captureFailure := false }
+  run {} [
+    .operatorReport
+      { id := 1, user := false, session := "s", reportId := some "r" } 0 0 0,
+    .operatorBeginCommit 1 config 0 true false,
+    .operatorCommitApply "batch" "payload" 0,
+    .operatorCommitSuccess "batch" "payload",
+    .operatorSendResult failure 0
+  ]
+
+/-- retry 待機後の入力、入力終了、retry 停止の固定操作集合。 -/
+def stopAlphabet : List Event := [
+  .operatorInput { id := 2, user := true, bytes := 1 } true 100,
+  .operatorInputEnd,
+  .operatorRetryStopped
+]
+
+/-- 後続入力を保留したまま入力終了を経て retry が停止したか。 -/
+def stoppedWithPendingInput (events : List Event) : Bool :=
+  let s := run reportRetryWaitingStart events
+  s.operatorInputEnded && s.operator.stopped &&
+    s.operatorRetryExit == some .stopped &&
+    s.operator.queue.pending.any (fun e => e.user && e.id == 2)
+
+/- 初期状態から report retry 待機に到達し、固定3操作で停止条件に達する。
+   retry lock 中に TTY input と EOF が介在するケースに対応する。 -/
+#guard (reportRetryWaitingStart.operator.retryPending && !reportRetryWaitingStart.operator.stopped)
+#guard (stoppedWithPendingInput stopAlphabet)
+
+/- report retry 待機と固定3操作・固定値の範囲では、長さ2以下の13列に該当例はない。 -/
+#guard ((tracesUpTo stopAlphabet 2).length == 13)
+#guard ((tracesUpTo stopAlphabet 2).all fun trace => !stoppedWithPendingInput trace)
+
 /-- 対象操作の任意長の列の後も、確認待ちは解消しない。 -/
 theorem attention_persists (events : List Action) :
     (runActions stoppedExample events).operator.lifecycle.pendingAttemptId.isSome = true := by
   rw [actions_preserve_stopped_operator stoppedExample example_stopped events]
   exact example_attention
+
+/-- 停止後、対象の回復操作列は保留中の入力も保持する。 -/
+theorem pending_input_persists (events : List Action) :
+    (runActions stoppedExample events).operator.queue.pending.any
+      (fun e => e.user && e.id == 2) = true := by
+  rw [actions_preserve_stopped_operator stoppedExample example_stopped events]
+  exact example_pending
 
 /-- 同じ具体状態を通る対象操作列では、確認待ちのない状態へ到達できない。 -/
 theorem no_attention_free_recovery :
@@ -145,8 +194,8 @@ def liveExample : System :=
     .operatorCommitApply "batch" "payload" 0,
     .operatorCommitSuccess "batch" "payload",
     .operatorSendResult failure 0,
-    .operatorInput { id := 2, user := true } true 100,
-    .operatorRetryResult (fun _ => 0) true
+    .operatorRetryResult (fun _ => 0) true,
+    .operatorInput { id := 2, user := true } true 100
   ]
 
 /-- 限定観測では稼働中と停止後が同じ状態に写る。 -/

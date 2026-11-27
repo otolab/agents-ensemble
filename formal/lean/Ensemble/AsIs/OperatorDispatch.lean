@@ -111,6 +111,24 @@ def Queue.requeueReport (q : Queue) (event : Event) (now delay : Nat) : Queue :=
   if alreadyQueued then q else if q.isHeld then { q with nextIdentity := fresh + 1, held := (q.held ++ [event]).mergeSort (fun a b => (a.arrivalOrder.getD a.arrival < b.arrivalOrder.getD b.arrival) || (a.arrivalOrder.getD a.arrival == b.arrivalOrder.getD b.arrival && a.arrival <= b.arrival)) }
   else { q with nextIdentity := fresh + 1, pending := (q.pending ++ [event]).mergeSort (fun a b => (a.arrivalOrder.getD a.arrival < b.arrivalOrder.getD b.arrival) || (a.arrivalOrder.getD a.arrival == b.arrivalOrder.getD b.arrival && a.arrival <= b.arrival)) }
 
+/--
+永続 watch state で queue にある report を再照合する。`readyAt` は永続期限と
+in-memory の report 別 retry index の最大値にする一方、event 本体は永続値で上書きする。
+現行 TS の selector が frozen deadline に event の `retryReadyAt` を読む差を保持する。
+-/
+def Queue.reconcileQueuedReport (q : Queue) (persisted : Event) (persistedReadyAt : Nat) : Queue :=
+  match persisted.usableReportId with
+  | none => q
+  | some reportId =>
+    if q.inFlight.contains reportId then q else
+    let indexedRetry := ((q.retryById.find? (fun entry => entry.1 == reportId)).map (·.2)).getD 0
+    let readyAt := max persistedReadyAt (max (persisted.retryReadyAt.getD 0) indexedRetry)
+    let update := fun queued =>
+      if !queued.user && queued.usableReportId == some reportId then
+        { persisted with id := queued.id, arrival := queued.arrival, readyAt }
+      else queued
+    { q with pending := q.pending.map update, held := q.held.map update }
+
 /-- commit 対象の report に外部供給された batch ID と payload を凍結する。 -/
 def freezeReports (events : List Event) (batchId payload : String) : List Event :=
   events.map (fun e => { e with frozenBatchId := some batchId, frozenPayload := some payload })
@@ -729,6 +747,30 @@ def Runner.finishAcknowledged (r : Runner) : Runner :=
   let (r, reconnect) := r.requestReconnect.beginReconnect 2
   let r := (r.settleReconnect reconnect.get! true).toOption.get!
   r.lifecycle.available && r.lifecycle.confirmationRequired && r.pendingReconnects == 0
+))
+
+/- 永続 refresh 後は map が5900を保ってもevent期限5100で別session通知時に選択される。 -/
+#guard (decide (
+  let a : Event := {
+    id := 1, arrival := 1, user := false, session := "a", reportId := some "a",
+    readyAt := 100, priority := 0, question := true,
+    frozenBatchId := some "batch-a", frozenPayload := some "payload-a",
+    retryReadyAt := some 5900
+  }
+  let q : Queue := { pending := [a], retryById := [("a", 5900)] }
+  let persisted := { a with retryReadyAt := some 5100 }
+  let refreshed := q.reconcileQueuedReport persisted 100
+  let b : Event := {
+    id := 2, arrival := 2, user := false, session := "b", reportId := some "b",
+    readyAt := 5200, firstQueuedAt := some 5200, priority := 1
+  }
+  let q := refreshed.enqueueReport b 5200 0 10
+  let cfg : Scheduling := { maxWait := 10, idleAging := 100, maxUserBytes := 100 }
+  let (_, selected) := q.selectBatch {} cfg 5200
+  refreshed.retryById == [("a", 5900)] &&
+    refreshed.pending.head!.readyAt == 5900 &&
+    refreshed.pending.head!.retryReadyAt == some 5100 &&
+    selected.map (fun batch => batch.events.map (·.reportId)) == some [some "a"]
 ))
 
 /- 明示時刻を使った代表操作列を実行可能な値として表示する。 -/

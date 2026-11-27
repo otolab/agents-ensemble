@@ -7,6 +7,7 @@ import Ensemble.AsIs.Composition
 import Ensemble.AsIs.ObservedHistory
 import Ensemble.AsIs.ObservedLoss
 import Ensemble.AsIs.DelayedRetry
+import Ensemble.AsIs.FairExecution
 import Ensemble.AsIs.ReconnectExploration
 import Ensemble.AsIs.StoppedRecovery
 import Ensemble.AsIs.HistoryRecovery

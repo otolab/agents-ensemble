@@ -69,6 +69,7 @@ inductive Event where
   | operatorInput (event : Ensemble.AsIs.OperatorDispatch.Event) (nonblank : Bool) (limit : Nat)
   | operatorInputEnd
   | operatorRequestStop
+  | operatorWaitStopped
   | operatorFinishInput
   | operatorReport (event : Ensemble.AsIs.OperatorDispatch.Event) (now delay maxWait : Nat)
   | operatorHold (enabled : Bool)
@@ -86,6 +87,7 @@ inductive Event where
   | operatorSendResult (input : SettlementInput) (now : Nat)
   | operatorInterruptSend
   | operatorRetryResult (readTime : Nat → Nat) (success : Bool)
+  | operatorRefreshReport (persisted : Ensemble.AsIs.OperatorDispatch.Event) (persistedReadyAt : Nat)
   | operatorRetryStopped
   | operatorRetryException
   | operatorAckResult (success : Bool) (now : Nat)
@@ -155,6 +157,12 @@ def step (s : System) : Event → System
     { s with operatorInputEnded := true }
   | .operatorRequestStop =>
     { s with operatorStopRequested := true }
+  | .operatorWaitStopped =>
+    if s.operatorStopRequested && s.operatorSend.isNone &&
+        s.operatorPreparing.isNone && !s.operator.retryPending &&
+        s.operator.ack == .idle then
+      { s with operator := { s.operator with stopped := true } }
+    else s
   | .operatorFinishInput =>
     if s.operatorInputEnded && !s.operator.stopped &&
         !(s.operator.queue.pending.any (·.user)) &&
@@ -194,7 +202,7 @@ def step (s : System) : Event → System
       | .error _ => s
       | .ok operator => { s with operator, operatorReconnect := none }
   | .operatorBeginCommit token config now reservationOk canInspect =>
-    if s.operator.stopped || s.operator.retryPending || s.operator.pendingReconnects > 0 ||
+    if s.operator.stopped || !s.operator.lifecycle.canDispatch || s.operator.retryPending || s.operator.pendingReconnects > 0 ||
         s.operator.ack != .idle || s.operatorPreparing.isSome ||
         canInspect != s.operatorCanInspectRecovery then s else
     let (queue, selected) := s.operator.queue.selectBatch s.operator.selection config now
@@ -286,6 +294,9 @@ def step (s : System) : Event → System
   | .operatorRetryResult readTime success =>
     if !success || s.operatorInputEnded || s.operatorStopRequested then s else
     { s with operator := s.operator.finishRetryRecord readTime true }
+  | .operatorRefreshReport persisted persistedReadyAt =>
+    { s with operator := { s.operator with
+        queue := s.operator.queue.reconcileQueuedReport persisted persistedReadyAt } }
   | .operatorRetryStopped =>
     if s.operator.stopped || !s.operator.retryPending ||
         !(s.operatorInputEnded || s.operatorStopRequested) then s else
@@ -391,6 +402,32 @@ def run (s : System) (events : List Event) : System := events.foldl step s
   (step ended .operatorRequestReconnect).operator.pendingReconnects == 0 &&
   (step ended .operatorFinishInput).operator.stopped &&
   !(step pending .operatorFinishInput).operator.stopped
+))
+
+/- dispatch 不可の待機中に requestStop が届くと runner は return する。
+   confirmation と後続入力はそのまま残る。 -/
+#guard (decide (
+  let config : Ensemble.AsIs.OperatorDispatch.Scheduling :=
+    { maxWait := 0, idleAging := 10, maxUserBytes := 100 }
+  let failure : SettlementInput :=
+    { lease := ⟨0, "", .send, 0⟩, workflow := .operatorAgent,
+      status := .other, failureClass := .transport, captureFailure := false }
+  let waiting := run {} [
+    .operatorInput { id := 1, user := true, bytes := 1 } true 100,
+    .operatorBeginCommit 1 config 0 true false,
+    .operatorCommitApply "batch" "payload" 0,
+    .operatorCommitSuccess "batch" "payload",
+    .operatorInput { id := 2, user := true, bytes := 1 } true 100,
+    .operatorSendResult failure 0,
+    .operatorRetryResult (fun _ => 0) true
+  ]
+  let stopped := run waiting [.operatorRequestStop, .operatorWaitStopped]
+  waiting.operator.lifecycle.pendingAttemptId.isSome &&
+    waiting.operator.queue.pending.any (fun e => e.user && e.id == 2) &&
+    !waiting.operator.lifecycle.canDispatch &&
+    stopped.operator.stopped &&
+    stopped.operator.lifecycle.pendingAttemptId.isSome &&
+    stopped.operator.queue.pending.any (fun e => e.user && e.id == 2)
 ))
 
 /- 独立した二主体は同時に send lease を持てる。共有 lease への射影には
@@ -590,6 +627,49 @@ def tracesUpTo (alphabet : List Event) : Nat → List (List Event)
     let shorter := tracesUpTo alphabet n
     shorter ++ (shorter.filter (fun trace => trace.length == n)).flatMap
       (fun trace => alphabet.map (fun event => trace ++ [event]))
+
+/-- 会話・手動 hold と終了を含む resume-watch の固定探索操作。 -/
+def resumeAlphabet : List Event :=
+  [ .operatorInput { id := 1, user := true, bytes := 1 } true 100,
+    .operatorReport { id := 2, user := false, session := "s", reportId := some "r" } 0 0 0,
+    .operatorHold true, .operatorHold false, .operatorResumeWatch,
+    .operatorInputEnd, .operatorRequestStop ]
+
+/-- resume-watch の対象外となる具体状態が保たれるかを検査する。 -/
+def resumePreservesConcrete (events : List Event) : Bool :=
+  let before := run {} events
+  let after := step before .operatorResumeWatch
+  after.operator.queue.reportHold == before.operator.queue.reportHold &&
+    after.operator.lifecycle == before.operator.lifecycle &&
+    after.operator.pendingReconnects == before.operator.pendingReconnects &&
+    after.operator.retryPending == before.operator.retryPending &&
+    after.operator.retryStoredAt == before.operator.retryStoredAt &&
+    after.operator.ack == before.operator.ack &&
+    after.conductor.hold.active == before.conductor.hold.active
+
+/- 初期状態・固定7操作・長さ3以下の400列で resume-watch の対象外状態を検査する。 -/
+#guard ((tracesUpTo resumeAlphabet 3).length == 400)
+#guard ((tracesUpTo resumeAlphabet 3).all resumePreservesConcrete)
+
+/- 対象範囲で operator の物理 held report があるとき、会話か手動の hold が有効。 -/
+#guard ((tracesUpTo resumeAlphabet 4).length == 2801)
+#guard ((tracesUpTo resumeAlphabet 4).all fun trace =>
+  let queue := (run {} trace).operator.queue
+  queue.held.isEmpty || queue.conversationHold || queue.reportHold)
+
+/- hold 中の worker を保留し、permission stall を send 開始する固定具体列。 -/
+#guard (decide (
+  let before := run {} [
+    .conductorHold true,
+    .conductorEnqueue { id := 3, kind := .workerCompleted, name := "w" },
+    .conductorEnqueue { id := 4, kind := .stall }
+  ]
+  let after := step before (.conductorBeginSend 1 0 none none true)
+  after.conductor.hold.active &&
+    after.conductor.hold.held.any (fun event => event.id == 3) &&
+    !(after.conductor.queue.any (fun event => event.id == 4)) &&
+    after.conductorSend.isSome
+))
 
 /- 上限に達した後、指定した10種類の解除・reconnect 操作の長さ4以下では上限が残る。 -/
 #guard ((tracesUpTo limitedRecoveryAlphabet 4).length == 11111)
