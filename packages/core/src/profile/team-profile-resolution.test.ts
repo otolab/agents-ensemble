@@ -74,6 +74,12 @@ describe('resolveTeamProfilePath', () => {
     );
   });
 
+  it('resolves the bundled with-architect profile by name', () => {
+    expect(resolveTeamProfilePath('with-architect', { repoRoot })).toBe(
+      bundledProfilePath('with-architect'),
+    );
+  });
+
   it('continues to resolve the bundled v1 profile by its explicit name', () => {
     expect(resolveTeamProfilePath('implementer-and-reviewer', { repoRoot })).toBe(
       bundledProfilePath('implementer-and-reviewer'),
@@ -160,6 +166,12 @@ describe('listTeamProfiles', () => {
       name: 'implementer-and-reviewer-v2',
       availability: 'available',
     });
+    expect(byId['with-architect@bundled']).toMatchObject({
+      source: 'bundled',
+      name: 'with-architect',
+      workersPreview: ['implementer', 'reviewer', 'architect'],
+      availability: 'available',
+    });
   });
 
   it('reports declared, unspecified and invalid modes without hiding entries', async () => {
@@ -180,6 +192,7 @@ describe('listTeamProfiles', () => {
     expect(byId['old@project']).toMatchObject({ modesStatus: 'unspecified' });
     expect(byId['implementer-and-reviewer@bundled']).toMatchObject({ meta: { modes: ['issue'] } });
     expect(byId['implementer-and-reviewer-v2@bundled']).toMatchObject({ meta: { modes: ['issue'] } });
+    expect(byId['with-architect@bundled']).toMatchObject({ meta: { modes: ['issue'] } });
     expect(byId['workspace-research@bundled']).toMatchObject({ meta: { modes: ['run'] } });
   });
 
