@@ -330,6 +330,12 @@ URL が端末幅を超える場合も URL は省略せず、上枠の title / su
 
 自律ループ停止後、CLI TTY デフォルトでは harness が **post-loop 待機** に入る（[ADR 0013](adr/0013-process-lifecycle-vs-autonomous-loop.md)、初回メッセージの分類は [ADR 0023](adr/0023-tty-initial-message-post-loop.md)）。この間も SessionDriver は停止せず、イベントキューで次の dispatch を待つ。`session.post_loop_wait` は待機 UX の開始通知であり、イベント配送を止める合図ではない。
 
+### stdin EOF の扱い（現行実装の記録）
+
+CLI の通常 TTY 経路は Ink の Operator input で、そこから送信された `/close` / `/exit` が session shutdown を要求します。現行コードは stdin の EOF をこの要求に結び付けていません。`bindAsyncOperatorInput` は別の binding 経路で、readline の `line` event は処理しますが、readline の `close` から session shutdown を要求する処理はありません。通常の CLI TTY では `useTui` が有効になるため、この readline binding ではなく Ink を使います。
+
+したがって、TTY の post-loop 待機中に入力 stream が EOF になっても、それだけで session が閉じるとは限りません。EOF 後はその stream から追加の operator command を送れず、Driver は別の終了要求や event を待ち続ける場合があります。これは現行コードの観測であり、EOF を graceful exit とする利用者保証ではありません。明示終了には入力可能な間に `/close` または `/exit` を使ってください。非 TTY one-shot と `--no-wait` は post-loop 待機をしない別経路です。
+
 | 条件 | 動作 |
 |------|------|
 | TTY + デフォルト（有効な初回メッセージの有無に関わらず。`--continue` / `--resume` で CLI メッセージを無視した場合を含む） | 自律ループ停止後も Ink pane / stream の入力欄に `> ` を表示。`/close` または `/exit` で teardown 後にプロセス終了 |

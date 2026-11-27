@@ -87,6 +87,12 @@
 | operator `/exit` | driver と `stopReason` の写し替えは close と同じ。teardown は `exited` を保存し、通常の `closeConductorAgentOnce` を呼ぶ。stop reason が `interrupted` でなければ isolated worktree の削除を試す。 | close 固有の attached-session snapshot / `forResume` は行わず、exit の worktree cleanup がある。remove の実成否は別結果であり、失敗時は warning として処理される。 |
 | SIGINT / SIGTERM 等の session shutdown signal（operator close / exit flag なし） | drain 後 driver は `interrupted` を返し、result も `interrupted` のまま。teardown は `interrupted` を保存し、force shutdown を行う。 | close 専用の resume snapshot / `forResume` と exit 専用の worktree cleanup のどちらも実行されない。保存済み state からの再開可否や provider 側の実状態は静的コード読解だけでは確定しない。 |
 
+#### CLI operator input の EOF
+
+`ensemble issue` / `ensemble run` の通常 TTY 経路は `useTui = interactive && tty` により `createIssueSessionTuiHost` を使う。TUI の submit は `OperatorInputBindingApi.submit` に届き、`/close` / `/exit` が session shutdown を要求する。CLI の TUI host / view には stdin の `end` を `requestOperatorShutdown` に接続する handler はない。別経路の `bindAsyncOperatorInput` は readline の `line` event を登録するが、`close` を shutdown に変換しない。通常の CLI TTY はこの readline binding ではなく Ink を使い、disposer が readline を閉じるのは session teardown 時である。
+
+したがって stdin EOF はこの経路で close / exit flag や Driver shutdown signal を立てない。`waitForOperatorExit` が有効な TTY post-loop では Driver が event を待ちうるため、EOF だけで session teardown が始まるとは言えない。入力 stream を失った後の runtime 全体の終了時刻も、この静的コード経路からは保証しない。`operator-agent` の `runTtyConversation` は別の stdin `end` / `inputEnded` 経路であり、ここには適用しない。
+
 この shutdown handoff は `shouldStopIssueLoop` とは別である。Issue loop の stop 条件は `shouldBreakAfterLoopState` が判定し、`waitForOperatorExit` が true なら driver は post-loop wait を続ける。したがって Issue loop が止まっても session shutdown signal は発生しない。false なら driver は loop を終えて teardown へ進み得るが、close / exit / process signal の lifecycle label は operator flag または shutdown signal によって別に決まる。実際の signal と Open Question request の race、外部 agent の cancel / close の結果、teardown 中の process 強制終了を含む順序は runtime で確認していない。
 
 ### operator-agent 側の状態遷移と非同期境界

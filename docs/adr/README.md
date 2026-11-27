@@ -158,7 +158,7 @@ ADR は**合意された設計判断の履歴**を残すもの。一度 `accepte
 | [0084](0084-conductor-mcp-selection.md) | conductor MCP server の明示選択 | accepted |
 | [0085](0085-ensemble-run-workspaces-and-notes.md) | `ensemble run`、workspaces 永続化、Notes | accepted |
 | [0086](0086-lean-formal-model-for-dispatch-flow.md) | 形式モデル（Lean 4）を dispatch フローの中間言語として導入する | proposed |
-| [0087](0087-conductor-dispatch-transition-core.md) | conductor dispatch transition core と実行層の分離 | proposed |
+| [0087](0087-conductor-dispatch-transition-core.md) | conductor dispatch transition core と実行層の分離 | proposed（operator review: LGTM、正式採択は未記録） |
 
 ## 追加するとき
 

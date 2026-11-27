@@ -14,7 +14,7 @@ ADR 0086 §3 は As-Is の忠実な写し、To-Be の再設計、後段 Oracle �
 
 ## Decision
 
-以下を採用する方針として提案する。operator review が済むまでは本 ADR を `proposed` とする。
+以下を採用する方針として提案する。オペレータは Open Question `inq-1` で、lifecycle 契約と本 ADR を対象に「LGTMです。」と回答した（[PR 上の記録](https://github.com/otolab/agents-ensemble/pull/903#issuecomment-7209087676)）。これは review の結果であり、ADR の `accepted` への変更を明示した判断とは記録されていない。ADR 0087 の `Status` は `proposed` のままとし、正式採択は未確定として扱う。
 
 ### 1. Transition core と実行層
 
@@ -24,7 +24,7 @@ ADR 0086 §3 は As-Is の忠実な写し、To-Be の再設計、後段 Oracle �
 - `schedule(selection)` と `sendStarted(attempt)` は別の event として扱う。選択を send 開始・完了、provider の受理、tool effect の成功と同一視しない。#855 の `Observation.dispatched` は実 send 開始を指す意味のまま保つ。
 - reconnect は開始要求と成功 / 失敗結果だけを core に置くモックとし、close / resume や認証・transport の内部処理はモデル化しない。
 
-具体実装の複数遷移（選択、reservation、lease 取得、実 send 開始）を抽象 `.schedule` に対応づける案を候補とする。この対応は #855 の `Observation.dispatched` を実 send 開始として保つもので、選択時の観測に読み替える案ではない。ただし、対応関係は未証明であり、この ADR は Lean / TS の整合や trace refinement を主張しない。中断・停止・無限待機を含む全 trace がどう写るか、またその性質の検証にどの公平性条件が要るかを確認する必要がある。今回は公平性条件も #855 の性質も追加・変更しない。operator review が済み、必要な条件と差分が明確になるまでは、この候補を To-Be / TS の既成事実として扱わない。
+具体実装の複数遷移（選択、reservation、lease 取得、実 send 開始）を抽象 `.schedule` に対応づける案を候補とする。この対応は #855 の `Observation.dispatched` を実 send 開始として保つもので、選択時の観測に読み替える案ではない。ただし、対応関係は未証明であり、この ADR は Lean / TS の整合や trace refinement を主張しない。中断・停止・無限待機を含む全 trace がどう写るか、またその性質の検証にどの公平性条件が要るかを確認する必要がある。今回は公平性条件も #855 の性質も追加・変更しない。正式採択と未証明条件の整理が済むまでは、この候補を To-Be / TS の既成事実として扱わない。
 
 ### 2. 二つの core と event contract
 
@@ -57,7 +57,7 @@ ADR 0086 §3 は As-Is の忠実な写し、To-Be の再設計、後段 Oracle �
 - 現行 TS は state を lifecycle / queue / driver / inbox / worker / permission など複数の owner に分けている。抽象 state との写像と event trace の完全性は別途確認が必要。
 - 抽象 `.schedule` と concrete な選択から実 send 開始までの遷移列との対応は候補にとどまる。中断・停止・無限待機を含む全 trace と公平性条件を検証するまでは整合を主張できず、selection を `dispatched` と読み替えたり既存性質を変えたりする危険が残る。
 - trace 照合は実行層の非同期 interleaving や external side effect の成否を網羅しない。結果から有限配送期限や副作用の重複排除を主張できない。
-- #855 の operator 合意記録と Lean file header の差は未解決で、本 ADR の範囲ではどちらも書き換えない。operator review は未了である。
+- #855 の operator 合意記録と Lean file header の差は未解決で、本 ADR の範囲ではどちらも書き換えない。lifecycle 契約と ADR 提案への operator review 応答（LGTM）は記録済みだが、ADR 0087 の正式採択は別途明示されていないため `proposed` のままとする。
 
 ## 参照
 

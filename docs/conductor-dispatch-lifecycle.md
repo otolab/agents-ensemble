@@ -106,6 +106,18 @@ dispatch hold は自動解除しない。`permission.pending` と通常 trigger 
 
 `runConductorSessionDriver` 全体は pure reducer ではない。`Promise`、`AbortSignal`、listener、外部 agent、reconnect、event logging、recovery inbox I/O と session shutdown を含む。関数を一対一で Lean に写すのではなく、transition core に入れる state / event / pure rule と、実行層に残す I/O を抽出する。
 
+## 入力 EOF と session 停止の現行実装
+
+以下は現行 CLI のコード経路を記したもので、EOF 時の終了を利用者に約束する契約ではない。
+
+`ensemble issue` / `ensemble run` の通常 TTY 実行は `useTui = interactive && tty` により `createIssueSessionTuiHost` を選び、Ink の入力欄から submit する。host は submit を `OperatorInputBindingApi.submit` へ渡し、`/close` と `/exit` は `conductor-session.ts` の submit 分岐から `requestOperatorShutdown` を呼ぶ。一方、TUI host / view には stdin の `end` を session shutdown に結ぶ処理がない。
+
+別の binding `bindAsyncOperatorInput` は readline の `line` event を処理するが、readline の `close` を shutdown 要求へ変換する listener は登録しない。通常の CLI TTY 経路はこの binding ではなく上記の Ink TUI を使う。返す disposer が readline を閉じるのは session teardown 時であり、入力 stream の EOF を teardown に結び付けるものではない。
+
+そのため、TTY の post-loop 待機が有効なときは、stdin EOF だけでは `requestOperatorShutdown` や Driver の shutdown signal は発生しない。`waitForOperatorExit` が有効なら、Issue 自律 loop が止まった後も Driver は event を待ちうる。EOF 後はその入力経路から追加操作を送れないが、EOF 自体が session を閉じるわけではなく、他の event や UDS / process signal による終了経路は別に残る。プロセスが必ず終了する、または無期限に残るとはここから断定しない。非 TTY の one-shot は継続入力 binding と post-loop 待機を持たず、別の停止条件で動く。
+
+`operator-agent` の `runTtyConversation` は stdin `end` を `inputEnded` に反映する別プロセスの経路である。その挙動を Issue CLI の conductor session の EOF 処理と同一視しない。
+
 ## 利用者に説明できる保証と限界
 
 | 契約 | 利用者に言えること | 言えないこと・根拠 |
