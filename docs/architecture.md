@@ -586,5 +586,6 @@ ensemble issue https://github.com/org/repo/issues/123
 | [documentation-policy.md](documentation-policy.md) | 文書の種類と更新ルール |
 | [testing-strategy.md](testing-strategy.md) | unittest / integration / e2e の分離 |
 | [session-logging.md](session-logging.md) | SessionLogger・stdout/stderr・終了 JSON |
+| [conductor-dispatch-lifecycle.md](conductor-dispatch-lifecycle.md) | conductor dispatch の状態所有者・遷移・core / execution 境界 |
 | [adr/0008-human-dialogue-open-questions.md](adr/0008-human-dialogue-open-questions.md) | open question / オペレータ対話 |
 | [adr/0031-operator-agent-layer.md](adr/0031-operator-agent-layer.md) | operator 層・operator-agent・接続密度 |

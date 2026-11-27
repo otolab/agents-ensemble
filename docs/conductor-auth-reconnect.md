@@ -1,6 +1,6 @@
 # conductor send の再接続と失敗後の確認
 
-> **正本:** conductor send の再接続、入力の確認、失敗後に後続 dispatch を再開する契約。認証情報の解決は [settings.md](settings.md) と [config.md](config.md)、利用者向けの入力操作は [operator-input.md](operator-input.md) を参照します。
+> **正本:** conductor send の再接続、入力の確認、失敗後に後続 dispatch を再開する契約。lifecycle 全体の状態所有者と遷移は [conductor-dispatch-lifecycle.md](conductor-dispatch-lifecycle.md)、認証情報の解決は [settings.md](settings.md) と [config.md](config.md)、利用者向けの入力操作は [operator-input.md](operator-input.md) を参照します。
 
 operator-agent の Pi backend は、provider 内部の再試行を `[pi retry]`、要約生成の再試行を `[pi summarization retry]` として表示します。これは以下で説明する harness の `[auth]` / `[transport]` 再接続とは別の処理です。Pi の再試行終了後に send が失敗した場合も、結果の分類に応じて以下の再接続と recovery が適用されます。要約再試行の終了イベント自体には成否がありません。Cursor backend では同等の内部通知を取得できません。
 

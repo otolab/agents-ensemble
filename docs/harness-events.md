@@ -1,6 +1,6 @@
 # harness イベント一覧
 
-> **正本:** harness の SessionLogEvent / SessionEvent の型・発火条件・読者別の意味。出力チャネルの説明は [session-logging.md](session-logging.md)、TUI の利用者向け挙動は [operator-input.md](operator-input.md) を参照します。
+> **正本:** harness の SessionLogEvent / SessionEvent の型・発火条件・読者別の意味。conductor dispatch の state ownership と event 境界は [conductor-dispatch-lifecycle.md](conductor-dispatch-lifecycle.md)、出力チャネルの説明は [session-logging.md](session-logging.md)、TUI の利用者向け挙動は [operator-input.md](operator-input.md) を参照します。
 
 `ensemble issue` セッション中に harness が発生させるイベントの整理。観測の役割分担の背景は [session-logging.md](session-logging.md) を参照。
 

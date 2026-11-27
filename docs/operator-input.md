@@ -1,6 +1,6 @@
 # オペレータ入力（SessionView）
 
-> **正本:** TUI とオペレータ入力の利用者向け挙動および SessionView 契約。入力ショートカットの実装詳細は [cli-text-input-keybindings.md](cli-text-input-keybindings.md)、設定の正本は [settings.md](settings.md) です。
+> **正本:** TUI とオペレータ入力の利用者向け挙動および SessionView 契約。conductor dispatch 側の状態・選択・send 境界は [conductor-dispatch-lifecycle.md](conductor-dispatch-lifecycle.md) を参照します。入力ショートカットの実装詳細は [cli-text-input-keybindings.md](cli-text-input-keybindings.md)、設定の正本は [settings.md](settings.md) です。
 
 ConductorSession の **View 層**契約。入力・表示はここに閉じ、オーケストレーション（Driver）とは `bindOperatorInput` で接続する。
 
@@ -329,6 +329,12 @@ URL が端末幅を超える場合も URL は省略せず、上枠の title / su
 ## post-loop 待機（プロセス維持）
 
 自律ループ停止後、CLI TTY デフォルトでは harness が **post-loop 待機** に入る（[ADR 0013](adr/0013-process-lifecycle-vs-autonomous-loop.md)、初回メッセージの分類は [ADR 0023](adr/0023-tty-initial-message-post-loop.md)）。この間も SessionDriver は停止せず、イベントキューで次の dispatch を待つ。`session.post_loop_wait` は待機 UX の開始通知であり、イベント配送を止める合図ではない。
+
+### stdin EOF の扱い（現行実装の記録）
+
+CLI の通常 TTY 経路は Ink の Operator input で、そこから送信された `/close` / `/exit` が session shutdown を要求します。現行コードは stdin の EOF をこの要求に結び付けていません。`bindAsyncOperatorInput` は別の binding 経路で、readline の `line` event は処理しますが、readline の `close` から session shutdown を要求する処理はありません。通常の CLI TTY では `useTui` が有効になるため、この readline binding ではなく Ink を使います。
+
+したがって、TTY の post-loop 待機中に入力 stream が EOF になっても、それだけで session が閉じるとは限りません。EOF 後はその stream から追加の operator command を送れず、Driver は別の終了要求や event を待ち続ける場合があります。これは現行コードの観測であり、EOF を graceful exit とする利用者保証ではありません。明示終了には入力可能な間に `/close` または `/exit` を使ってください。非 TTY one-shot と `--no-wait` は post-loop 待機をしない別経路です。
 
 | 条件 | 動作 |
 |------|------|

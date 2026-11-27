@@ -17,6 +17,7 @@
 | TUI scrollback の検出設計・端末制約 | [tui-scrollback-detection.md](tui-scrollback-detection.md) | native viewport 検出、tmux adapter、A+B の設計境界 |
 | Pi conductor の初回セットアップ・認証 | [pi-conductor-setup.md](pi-conductor-setup.md) | backend、resource root、provider login、復旧の利用者向け正本。全体設定は [settings.md](settings.md)、resource の詳細は [config.md](config.md) |
 | 認証トークンの全体解決 | [settings.md](settings.md) | Pi の利用者向け導線は [pi-conductor-setup.md](pi-conductor-setup.md)、`config.yaml` の認証関連キーは [config.md](config.md) |
+| conductor dispatch lifecycle | [conductor-dispatch-lifecycle.md](conductor-dispatch-lifecycle.md) | 状態の正本、現行遷移、関数対応、利用者保証、transition core / 実行層、conductor–operator event contract |
 | conductor send の再接続・失敗後の recovery 設計 | [conductor-auth-reconnect.md](conductor-auth-reconnect.md) | 認証設定そのものの正本ではない |
 | 現行の技術構成 | [architecture.md](architecture.md) | 判断の履歴は ADR |
 | 形式モデル | [作業規約](../formal/lean/README.md)、[抽象仕様](../formal/lean/Ensemble/Flow/Spec.lean) | Lean による dispatch フローのモデル |
@@ -33,6 +34,7 @@
 | [settings.md](settings.md) | CLI / 環境変数 / config / profile / TUI の設定一覧と解決順（設定全体の正本） |
 | [config.md](config.md) | `.ensemble/config.yaml` の配置・書き方・スキーマ・MCP 設定（config の正本） |
 | [operator-input.md](operator-input.md) | TUI のレイアウト、オペレータ入力、post-loop の利用者向け契約 |
+| [conductor-dispatch-lifecycle.md](conductor-dispatch-lifecycle.md) | conductor dispatch の状態・遷移・利用者保証と operator event contract |
 | [live-open-question-control-api.md](live-open-question-control-api.md) | 稼働中 harness の Open Question / watch `session.observe` / operator message UDS API と最後の成功応答取得（未応答は `message: null`）。watch は保存 snapshot に fallback し、直接 live control は fallback しない |
 | [tui-terminal-compatibility.md](tui-terminal-compatibility.md) | TUI の端末 × layout × resize / IME / scrollback の確認マトリクスと更新手順 |
 | [tui-scrollback-detection.md](tui-scrollback-detection.md) | scrollback 閲覧検出の設計・端末別 C 可否・副作用 |
@@ -53,6 +55,7 @@
 | 文書 | 内容 |
 |------|------|
 | [architecture.md](architecture.md) | operator-agent、Cursor SDK / Pi conductor、ACP worker の現行技術アーキテクチャ |
+| [conductor-dispatch-lifecycle.md](conductor-dispatch-lifecycle.md) | conductor dispatch の状態所有者・関数対応・利用者保証・core / execution 境界 |
 | [elements.md](elements.md) | skill、worker、profile、Issue、PR などの構成要素 |
 | [orchestrator.md](orchestrator.md) | conductor / orchestrator の責務の整理 |
 | [harness-events.md](harness-events.md) | harness の SessionLogEvent / SessionEvent と出力語彙 |
