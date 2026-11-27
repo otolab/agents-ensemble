@@ -1,10 +1,11 @@
 import type { ConductorSendResult } from './conductor-agent.js';
 import { isConductorSendAuthError } from './conductor-auth.js';
 import { isConductorSendTransportError } from './conductor-send-reconnect.js';
+import { CONDUCTOR_RECOVERY_INPUT_BYTE_LIMIT } from './conductor-recovery-constants.js';
+export { CONDUCTOR_RECOVERY_INPUT_BYTE_LIMIT } from './conductor-recovery-constants.js';
 
 export const CONDUCTOR_RECOVERY_SNAPSHOT_LIMIT = 4;
 export const CONDUCTOR_RECOVERY_SNAPSHOT_TTL_MS = 30 * 60 * 1_000;
-export const CONDUCTOR_RECOVERY_INPUT_BYTE_LIMIT = 1_048_576;
 export const CONDUCTOR_RECOVERY_TOTAL_BYTE_LIMIT =
   CONDUCTOR_RECOVERY_SNAPSHOT_LIMIT * CONDUCTOR_RECOVERY_INPUT_BYTE_LIMIT;
 

@@ -3,6 +3,10 @@ import type {
   DispatchHoldChange,
   DispatchHoldState,
 } from '../conductor/session/dispatch-hold.js';
+import {
+  createConductorCoreState,
+  stepConductorCore,
+} from '../conductor/conductor-transition-core.js';
 import { yamlToolResult } from './yaml-tool-result.js';
 
 export interface SetDispatchHoldToolOptions {
@@ -45,30 +49,35 @@ export function createSetDispatchHoldTool(
         }
 
         if (args.hold) {
-          const status = options.state.dispatchHold ? 'updated' : 'enabled';
-          options.state.dispatchHold = true;
-          const heldEventCount = options.state.heldEvents.length;
-          options.onChanged?.({
-            status,
-            hold: true,
-            heldEventCount,
-          });
+          const transition = stepConductorCore(
+            createConductorCoreState({
+              dispatchHold: options.state.dispatchHold,
+              heldEvents: options.state.heldEvents,
+            }),
+            { type: 'dispatchHold.set', enabled: true },
+          );
+          options.state.dispatchHold = transition.state.dispatchHold;
+          const change = getDispatchHoldChange(transition.effects);
+          if (change) options.onChanged?.(change);
           return yamlToolResult('set_dispatch_hold', {
             dispatchHold: true,
-            heldEventCount,
+            heldEventCount: options.state.heldEvents.length,
             sendScheduled: false,
           });
         }
 
         options.onBeforeRelease?.();
-        const flushedEventCount = options.state.heldEvents.length;
-        options.state.dispatchHold = false;
-        options.onChanged?.({
-          status: 'released',
-          hold: false,
-          heldEventCount: options.state.heldEvents.length,
-          flushedEventCount,
-        });
+        const transition = stepConductorCore(
+          createConductorCoreState({
+            dispatchHold: options.state.dispatchHold,
+            heldEvents: options.state.heldEvents,
+          }),
+          { type: 'dispatchHold.set', enabled: false },
+        );
+        options.state.dispatchHold = transition.state.dispatchHold;
+        const change = getDispatchHoldChange(transition.effects);
+        if (change) options.onChanged?.(change);
+        const flushedEventCount = change?.flushedEventCount ?? 0;
         return yamlToolResult('set_dispatch_hold', {
           dispatchHold: false,
           flushedEventCount,
@@ -76,5 +85,29 @@ export function createSetDispatchHoldTool(
         });
       },
     },
+  };
+}
+
+function getDispatchHoldChange(
+  effects: ReturnType<typeof stepConductorCore>['effects'],
+): DispatchHoldChange | undefined {
+  const changed = effects.find(
+    (effect) =>
+      effect.kind === 'action' &&
+      effect.action.type === 'dispatchHoldChanged',
+  );
+  if (
+    changed?.kind !== 'action' ||
+    changed.action.type !== 'dispatchHoldChanged'
+  ) {
+    return undefined;
+  }
+  return {
+    status: changed.action.status,
+    hold: changed.action.hold,
+    heldEventCount: changed.action.heldEventCount,
+    ...(changed.action.flushedEventCount !== undefined
+      ? { flushedEventCount: changed.action.flushedEventCount }
+      : {}),
   };
 }
