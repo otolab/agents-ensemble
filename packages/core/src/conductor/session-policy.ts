@@ -79,6 +79,8 @@ export interface IssueLoopDriverDecisionInput extends IssueLoopStopInput {
   workerInboxDrained?: boolean;
   postLoopWaiting: boolean;
   idleOperatorMessageReady?: boolean;
+  idleStopCheckQueueEmpty?: boolean;
+  phase?: 'afterSend' | 'idle';
 }
 
 export interface IssueLoopDriverDecision {
@@ -87,6 +89,7 @@ export interface IssueLoopDriverDecision {
   notifyIssueLoopStop: boolean;
   postLoopWaiting: boolean;
   idleOperatorMessageReady?: boolean;
+  idleStopCheckQueueEmpty?: boolean;
 }
 
 /** Driver の停止優先・待機・inbox drain 要否を core に委ねる。 */
@@ -109,8 +112,14 @@ export function decideIssueLoopDriver(
       ...(input.idleOperatorMessageReady === undefined
         ? {}
         : { idleOperatorMessageReady: input.idleOperatorMessageReady }),
+      ...(input.idleStopCheckQueueEmpty === undefined
+        ? {}
+        : { idleStopCheckQueueEmpty: input.idleStopCheckQueueEmpty }),
     }),
-    { type: 'issueLoop.driverStopCheck' },
+    {
+      type: 'issueLoop.driverStopCheck',
+      ...(input.phase ? { phase: input.phase } : {}),
+    },
   );
   const decision = transition.effects.find(
     (effect) =>
@@ -131,6 +140,12 @@ export function decideIssueLoopDriver(
             idleOperatorMessageReady:
               transition.state.idleOperatorMessageReady,
           }),
+      ...(transition.state.idleStopCheckQueueEmpty === undefined
+        ? {}
+        : {
+            idleStopCheckQueueEmpty:
+              transition.state.idleStopCheckQueueEmpty,
+          }),
     };
   }
   return {
@@ -143,6 +158,12 @@ export function decideIssueLoopDriver(
       : {
           idleOperatorMessageReady:
             transition.state.idleOperatorMessageReady,
+        }),
+    ...(transition.state.idleStopCheckQueueEmpty === undefined
+      ? {}
+      : {
+          idleStopCheckQueueEmpty:
+            transition.state.idleStopCheckQueueEmpty,
         }),
   };
 }

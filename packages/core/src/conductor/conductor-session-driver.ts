@@ -340,11 +340,13 @@ export async function runConductorSessionDriver(
 
   const shouldBreakAfterLoopState = async (
     loopState: IssueLoopStopInput,
+    phase: 'afterSend' | 'idle',
   ): Promise<boolean> => {
     const decide = (
       workerInboxDrained: boolean,
       runningWorkers = loopState.runningWorkers,
       idleOperatorMessageReady?: boolean,
+      idleStopCheckQueueEmpty?: boolean,
     ) =>
       decideIssueLoopDriver({
         ...loopState,
@@ -360,9 +362,13 @@ export async function runConductorSessionDriver(
           options.continueAfterIssueLoopStop === true,
         workerInboxDrained,
         postLoopWaiting,
+        phase,
         ...(idleOperatorMessageReady === undefined
           ? {}
           : { idleOperatorMessageReady }),
+        ...(idleStopCheckQueueEmpty === undefined
+          ? {}
+          : { idleStopCheckQueueEmpty }),
       });
     let decision = decide(false);
     stopReason = decision.stopReason;
@@ -376,6 +382,7 @@ export async function runConductorSessionDriver(
         true,
         options.workerSession.runtime.runningCount,
         decision.idleOperatorMessageReady,
+        decision.idleStopCheckQueueEmpty,
       );
       stopReason = decision.stopReason;
       postLoopWaiting = decision.postLoopWaiting;
@@ -610,57 +617,25 @@ export async function runConductorSessionDriver(
         continueOnConductorError: options.continueOnConductorError,
         stopOnUnansweredInput: options.stopOnUnansweredInput,
       });
-      const queuedDispatch = selectDispatchBatch({
-        queue: options.eventQueue.snapshot(),
-        state: dispatchBatchState,
-        autonomousTurns,
-        maxTurns: options.maxTurns,
-        allowIdleOperatorMessages: canDispatchIdleOperatorMessage({
-          eventQueue: options.eventQueue,
-          dispatchHoldState,
-          workerSession: options.workerSession,
-          dispatchBatchState,
-          autonomousTurns,
-          maxTurns: options.maxTurns,
-        }),
-      });
-      const shouldBreak = await shouldBreakAfterLoopState(loopState);
-      const idleOperatorMessageReady = queuedDispatch?.batch.events.some(
-        (event) =>
-          event.type === 'operator.message' && event.delivery === 'idle',
-      );
-      if (
-        shouldBreak &&
-        (!idleOperatorMessageReady ||
-          options.stopOnUnansweredInput === true)
-      ) {
+      if (await shouldBreakAfterLoopState(loopState, 'afterSend')) {
         break;
       }
       continue;
     }
 
-    const canEvaluateStopWithHeldEvents =
-      dispatchHoldState.heldEvents.length === 0 ||
-      options.stopOnUnansweredInput === true;
-    if (
-      options.eventQueue.isEmpty() &&
-      options.workerSession.runtime.runningCount === 0 &&
-      canEvaluateStopWithHeldEvents
-    ) {
-      const loopState = buildIssueLoopStopInput({
-        autonomousTurns,
-        maxTurns: options.maxTurns,
-        lastSendResult,
-        dispatchesThisTurn: lastDispatchesThisTurn,
-        workerSession: options.workerSession,
-        permissionPipeline: options.permissionPipeline,
-        openQuestions: options.openQuestions,
-        continueOnConductorError: options.continueOnConductorError,
-        stopOnUnansweredInput: options.stopOnUnansweredInput,
-      });
-      if (await shouldBreakAfterLoopState(loopState)) {
-        break;
-      }
+    const loopState = buildIssueLoopStopInput({
+      autonomousTurns,
+      maxTurns: options.maxTurns,
+      lastSendResult,
+      dispatchesThisTurn: lastDispatchesThisTurn,
+      workerSession: options.workerSession,
+      permissionPipeline: options.permissionPipeline,
+      openQuestions: options.openQuestions,
+      continueOnConductorError: options.continueOnConductorError,
+      stopOnUnansweredInput: options.stopOnUnansweredInput,
+    });
+    if (await shouldBreakAfterLoopState(loopState, 'idle')) {
+      break;
     }
 
     let dispatchResult: DispatchBatchResult | undefined;

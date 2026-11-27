@@ -22,6 +22,8 @@ export interface ConductorCoreState {
   readonly lastFailureClass?: ConductorRecoveryFailureClass;
   readonly issueLoop?: IssueLoopStopInput;
   readonly queue: readonly SessionEvent[];
+  readonly shutdownMode?: 'close' | 'exit' | 'signal';
+  readonly sendStartedAttemptId?: string;
   readonly dispatchHold: boolean;
   readonly heldEvents: readonly SessionEvent[];
   readonly dispatchBatchState: ConductorCoreDispatchBatchState;
@@ -33,6 +35,8 @@ export interface ConductorCoreState {
   readonly postLoopWaiting: boolean;
   /** 非同期 inbox drain 前に得た idle operator message 適格性。 */
   readonly idleOperatorMessageReady?: boolean;
+  /** idle stop check 開始時点で queue が空だったか。drain 後の再判定に使う。 */
+  readonly idleStopCheckQueueEmpty?: boolean;
   readonly cursorBootstrap: CursorBootstrapProjection;
 }
 
@@ -81,6 +85,7 @@ export type ConductorCoreAction =
       stopReason: IssueLoopStopReason;
       notifyIssueLoopStop?: boolean;
       idleOperatorMessageReady?: boolean;
+      idleStopCheckQueueEmpty?: boolean;
     }
   | {
       type: 'issueLoopConfirmationGate';
@@ -157,6 +162,7 @@ export type IssueLoopStopReason =
 export type ConductorCoreEvent =
   | { type: 'queue.arrival'; event: SessionEvent; waiterMatched: boolean }
   | { type: 'queue.remove'; events: readonly SessionEvent[] }
+  | { type: 'session.shutdown'; mode: 'close' | 'exit' | 'signal' }
   | { type: 'dispatch.schedule'; input: DispatchScheduleOptions }
   | {
       type: 'send.requested';
@@ -211,7 +217,10 @@ export type ConductorCoreEvent =
     }
   | { type: 'issueLoop.stopCheck' }
   | { type: 'issueLoop.confirmationGate' }
-  | { type: 'issueLoop.driverStopCheck' };
+  | {
+      type: 'issueLoop.driverStopCheck';
+      phase?: 'afterSend' | 'idle';
+    };
 
 const EMPTY_EFFECTS: readonly ConductorCoreEffect[] = [];
 
@@ -284,7 +293,27 @@ export function stepConductorCore(
         ? { state, effects: EMPTY_EFFECTS }
         : { state: { ...state, queue }, effects: EMPTY_EFFECTS };
     }
+    case 'session.shutdown': {
+      const sendHasNotStarted =
+        state.lease?.kind === 'send' &&
+        state.sendStartedAttemptId !== state.lease.attemptId;
+      return {
+        state: {
+          ...state,
+          shutdownMode: state.shutdownMode ?? event.mode,
+          ...(sendHasNotStarted ? { lease: undefined } : {}),
+          ...(sendHasNotStarted ? { sendStartedAttemptId: undefined } : {}),
+        },
+        effects: EMPTY_EFFECTS,
+      };
+    }
     case 'dispatch.schedule': {
+      if (state.shutdownMode !== undefined) {
+        return {
+          state,
+          effects: [action({ type: 'dispatchSelection' })],
+        };
+      }
       const result = selectDispatchBatchCore({
         queue: state.queue,
         state: state.dispatchBatchState,
@@ -325,13 +354,14 @@ export function stepConductorCore(
     }
     case 'send.started': {
       if (
+        state.shutdownMode !== undefined ||
         state.lease?.kind !== 'send' ||
         state.lease.attemptId !== event.attemptId
       ) {
         return { state, effects: EMPTY_EFFECTS };
       }
       return {
-        state,
+        state: { ...state, sendStartedAttemptId: event.attemptId },
         effects: [
           observation({
             type: 'dispatched',
@@ -352,6 +382,7 @@ export function stepConductorCore(
       const nextState: ConductorCoreState = {
         ...state,
         lease: undefined,
+        sendStartedAttemptId: undefined,
         ...(event.agentAvailable !== undefined
           ? { agentAvailable: event.agentAvailable }
           : {}),
@@ -375,7 +406,7 @@ export function stepConductorCore(
       };
     }
     case 'reconnect.requested': {
-      if (state.lease !== undefined) {
+      if (state.shutdownMode !== undefined || state.lease !== undefined) {
         return { state, effects: EMPTY_EFFECTS };
       }
       return {
@@ -560,7 +591,9 @@ export function stepConductorCore(
         effects: [
           action({
             type: 'idleOperatorMessageGate',
-            allowed: canDispatchIdleOperatorMessageCore(state),
+            allowed:
+              state.shutdownMode === undefined &&
+              canDispatchIdleOperatorMessageCore(state),
           }),
         ],
       };
@@ -651,6 +684,7 @@ export function stepConductorCore(
     }
     case 'issueLoop.driverStopCheck': {
       const input = state.issueLoop;
+      const phase = event.phase ?? 'afterSend';
       if (!input) {
         return {
           state,
@@ -666,21 +700,56 @@ export function stepConductorCore(
 
       let stopReason = resolveIssueLoopStopReasonCore(input);
       const shouldStop = shouldStopIssueLoopCore(input);
-      if (
-        state.recoveryConfirmationRequired &&
-        !state.operatorCanInspectRecovery
-      ) {
-        stopReason = input.lastStatus === 'cancelled' ? 'cancelled' : 'error';
-        const deferForIdleOperatorMessage =
-          input.stopOnUnansweredInput !== true &&
-          (state.idleOperatorMessageReady ??
-            hasIdleOperatorMessageReadyCore(state, input.maxTurns));
+      if (state.shutdownMode !== undefined) {
         return {
           state,
           effects: [
             action({
               type: 'issueLoopDecision',
-              decision: deferForIdleOperatorMessage ? 'continue' : 'stop',
+              decision: 'stop',
+              stopReason: 'interrupted',
+            }),
+          ],
+        };
+      }
+      if (
+        state.recoveryConfirmationRequired &&
+        !state.operatorCanInspectRecovery
+      ) {
+        stopReason = input.lastStatus === 'cancelled' ? 'cancelled' : 'error';
+        return {
+          state,
+          effects: [
+            action({
+              type: 'issueLoopDecision',
+              decision: 'stop',
+              stopReason,
+            }),
+          ],
+        };
+      }
+
+      const idleStopCheckQueueEmpty =
+        phase === 'idle'
+          ? (state.idleStopCheckQueueEmpty ?? (state.queue.length === 0))
+          : undefined;
+      if (
+        phase === 'idle' &&
+        (!idleStopCheckQueueEmpty ||
+          (input.runningWorkers ?? 0) !== 0 ||
+          (state.heldEvents.length > 0 &&
+            input.stopOnUnansweredInput !== true))
+      ) {
+        return {
+          state: {
+            ...state,
+            idleStopCheckQueueEmpty,
+            postLoopWaiting: false,
+          },
+          effects: [
+            action({
+              type: 'issueLoopDecision',
+              decision: 'continue',
               stopReason,
             }),
           ],
@@ -748,13 +817,22 @@ export function stepConductorCore(
           input.maxTurns,
         );
         return {
-          state: { ...state, idleOperatorMessageReady },
+          state: {
+            ...state,
+            idleOperatorMessageReady,
+            ...(idleStopCheckQueueEmpty === undefined
+              ? {}
+              : { idleStopCheckQueueEmpty }),
+          },
           effects: [
             action({
               type: 'issueLoopDecision',
               decision: 'drainWorkerInbox',
               stopReason,
               idleOperatorMessageReady,
+              ...(idleStopCheckQueueEmpty === undefined
+                ? {}
+                : { idleStopCheckQueueEmpty }),
             }),
           ],
         };
@@ -809,6 +887,7 @@ export function stepConductorCore(
 
 export function canDispatchConductorCore(state: ConductorCoreState): boolean {
   return (
+    state.shutdownMode === undefined &&
     state.lease === undefined &&
     state.agentAvailable &&
     state.attentionAttemptId === undefined

@@ -8,6 +8,7 @@ import type { CursorBootstrapState } from './cursor-bootstrap-state.js';
 import { ConductorDispatchLifecycle } from './conductor-dispatch-lifecycle.js';
 import { ConductorRecoveryInbox } from './conductor-recovery-inbox.js';
 import { runConductorSessionDriver } from './conductor-session-driver.js';
+import type { SessionEvent } from './session/session-event.js';
 import { createSetDispatchHoldTool } from '../dispatch/set-dispatch-hold-tool.js';
 import {
   bufferDispatchHoldEvents,
@@ -276,6 +277,39 @@ describe('runConductorSessionDriver', () => {
     expect(String(send.mock.calls[1]![0])).toContain('worker.failed');
     expect(String(send.mock.calls[2]![0])).toContain('worker.completed');
     expect(inbox.drain).toHaveBeenCalledTimes(2);
+    expect(result.stopReason).toBe('completed');
+  });
+
+  it('keeps an idle input received during inbox drain queued when the loop stop was already decided', async () => {
+    const send = vi.fn().mockResolvedValue({
+      runId: 'run-1',
+      status: 'finished',
+      result: 'done',
+    });
+    const conductor = {
+      agentId: 'agent-1',
+      send,
+      close: vi.fn(),
+    } as unknown as ConductorAgent;
+    const eventQueue = new SessionEventQueue();
+    const idleMessage: SessionEvent = {
+      type: 'operator.message',
+      text: 'arrived while draining',
+      delivery: 'idle',
+    };
+    const inbox = {
+      drain: vi.fn(async () => {
+        eventQueue.enqueue(idleMessage);
+      }),
+    };
+    const options = createDriverOptions({ eventQueue, conductor });
+    options.workerSession.inbox = inbox;
+
+    const result = await runConductorSessionDriver(options);
+
+    expect(inbox.drain).toHaveBeenCalledOnce();
+    expect(send).toHaveBeenCalledOnce();
+    expect(eventQueue.snapshot()).toEqual([idleMessage]);
     expect(result.stopReason).toBe('completed');
   });
 

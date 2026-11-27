@@ -102,6 +102,108 @@ describe('stepConductorCore', () => {
     expect(initial.queue).toEqual([operatorMessage]);
   });
 
+  it('keeps a selected queue item when shutdown wins before send start', () => {
+    const operatorMessage: SessionEvent = {
+      type: 'operator.message',
+      text: 'do not send after shutdown',
+    };
+    const selected = stepConductorCore(
+      createConductorCoreState({ queue: [operatorMessage] }),
+      {
+        type: 'dispatch.schedule',
+        input: { maxTurns: 5 },
+      },
+    );
+    expect(observations(selected.effects)).toContainEqual({
+      type: 'scheduled',
+      sourceKey: 'operator',
+      events: [operatorMessage],
+    });
+
+    const shutdown = stepConductorCore(selected.state, {
+      type: 'session.shutdown',
+      mode: 'close',
+    });
+    const requestAfterShutdown = stepConductorCore(shutdown.state, {
+      type: 'send.requested',
+      attemptId: 'send-after-shutdown',
+      id: 2,
+      payload: [operatorMessage],
+    });
+    expect(actionEffects(requestAfterShutdown.effects)).toEqual([]);
+    expect(requestAfterShutdown.state.lease).toBeUndefined();
+    expect(requestAfterShutdown.state.queue).toEqual([operatorMessage]);
+    const shutdownWinsStopCheck = stepConductorCore(
+      {
+        ...requestAfterShutdown.state,
+        issueLoop: {
+          autonomousTurns: 1,
+          maxTurns: 5,
+          lastStatus: 'finished',
+          dispatchesThisTurn: 0,
+        },
+      },
+      { type: 'issueLoop.driverStopCheck', phase: 'idle' },
+    );
+    expect(actionEffects(shutdownWinsStopCheck.effects)).toEqual([
+      {
+        type: 'issueLoopDecision',
+        decision: 'stop',
+        stopReason: 'interrupted',
+      },
+    ]);
+
+    const pendingSend = stepConductorCore(selected.state, {
+      type: 'send.requested',
+      attemptId: 'send-pending',
+      id: 3,
+      payload: [operatorMessage],
+    });
+    const shutdownBeforeStarted = stepConductorCore(pendingSend.state, {
+      type: 'session.shutdown',
+      mode: 'signal',
+    });
+    expect(shutdownBeforeStarted.state.lease).toBeUndefined();
+    const lateStart = stepConductorCore(shutdownBeforeStarted.state, {
+      type: 'send.started',
+      attemptId: 'send-pending',
+      sourceKey: 'operator',
+      events: [operatorMessage],
+    });
+    expect(observations(lateStart.effects)).toEqual([]);
+    expect(lateStart.state.queue).toEqual([operatorMessage]);
+
+    const startedBeforeShutdown = stepConductorCore(pendingSend.state, {
+      type: 'send.started',
+      attemptId: 'send-pending',
+      sourceKey: 'operator',
+      events: [operatorMessage],
+    });
+    const shutdownDuringSend = stepConductorCore(startedBeforeShutdown.state, {
+      type: 'session.shutdown',
+      mode: 'exit',
+    });
+    expect(shutdownDuringSend.state.lease).toEqual({
+      kind: 'send',
+      attemptId: 'send-pending',
+      id: 3,
+    });
+    const settledAfterShutdown = stepConductorCore(shutdownDuringSend.state, {
+      type: 'send.result',
+      attemptId: 'send-pending',
+      completed: false,
+      failureClass: 'transport',
+    });
+    expect(observations(settledAfterShutdown.effects)).toEqual([
+      {
+        type: 'send.result',
+        attemptId: 'send-pending',
+        completed: false,
+        failureClass: 'transport',
+      },
+    ]);
+  });
+
   it('models reconnect as a start effect and result event only', () => {
     const reconnecting = stepConductorCore(
       createConductorCoreState({
@@ -324,10 +426,17 @@ describe('stepConductorCore', () => {
     const confirmationOverridesHold = stepConductorCore(
       createConductorCoreState({
         issueLoop: { ...stoppedLoop, lastStatus: 'error' },
+        queue: [
+          {
+            type: 'operator.message',
+            text: 'must not override recovery confirmation',
+            delivery: 'idle',
+          },
+        ],
         heldEvents: [heldEvent],
         recoveryConfirmationRequired: true,
       }),
-      { type: 'issueLoop.driverStopCheck' },
+      { type: 'issueLoop.driverStopCheck', phase: 'idle' },
     );
     expect(actionEffects(confirmationOverridesHold.effects)).toEqual([
       {
@@ -399,7 +508,7 @@ describe('stepConductorCore', () => {
 
     const drainRequested = stepConductorCore(
       createConductorCoreState({ issueLoop: stoppedLoop }),
-      { type: 'issueLoop.driverStopCheck' },
+      { type: 'issueLoop.driverStopCheck', phase: 'idle' },
     );
     expect(actionEffects(drainRequested.effects)).toEqual([
       {
@@ -407,6 +516,7 @@ describe('stepConductorCore', () => {
         decision: 'drainWorkerInbox',
         stopReason: 'completed',
         idleOperatorMessageReady: false,
+        idleStopCheckQueueEmpty: true,
       },
     ]);
 
@@ -448,7 +558,7 @@ describe('stepConductorCore', () => {
         ],
         workerInboxDrained: true,
       },
-      { type: 'issueLoop.driverStopCheck' },
+      { type: 'issueLoop.driverStopCheck', phase: 'idle' },
     );
     expect(actionEffects(idleArrivesDuringDrain.effects)).toEqual([
       {
@@ -457,6 +567,7 @@ describe('stepConductorCore', () => {
         stopReason: 'completed',
       },
     ]);
+    expect(idleArrivesDuringDrain.state.idleStopCheckQueueEmpty).toBe(true);
   });
 
   it('decides idle operator eligibility from queue, held work, and worker projections', () => {
