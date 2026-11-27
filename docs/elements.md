@@ -24,6 +24,7 @@
 | implementer | 実装・Issue・PR・対応・依頼・クローズ | Issue worktree（既定） |
 | reviewer | 独立検証 | 既存に入る |
 | librarian | ドキュメント整備・所在調査 | profile の `workspace` で別 cwd 可 |
+| architect | 設計の相談（助言のみ。コードを書かない・探索しない） | Issue worktree（参照のみ） |
 
 種別はプロファイルで定義する。Skill と worker 用システムプロンプトを返す。
 
@@ -53,7 +54,8 @@ team-profile は **チーム体制・役割分担・起動文書**の正本（Sk
 
 `ENSEMBLE_DEFAULT_PROFILE` の値は `--profile` と同じ解釈（名前またはパス）。
 - 一覧: `ensemble profiles list`（`id` は `name@source` 形式。workspace 欠損の profile は `unusable`）
-- ユーザ層の規約: [user-teams.md](user-teams.md)
+- 同梱 profile: 既定の `implementer-and-reviewer-v2` のほか、v1 の `implementer-and-reviewer`、設計相談役 architect を加えた `with-architect`、`ensemble run` 向けの `workspace-research`
+- ユーザ層の規約と同梱 profile の説明: [user-teams.md](user-teams.md)
 - 設計判断: [ADR 0018](adr/0018-team-profile-four-layer-resolution.md)
 
 ### ensemble 共通設定（config.yaml）

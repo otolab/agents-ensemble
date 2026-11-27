@@ -1,0 +1,47 @@
+# with-architect（Issue #814）
+# implementer-and-reviewer-v2 をベースに、設計相談役の architect worker を追加。
+# architect の振る舞いは team-architect.md で宣言する（worker ごとの tool / permission 制限は持たない）。
+# harness 接続は core base-module、チーム運用は team-common.md。
+
+meta:
+  modes: [issue]
+  title: with-architect
+  summary: conductor / implementer / reviewer / architect — 設計相談役つき
+
+agents:
+  conductor: {}
+  implementer: {}
+  reviewer: {}
+  architect: {}
+
+workers:
+  - name: implementer
+    kind: implementer
+    modelTag: default
+  - name: reviewer
+    kind: reviewer
+    modelTag: default
+  - name: architect
+    kind: architect
+    modelTag: high
+
+materials:
+  - id: team-common
+    title: 標準動作モード（共通）
+    file: team-common.md
+  - id: team-conductor
+    title: 標準動作モード（conductor）
+    file: team-conductor.md
+    kinds: [conductor]
+  - id: team-implementer
+    title: 標準動作モード（implementer）
+    file: team-implementer.md
+    kinds: [implementer]
+  - id: team-reviewer
+    title: 標準動作モード（reviewer）
+    file: team-reviewer.md
+    kinds: [reviewer]
+  - id: team-architect
+    title: 標準動作モード（architect）
+    file: team-architect.md
+    kinds: [architect]

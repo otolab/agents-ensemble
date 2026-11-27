@@ -86,3 +86,14 @@ ensemble profiles list --json
 同梱の標準 team は v2 の `profiles/implementer-and-reviewer-v2/`（内部名 `implementer-and-reviewer-v2`）です。CLI・環境変数・config に profile の指定がない場合と、`--profile default` はこの v2 を指します。v1 の `implementer-and-reviewer` も同梱されており、`--profile implementer-and-reviewer` で明示的に選べます。シェル全体またはリポジトリ単位のデフォルトは `ENSEMBLE_DEFAULT_PROFILE` または config の `profile.default` で指定できます（CLI `--profile` が優先）。全体の解決順は [settings.md](settings.md) の profile 設定を参照してください。
 
 詳細は [elements.md](elements.md) § プロファイル と [ADR 0018](adr/0018-team-profile-four-layer-resolution.md) を参照してください。
+
+## 組み込み with-architect
+
+同梱の `profiles/with-architect/`（`--profile with-architect`）は、v2 の conductor / implementer / reviewer に、設計相談役の worker `architect`（`modelTag: high`、`workspace` 指定なし）を加えた team です。`ensemble issue <N> --profile with-architect` で起動します。
+
+architect は、渡された情報から推論して設計上の助言を返す相談役です。前提の誤り、情報の矛盾、語られていない空白を指摘し、分からないことは「不明」と答えたうえで、何を調べれば判断できるかを返します。コードを書くこと、探索的な調査、判定や承認、Issue / PR への投稿はしません。ツールの使用はなるべく控え、推論の裏付けに要る特定のコード箇所の確認と、指定されたドキュメントの読み込みにとどめます。
+
+- **相談の経路:** worker どうしは直接やりとりしません。conductor が方針の分かれ目、難しいところ、レビューで出た設計上の指摘、実装が方針からずれていそうなときに、判断に要る情報を指示文にまとめて architect に渡します。助言は conductor が咀嚼して判断し、implementer / reviewer に伝えます。相談したことと採用した判断は conductor が Issue に残します。
+- **制約の強さ:** architect の制約は materials（`team-architect.md`）での宣言だけです。worker ごとのツール allowlist や読み取り専用の設定はなく、仕組みとしては他の worker と同じ権限で動きます。書き込みを伴う permission 要求が来た場合は conductor が deny します。
+- **attach の時期:** `session.lazyWorkers` が既定の `false` のときは、architect も他の worker と同じくセッション開始時に attach します。相談するまで起動を遅らせたい場合は `session.lazyWorkers: true` を設定してください（[config.md](config.md) の `session.lazyWorkers`）。この設定は profile の全 worker に適用されます。
+- **modelTag:** `high` の mapping が `acp.tags` にない場合は warning を出して `default` を試します（上記「worker modelTag と tier の慣習」）。
