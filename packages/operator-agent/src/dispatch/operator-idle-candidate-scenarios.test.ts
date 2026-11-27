@@ -456,6 +456,9 @@ describe('synthetic idle-candidate dispatch comparisons', () => {
           };
         } finally {
           watchPool?.close();
+          // close() は scheduling writer の drain を待たずに戻るため、
+          // 書き込みが終わってから repoRoot を削除する（#845）。
+          await watchPool?.flushSchedulingEvents?.();
           await liveServer.close();
           await rm(repoRoot, { recursive: true, force: true });
         }
