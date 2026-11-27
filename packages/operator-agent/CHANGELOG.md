@@ -1,5 +1,14 @@
 # @agents-ensemble/operator-agent
 
+## 0.8.2
+
+### Patch Changes
+
+- Updated dependencies [a1953a8]
+- Updated dependencies [db7fc0d]
+- Updated dependencies [eecff94]
+  - @agents-ensemble/core@0.25.2
+
 ## 0.8.1
 
 ### Patch Changes

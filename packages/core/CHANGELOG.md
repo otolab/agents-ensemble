@@ -1,5 +1,13 @@
 # @agents-ensemble/core
 
+## 0.25.2
+
+### Patch Changes
+
+- a1953a8: Pi SDK を 1.6.1 に更新し、builtin worker の pi-acp を 0.0.35 に更新します。BYO の pi-acp は Pi CLI 0.80.6 との互換性を保つため 0.0.33 のままです。
+- db7fc0d: 設計相談役の worker `architect` を置いた team profile `with-architect` を同梱します。`ensemble issue <N> --profile with-architect` で起動できます。architect は conductor から渡された情報をもとに設計上の助言を返し、コードの変更や探索的な調査、判定は行いません。
+- eecff94: codex-acp を 2.12.0 に更新し、Codex worker の mode・MCP 設定・token usage の互換性を整える。
+
 ## 0.25.1
 
 ### Patch Changes
