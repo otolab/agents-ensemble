@@ -249,16 +249,18 @@ describe('stepConductorCore', () => {
   });
 
   it('returns stop decisions from explicit state projections', () => {
-    const stillRunning = stepConductorCore(createConductorCoreState(), {
-      type: 'issueLoop.stopCheck',
-      input: {
+    const stillRunning = stepConductorCore(
+      createConductorCoreState({
+        issueLoop: {
         autonomousTurns: 5,
         maxTurns: 5,
         lastStatus: 'finished',
         dispatchesThisTurn: 0,
         runningWorkers: 1,
-      },
-    });
+        },
+      }),
+      { type: 'issueLoop.stopCheck' },
+    );
     expect(actionEffects(stillRunning.effects)).toEqual([
       {
         type: 'issueLoopStop',
@@ -267,20 +269,448 @@ describe('stepConductorCore', () => {
       },
     ]);
 
-    const stopped = stepConductorCore(stillRunning.state, {
-      type: 'issueLoop.stopCheck',
-      input: {
+    const stopped = stepConductorCore(
+      createConductorCoreState({
+        issueLoop: {
         autonomousTurns: 1,
         maxTurns: 5,
         lastStatus: 'finished',
         dispatchesThisTurn: 0,
-      },
-    });
+        },
+      }),
+      { type: 'issueLoop.stopCheck' },
+    );
     expect(actionEffects(stopped.effects)).toEqual([
       {
         type: 'issueLoopStop',
         shouldStop: true,
         stopReason: 'completed',
+      },
+    ]);
+  });
+
+  it('keeps Driver stop priority, hold suppression, recovery confirmation, and inbox drain in the reducer', () => {
+    const heldEvent: SessionEvent = {
+      type: 'github.update',
+      items: [{ id: 'update-1', kind: 'issue.comment', summary: 'update' }],
+    };
+    const stoppedLoop = {
+      autonomousTurns: 1,
+      maxTurns: 5,
+      lastStatus: 'finished',
+      dispatchesThisTurn: 0,
+      runningWorkers: 0,
+      pendingPermissions: 0,
+      openQuestions: 0,
+      continueOnConductorError: false,
+      stopOnUnansweredInput: false,
+    };
+    const held = stepConductorCore(
+      createConductorCoreState({
+        issueLoop: stoppedLoop,
+        heldEvents: [heldEvent],
+      }),
+      { type: 'issueLoop.driverStopCheck' },
+    );
+    expect(actionEffects(held.effects)).toEqual([
+      {
+        type: 'issueLoopDecision',
+        decision: 'continue',
+        stopReason: 'completed',
+      },
+    ]);
+    expect(held.state.postLoopWaiting).toBe(false);
+
+    const confirmationOverridesHold = stepConductorCore(
+      createConductorCoreState({
+        issueLoop: { ...stoppedLoop, lastStatus: 'error' },
+        heldEvents: [heldEvent],
+        recoveryConfirmationRequired: true,
+      }),
+      { type: 'issueLoop.driverStopCheck' },
+    );
+    expect(actionEffects(confirmationOverridesHold.effects)).toEqual([
+      {
+        type: 'issueLoopDecision',
+        decision: 'stop',
+        stopReason: 'error',
+      },
+    ]);
+
+    const cancelledConfirmation = stepConductorCore(
+      createConductorCoreState({
+        issueLoop: { ...stoppedLoop, lastStatus: 'cancelled' },
+        heldEvents: [heldEvent],
+        recoveryConfirmationRequired: true,
+      }),
+      { type: 'issueLoop.driverStopCheck' },
+    );
+    expect(actionEffects(cancelledConfirmation.effects)).toEqual([
+      {
+        type: 'issueLoopDecision',
+        decision: 'stop',
+        stopReason: 'cancelled',
+      },
+    ]);
+    const confirmationGate = stepConductorCore(
+      createConductorCoreState({
+        issueLoop: { ...stoppedLoop, lastStatus: 'cancelled' },
+        recoveryConfirmationRequired: true,
+      }),
+      { type: 'issueLoop.confirmationGate' },
+    );
+    expect(actionEffects(confirmationGate.effects)).toEqual([
+      {
+        type: 'issueLoopConfirmationGate',
+        shouldStop: true,
+        stopReason: 'cancelled',
+      },
+    ]);
+
+    const recoveryWait = stepConductorCore(
+      createConductorCoreState({
+        issueLoop: { ...stoppedLoop, lastStatus: 'error' },
+        recoveryConfirmationRequired: true,
+        operatorCanInspectRecovery: true,
+      }),
+      { type: 'issueLoop.driverStopCheck' },
+    );
+    expect(actionEffects(recoveryWait.effects)).toEqual([
+      {
+        type: 'issueLoopDecision',
+        decision: 'continue',
+        stopReason: 'error',
+        notifyIssueLoopStop: true,
+      },
+    ]);
+    expect(recoveryWait.state.postLoopWaiting).toBe(true);
+
+    const recoveryAlreadyReported = stepConductorCore(
+      recoveryWait.state,
+      { type: 'issueLoop.driverStopCheck' },
+    );
+    expect(actionEffects(recoveryAlreadyReported.effects)).toEqual([
+      {
+        type: 'issueLoopDecision',
+        decision: 'continue',
+        stopReason: 'error',
+      },
+    ]);
+
+    const drainRequested = stepConductorCore(
+      createConductorCoreState({ issueLoop: stoppedLoop }),
+      { type: 'issueLoop.driverStopCheck' },
+    );
+    expect(actionEffects(drainRequested.effects)).toEqual([
+      {
+        type: 'issueLoopDecision',
+        decision: 'drainWorkerInbox',
+        stopReason: 'completed',
+        idleOperatorMessageReady: false,
+      },
+    ]);
+
+    const workerOutcome: SessionEvent = {
+      type: 'worker.failed',
+      failure: {
+        workerId: 'worker-1',
+        name: 'implementer',
+        kind: 'implementer',
+        error: 'failed',
+        issueUrl: 'https://github.com/otolab/agents-ensemble/issues/1',
+      },
+    };
+    const workerArrivedDuringDrain = stepConductorCore(
+      createConductorCoreState({
+        issueLoop: stoppedLoop,
+        queue: [workerOutcome],
+        workerInboxDrained: true,
+      }),
+      { type: 'issueLoop.driverStopCheck' },
+    );
+    expect(actionEffects(workerArrivedDuringDrain.effects)).toEqual([
+      {
+        type: 'issueLoopDecision',
+        decision: 'continue',
+        stopReason: 'completed',
+      },
+    ]);
+
+    const idleArrivesDuringDrain = stepConductorCore(
+      {
+        ...drainRequested.state,
+        queue: [
+          {
+            type: 'operator.message',
+            text: 'arrived during drain',
+            delivery: 'idle',
+          },
+        ],
+        workerInboxDrained: true,
+      },
+      { type: 'issueLoop.driverStopCheck' },
+    );
+    expect(actionEffects(idleArrivesDuringDrain.effects)).toEqual([
+      {
+        type: 'issueLoopDecision',
+        decision: 'stop',
+        stopReason: 'completed',
+      },
+    ]);
+  });
+
+  it('decides idle operator eligibility from queue, held work, and worker projections', () => {
+    const idleMessage: SessionEvent = {
+      type: 'operator.message',
+      text: 'later',
+      delivery: 'idle',
+    };
+    const workerOutcome: SessionEvent = {
+      type: 'worker.failed',
+      failure: {
+        workerId: 'worker-1',
+        name: 'implementer',
+        kind: 'implementer',
+        error: 'failed',
+        issueUrl: 'https://github.com/otolab/agents-ensemble/issues/1',
+      },
+    };
+    const inputState = {
+      issueLoop: {
+        autonomousTurns: 1,
+        maxTurns: 5,
+        lastStatus: 'finished',
+        dispatchesThisTurn: 0,
+        runningWorkers: 0,
+      },
+      queue: [idleMessage],
+    };
+    const idleOnly = stepConductorCore(
+      createConductorCoreState(inputState),
+      { type: 'dispatch.idleOperatorMessageGate' },
+    );
+    expect(actionEffects(idleOnly.effects)).toEqual([
+      { type: 'idleOperatorMessageGate', allowed: true },
+    ]);
+
+    const workerTakesPriority = stepConductorCore(
+      createConductorCoreState({
+        ...inputState,
+        issueLoop: { ...inputState.issueLoop, runningWorkers: 1 },
+        queue: [idleMessage, workerOutcome],
+      }),
+      { type: 'dispatch.idleOperatorMessageGate' },
+    );
+    expect(actionEffects(workerTakesPriority.effects)).toEqual([
+      { type: 'idleOperatorMessageGate', allowed: false },
+    ]);
+
+    const queuedTriggerTakesPriority = stepConductorCore(
+      createConductorCoreState({
+        ...inputState,
+        queue: [idleMessage, workerOutcome],
+      }),
+      { type: 'dispatch.idleOperatorMessageGate' },
+    );
+    expect(actionEffects(queuedTriggerTakesPriority.effects)).toEqual([
+      { type: 'idleOperatorMessageGate', allowed: false },
+    ]);
+
+    const releasedHeldTriggerTakesPriority = stepConductorCore(
+      createConductorCoreState({
+        ...inputState,
+        dispatchHold: false,
+        heldEvents: [workerOutcome],
+      }),
+      { type: 'dispatch.idleOperatorMessageGate' },
+    );
+    expect(actionEffects(releasedHeldTriggerTakesPriority.effects)).toEqual([
+      { type: 'idleOperatorMessageGate', allowed: false },
+    ]);
+
+    const activeHoldDoesNotFlushHeldWork = stepConductorCore(
+      createConductorCoreState({
+        ...inputState,
+        dispatchHold: true,
+        heldEvents: [workerOutcome],
+      }),
+      { type: 'dispatch.idleOperatorMessageGate' },
+    );
+    expect(actionEffects(activeHoldDoesNotFlushHeldWork.effects)).toEqual([
+      { type: 'idleOperatorMessageGate', allowed: true },
+    ]);
+
+    const idleMessageOverridesPostLoopStop = stepConductorCore(
+      createConductorCoreState({
+        issueLoop: {
+          autonomousTurns: 1,
+          maxTurns: 5,
+          lastStatus: 'finished',
+          dispatchesThisTurn: 0,
+          runningWorkers: 0,
+          stopOnUnansweredInput: false,
+        },
+        queue: [idleMessage],
+        workerInboxDrained: true,
+      }),
+      { type: 'issueLoop.driverStopCheck' },
+    );
+    expect(actionEffects(idleMessageOverridesPostLoopStop.effects)).toEqual([
+      {
+        type: 'issueLoopDecision',
+        decision: 'continue',
+        stopReason: 'completed',
+      },
+    ]);
+
+    const oneShotStillStops = stepConductorCore(
+      createConductorCoreState({
+        issueLoop: {
+          autonomousTurns: 1,
+          maxTurns: 5,
+          lastStatus: 'finished',
+          dispatchesThisTurn: 0,
+          runningWorkers: 0,
+          stopOnUnansweredInput: true,
+        },
+        queue: [idleMessage],
+        workerInboxDrained: true,
+      }),
+      { type: 'issueLoop.driverStopCheck' },
+    );
+    expect(actionEffects(oneShotStillStops.effects)).toEqual([
+      {
+        type: 'issueLoopDecision',
+        decision: 'stop',
+        stopReason: 'completed',
+      },
+    ]);
+  });
+
+  it('projects Cursor bootstrap gating and completion as reducer decisions', () => {
+    const undecided = stepConductorCore(
+      createConductorCoreState({
+        cursorBootstrap: {
+          backend: 'cursor',
+          status: 'unknown',
+          skipInitialSend: false,
+          completedThisDriver: false,
+        },
+      }),
+      { type: 'cursorBootstrap.check' },
+    );
+    expect(actionEffects(undecided.effects)).toEqual([
+      {
+        type: 'cursorBootstrapDecision',
+        needsDecision: true,
+        pending: false,
+      },
+    ]);
+
+    const incomplete = stepConductorCore(
+      createConductorCoreState({
+        cursorBootstrap: {
+          backend: 'cursor',
+          status: 'incomplete',
+          skipInitialSend: false,
+          completedThisDriver: false,
+        },
+      }),
+      { type: 'cursorBootstrap.check' },
+    );
+    expect(actionEffects(incomplete.effects)).toEqual([
+      {
+        type: 'cursorBootstrapDecision',
+        needsDecision: false,
+        pending: true,
+      },
+    ]);
+    const incompleteSend = stepConductorCore(incomplete.state, {
+      type: 'cursorBootstrap.dispatchResult',
+      status: 'cancelled',
+      bootstrapIncluded: true,
+    });
+    expect(
+      actionEffects(
+        stepConductorCore(incompleteSend.state, {
+          type: 'cursorBootstrap.check',
+        }).effects,
+      ),
+    ).toEqual([
+      {
+        type: 'cursorBootstrapDecision',
+        needsDecision: false,
+        pending: true,
+      },
+    ]);
+    const sent = stepConductorCore(incomplete.state, {
+      type: 'cursorBootstrap.dispatchResult',
+      status: 'finished',
+      bootstrapIncluded: true,
+    });
+    const afterSend = stepConductorCore(sent.state, {
+      type: 'cursorBootstrap.check',
+    });
+    expect(actionEffects(afterSend.effects)).toEqual([
+      {
+        type: 'cursorBootstrapDecision',
+        needsDecision: false,
+        pending: false,
+      },
+    ]);
+
+    const nonCursor = stepConductorCore(
+      createConductorCoreState({
+        cursorBootstrap: {
+          backend: 'other',
+          status: 'incomplete',
+          skipInitialSend: false,
+          completedThisDriver: false,
+        },
+      }),
+      { type: 'cursorBootstrap.check' },
+    );
+    expect(actionEffects(nonCursor.effects)).toEqual([
+      {
+        type: 'cursorBootstrapDecision',
+        needsDecision: false,
+        pending: false,
+      },
+    ]);
+
+    const legacyCursor = createConductorCoreState({
+      cursorBootstrap: {
+        backend: 'cursor',
+        skipInitialSend: false,
+        completedThisDriver: false,
+      },
+    });
+    const legacyPending = stepConductorCore(legacyCursor, {
+      type: 'cursorBootstrap.check',
+    });
+    expect(actionEffects(legacyPending.effects)).toEqual([
+      {
+        type: 'cursorBootstrapDecision',
+        needsDecision: false,
+        pending: true,
+      },
+    ]);
+    const legacySent = stepConductorCore(legacyPending.state, {
+      type: 'cursorBootstrap.dispatchResult',
+      status: 'finished',
+      bootstrapIncluded: true,
+    });
+    expect(
+      actionEffects(
+        stepConductorCore(legacySent.state, {
+          type: 'cursorBootstrap.check',
+        }).effects,
+      ),
+    ).toEqual([
+      {
+        type: 'cursorBootstrapDecision',
+        needsDecision: false,
+        pending: false,
       },
     ]);
   });

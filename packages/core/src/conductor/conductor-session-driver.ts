@@ -10,6 +10,11 @@ import {
   ConductorDispatchLifecycle,
   settleConductorDispatch,
 } from './conductor-dispatch-lifecycle.js';
+import {
+  createConductorCoreState,
+  isConductorDispatchCompletedCore,
+  stepConductorCore,
+} from './conductor-transition-core.js';
 import type {
   ConductorDispatchLease,
   ConductorReconnectLease,
@@ -57,11 +62,13 @@ import {
 } from './session/select-dispatch-batch.js';
 import {
   autonomousTurnsAfterConductorBatch,
+  allowIdleOperatorMessages,
   buildIssueLoopStopInput,
   canDispatchConductorSend,
+  decideIssueLoopDriver,
   isMaxTurnsLimited,
-  resolveIssueLoopStopReason,
-  shouldStopIssueLoop,
+  recoveryConfirmationStopReason,
+  type IssueLoopStopInput,
   type IssueLoopStopReason,
 } from './session-policy.js';
 
@@ -219,14 +226,17 @@ export async function runConductorSessionDriver(
     runId: '',
     status: 'finished',
   };
-  let cursorBootstrapPending =
-    options.recoveryBackend === 'cursor' &&
-    (options.cursorBootstrapState
-      ? options.cursorBootstrapState.status === 'incomplete'
-      : options.cursorBootstrapComplete === undefined
-        ? !options.skipInitialSend
-        : !options.cursorBootstrapComplete);
-  let cursorBootstrapCompletedThisDriver = false;
+  let cursorBootstrapCoreState = createConductorCoreState({
+    cursorBootstrap: {
+      backend:
+        options.recoveryBackend === 'cursor' ? 'cursor' : 'other',
+      ...(options.cursorBootstrapComplete === undefined
+        ? {}
+        : { persistedComplete: options.cursorBootstrapComplete }),
+      skipInitialSend: options.skipInitialSend === true,
+      completedThisDriver: false,
+    },
+  });
   let inFlightSend: Promise<ConductorSendResult> | undefined;
   let postLoopWaiting = false;
   const lifecycle =
@@ -235,23 +245,32 @@ export async function runConductorSessionDriver(
   const recoveryInbox = options.recoveryInbox ?? new ConductorRecoveryInbox();
   const dispatchHoldState =
     options.dispatchHoldState ?? createDispatchHoldState();
+  const getCursorBootstrapDecision = () => {
+    cursorBootstrapCoreState = stepConductorCore(cursorBootstrapCoreState, {
+      type: 'cursorBootstrap.status',
+      status: options.cursorBootstrapState?.status,
+    }).state;
+    const transition = stepConductorCore(cursorBootstrapCoreState, {
+      type: 'cursorBootstrap.check',
+    });
+    cursorBootstrapCoreState = transition.state;
+    const decision = transition.effects.find(
+      (effect) =>
+        effect.kind === 'action' &&
+        effect.action.type === 'cursorBootstrapDecision',
+    );
+    return decision?.kind === 'action' &&
+      decision.action.type === 'cursorBootstrapDecision'
+      ? {
+          needsDecision: decision.action.needsDecision,
+          pending: decision.action.pending,
+        }
+      : { needsDecision: false, pending: false };
+  };
   const cursorBootstrapNeedsDecision = (): boolean =>
-    options.cursorBootstrapState?.status === 'unknown' ||
-    options.cursorBootstrapState?.status === 'saving';
-  const isCursorBootstrapPending = (): boolean => {
-    if (options.recoveryBackend !== 'cursor') return false;
-    if (options.cursorBootstrapState) {
-      return (
-        options.cursorBootstrapState.status === 'incomplete' &&
-        !cursorBootstrapCompletedThisDriver
-      );
-    }
-    return cursorBootstrapPending;
-  };
-  const markCursorBootstrapCompleted = (): void => {
-    cursorBootstrapPending = false;
-    cursorBootstrapCompletedThisDriver = true;
-  };
+    getCursorBootstrapDecision().needsDecision;
+  const isCursorBootstrapPending = (): boolean =>
+    getCursorBootstrapDecision().pending;
   let automaticReconnect: ConductorRecoveryReconnect | undefined;
   const sendReconnect = withAgentAvailabilityCallbacks(
     options.sendReconnect,
@@ -319,84 +338,50 @@ export async function runConductorSessionDriver(
     }
   };
 
-  const hasDispatchableWorkerOutcome = (): boolean =>
-    selectDispatchBatch({
-      queue: options.eventQueue.snapshot().filter(
-        (event) =>
-          event.type === 'worker.completed' || event.type === 'worker.failed',
-      ),
-      state: dispatchBatchState,
-      autonomousTurns,
-      maxTurns: options.maxTurns,
-    }) !== undefined;
-
   const shouldBreakAfterLoopState = async (
-    loopState: Parameters<typeof shouldStopIssueLoop>[0],
+    loopState: IssueLoopStopInput,
   ): Promise<boolean> => {
-    stopReason = resolveIssueLoopStopReason(loopState);
-    const shouldStop = shouldStopIssueLoop(loopState);
-    // A normal binding may still release and flush held trigger events before
-    // stopping. A one-shot has no later operator input to release the hold,
-    // so its stop condition must take precedence or the Driver can wait
-    // forever. SDK terminal statuses also must not be hidden by the hold.
-    const holdBlocksStop =
-      dispatchHoldState.heldEvents.length > 0 &&
-      options.stopOnUnansweredInput !== true &&
-      loopState.lastStatus !== 'error' &&
-      loopState.lastStatus !== 'send_rejected' &&
-      loopState.lastStatus !== 'cancelled';
-    if (
-      lifecycle.confirmationRequired &&
-      options.operatorCanInspectRecovery !== true
-    ) {
-      stopReason =
-        loopState.lastStatus === 'cancelled' ? 'cancelled' : 'error';
-      return true;
-    }
-    if (holdBlocksStop) {
-      postLoopWaiting = false;
-      return false;
-    }
-    if (!shouldStop) {
-      postLoopWaiting = false;
-      return false;
-    }
-
-    if (options.operatorCanInspectRecovery && lifecycle.confirmationRequired) {
-      if (!postLoopWaiting) {
-        postLoopWaiting = true;
-        options.onIssueLoopStop?.();
-      }
-      return false;
-    }
-
-    // A worker publishes its outcome to the inbox before its runtime round
-    // leaves the running state. Drain that notification chain before
-    // deciding the session is idle, otherwise the driver can tear down in
-    // the gap before the outcome reaches eventQueue.
-    const canHavePendingWorkerOutcome =
-      loopState.lastStatus === 'finished' &&
-      loopState.dispatchesThisTurn === 0 &&
-      (loopState.pendingPermissions ?? 0) === 0 &&
-      (loopState.openQuestions ?? 0) === 0;
-    if (canHavePendingWorkerOutcome) {
+    const decide = (
+      workerInboxDrained: boolean,
+      runningWorkers = loopState.runningWorkers,
+      idleOperatorMessageReady?: boolean,
+    ) =>
+      decideIssueLoopDriver({
+        ...loopState,
+        ...(runningWorkers === undefined ? {} : { runningWorkers }),
+        queue: options.eventQueue.snapshot(),
+        dispatchHold: dispatchHoldState.dispatchHold,
+        heldEvents: dispatchHoldState.heldEvents,
+        dispatchBatchState,
+        recoveryConfirmationRequired: lifecycle.confirmationRequired,
+        operatorCanInspectRecovery:
+          options.operatorCanInspectRecovery === true,
+        continueAfterIssueLoopStop:
+          options.continueAfterIssueLoopStop === true,
+        workerInboxDrained,
+        postLoopWaiting,
+        ...(idleOperatorMessageReady === undefined
+          ? {}
+          : { idleOperatorMessageReady }),
+      });
+    let decision = decide(false);
+    stopReason = decision.stopReason;
+    postLoopWaiting = decision.postLoopWaiting;
+    if (decision.notifyIssueLoopStop) options.onIssueLoopStop?.();
+    if (decision.decision === 'drainWorkerInbox') {
+      // The inbox is an external owner. The reducer decides when its
+      // notification chain must be drained before the final stop decision.
       await options.workerSession.inbox.drain();
-      if (
-        hasDispatchableWorkerOutcome() ||
-        options.workerSession.runtime.runningCount !== 0
-      ) {
-        postLoopWaiting = false;
-        return false;
-      }
+      decision = decide(
+        true,
+        options.workerSession.runtime.runningCount,
+        decision.idleOperatorMessageReady,
+      );
+      stopReason = decision.stopReason;
+      postLoopWaiting = decision.postLoopWaiting;
+      if (decision.notifyIssueLoopStop) options.onIssueLoopStop?.();
     }
-    if (!options.continueAfterIssueLoopStop) {
-      return true;
-    }
-    if (!postLoopWaiting) {
-      postLoopWaiting = true;
-      options.onIssueLoopStop?.();
-    }
-    return false;
+    return decision.decision === 'stop';
   };
 
   if (options.shutdownSignal.aborted) {
@@ -413,7 +398,7 @@ export async function runConductorSessionDriver(
   if (options.cursorBootstrapState && !options.skipInitialSend) {
     try {
       await waitForCursorBootstrapDecision({
-        state: options.cursorBootstrapState,
+        needsDecision: cursorBootstrapNeedsDecision,
         lifecycle,
         eventQueue: options.eventQueue,
         onOperatorQueueChanged: options.onOperatorQueueChanged,
@@ -486,12 +471,11 @@ export async function runConductorSessionDriver(
         options.onSendComplete(info);
       },
     }).then((result) => {
-      if (
-        options.recoveryBackend === 'cursor' &&
-        isIssueDispatchCompleted(result)
-      ) {
-        markCursorBootstrapCompleted();
-      }
+      cursorBootstrapCoreState = stepConductorCore(cursorBootstrapCoreState, {
+        type: 'cursorBootstrap.dispatchResult',
+        status: result.status,
+        bootstrapIncluded: options.recoveryBackend === 'cursor',
+      }).state;
       const explicitInterruptQueued =
         result.status === 'cancelled' &&
         options.eventQueue.snapshot().some(
@@ -536,7 +520,7 @@ export async function runConductorSessionDriver(
     if (options.cursorBootstrapState && cursorBootstrapNeedsDecision()) {
       try {
         await waitForCursorBootstrapDecision({
-          state: options.cursorBootstrapState,
+          needsDecision: cursorBootstrapNeedsDecision,
           lifecycle,
           eventQueue: options.eventQueue,
           onOperatorQueueChanged: options.onOperatorQueueChanged,
@@ -553,12 +537,14 @@ export async function runConductorSessionDriver(
       }
     }
 
-    if (
-      lifecycle.confirmationRequired &&
-      options.operatorCanInspectRecovery !== true
-    ) {
-      stopReason =
-        lastSendResult.status === 'cancelled' ? 'cancelled' : 'error';
+    const confirmationStopReason = recoveryConfirmationStopReason({
+      lastStatus: lastSendResult.status,
+      confirmationRequired: lifecycle.confirmationRequired,
+      operatorCanInspectRecovery:
+        options.operatorCanInspectRecovery === true,
+    });
+    if (confirmationStopReason) {
+      stopReason = confirmationStopReason;
       break;
     }
 
@@ -823,9 +809,11 @@ export async function runConductorSessionDriver(
         options.onSendComplete(info);
       },
     }).then((result) => {
-      if (restoreCursorBootstrap && isIssueDispatchCompleted(result)) {
-        markCursorBootstrapCompleted();
-      }
+      cursorBootstrapCoreState = stepConductorCore(cursorBootstrapCoreState, {
+        type: 'cursorBootstrap.dispatchResult',
+        status: result.status,
+        bootstrapIncluded: restoreCursorBootstrap,
+      }).state;
       const explicitInterruptQueued =
         result.status === 'cancelled' &&
         options.eventQueue.snapshot().some(
@@ -994,11 +982,7 @@ function runEventConductorSend(input: {
 }
 
 function isIssueDispatchCompleted(result: ConductorSendResult): boolean {
-  return (
-    result.status === 'finished' ||
-    result.status === 'completed' ||
-    result.status === 'running'
-  );
+  return isConductorDispatchCompletedCore(result.status, 'issue');
 }
 
 interface DispatchBatchResult {
@@ -1236,16 +1220,13 @@ function waitForDispatchChange(input: {
 }
 
 async function waitForCursorBootstrapDecision(input: {
-  state: CursorBootstrapState;
+  needsDecision: () => boolean;
   lifecycle: ConductorDispatchLifecycle<ConductorDispatchPayload>;
   eventQueue: SessionEventQueue;
   onOperatorQueueChanged?: () => void;
   signal: AbortSignal;
 }): Promise<void> {
-  while (
-    input.state.status === 'unknown' ||
-    input.state.status === 'saving'
-  ) {
+  while (input.needsDecision()) {
     if (input.signal.aborted) {
       throw new DOMException('Cursor bootstrap decision wait aborted', 'AbortError');
     }
@@ -1269,12 +1250,7 @@ async function waitForCursorBootstrapDecision(input: {
         resolve();
       };
       const onStatusChanged = () => {
-        if (
-          input.state.status === 'unknown' ||
-          input.state.status === 'saving'
-        ) {
-          return;
-        }
+        if (input.needsDecision()) return;
         finish();
       };
       const onQueueChanged = () => {
@@ -1316,42 +1292,15 @@ function canDispatchIdleOperatorMessage(input: {
   autonomousTurns: number;
   maxTurns: number;
 }): boolean {
-  if (input.workerSession.runtime.runningCount > 0) {
-    return false;
-  }
-  const heldEvents = input.dispatchHoldState.heldEvents;
-  if (
-    !input.dispatchHoldState.dispatchHold &&
-    heldEvents.length > 0 &&
-    (heldEvents.every((event) =>
-      canDispatchConductorSend(
-        event,
-        input.autonomousTurns,
-        input.maxTurns,
-      ),
-    ) ||
-      selectDispatchBatch({
-        queue: heldEvents,
-        state: input.dispatchBatchState,
-        autonomousTurns: input.autonomousTurns,
-        maxTurns: input.maxTurns,
-      }) !== undefined)
-  ) {
-    return false;
-  }
-  const nonOperatorTriggers = input.eventQueue.snapshot().filter(
-    (event) =>
-      event.type !== 'operator.message' &&
-      event.type !== 'operator.reconnect',
-  );
-  return (
-    selectDispatchBatch({
-      queue: nonOperatorTriggers,
-      state: input.dispatchBatchState,
-      autonomousTurns: input.autonomousTurns,
-      maxTurns: input.maxTurns,
-    }) === undefined
-  );
+  return allowIdleOperatorMessages({
+    queue: input.eventQueue.snapshot(),
+    dispatchHold: input.dispatchHoldState.dispatchHold,
+    heldEvents: input.dispatchHoldState.heldEvents,
+    dispatchBatchState: input.dispatchBatchState,
+    autonomousTurns: input.autonomousTurns,
+    maxTurns: input.maxTurns,
+    runningWorkers: input.workerSession.runtime.runningCount,
+  });
 }
 
 /** `/reconnect` は conductor へ送らず、直近 send 完了後に agent だけ差し替える。 */

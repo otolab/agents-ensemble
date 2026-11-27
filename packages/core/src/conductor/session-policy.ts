@@ -7,6 +7,7 @@ import {
   createConductorCoreState,
   isMaxTurnsLimitedCore,
   stepConductorCore,
+  type ConductorCoreDispatchBatchState,
   type IssueLoopStopInput,
   type IssueLoopStopReason,
 } from './conductor-transition-core.js';
@@ -35,10 +36,10 @@ export function operatorInputMaxTurns(maxTurns: number): number | null {
 
 /** Issue session の conductor 自律ループを終了すべきか判定する（プロセス終了ではない）。 */
 export function shouldStopIssueLoop(input: IssueLoopStopInput): boolean {
-  const transition = stepConductorCore(createConductorCoreState(), {
-    type: 'issueLoop.stopCheck',
-    input,
-  });
+  const transition = stepConductorCore(
+    createConductorCoreState({ issueLoop: input }),
+    { type: 'issueLoop.stopCheck' },
+  );
   const decision = transition.effects.find(
     (effect) =>
       effect.kind === 'action' && effect.action.type === 'issueLoopStop',
@@ -53,10 +54,10 @@ export function shouldStopIssueLoop(input: IssueLoopStopInput): boolean {
 export function resolveIssueLoopStopReason(
   input: IssueLoopStopInput,
 ): IssueLoopStopReason {
-  const transition = stepConductorCore(createConductorCoreState(), {
-    type: 'issueLoop.stopCheck',
-    input,
-  });
+  const transition = stepConductorCore(
+    createConductorCoreState({ issueLoop: input }),
+    { type: 'issueLoop.stopCheck' },
+  );
   const decision = transition.effects.find(
     (effect) =>
       effect.kind === 'action' && effect.action.type === 'issueLoopStop',
@@ -65,6 +66,153 @@ export function resolveIssueLoopStopReason(
     decision.action.type === 'issueLoopStop'
     ? decision.action.stopReason
     : 'completed';
+}
+
+export interface IssueLoopDriverDecisionInput extends IssueLoopStopInput {
+  queue: readonly SessionEvent[];
+  dispatchHold: boolean;
+  heldEvents: readonly SessionEvent[];
+  dispatchBatchState: ConductorCoreDispatchBatchState;
+  recoveryConfirmationRequired: boolean;
+  operatorCanInspectRecovery: boolean;
+  continueAfterIssueLoopStop: boolean;
+  workerInboxDrained?: boolean;
+  postLoopWaiting: boolean;
+  idleOperatorMessageReady?: boolean;
+}
+
+export interface IssueLoopDriverDecision {
+  decision: 'stop' | 'continue' | 'drainWorkerInbox';
+  stopReason: IssueLoopStopReason;
+  notifyIssueLoopStop: boolean;
+  postLoopWaiting: boolean;
+  idleOperatorMessageReady?: boolean;
+}
+
+/** Driver の停止優先・待機・inbox drain 要否を core に委ねる。 */
+export function decideIssueLoopDriver(
+  input: IssueLoopDriverDecisionInput,
+): IssueLoopDriverDecision {
+  const transition = stepConductorCore(
+    createConductorCoreState({
+      issueLoop: input,
+      queue: [...input.queue],
+      dispatchHold: input.dispatchHold,
+      heldEvents: [...input.heldEvents],
+      dispatchBatchState: input.dispatchBatchState,
+      autonomousTurns: input.autonomousTurns,
+      recoveryConfirmationRequired: input.recoveryConfirmationRequired,
+      operatorCanInspectRecovery: input.operatorCanInspectRecovery,
+      continueAfterIssueLoopStop: input.continueAfterIssueLoopStop,
+      workerInboxDrained: input.workerInboxDrained ?? false,
+      postLoopWaiting: input.postLoopWaiting,
+      ...(input.idleOperatorMessageReady === undefined
+        ? {}
+        : { idleOperatorMessageReady: input.idleOperatorMessageReady }),
+    }),
+    { type: 'issueLoop.driverStopCheck' },
+  );
+  const decision = transition.effects.find(
+    (effect) =>
+      effect.kind === 'action' && effect.action.type === 'issueLoopDecision',
+  );
+  if (
+    decision?.kind !== 'action' ||
+    decision.action.type !== 'issueLoopDecision'
+  ) {
+    return {
+      decision: 'continue',
+      stopReason: 'completed',
+      notifyIssueLoopStop: false,
+      postLoopWaiting: transition.state.postLoopWaiting,
+      ...(transition.state.idleOperatorMessageReady === undefined
+        ? {}
+        : {
+            idleOperatorMessageReady:
+              transition.state.idleOperatorMessageReady,
+          }),
+    };
+  }
+  return {
+    decision: decision.action.decision,
+    stopReason: decision.action.stopReason,
+    notifyIssueLoopStop: decision.action.notifyIssueLoopStop === true,
+    postLoopWaiting: transition.state.postLoopWaiting,
+    ...(transition.state.idleOperatorMessageReady === undefined
+      ? {}
+      : {
+          idleOperatorMessageReady:
+            transition.state.idleOperatorMessageReady,
+        }),
+  };
+}
+
+export function recoveryConfirmationStopReason(input: {
+  lastStatus: string;
+  confirmationRequired: boolean;
+  operatorCanInspectRecovery: boolean;
+}): IssueLoopStopReason | undefined {
+  const transition = stepConductorCore(
+    createConductorCoreState({
+      issueLoop: {
+        autonomousTurns: 0,
+        maxTurns: 0,
+        lastStatus: input.lastStatus,
+        dispatchesThisTurn: 0,
+      },
+      recoveryConfirmationRequired: input.confirmationRequired,
+      operatorCanInspectRecovery: input.operatorCanInspectRecovery,
+    }),
+    { type: 'issueLoop.confirmationGate' },
+  );
+  const decision = transition.effects.find(
+    (effect) =>
+      effect.kind === 'action' &&
+      effect.action.type === 'issueLoopConfirmationGate',
+  );
+  return decision?.kind === 'action' &&
+    decision.action.type === 'issueLoopConfirmationGate' &&
+    decision.action.shouldStop
+    ? decision.action.stopReason
+    : undefined;
+}
+
+export function allowIdleOperatorMessages(input: {
+  queue: readonly SessionEvent[];
+  dispatchHold: boolean;
+  heldEvents: readonly SessionEvent[];
+  dispatchBatchState: ConductorCoreDispatchBatchState;
+  autonomousTurns: number;
+  maxTurns: number;
+  runningWorkers: number;
+}): boolean {
+  const transition = stepConductorCore(
+    createConductorCoreState({
+      issueLoop: {
+        autonomousTurns: input.autonomousTurns,
+        maxTurns: input.maxTurns,
+        lastStatus: 'finished',
+        dispatchesThisTurn: 0,
+        runningWorkers: input.runningWorkers,
+      },
+      queue: [...input.queue],
+      dispatchHold: input.dispatchHold,
+      heldEvents: [...input.heldEvents],
+      dispatchBatchState: input.dispatchBatchState,
+      autonomousTurns: input.autonomousTurns,
+    }),
+    { type: 'dispatch.idleOperatorMessageGate' },
+  );
+  const decision = transition.effects.find(
+    (effect) =>
+      effect.kind === 'action' &&
+      effect.action.type === 'idleOperatorMessageGate',
+  );
+  return (
+    decision?.kind === 'action' &&
+    decision.action.type === 'idleOperatorMessageGate' &&
+    decision.action.allowed
+  );
 }
 
 /** 自律ターン上限到達後も conductor へ送れるイベントか。 */

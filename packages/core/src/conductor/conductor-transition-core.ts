@@ -20,11 +20,28 @@ export interface ConductorCoreState {
   readonly agentAvailable: boolean;
   readonly attentionAttemptId?: string;
   readonly lastFailureClass?: ConductorRecoveryFailureClass;
+  readonly issueLoop?: IssueLoopStopInput;
   readonly queue: readonly SessionEvent[];
   readonly dispatchHold: boolean;
   readonly heldEvents: readonly SessionEvent[];
   readonly dispatchBatchState: ConductorCoreDispatchBatchState;
   readonly autonomousTurns: number;
+  readonly recoveryConfirmationRequired: boolean;
+  readonly operatorCanInspectRecovery: boolean;
+  readonly continueAfterIssueLoopStop: boolean;
+  readonly workerInboxDrained: boolean;
+  readonly postLoopWaiting: boolean;
+  /** 非同期 inbox drain 前に得た idle operator message 適格性。 */
+  readonly idleOperatorMessageReady?: boolean;
+  readonly cursorBootstrap: CursorBootstrapProjection;
+}
+
+export interface CursorBootstrapProjection {
+  readonly backend: 'cursor' | 'other';
+  readonly status?: 'unknown' | 'saving' | 'complete' | 'incomplete';
+  readonly persistedComplete?: boolean;
+  readonly skipInitialSend: boolean;
+  readonly completedThisDriver: boolean;
 }
 
 export type ConductorCoreObservation =
@@ -57,6 +74,24 @@ export type ConductorCoreAction =
       type: 'issueLoopStop';
       shouldStop: boolean;
       stopReason: IssueLoopStopReason;
+    }
+  | {
+      type: 'issueLoopDecision';
+      decision: 'stop' | 'continue' | 'drainWorkerInbox';
+      stopReason: IssueLoopStopReason;
+      notifyIssueLoopStop?: boolean;
+      idleOperatorMessageReady?: boolean;
+    }
+  | {
+      type: 'issueLoopConfirmationGate';
+      shouldStop: boolean;
+      stopReason?: IssueLoopStopReason;
+    }
+  | { type: 'idleOperatorMessageGate'; allowed: boolean }
+  | {
+      type: 'cursorBootstrapDecision';
+      needsDecision: boolean;
+      pending: boolean;
     }
   | {
       type: 'dispatchHoldChanged';
@@ -166,7 +201,17 @@ export type ConductorCoreEvent =
       event: SessionEvent;
       maxTurns: number;
     }
-  | { type: 'issueLoop.stopCheck'; input: IssueLoopStopInput };
+  | { type: 'dispatch.idleOperatorMessageGate' }
+  | { type: 'cursorBootstrap.status'; status?: CursorBootstrapProjection['status'] }
+  | { type: 'cursorBootstrap.check' }
+  | {
+      type: 'cursorBootstrap.dispatchResult';
+      status: string;
+      bootstrapIncluded: boolean;
+    }
+  | { type: 'issueLoop.stopCheck' }
+  | { type: 'issueLoop.confirmationGate' }
+  | { type: 'issueLoop.driverStopCheck' };
 
 const EMPTY_EFFECTS: readonly ConductorCoreEffect[] = [];
 
@@ -192,6 +237,16 @@ export function createConductorCoreState(
     heldEvents: [],
     dispatchBatchState: {},
     autonomousTurns: 0,
+    recoveryConfirmationRequired: false,
+    operatorCanInspectRecovery: false,
+    continueAfterIssueLoopStop: false,
+    workerInboxDrained: false,
+    postLoopWaiting: false,
+    cursorBootstrap: {
+      backend: 'other',
+      skipInitialSend: false,
+      completedThisDriver: false,
+    },
     ...initial,
   };
 }
@@ -499,17 +554,256 @@ export function stepConductorCore(
           }),
         ],
       };
-    case 'issueLoop.stopCheck':
+    case 'dispatch.idleOperatorMessageGate': {
+      return {
+        state,
+        effects: [
+          action({
+            type: 'idleOperatorMessageGate',
+            allowed: canDispatchIdleOperatorMessageCore(state),
+          }),
+        ],
+      };
+    }
+    case 'cursorBootstrap.status':
+      return {
+        state: {
+          ...state,
+          cursorBootstrap: {
+            ...state.cursorBootstrap,
+            status: event.status,
+          },
+        },
+        effects: EMPTY_EFFECTS,
+      };
+    case 'cursorBootstrap.check': {
+      const bootstrap = state.cursorBootstrap;
+      const needsDecision =
+        (bootstrap.status === 'unknown' || bootstrap.status === 'saving');
+      const pending =
+        bootstrap.backend === 'cursor' &&
+        !bootstrap.completedThisDriver &&
+        (bootstrap.status === undefined
+          ? bootstrap.persistedComplete === undefined
+            ? !bootstrap.skipInitialSend
+            : !bootstrap.persistedComplete
+          : bootstrap.status === 'incomplete');
+      return {
+        state,
+        effects: [
+          action({
+            type: 'cursorBootstrapDecision',
+            needsDecision,
+            pending,
+          }),
+        ],
+      };
+    }
+    case 'cursorBootstrap.dispatchResult':
+      if (
+        !event.bootstrapIncluded ||
+        state.cursorBootstrap.backend !== 'cursor' ||
+        !isConductorDispatchCompletedCore(event.status, 'issue')
+      ) {
+        return { state, effects: EMPTY_EFFECTS };
+      }
+      return {
+        state: {
+          ...state,
+          cursorBootstrap: {
+            ...state.cursorBootstrap,
+            completedThisDriver: true,
+          },
+        },
+        effects: EMPTY_EFFECTS,
+      };
+    case 'issueLoop.stopCheck': {
+      const input = state.issueLoop;
       return {
         state,
         effects: [
           action({
             type: 'issueLoopStop',
-            shouldStop: shouldStopIssueLoopCore(event.input),
-            stopReason: resolveIssueLoopStopReasonCore(event.input),
+            shouldStop: input ? shouldStopIssueLoopCore(input) : false,
+            stopReason: input
+              ? resolveIssueLoopStopReasonCore(input)
+              : 'completed',
           }),
         ],
       };
+    }
+    case 'issueLoop.confirmationGate': {
+      const shouldStop =
+        state.recoveryConfirmationRequired &&
+        !state.operatorCanInspectRecovery;
+      const stopReason =
+        state.issueLoop?.lastStatus === 'cancelled' ? 'cancelled' : 'error';
+      return {
+        state,
+        effects: [
+          action({
+            type: 'issueLoopConfirmationGate',
+            shouldStop,
+            ...(shouldStop ? { stopReason } : {}),
+          }),
+        ],
+      };
+    }
+    case 'issueLoop.driverStopCheck': {
+      const input = state.issueLoop;
+      if (!input) {
+        return {
+          state,
+          effects: [
+            action({
+              type: 'issueLoopDecision',
+              decision: 'continue',
+              stopReason: 'completed',
+            }),
+          ],
+        };
+      }
+
+      let stopReason = resolveIssueLoopStopReasonCore(input);
+      const shouldStop = shouldStopIssueLoopCore(input);
+      if (
+        state.recoveryConfirmationRequired &&
+        !state.operatorCanInspectRecovery
+      ) {
+        stopReason = input.lastStatus === 'cancelled' ? 'cancelled' : 'error';
+        const deferForIdleOperatorMessage =
+          input.stopOnUnansweredInput !== true &&
+          (state.idleOperatorMessageReady ??
+            hasIdleOperatorMessageReadyCore(state, input.maxTurns));
+        return {
+          state,
+          effects: [
+            action({
+              type: 'issueLoopDecision',
+              decision: deferForIdleOperatorMessage ? 'continue' : 'stop',
+              stopReason,
+            }),
+          ],
+        };
+      }
+
+      const holdBlocksStop =
+        state.heldEvents.length > 0 &&
+        input.stopOnUnansweredInput !== true &&
+        input.lastStatus !== 'error' &&
+        input.lastStatus !== 'send_rejected' &&
+        input.lastStatus !== 'cancelled';
+      if (holdBlocksStop) {
+        return {
+          state: { ...state, postLoopWaiting: false },
+          effects: [
+            action({
+              type: 'issueLoopDecision',
+              decision: 'continue',
+              stopReason,
+            }),
+          ],
+        };
+      }
+      if (!shouldStop) {
+        return {
+          state: { ...state, postLoopWaiting: false },
+          effects: [
+            action({
+              type: 'issueLoopDecision',
+              decision: 'continue',
+              stopReason,
+            }),
+          ],
+        };
+      }
+
+      if (
+        state.operatorCanInspectRecovery &&
+        state.recoveryConfirmationRequired
+      ) {
+        return {
+          state: { ...state, postLoopWaiting: true },
+          effects: [
+            action({
+              type: 'issueLoopDecision',
+              decision: 'continue',
+              stopReason,
+              ...(!state.postLoopWaiting
+                ? { notifyIssueLoopStop: true }
+                : {}),
+            }),
+          ],
+        };
+      }
+
+      const canHavePendingWorkerOutcome =
+        input.lastStatus === 'finished' &&
+        input.dispatchesThisTurn === 0 &&
+        (input.pendingPermissions ?? 0) === 0 &&
+        (input.openQuestions ?? 0) === 0;
+      if (canHavePendingWorkerOutcome && !state.workerInboxDrained) {
+        const idleOperatorMessageReady = hasIdleOperatorMessageReadyCore(
+          state,
+          input.maxTurns,
+        );
+        return {
+          state: { ...state, idleOperatorMessageReady },
+          effects: [
+            action({
+              type: 'issueLoopDecision',
+              decision: 'drainWorkerInbox',
+              stopReason,
+              idleOperatorMessageReady,
+            }),
+          ],
+        };
+      }
+      if (
+        canHavePendingWorkerOutcome &&
+        (hasDispatchableWorkerOutcomeCore(state, input.maxTurns) ||
+          (input.runningWorkers ?? 0) !== 0)
+      ) {
+        return {
+          state: { ...state, postLoopWaiting: false },
+          effects: [
+            action({
+              type: 'issueLoopDecision',
+              decision: 'continue',
+              stopReason,
+            }),
+          ],
+        };
+      }
+      if (!state.continueAfterIssueLoopStop) {
+        const deferForIdleOperatorMessage =
+          input.stopOnUnansweredInput !== true &&
+          (state.idleOperatorMessageReady ??
+            hasIdleOperatorMessageReadyCore(state, input.maxTurns));
+        return {
+          state,
+          effects: [
+            action({
+              type: 'issueLoopDecision',
+              decision: deferForIdleOperatorMessage ? 'continue' : 'stop',
+              stopReason,
+            }),
+          ],
+        };
+      }
+
+      return {
+        state: { ...state, postLoopWaiting: true },
+        effects: [
+          action({
+            type: 'issueLoopDecision',
+            decision: 'continue',
+            stopReason,
+            ...(!state.postLoopWaiting ? { notifyIssueLoopStop: true } : {}),
+          }),
+        ],
+      };
+    }
   }
 }
 
@@ -801,6 +1095,80 @@ function observation(
   value: ConductorCoreObservation,
 ): ConductorCoreEffect {
   return { kind: 'observation', observation: value };
+}
+
+function hasDispatchableWorkerOutcomeCore(
+  state: ConductorCoreState,
+  maxTurns: number,
+): boolean {
+  return (
+    selectDispatchBatchCore({
+      queue: state.queue.filter(
+        (event) =>
+          event.type === 'worker.completed' || event.type === 'worker.failed',
+      ),
+      state: state.dispatchBatchState,
+      autonomousTurns: state.autonomousTurns,
+      maxTurns,
+    }) !== undefined
+  );
+}
+
+function canDispatchIdleOperatorMessageCore(
+  state: ConductorCoreState,
+): boolean {
+  const maxTurns = state.issueLoop?.maxTurns ?? 0;
+  if ((state.issueLoop?.runningWorkers ?? 0) > 0) return false;
+
+  const heldWorkReady =
+    !state.dispatchHold &&
+    state.heldEvents.length > 0 &&
+    (state.heldEvents.every((event) =>
+      canDispatchConductorSendCore(
+        event,
+        state.autonomousTurns,
+        maxTurns,
+      ),
+    ) ||
+      selectDispatchBatchCore({
+        queue: state.heldEvents,
+        state: state.dispatchBatchState,
+        autonomousTurns: state.autonomousTurns,
+        maxTurns,
+      }) !== undefined);
+  const nonOperatorTriggers = state.queue.filter(
+    (event) =>
+      event.type !== 'operator.message' &&
+      event.type !== 'operator.reconnect',
+  );
+  return (
+    !heldWorkReady &&
+    selectDispatchBatchCore({
+      queue: nonOperatorTriggers,
+      state: state.dispatchBatchState,
+      autonomousTurns: state.autonomousTurns,
+      maxTurns,
+    }) === undefined
+  );
+}
+
+function hasIdleOperatorMessageReadyCore(
+  state: ConductorCoreState,
+  maxTurns: number,
+): boolean {
+  if (!canDispatchIdleOperatorMessageCore(state)) return false;
+  return (
+    selectDispatchBatchCore({
+      queue: state.queue,
+      state: state.dispatchBatchState,
+      autonomousTurns: state.autonomousTurns,
+      maxTurns,
+      allowIdleOperatorMessages: true,
+    })?.batch.events.some(
+      (event) =>
+        event.type === 'operator.message' && event.delivery === 'idle',
+    ) ?? false
+  );
 }
 
 function isDispatchable(
