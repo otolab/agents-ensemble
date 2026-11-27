@@ -9,6 +9,7 @@
 | 文書 | 内容 |
 |------|------|
 | [docs/architecture.md](docs/architecture.md) | 現行の技術構成 |
+| [docs/conductor-dispatch-lifecycle.md](docs/conductor-dispatch-lifecycle.md) | conductor dispatch の状態・遷移・利用者保証 |
 | [docs/session-logging.md](docs/session-logging.md) | セッションのログ・表示 |
 | [docs/adr/](docs/adr/README.md) | 設計判断の履歴（ADR。本文は不変） |
 | [docs/README.md](docs/README.md) | 各テーマの正本マップ |

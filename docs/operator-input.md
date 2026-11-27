@@ -1,6 +1,6 @@
 # オペレータ入力（SessionView）
 
-> **正本:** TUI とオペレータ入力の利用者向け挙動および SessionView 契約。入力ショートカットの実装詳細は [cli-text-input-keybindings.md](cli-text-input-keybindings.md)、設定の正本は [settings.md](settings.md) です。
+> **正本:** TUI とオペレータ入力の利用者向け挙動および SessionView 契約。conductor dispatch 側の状態・選択・send 境界は [conductor-dispatch-lifecycle.md](conductor-dispatch-lifecycle.md) を参照します。入力ショートカットの実装詳細は [cli-text-input-keybindings.md](cli-text-input-keybindings.md)、設定の正本は [settings.md](settings.md) です。
 
 ConductorSession の **View 層**契約。入力・表示はここに閉じ、オーケストレーション（Driver）とは `bindOperatorInput` で接続する。
 
