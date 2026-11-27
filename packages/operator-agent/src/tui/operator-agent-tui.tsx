@@ -214,6 +214,10 @@ function OperatorAgentTui({
     1,
     Math.min(MAX_INPUT_DISPLAY_LINES, liveFrameRows - 4),
   );
+  // IME coordinates are relative to this Ink tree's output origin. Account
+  // for the operator status row, optional harness status row, and input pane's
+  // top border before placing the cursor on the first TextArea row.
+  const inputCursorStartY = 1 + Number(Boolean(snapshot.harnessStatus)) + 1;
   const handleSubmit = useCallback(
     (value: string) => {
       if (!snapshot.inputEnabled || !value.trim()) return;
@@ -305,7 +309,7 @@ function OperatorAgentTui({
               linePrefix={promptPrefix}
               viewportLines={maxInputDisplayLines}
               initialLineCount={1}
-              cursorStart={snapshot.inputEnabled ? { x: 2, y: 2 } : undefined}
+              cursorStart={snapshot.inputEnabled ? { x: 2, y: inputCursorStartY } : undefined}
               cursorPosition={cursorPosition}
               onCursorChange={setCursorPosition}
             />
