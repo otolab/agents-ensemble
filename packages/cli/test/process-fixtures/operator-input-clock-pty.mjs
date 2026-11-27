@@ -53,8 +53,10 @@ if (mode === 'operator-agent') {
       tui.setHarnessStatus('監視報告: 解除（理由: なし、保留件数: 0 件）');
     }
     if (scenario.includes('toggle-harness')) {
-      setTimeout(() => tui.setHarnessStatus('監視報告: 保留 1 件'), 1_200);
-      setTimeout(() => tui.setHarnessStatus(''), 2_400);
+      // Let the PTY observer capture one complete clock redraw in the initial
+      // no-harness state before exercising both status transitions.
+      setTimeout(() => tui.setHarnessStatus('監視報告: 保留 1 件'), 2_500);
+      setTimeout(() => tui.setHarnessStatus(''), 4_500);
     }
     setTimeout(() => {
       if (viewModel) {
