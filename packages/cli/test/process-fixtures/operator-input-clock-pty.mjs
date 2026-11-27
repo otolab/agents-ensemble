@@ -6,25 +6,65 @@ const scenario = process.argv[3] ?? '';
 let viewModel;
 const originalWrite = process.stdout.write.bind(process.stdout);
 const frameMarker = Buffer.from('\u001b]777;ensemble-frame\u0007');
-process.stdout.write = (chunk, encoding, callback) => {
-  const callbackFn = typeof encoding === 'function' ? encoding : callback;
-  const encodingName = typeof encoding === 'string' ? encoding : undefined;
-  const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, encodingName);
-  return originalWrite(Buffer.concat([bytes, frameMarker]), callbackFn);
-};
+if (scenario !== 'manual') {
+  process.stdout.write = (chunk, encoding, callback) => {
+    const callbackFn = typeof encoding === 'function' ? encoding : callback;
+    const encodingName = typeof encoding === 'string' ? encoding : undefined;
+    const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, encodingName);
+    return originalWrite(Buffer.concat([bytes, frameMarker]), callbackFn);
+  };
+}
 
 if (mode === 'operator-agent') {
   const { createOperatorAgentTuiHost } = await import(
     '../../../operator-agent/dist/tui/operator-agent-tui.js'
   );
-  const tui = createOperatorAgentTuiHost({
+  let tui;
+  let stopping = false;
+  let statusTimer;
+  const stop = () => {
+    if (stopping) return;
+    stopping = true;
+    if (statusTimer) clearInterval(statusTimer);
+    void tui.dispose().then(
+      () => process.exit(0),
+      (error) => {
+        console.error(error);
+        process.exit(1);
+      },
+    );
+  };
+  tui = createOperatorAgentTuiHost({
     stdin: process.stdin,
     stdout: process.stdout,
     colorEnabled: false,
     onSubmit: () => {},
-    onInterrupt: () => {},
+    onInterrupt: stop,
   });
-  tui.setHarnessStatus('監視報告: 解除（理由: なし、保留件数: 0 件）');
+  if (scenario === 'manual') {
+    tui.setHarnessStatus('手動 PTY 確認用');
+    statusTimer = setInterval(() => tui.setStatus('clock-fixture', Date.now()), 1_000);
+    process.once('SIGINT', stop);
+    process.once('SIGTERM', stop);
+  } else {
+    const startsWithoutHarnessStatus =
+      scenario.includes('no-harness') || scenario.includes('toggle-harness');
+    if (!startsWithoutHarnessStatus) {
+      tui.setHarnessStatus('監視報告: 解除（理由: なし、保留件数: 0 件）');
+    }
+    if (scenario.includes('toggle-harness')) {
+      setTimeout(() => tui.setHarnessStatus('監視報告: 保留 1 件'), 1_200);
+      setTimeout(() => tui.setHarnessStatus(''), 2_400);
+    }
+    setTimeout(() => {
+      if (viewModel) {
+        viewModel.setConductorStatus({
+          text: 'clock-fixture',
+          since: Date.now(),
+        });
+      }
+    }, 1_000);
+  }
   tui.setStatus('clock-fixture', Date.now());
 } else {
   const { IssueSessionTui } = await import('../../dist/tui/issue-session-tui.js');
@@ -63,11 +103,13 @@ if (mode === 'operator-agent') {
   }), { exitOnCtrlC: false, interactive: true });
 }
 
-setTimeout(() => {
-  if (viewModel) {
-    viewModel.setConductorStatus({
-      text: 'clock-fixture',
-      since: Date.now(),
-    });
-  }
-}, 1_000);
+if (scenario !== 'manual') {
+  setTimeout(() => {
+    if (viewModel) {
+      viewModel.setConductorStatus({
+        text: 'clock-fixture',
+        since: Date.now(),
+      });
+    }
+  }, 1_000);
+}
