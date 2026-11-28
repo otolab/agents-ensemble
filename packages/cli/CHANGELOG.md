@@ -1,5 +1,17 @@
 # @agents-ensemble/cli
 
+## 0.25.3
+
+### Patch Changes
+
+- 2046265: `operator-agent --config` と同じ config namespace を使う管理コマンドを追加します。既定 config の保存先互換性を保ちながら、別 config の workspace・watch・scheduling state を分離します。
+- Updated dependencies [2046265]
+- Updated dependencies [c722e1e]
+- Updated dependencies [6319b03]
+- Updated dependencies [18b5be4]
+  - @agents-ensemble/operator-agent@0.8.3
+  - @agents-ensemble/core@0.25.3
+
 ## 0.25.2
 
 ### Patch Changes

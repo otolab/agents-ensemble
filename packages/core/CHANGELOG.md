@@ -1,5 +1,12 @@
 # @agents-ensemble/core
 
+## 0.25.3
+
+### Patch Changes
+
+- c722e1e: builtin Pi worker の HOME・session map・transcript を Pi user root に揃え、session ごとの保存先を resume と履歴 reader で引き継ぎます。
+- 18b5be4: conductor から worker の ACP session を同じ ID で安全に再起動できるようにします。
+
 ## 0.25.2
 
 ### Patch Changes

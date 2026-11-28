@@ -1,5 +1,15 @@
 # @agents-ensemble/operator-agent
 
+## 0.8.3
+
+### Patch Changes
+
+- 2046265: `operator-agent --config` と同じ config namespace を使う管理コマンドを追加します。既定 config の保存先互換性を保ちながら、別 config の workspace・watch・scheduling state を分離します。
+- 6319b03: operator-agent の IME カーソルを、表示中の harness status 行を含めた入力欄の位置に合わせます。
+- Updated dependencies [c722e1e]
+- Updated dependencies [18b5be4]
+  - @agents-ensemble/core@0.25.3
+
 ## 0.8.2
 
 ### Patch Changes
