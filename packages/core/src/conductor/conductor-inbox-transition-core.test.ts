@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  canDispatchConductorCore,
   createConductorCoreState,
   stepConductorCore,
 } from './conductor-transition-core.js';
@@ -153,7 +154,14 @@ describe('conductor durable inbox transition projection', () => {
       }).state.durableInbox.batches,
     ).toHaveLength(1);
 
-    const explicitResend = stepConductorCore(exhausted.state, {
+    const attentionConfirmed = stepConductorCore(exhausted.state, {
+      type: 'recovery.confirm',
+      expectedAttemptId: 'attempt-3',
+    });
+    expect(attentionConfirmed.state.durableInbox.stopGates).toEqual([
+      { kind: 'retryExhausted', batchId: 'batch-1' },
+    ]);
+    const explicitResend = stepConductorCore(attentionConfirmed.state, {
       type: 'inbox.batch.start',
       batchId: 'batch-1',
       attemptId: 'operator-resend-1',
@@ -202,6 +210,300 @@ describe('conductor durable inbox transition projection', () => {
     ]);
     expect(ackCommitted.state.durableInbox.batches).toEqual([]);
     expect(ackCommitted.state.durableInbox.stopGates).toEqual([]);
+  });
+
+  it('projects unknown durable send results into shared lifecycle across the retry limit', () => {
+    const item: ConductorInboxItem = {
+      id: 'recovery-item',
+      payload: { text: 'resume the original batch' },
+      holdClass: 'deliveryUnknown',
+    };
+    const firstRestore = stepConductorCore(createConductorCoreState(), {
+      type: 'inbox.restore',
+      pendingItems: [item],
+      dispatchHold: true,
+      deliveryUnknownBatches: [
+        {
+          id: 'recovery-batch',
+          itemIds: [item.id],
+          automaticSendInvocations: 1,
+          processResumeNotice: { text: 'the process resumed' },
+        },
+      ],
+    });
+    const beforeLimitStart = stepConductorCore(firstRestore.state, {
+      type: 'inbox.batch.start',
+      batchId: 'recovery-batch',
+      attemptId: 'recovery-before-limit',
+      reason: 'restartRecovery',
+    });
+    expect(actions(beforeLimitStart.effects)).toContainEqual({
+      type: 'startInboxBatchSend',
+      attemptId: 'recovery-before-limit',
+      batchId: 'recovery-batch',
+      itemIds: [item.id],
+      reason: 'restartRecovery',
+      processResumeNotice: { text: 'the process resumed' },
+    });
+    expect(beforeLimitStart.state.dispatchHold).toBe(true);
+
+    const beforeLimitInvoked = stepConductorCore(beforeLimitStart.state, {
+      type: 'inbox.send.invoked',
+      attemptId: 'recovery-before-limit',
+    });
+    expect(
+      beforeLimitInvoked.state.durableInbox.batches[0]
+        ?.automaticSendInvocations,
+    ).toBe(2);
+    const beforeLimitUnknown = stepConductorCore(beforeLimitInvoked.state, {
+      type: 'inbox.send.result',
+      attemptId: 'recovery-before-limit',
+      outcome: 'deliveryUnknown',
+      failureClass: 'send_rejected',
+      agentAvailable: false,
+    });
+    expect(beforeLimitUnknown.state.lease).toBeUndefined();
+    expect(beforeLimitUnknown.state.agentAvailable).toBe(false);
+    expect(beforeLimitUnknown.state.attentionAttemptId).toBe(
+      'recovery-before-limit',
+    );
+    expect(beforeLimitUnknown.state.lastFailureClass).toBe('send_rejected');
+    expect(beforeLimitUnknown.state.durableInbox.stopGates).toEqual([]);
+    expect(beforeLimitUnknown.state.dispatchHold).toBe(true);
+    expect(canDispatchConductorCore(beforeLimitUnknown.state)).toBe(false);
+    expect(observations(beforeLimitUnknown.effects)).toContainEqual({
+      type: 'send.result',
+      attemptId: 'recovery-before-limit',
+      completed: false,
+      failureClass: 'send_rejected',
+    });
+
+    const sameProcessRetry = stepConductorCore(beforeLimitUnknown.state, {
+      type: 'inbox.batch.start',
+      batchId: 'recovery-batch',
+      attemptId: 'same-process-retry',
+      reason: 'restartRecovery',
+    });
+    expect(sameProcessRetry.state).toBe(beforeLimitUnknown.state);
+    expect(actions(sameProcessRetry.effects)).toEqual([]);
+
+    // A process restart supplies a fresh shared lifecycle projection while
+    // the persisted inbox batch retains its actual invocation count.
+    const afterRestart = stepConductorCore(createConductorCoreState(), {
+      type: 'inbox.restore',
+      pendingItems: [item],
+      dispatchHold: true,
+      deliveryUnknownBatches: [
+        {
+          id: 'recovery-batch',
+          itemIds: [item.id],
+          automaticSendInvocations: 2,
+          processResumeNotice: { text: 'the process resumed again' },
+        },
+      ],
+    });
+    const atLimitStart = stepConductorCore(afterRestart.state, {
+      type: 'inbox.batch.start',
+      batchId: 'recovery-batch',
+      attemptId: 'recovery-at-limit',
+      reason: 'restartRecovery',
+    });
+    expect(actions(atLimitStart.effects)).toContainEqual(
+      expect.objectContaining({
+        type: 'startInboxBatchSend',
+        reason: 'restartRecovery',
+      }),
+    );
+    const atLimitInvoked = stepConductorCore(atLimitStart.state, {
+      type: 'inbox.send.invoked',
+      attemptId: 'recovery-at-limit',
+    });
+    const atLimitUnknown = stepConductorCore(atLimitInvoked.state, {
+      type: 'inbox.send.result',
+      attemptId: 'recovery-at-limit',
+      outcome: 'deliveryUnknown',
+      failureClass: 'transport',
+    });
+    expect(
+      atLimitUnknown.state.durableInbox.batches[0]
+        ?.automaticSendInvocations,
+    ).toBe(3);
+    expect(atLimitUnknown.state.durableInbox.stopGates).toEqual([
+      { kind: 'retryExhausted', batchId: 'recovery-batch' },
+    ]);
+    expect(atLimitUnknown.state.agentAvailable).toBe(true);
+    expect(atLimitUnknown.state.attentionAttemptId).toBe('recovery-at-limit');
+    expect(atLimitUnknown.state.lastFailureClass).toBe('transport');
+    expect(atLimitUnknown.state.dispatchHold).toBe(true);
+    expect(canDispatchConductorCore(atLimitUnknown.state)).toBe(false);
+
+    const resendBeforeConfirmation = stepConductorCore(
+      atLimitUnknown.state,
+      {
+        type: 'inbox.batch.start',
+        batchId: 'recovery-batch',
+        attemptId: 'resend-too-early',
+        reason: 'operatorResend',
+      },
+    );
+    expect(resendBeforeConfirmation.state).toBe(atLimitUnknown.state);
+    expect(actions(resendBeforeConfirmation.effects)).toEqual([]);
+
+    const reconnecting = stepConductorCore(atLimitUnknown.state, {
+      type: 'reconnect.requested',
+      attemptId: 'reconnect-after-failure',
+      id: 4,
+    });
+    const reconnected = stepConductorCore(reconnecting.state, {
+      type: 'reconnect.result',
+      attemptId: 'reconnect-after-failure',
+      succeeded: true,
+    });
+    expect(reconnected.state.agentAvailable).toBe(true);
+    expect(reconnected.state.attentionAttemptId).toBe('recovery-at-limit');
+    const confirmed = stepConductorCore(reconnected.state, {
+      type: 'recovery.confirm',
+      expectedAttemptId: 'recovery-at-limit',
+    });
+    expect(canDispatchConductorCore(confirmed.state)).toBe(false);
+    const explicitResend = stepConductorCore(confirmed.state, {
+      type: 'inbox.batch.start',
+      batchId: 'recovery-batch',
+      attemptId: 'operator-resend-after-confirmation',
+      reason: 'operatorResend',
+    });
+    expect(actions(explicitResend.effects)).toContainEqual(
+      expect.objectContaining({
+        type: 'startInboxBatchSend',
+        attemptId: 'operator-resend-after-confirmation',
+        reason: 'operatorResend',
+      }),
+    );
+    expect(explicitResend.state.dispatchHold).toBe(true);
+    expect(
+      explicitResend.state.durableInbox.batches[0]
+        ?.automaticSendInvocations,
+    ).toBe(3);
+  });
+
+  it('does not let a delivery-unknown hold bypass cross another inbox stop gate', () => {
+    const recoveryItem: ConductorInboxItem = {
+      id: 'recovery-item',
+      payload: { text: 'unknown delivery result' },
+      holdClass: 'deliveryUnknown',
+    };
+    const oversizedItem: ConductorInboxItem = {
+      id: 'oversized-item',
+      payload: { text: 'size blocked batch' },
+      holdClass: 'ordinary',
+    };
+    const restored = stepConductorCore(createConductorCoreState(), {
+      type: 'inbox.restore',
+      pendingItems: [recoveryItem, oversizedItem],
+      dispatchHold: true,
+      deliveryUnknownBatches: [
+        {
+          id: 'recovery-batch',
+          itemIds: [recoveryItem.id],
+          automaticSendInvocations: 1,
+          processResumeNotice: { text: 'resume' },
+        },
+      ],
+      sizeBlockedBatches: [
+        {
+          id: 'size-batch',
+          itemIds: [oversizedItem.id],
+          automaticSendInvocations: 0,
+          holdClass: 'ordinary',
+        },
+      ],
+    });
+    const blocked = stepConductorCore(restored.state, {
+      type: 'inbox.batch.start',
+      batchId: 'recovery-batch',
+      attemptId: 'recovery-blocked-by-size-gate',
+      reason: 'restartRecovery',
+    });
+    expect(blocked.state).toBe(restored.state);
+    expect(actions(blocked.effects)).toEqual([]);
+    expect(blocked.state.dispatchHold).toBe(true);
+    expect(blocked.state.durableInbox.stopGates).toEqual([
+      { kind: 'sizeBlocked', batchId: 'size-batch' },
+    ]);
+  });
+
+  it('ignores stale durable results and settles a finished result through shared lifecycle', () => {
+    const item: ConductorInboxItem = {
+      id: 'finished-item',
+      payload: { text: 'complete this item' },
+      holdClass: 'ordinary',
+    };
+    const restored = stepConductorCore(
+      createConductorCoreState({ lastFailureClass: 'transport' }),
+      {
+        type: 'inbox.restore',
+        pendingItems: [item],
+        dispatchHold: false,
+      },
+    );
+    const selected = stepConductorCore(restored.state, {
+      type: 'inbox.batch.select',
+      batchId: 'finished-batch',
+      itemIds: [item.id],
+    });
+    const preflightPassed = stepConductorCore(selected.state, {
+      type: 'inbox.sizePreflight.result',
+      batchId: 'finished-batch',
+      withinLimit: true,
+    });
+    const started = stepConductorCore(preflightPassed.state, {
+      type: 'inbox.batch.start',
+      batchId: 'finished-batch',
+      attemptId: 'finished-attempt',
+      reason: 'initial',
+    });
+    const invoked = stepConductorCore(started.state, {
+      type: 'inbox.send.invoked',
+      attemptId: 'finished-attempt',
+    });
+
+    const stale = stepConductorCore(invoked.state, {
+      type: 'inbox.send.result',
+      attemptId: 'stale-attempt',
+      outcome: 'deliveryUnknown',
+      failureClass: 'auth',
+      agentAvailable: false,
+    });
+    expect(stale.state).toBe(invoked.state);
+    expect(stale.effects).toEqual([]);
+
+    const finished = stepConductorCore(invoked.state, {
+      type: 'inbox.send.result',
+      attemptId: 'finished-attempt',
+      outcome: 'finished',
+      agentAvailable: true,
+    });
+    expect(finished.state.lease).toBeUndefined();
+    expect(finished.state.sendStartedAttemptId).toBeUndefined();
+    expect(finished.state.agentAvailable).toBe(true);
+    expect(finished.state.attentionAttemptId).toBeUndefined();
+    expect(finished.state.lastFailureClass).toBeUndefined();
+    expect(finished.state.durableInbox.stopGates).toEqual([
+      { kind: 'ackPending', batchId: 'finished-batch' },
+    ]);
+    expect(canDispatchConductorCore(finished.state)).toBe(false);
+    expect(observations(finished.effects)).toContainEqual({
+      type: 'send.result',
+      attemptId: 'finished-attempt',
+      completed: true,
+    });
+    expect(actions(finished.effects)).toEqual([
+      {
+        type: 'persistInboxDeliveryAck',
+        batchId: 'finished-batch',
+        itemIds: [item.id],
+      },
+    ]);
   });
 
   it('keeps a durable inbox send in the shared lease across shutdown', () => {

@@ -12,6 +12,20 @@ import type {
 import { CONDUCTOR_RECOVERY_INPUT_BYTE_LIMIT } from './conductor-recovery-constants.js';
 import type { SessionEvent } from './session/session-event.js';
 
+type ConductorCoreInboxSendResult = Extract<
+  ConductorInboxCoreEvent,
+  { readonly type: 'inbox.send.result' }
+> & {
+  /** Shared lifecycle projection; the inbox reducer itself ignores these. */
+  readonly failureClass?: ConductorRecoveryFailureClass;
+  readonly agentAvailable?: boolean;
+  readonly requiresConfirmation?: boolean;
+};
+
+type ConductorCoreInboxEvent =
+  | Exclude<ConductorInboxCoreEvent, { readonly type: 'inbox.send.result' }>
+  | ConductorCoreInboxSendResult;
+
 export type ConductorCoreLease =
   | {
       readonly kind: 'send';
@@ -246,7 +260,7 @@ export type ConductorCoreEvent =
       type: 'issueLoop.driverStopCheck';
       phase?: 'afterSend' | 'idle';
     }
-  | ConductorInboxCoreEvent;
+  | ConductorCoreInboxEvent;
 
 const EMPTY_EFFECTS: readonly ConductorCoreEffect[] = [];
 
@@ -406,20 +420,14 @@ export function stepConductorCore(
       ) {
         return { state, effects: EMPTY_EFFECTS };
       }
-      const nextState: ConductorCoreState = {
-        ...state,
-        lease: undefined,
-        sendStartedAttemptId: undefined,
-        ...(event.agentAvailable !== undefined
-          ? { agentAvailable: event.agentAvailable }
-          : {}),
-        attentionAttemptId: event.completed
-          ? undefined
-          : event.requiresConfirmation === false
-            ? state.attentionAttemptId
-            : event.attemptId,
-        lastFailureClass: event.completed ? undefined : event.failureClass,
-      };
+      const nextState = applySendResultLifecycle(
+        {
+          ...state,
+          lease: undefined,
+          sendStartedAttemptId: undefined,
+        },
+        event,
+      );
       return {
         state: nextState,
         effects: [
@@ -1066,13 +1074,29 @@ export function stepConductorCore(
         return { state, effects: EMPTY_EFFECTS };
       }
       return {
-        state: {
-          ...state,
-          durableInbox: transition.state,
-          lease: undefined,
-          sendStartedAttemptId: undefined,
-        },
-        effects: transition.effects,
+        state: applySendResultLifecycle(
+          {
+            ...state,
+            durableInbox: transition.state,
+            lease: undefined,
+            sendStartedAttemptId: undefined,
+          },
+          {
+            ...event,
+            completed: event.outcome === 'finished',
+          },
+        ),
+        effects: [
+          observation({
+            type: 'send.result',
+            attemptId: event.attemptId,
+            completed: event.outcome === 'finished',
+            ...(event.failureClass
+              ? { failureClass: event.failureClass }
+              : {}),
+          }),
+          ...transition.effects,
+        ],
       };
     }
     case 'inbox.accept':
@@ -1092,6 +1116,30 @@ export function stepConductorCore(
       };
     }
   }
+}
+
+function applySendResultLifecycle(
+  state: ConductorCoreState,
+  result: {
+    readonly attemptId: string;
+    readonly completed: boolean;
+    readonly failureClass?: ConductorRecoveryFailureClass;
+    readonly agentAvailable?: boolean;
+    readonly requiresConfirmation?: boolean;
+  },
+): ConductorCoreState {
+  return {
+    ...state,
+    ...(result.agentAvailable !== undefined
+      ? { agentAvailable: result.agentAvailable }
+      : {}),
+    attentionAttemptId: result.completed
+      ? undefined
+      : result.requiresConfirmation === false
+        ? state.attentionAttemptId
+        : result.attemptId,
+    lastFailureClass: result.completed ? undefined : result.failureClass,
+  };
 }
 
 export function canDispatchConductorCore(state: ConductorCoreState): boolean {
