@@ -1,7 +1,23 @@
 import { createReadStream } from 'node:fs';
-import { readFile, readdir, stat } from 'node:fs/promises';
+import {
+  lstat,
+  readFile,
+  readdir,
+  realpath,
+  stat,
+} from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { extname, isAbsolute, join, resolve } from 'node:path';
+import {
+  basename,
+  dirname,
+  extname,
+  isAbsolute,
+  join,
+  normalize,
+  relative,
+  resolve,
+  sep,
+} from 'node:path';
 import { createInterface } from 'node:readline';
 import type { Readable, Transform } from 'node:stream';
 import {
@@ -53,6 +69,8 @@ export interface WorkerSessionHistoryReaderInput {
   piRuntime?: PiAcpRuntimeMarker;
   issueNumber?: number;
   workspaceSlugKey?: string;
+  /** Exact builtin Pi worker HOME recorded with this session generation. */
+  piWorkerHome?: string;
 }
 
 /** Adapter contract for reading a provider's local worker transcript. */
@@ -253,8 +271,13 @@ export async function readWorkerSessionHistory(input: {
     const piRuntime = worker.acpSpawn?.piRuntime;
     let issueNumber: number | undefined;
     let workspaceSlugKey: string | undefined;
+    let piWorkerHome: string | undefined;
     if (piRuntime === 'builtin') {
       workspaceSlugKey = parseWorkspaceSessionUrl(generationIssueUrl)?.slugKey;
+      const storagePaths = resolveEnsemblePaths({
+        repoRoot: generationRepoRoot,
+        userEnsembleRoot: input.userEnsembleRoot,
+      });
       if (!workspaceSlugKey) {
         try {
           issueNumber = parseIssueUrl(generationIssueUrl).number;
@@ -264,9 +287,25 @@ export async function readWorkerSessionHistory(input: {
           );
         }
       }
+      piWorkerHome =
+        worker.piWorkerHome ??
+        (workspaceSlugKey
+          ? storagePaths.piWorkspaceWorkerDir(workerName, workspaceSlugKey)
+          : storagePaths.piWorkerDir(workerName, issueNumber!));
+      if (!isBuiltinPiWorkerHomeIdentity({
+        workerHome: piWorkerHome,
+        workerName,
+        issueNumber,
+        workspaceSlugKey,
+        paths: storagePaths,
+      })) {
+        throw new WorkerSessionHistoryUnavailableError(
+          'SessionResumeStore の builtin Pi worker HOME が worker identity と一致しません。',
+        );
+      }
     }
     const readerInput: WorkerSessionHistoryReaderInput = {
-      repoRoot,
+      repoRoot: piWorkerHome ? generationRepoRoot : repoRoot,
       fallbackRepoRoots: selected === currentIndex
         ? [generationRepoRoot]
         : [],
@@ -281,6 +320,7 @@ export async function readWorkerSessionHistory(input: {
         : {}),
       ...(issueNumber !== undefined ? { issueNumber } : {}),
       ...(workspaceSlugKey ? { workspaceSlugKey } : {}),
+      ...(piWorkerHome ? { piWorkerHome } : {}),
     };
     const result = input.includeSourceFiles
       ? await reader.readWithSources(readerInput)
@@ -380,36 +420,48 @@ async function readPiAcpSessionHistoryWithSources(
         })
       : undefined;
   let session: PiAcpSessionMapEntry | undefined;
-  let foundMap = false;
-  let malformedMap = false;
   let sessionMapPaths: string[];
+  let allowedTranscriptHomes: string[] = [];
   if (paths) {
     const issueNumber = input.issueNumber;
     if (
-      !input.workspaceSlugKey && (issueNumber === undefined ||
-      !Number.isSafeInteger(issueNumber) ||
-      issueNumber < 1)
+      !input.workspaceSlugKey &&
+      (issueNumber === undefined ||
+        !Number.isSafeInteger(issueNumber) ||
+        issueNumber < 1)
     ) {
       throw new WorkerSessionHistoryUnavailableError(
         'builtin Pi の Issue number がなく、session map を解決できません。',
       );
     }
+    const workerHome = input.piWorkerHome;
+    if (!workerHome) {
+      throw new WorkerSessionHistoryUnavailableError(
+        'SessionResumeStore に builtin Pi worker HOME がなく、保存先を解決できません。',
+      );
+    }
+    const storageRoot = input.workspaceSlugKey
+      ? dirname(dirname(dirname(workerHome)))
+      : dirname(dirname(workerHome));
+    const defaultPaths = resolveEnsemblePaths({
+      repoRoot: input.repoRoot,
+      userEnsembleRoot: input.userEnsembleRoot,
+    });
+    const legacyWorkerHome =
+      resolve(storageRoot) === resolve(defaultPaths.piWorkerRoot)
+        ? join(storageRoot, basename(workerHome))
+        : undefined;
+    const mapPaths = resolvePiAcpSessionMapPaths(
+      workerHome,
+      legacyWorkerHome,
+    );
     sessionMapPaths = [
-      ...[input.repoRoot, ...(input.fallbackRepoRoots ?? [])].flatMap(
-        (repoRoot) => {
-          const rootPaths = resolveEnsemblePaths({
-            repoRoot,
-            userEnsembleRoot: input.userEnsembleRoot,
-          });
-          const mapPaths = resolvePiAcpSessionMapPaths(
-            input.workspaceSlugKey
-              ? rootPaths.piWorkspaceWorkerDir(input.workerName, input.workspaceSlugKey)
-              : rootPaths.piWorkerDir(input.workerName, issueNumber!),
-            rootPaths.legacyPiWorkerDir(input.workerName),
-          );
-          return [mapPaths.upstreamPath, ...mapPaths.compatibilityPaths];
-        },
-      ),
+      mapPaths.upstreamPath,
+      ...mapPaths.compatibilityPaths,
+    ];
+    allowedTranscriptHomes = [
+      workerHome,
+      ...mapPaths.compatibilitySources.map(({ workerHome: home }) => home),
     ];
   } else {
     sessionMapPaths = [join(homedir(), '.pi', 'pi-acp', 'session-map.json')];
@@ -418,9 +470,15 @@ async function readPiAcpSessionHistoryWithSources(
   for (const path of new Set(sessionMapPaths)) {
     let raw: string;
     try {
+      const mapStats = await lstat(path);
+      if (mapStats.isSymbolicLink() || !mapStats.isFile()) {
+        throw new WorkerSessionHistoryUnavailableError(
+          'Pi ACP の session map は通常 file ではありません。',
+        );
+      }
       raw = await readFile(path, 'utf8');
-      foundMap = true;
     } catch (error) {
+      if (error instanceof WorkerSessionHistoryUnavailableError) throw error;
       if (isEnoent(error)) continue;
       throw new WorkerSessionHistoryUnavailableError(
         'Pi ACP の session map を読み取れませんでした。',
@@ -431,30 +489,29 @@ async function readPiAcpSessionHistoryWithSources(
     try {
       parsed = JSON.parse(raw);
     } catch {
-      malformedMap = true;
-      continue;
-    }
-
-    session = findPiAcpSessionMapEntry(parsed, input.acpSessionId);
-    if (session) break;
-  }
-  if (!session) {
-    if (!foundMap) {
-      throw new WorkerSessionHistoryUnavailableError(
-        'Pi ACP の session map が見つかりません。',
-      );
-    }
-    if (malformedMap) {
       throw new WorkerSessionHistoryUnavailableError(
         'Pi ACP の session map が不正な JSON です。',
       );
     }
+
+    session = findPiAcpSessionMapEntry(parsed, input.acpSessionId);
+    if (!session) {
+      throw new WorkerSessionHistoryUnavailableError(
+        'Pi ACP の選択された session map に対象 session がありません。',
+      );
+    }
+    break;
+  }
+  if (!session) {
     throw new WorkerSessionHistoryUnavailableError(
-      'Pi ACP の session map に対象 session がありません。',
+      'Pi ACP の session map が見つかりません。',
     );
   }
 
-  if (!isAbsolute(session.cwd) || resolve(session.cwd) !== resolve(input.acpCwd)) {
+  if (
+    !isAbsolute(session.cwd) ||
+    resolve(session.cwd) !== resolve(input.acpCwd)
+  ) {
     throw new WorkerSessionHistoryUnavailableError(
       'Pi ACP session map の cwd が SessionResumeStore と一致しません。',
     );
@@ -470,7 +527,9 @@ async function readPiAcpSessionHistoryWithSources(
 
   let transcriptStat;
   try {
-    transcriptStat = await stat(session.sessionFile);
+    transcriptStat = paths
+      ? await lstat(session.sessionFile)
+      : await stat(session.sessionFile);
   } catch (error) {
     if (isEnoent(error)) {
       throw new WorkerSessionHistoryUnavailableError(
@@ -485,6 +544,34 @@ async function readPiAcpSessionHistoryWithSources(
     throw new WorkerSessionHistoryUnavailableError(
       'Pi ACP session map が指す transcript path は file ではありません。',
     );
+  }
+  if (paths) {
+    if (transcriptStat.isSymbolicLink()) {
+      throw new WorkerSessionHistoryUnavailableError(
+        'builtin Pi transcript は symlink を参照できません。',
+      );
+    }
+    let transcriptRealPath: string;
+    let allowedRealHomes: string[];
+    try {
+      transcriptRealPath = await realpath(session.sessionFile);
+      allowedRealHomes = (
+        await Promise.all(
+          allowedTranscriptHomes.map((home) => realpath(home).catch(() => '')),
+        )
+      ).filter(Boolean);
+    } catch {
+      throw new WorkerSessionHistoryUnavailableError(
+        'Pi ACP transcript の保存先を検証できません。',
+      );
+    }
+    if (
+      !allowedRealHomes.some((home) => isPathWithin(home, transcriptRealPath))
+    ) {
+      throw new WorkerSessionHistoryUnavailableError(
+        'Pi ACP session map の transcript path が worker storage 外を指しています。',
+      );
+    }
   }
 
   let transcript: string;
@@ -1389,6 +1476,39 @@ function findPiAcpSessionMapEntry(
     cwd: entry.cwd,
     sessionFile: entry.sessionFile,
   };
+}
+
+function isBuiltinPiWorkerHomeIdentity(input: {
+  workerHome: string;
+  workerName: string;
+  issueNumber?: number;
+  workspaceSlugKey?: string;
+  paths: ReturnType<typeof resolveEnsemblePaths>;
+}): boolean {
+  const expectedHome = input.workspaceSlugKey
+    ? input.paths.piWorkspaceWorkerDir(
+        input.workerName,
+        input.workspaceSlugKey,
+      )
+    : input.paths.piWorkerDir(input.workerName, input.issueNumber!);
+  const suffix = input.workspaceSlugKey
+    ? join('workspace', input.workspaceSlugKey, basename(expectedHome))
+    : join(`issue-${input.issueNumber}`, basename(expectedHome));
+  return (
+    isAbsolute(input.workerHome) &&
+    normalize(resolve(input.workerHome)) === input.workerHome &&
+    resolve(input.workerHome).endsWith(`${sep}${suffix}`)
+  );
+}
+
+function isPathWithin(root: string, candidate: string): boolean {
+  const relativePath = relative(resolve(root), resolve(candidate));
+  return (
+    relativePath === '' ||
+    (relativePath !== '..' &&
+      !relativePath.startsWith(`..${sep}`) &&
+      !isAbsolute(relativePath))
+  );
 }
 
 function isSessionMessageEntry(

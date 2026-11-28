@@ -3147,12 +3147,13 @@ process.stdin.on('data', chunk => {
     });
 
     const workerSpawn = connectAcp.mock.calls[0]?.[0].spawn;
-    const paths = resolveEnsemblePaths({ repoRoot });
+    const paths = resolveEnsemblePaths({
+      repoRoot,
+      piAgentDir: join(repoRoot, 'custom-pi-user'),
+    });
     expect(workerSpawn?.env).toMatchObject({
       HOME: paths.piWorkerDir('implementer', TEST_ISSUE.number),
       USERPROFILE: paths.piWorkerDir('implementer', TEST_ISSUE.number),
-      ENSEMBLE_PI_LEGACY_WORKER_HOME:
-        paths.legacyPiWorkerDir('implementer'),
       PI_CODING_AGENT_DIR: join(repoRoot, 'custom-pi-user'),
       PI_CODING_AGENT_SESSION_DIR:
         paths.piWorkerSessionsDir('implementer', TEST_ISSUE.number),
@@ -3163,6 +3164,134 @@ process.stdin.on('data', chunk => {
     );
     expect(workerSpawn?.env?.ENSEMBLE_PI_CLI_EXECUTABLE).toBe(
       resolveBundledPiCliPath(),
+    );
+    const resumeStore = await loadSessionResumeStore(
+      sessionResumeStorePath({
+        repoRoot,
+        conductorAgentId: 'agent-builtin-pi-root',
+      }),
+    );
+    expect(resumeStore?.workers.implementer?.piWorkerHome).toBe(
+      paths.piWorkerDir('implementer', TEST_ISSUE.number),
+    );
+  });
+
+  it('resumes builtin Pi from the saved worker home after agentDir changes', async () => {
+    const agentId = 'resume-builtin-pi-saved-home';
+    const oldAgentDir = join(repoRoot, 'old-pi-agent');
+    const currentAgentDir = join(repoRoot, 'current-pi-agent');
+    const ensembleConfig = {
+      ...DEFAULT_ENSEMBLE_CONFIG,
+      conductor: {
+        ...DEFAULT_ENSEMBLE_CONFIG.conductor,
+        pi: { agentDir: currentAgentDir },
+      },
+      acp: {
+        ...DEFAULT_ENSEMBLE_CONFIG.acp,
+        defaultPreset: 'pi' as const,
+        pi: { runtime: 'builtin' as const },
+      },
+    };
+    const savedWorkerHome = resolveEnsemblePaths({
+      repoRoot,
+      piAgentDir: oldAgentDir,
+    }).piWorkerDir('implementer', TEST_ISSUE.number);
+    const savedSpawn = acpSpawnFingerprint(
+      resolveWorkerAcpSpawn({
+        defaultOptions: { config: ensembleConfig, env: {} },
+      }),
+    );
+    await saveSessionResumeStore(
+      sessionResumeStorePath({ repoRoot, conductorAgentId: agentId }),
+      {
+        version: SESSION_RESUME_STORE_VERSION,
+        conductorAgentId: agentId,
+        issueUrl: TEST_ISSUE.url,
+        repoRoot,
+        profile: {
+          workers: [{ name: 'implementer', kind: 'implementer' }],
+        },
+        openQuestions: [],
+        sequence: 0,
+        workers: {
+          implementer: {
+            acpSessionId: 'saved-builtin-pi-session',
+            acpCwd: repoRoot,
+            piWorkerHome: savedWorkerHome,
+            acpSpawn: savedSpawn,
+          },
+        },
+        updatedAt: 0,
+      },
+    );
+
+    const bridge = {
+      loadSession: vi.fn().mockResolvedValue(undefined),
+      newSession: vi.fn().mockResolvedValue('unexpected-new-session'),
+      promptSession: vi.fn().mockResolvedValue({
+        stopReason: 'end_turn',
+        responseText: 'ready',
+      }),
+      cancelSession: vi.fn().mockResolvedValue(undefined),
+      close: vi.fn().mockResolvedValue(undefined),
+    } as unknown as AcpBridge;
+    const connectAcp = vi.fn().mockResolvedValue(bridge);
+    mockResume.mockImplementationOnce(async () => ({
+      agentId,
+      send: mockSend,
+      close: mockClose,
+      getUsage: createMockConductorGetUsage(),
+    }));
+    mockSend.mockResolvedValue({
+      runId: 'run-resume-builtin-pi-saved-home',
+      status: 'finished',
+      result: 'resumed',
+    });
+
+    stubUnusedControlServer();
+    await runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: {
+        workers: [{ name: 'implementer', kind: 'implementer' }],
+      },
+      ensembleConfig,
+      defaultAcp: { config: ensembleConfig, env: {} },
+      workerWorktree: {
+        path: repoRoot,
+        branch: 'ensemble/issue-1',
+        issue: TEST_ISSUE,
+        inRepo: true,
+      },
+      resumeAgentId: agentId,
+      connectAcp,
+      maxTurns: 5,
+      disableGitHubMonitor: true,
+      disablePermissionDeadlockMonitor: true,
+      permissionPipeline: new PermissionPipeline({}),
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: false,
+    });
+
+    expect(connectAcp.mock.calls[0]?.[0].spawn.env).toMatchObject({
+      HOME: savedWorkerHome,
+      USERPROFILE: savedWorkerHome,
+      PI_CODING_AGENT_DIR: currentAgentDir,
+      PI_CODING_AGENT_SESSION_DIR: join(savedWorkerHome, 'sessions'),
+      ENSEMBLE_PI_RESUME_SESSION_ID: 'saved-builtin-pi-session',
+      ENSEMBLE_PI_RESUME_CWD: repoRoot,
+    });
+    expect(bridge.loadSession).toHaveBeenCalledWith(
+      'saved-builtin-pi-session',
+      repoRoot,
+      expect.any(Function),
+    );
+    expect(bridge.newSession).not.toHaveBeenCalled();
+    const resumedStore = await loadSessionResumeStore(
+      sessionResumeStorePath({ repoRoot, conductorAgentId: agentId }),
+    );
+    expect(resumedStore?.workers.implementer?.piWorkerHome).toBe(
+      savedWorkerHome,
     );
   });
 

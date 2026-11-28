@@ -9,6 +9,8 @@ export interface ResolveEnsemblePathsOptions {
   home?: string;
   /** Override the user-level Ensemble directory, primarily for isolated tests. */
   userEnsembleRoot?: string;
+  /** Effective Pi user resource root for builtin worker storage. */
+  piAgentDir?: string;
 }
 
 /**
@@ -37,7 +39,13 @@ export function resolveEnsemblePaths(
   const workspacesRoot = join(userRoot, 'workspaces');
   const legacyHashSessionsDir = join(sessionsRoot, repoKey);
   const piUserDir = join(userRoot, 'pi');
-  const piWorkerRoot = join(piUserDir, 'worker', repoKey);
+  const piWorkerRoot = join(
+    options.piAgentDir
+      ? normalize(resolve(options.piAgentDir))
+      : piUserDir,
+    'worker',
+    repoKey,
+  );
   const piWorkerDirectoryName = (workerName: string) => {
     const slug = workerName
       .normalize('NFKD')

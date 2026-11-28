@@ -115,6 +115,41 @@ describe('list_worker_messages', () => {
     ]);
   });
 
+  it('uses the worker root saved with the session independently of operator resources', async () => {
+    await setupRoots();
+    const agentDir = join(tempRoot, 'conductor-pi-root');
+    vi.stubEnv('PI_CODING_AGENT_DIR', join(tempRoot, 'operator-pi-root'));
+    const paths = resolveEnsemblePaths({
+      repoRoot,
+      userEnsembleRoot,
+      piAgentDir: agentDir,
+    });
+    const conductorAgentId = 'custom-pi-root-run';
+    await writeWorkerSession(paths, {
+      conductorAgentId,
+      acpSessionId: 'custom-pi-session',
+      acpCwd: '/tmp/custom-pi-worker',
+      piWorkerHome: paths.piWorkerDir('implementer', 691),
+    });
+
+    const result = await createListWorkerMessagesTool({
+      userEnsembleRoot,
+    }).execute({
+      issueUrl: ISSUE_URL,
+      conductorAgentId,
+      worker: 'implementer',
+    });
+
+    expect(result.structuredContent).toMatchObject({
+      status: 'supported',
+      messages: expect.arrayContaining([
+        expect.objectContaining({
+          text: `Worker reply from ${conductorAgentId}.`,
+        }),
+      ]),
+    });
+  });
+
   it('rejects a cursor from another run when provider ids overlap', async () => {
     await setupRoots();
     const paths = resolveEnsemblePaths({ repoRoot, userEnsembleRoot });
@@ -264,6 +299,7 @@ describe('list_worker_messages', () => {
       conductorAgentId: string;
       acpSessionId: string;
       acpCwd: string;
+      piWorkerHome?: string;
     },
   ): Promise<void> {
     const store: SessionResumeStore = {
@@ -280,6 +316,9 @@ describe('list_worker_messages', () => {
         implementer: {
           acpSessionId: input.acpSessionId,
           acpCwd: input.acpCwd,
+          ...(input.piWorkerHome
+            ? { piWorkerHome: input.piWorkerHome }
+            : {}),
           acpSpawn: {
             preset: 'pi',
             command: 'pi-acp',

@@ -2,6 +2,7 @@ import { WORKSPACE_WORKER_PROMPT_VERSION } from '../workspace-run/worker-prompt-
 import { conductorFailureLogPath, createConductorFailureLog } from '../session/conductor-failure-log.js';
 import { SessionOwnership, type SessionWriteLease } from '../session/session-ownership.js';
 import { resolveUserEnsembleRoot } from '../resolve-user-ensemble-root.js';
+import { resolveEnsemblePaths } from '../ensemble-paths.js';
 import { acquireSessionMigrationReadLock, acquireSessionOwnerLock } from '../session/session-owner-lock.js';
 import { readWorkspaceAnchor } from '../workspace-run/slug-key.js';
 import { stat } from 'node:fs/promises';
@@ -899,8 +900,20 @@ async function runConductorSessionWithStartupGuard(
     }
     githubMonitorCursor = resumeStore.githubMonitor;
     for (const [name, worker] of Object.entries(resumeStore.workers)) {
+      const isSavedBuiltinPi =
+        worker.acpSpawn?.preset === 'pi' &&
+        worker.acpSpawn.piRuntime === 'builtin';
+      const piWorkerHome = isSavedBuiltinPi
+        ? worker.piWorkerHome ??
+          resolveLegacyBuiltinPiWorkerHome({
+            repoRoot: worker.repoRoot ?? resumeStore.repoRoot,
+            issueUrl: worker.issueUrl ?? resumeStore.issueUrl,
+            workerName: name,
+          })
+        : undefined;
       workerSessions.set(name, {
         ...worker,
+        ...(piWorkerHome ? { piWorkerHome } : {}),
         ...(worker.originAcpCwd || worker.acpCwd
           ? { originAcpCwd: worker.originAcpCwd ?? worker.acpCwd }
           : {}),
@@ -1100,10 +1113,26 @@ async function runConductorSessionWithStartupGuard(
       options.defaultAcp,
       piAgentDir,
       workspaceSession?.slugKey,
+      workerSessions,
+      activeLocatedResumeStore?.resumeStore.repoRoot,
     );
   }
   const workerAcpFingerprints = new Map(
     workers.map((worker) => [worker.name, worker.acpFingerprint] as const),
+  );
+  const workerStorageHomes = new Map(
+    workers.flatMap((worker) => {
+      if (
+        worker.acpFingerprint?.preset !== 'pi' ||
+        worker.acpFingerprint.piRuntime !== 'builtin'
+      ) {
+        return [];
+      }
+      const home = worker.spawn?.env?.HOME;
+      return typeof home === 'string' && home
+        ? [[worker.name, home] as const]
+        : [];
+    }),
   );
   let teardownStarted = false;
   const workerWorktree =
@@ -1293,7 +1322,7 @@ async function runConductorSessionWithStartupGuard(
         });
         return;
       }
-      workerSessions.set(result.name, {
+      const updatedWorker: WorkerSessionResumeStore = {
         ...workerSessions.get(result.name),
         acpSessionId: result.acpSessionId,
         ...(workspaceSession && result.source === 'harness' && result.promptResult.stopReason === 'end_turn' && !attached?.session.resumed ? { workspacePromptVersion: WORKSPACE_WORKER_PROMPT_VERSION } : {}),
@@ -1307,7 +1336,11 @@ async function runConductorSessionWithStartupGuard(
         ...(workerAcpFingerprints.get(result.name)
           ? { acpSpawn: workerAcpFingerprints.get(result.name) }
           : {}),
-      });
+      };
+      const currentWorkerHome = workerStorageHomes.get(result.name);
+      if (currentWorkerHome) updatedWorker.piWorkerHome = currentWorkerHome;
+      else delete updatedWorker.piWorkerHome;
+      workerSessions.set(result.name, updatedWorker);
       eventQueue.enqueue({ type: 'worker.completed', result });
       scheduleSessionResumeStoreFlush();
     },
@@ -2019,6 +2052,9 @@ async function runConductorSessionWithStartupGuard(
       const replacement: WorkerSessionResumeStore = {
         acpSessionId: notification.acpSessionId,
         acpCwd: notification.acpCwd,
+        ...(workerStorageHomes.get(notification.name)
+          ? { piWorkerHome: workerStorageHomes.get(notification.name) }
+          : {}),
         handoffPending: true,
         ...(workspaceSession ? { workspacePromptVersion: WORKSPACE_WORKER_PROMPT_VERSION } : {}),
         originAcpCwd: notification.acpCwd,
@@ -2036,6 +2072,9 @@ async function runConductorSessionWithStartupGuard(
             acpSessionId: previous.acpSessionId,
             ...(previous.originAcpCwd ?? previous.acpCwd
               ? { acpCwd: previous.originAcpCwd ?? previous.acpCwd }
+              : {}),
+            ...(previous.piWorkerHome
+              ? { piWorkerHome: previous.piWorkerHome }
               : {}),
             ...(previous.originAcpSpawn ?? previous.acpSpawn
               ? { acpSpawn: historySpawnFingerprint((previous.originAcpSpawn ?? previous.acpSpawn)!) }
@@ -3315,7 +3354,7 @@ async function runConductorSessionWithStartupGuard(
         for (const attached of workerSession.runtime.listAttachedForResume()) {
           const savedWorker = workerSessions.get(attached.name);
           if (savedWorker && savedWorker.acpSessionId !== attached.session.sessionId) continue;
-          workerSessions.set(attached.name, {
+          const updatedWorker: WorkerSessionResumeStore = {
             ...workerSessions.get(attached.name),
             acpSessionId: attached.session.sessionId,
             acpCwd: attached.session.acpCwd,
@@ -3326,7 +3365,11 @@ async function runConductorSessionWithStartupGuard(
             ...(workerAcpFingerprints.get(attached.name)
               ? { acpSpawn: workerAcpFingerprints.get(attached.name) }
               : {}),
-          });
+          };
+          const currentWorkerHome = workerStorageHomes.get(attached.name);
+          if (currentWorkerHome) updatedWorker.piWorkerHome = currentWorkerHome;
+          else delete updatedWorker.piWorkerHome;
+          workerSessions.set(attached.name, updatedWorker);
         }
       }
       const rejectedPendingPermissions = rejectAllPendingPermissions(
@@ -3583,6 +3626,8 @@ function finalizeSessionWorkerSpecs(
   defaultAcp?: DefaultAcpResolutionOptions,
   piAgentDir?: string,
   workspaceSlugKey?: string,
+  savedWorkers?: ReadonlyMap<string, WorkerSessionResumeStore>,
+  savedRepoRoot?: string,
 ): void {
   const resolvedPiAgentDir =
     piAgentDir ??
@@ -3597,10 +3642,34 @@ function finalizeSessionWorkerSpecs(
       defaultOptions: defaultAcp,
       modelTag: worker.modelTag,
     });
+    const savedWorker = savedWorkers?.get(worker.name);
+    const resumeBuiltinPi =
+      resolved.preset === 'pi' &&
+      resolved.piRuntime === 'builtin' &&
+      savedWorker?.acpSpawn?.preset === 'pi' &&
+      savedWorker.acpSpawn.piRuntime === 'builtin';
+    if (resumeBuiltinPi && !savedWorker.acpCwd) {
+      throw new Error(
+        `Cannot safely resume builtin Pi worker "${worker.name}" because its saved ACP cwd is missing.`,
+      );
+    }
     const sessionSpawn =
       resolved.piRuntime === 'builtin'
         ? configurePiWorkerRuntime(resolved, {
             repoRoot,
+            ...(resumeBuiltinPi
+              ? {
+                  storageRepoRoot:
+                    savedWorker.repoRoot ?? savedRepoRoot ?? repoRoot,
+                  ...(savedWorker.piWorkerHome
+                    ? { workerHome: savedWorker.piWorkerHome }
+                    : {}),
+                  resumeSessionId: savedWorker.acpSessionId,
+                  ...(savedWorker.acpCwd
+                    ? { resumeCwd: savedWorker.acpCwd }
+                    : {}),
+                }
+              : {}),
             workerName: worker.name,
             ...(workspaceSlugKey
               ? { workspaceSlugKey }
@@ -3614,6 +3683,22 @@ function finalizeSessionWorkerSpecs(
     worker.spawn = resolvedAcpSpawnToOptions(finalized, worker.spawn);
     worker.acpFingerprint = acpSpawnFingerprint(finalized);
   }
+}
+
+function resolveLegacyBuiltinPiWorkerHome(input: {
+  repoRoot: string;
+  issueUrl: string;
+  workerName: string;
+}): string {
+  const paths = resolveEnsemblePaths({ repoRoot: input.repoRoot });
+  const workspace = parseWorkspaceSessionUrl(input.issueUrl);
+  if (workspace) {
+    return paths.piWorkspaceWorkerDir(input.workerName, workspace.slugKey);
+  }
+  return paths.piWorkerDir(
+    input.workerName,
+    parseIssueUrl(input.issueUrl).number,
+  );
 }
 
 function configureOneTimeSecretWorkerEnvironment(input: {
