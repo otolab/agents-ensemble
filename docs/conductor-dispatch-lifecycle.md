@@ -145,12 +145,18 @@ Transition core は純粋な一段遷移として、概念上 `step(state, event
 
 | 型 | 含める値 | 役割 |
 |---|---|---|
-| `State` | lifecycle lease / availability / attention、抽象 queue item と status、dispatch hold / held、selector continuation、turn policy、eligible / stop guard に必要な permission・worker・Open Question・bootstrap の投影 | core が所有する決定的な状態。実際の queue object や service instance ではなく、遷移に必要な値だけを含める。投影の入力源は現行 owner のままとする |
-| `Event` | `arrival`、operator operation / shutdown input、scheduler の `schedule(selection)`、実行層から戻る `sendStarted(attempt)` / `sendResult(attempt, outcome)` / `reconnectResult(outcome)`、明示 `tick(time)` | core への一回の入力。ID は trace 内の項目 / attempt の対応づけに使い、現行 wire API の安定 ID を意味しない |
-| `Effect.actions` | `startSend(attempt, payload)`、`startReconnect(attempt)`、operator notification | reducer が実行層に依頼する作用。外部 I/O が実行・成功したこととは区別する |
+| `State` | lifecycle lease / availability / attention、抽象 queue item と status、dispatch hold / held、selector continuation、turn policy、eligible / stop guard に必要な permission・worker・Open Question・bootstrap の投影、時刻サンプルと hold reminder の次回期限 | core が所有する決定的な状態。実際の queue object や service instance ではなく、遷移に必要な値だけを含める。投影の入力源は現行 owner のままとする |
+| `Event` | `arrival`、operator operation / shutdown input、scheduler の `schedule(selection)`、実行層から戻る `sendStarted(attempt)` / `sendResult(attempt, outcome)` / `reconnectResult(outcome)`、明示 `tick(time)` | core への一回の入力。`tick(time)` は実行層が取得した時刻を渡し、hold reminder の期限到達を判断する。ID は trace 内の項目 / attempt の対応づけに使い、現行 wire API の安定 ID を意味しない |
+| `Effect.actions` | `startSend(attempt, payload)`、`startReconnect(attempt)`、operator notification、hold reminder 通知 | reducer が実行層に依頼する作用。外部 I/O が実行・成功したこととは区別する |
 | `Effect.observations` | `accepted`、`scheduled`、`dispatched`、`discarded`、recovery 等の状態変化を trace で照合する観測 | action の実行とは別の出力。#855 の `Observation.dispatched` は実 send 開始を指す意味のまま保つ |
 
 `schedule(selection)` は選択の記録であり、実 send 開始を表す `sendStarted(attempt)` と同じ event にはしない。実行層は `startSend` effect を受けて agent API を呼び、その開始を `sendStarted`、返却 / reject を `sendResult` として戻す。`reconnect` も core は開始要求と成功 / 失敗結果だけを扱い、close / resume や transport の内部過程を表現しない。
+
+現行の dispatch hold reminder は、hold が始まった時刻から interval 後に通知し、通知後はその時点から次の interval を数える。core では hold 開始時の直近 `tick(time)` を基準に期限を記録し、後続の `tick(time)` が期限以上なら現在の held 件数を含む reminder effect を一度返す。hold の再設定では期限を延ばさず、解除で期限を消し、再 hold では新しい期限を置く。monitor の時計取得・poll timer・shutdown listener と effect の実行は実行層に残る。この reducer event / effect の runtime 配線は本 PR では行わず、#900 の範囲とする。
+
+TypeScript core は `session.shutdown` event に shutdown mode（`close` / `exit` / `signal`）を記録する。選択後でも `send.requested` による lease 取得より前に shutdown が届けば、後続の lease 要求は拒否され、項目は queue または held buffer に残る。operator input 用の inbox reservation があれば、現行 Driver はこの境界で解放する。reservation は inbox が所有する実行層の状態で、reducer state には含めない。
+
+lease を取得した後は別の境界になる。core は `startSend` effect と payload を持つ lease を返し、shutdown event でどちらも取り消さない。現行 Driver は lease 取得後に項目を queue または held buffer から除き、同期 callback を呼んでから `conductor.send.started` を記録し、`agent.send` を呼ぶ。この callback が再入して shutdown を要求しても、Driver はその間に shutdown を再確認せず send 呼び出しへ進む。したがって core は、対応する `send.started` と `send.result` が後から届く trace を受け付ける。これは発行済み effect の実行や provider 側の受理・完了を保証するものではない。AbortSignal の伝達、listener の解除、I/O の中断や effect 実行順序の保証は execution layer の責務であり、#900 の配線対象とする。
 
 architect との相談を踏まえ、具体実装の複数遷移（選択、reservation、lease 取得、実 send 開始）を抽象 `.schedule` に写す案を候補として残す。この案では `Observation.dispatched` を実 send 開始として保ち、選択時の観測へ読み替えない。ただし、この抽象化が成り立つことや Lean / TS の整合は現時点で証明されていない。中断・停止・無限待機を含む全 trace の対応と、必要となる公平性条件の検証が別途必要である。今回、公平性条件も #855 の性質も追加・変更しない。次の Lean / TS モデルでこの対応を前提にする前に、差分と未証明条件を conductor / operator が確認する。ここに挙げた型は契約の初版であり、具体的なコード union や wire format の確定ではない。
 

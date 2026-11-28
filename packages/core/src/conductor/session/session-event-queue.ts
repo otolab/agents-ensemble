@@ -1,4 +1,8 @@
 import type { SessionEvent } from './session-event.js';
+import {
+  createConductorCoreState,
+  stepConductorCore,
+} from '../conductor-transition-core.js';
 
 /** ConductorSession の単一イベント列（旧 inbox + conductor Queue の統合）。 */
 export class SessionEventQueue {
@@ -22,13 +26,21 @@ export class SessionEventQueue {
     const waiterIndex = this.waiters.findIndex((waiter) =>
       waiter.accept(event),
     );
+    const transition = stepConductorCore(
+      createConductorCoreState({ queue: this.queue }),
+      {
+        type: 'queue.arrival',
+        event,
+        waiterMatched: waiterIndex >= 0,
+      },
+    );
     if (waiterIndex >= 0) {
       const [waiter] = this.waiters.splice(waiterIndex, 1);
       waiter!.resolve(event);
       this.notifyChanged();
       return;
     }
-    this.queue.push(event);
+    this.queue.push(...transition.state.queue.slice(this.queue.length));
     this.notifyChanged();
   }
 
@@ -58,12 +70,14 @@ export class SessionEventQueue {
   /** Remove only the selected event objects, preserving events enqueued meanwhile. */
   removeEvents(events: readonly SessionEvent[]): number {
     if (events.length === 0) return 0;
-    const selected = new Set(events);
-    const retained = this.queue.filter((event) => !selected.has(event));
-    const removed = this.queue.length - retained.length;
+    const transition = stepConductorCore(
+      createConductorCoreState({ queue: this.queue }),
+      { type: 'queue.remove', events },
+    );
+    const removed = this.queue.length - transition.state.queue.length;
     if (removed > 0) {
       this.queue.length = 0;
-      this.queue.push(...retained);
+      this.queue.push(...transition.state.queue);
       this.notifyChanged();
     }
     return removed;

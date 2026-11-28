@@ -1,6 +1,9 @@
 import type { SessionEvent } from './session-event.js';
-import { isTriggerSessionEvent } from './dispatch-mode.js';
 import type { SessionEventQueue } from './session-event-queue.js';
+import {
+  createConductorCoreState,
+  stepConductorCore,
+} from '../conductor-transition-core.js';
 
 /** Driver 内だけで生存する dispatch 保留状態。SessionResumeStore には保存しない。 */
 export interface DispatchHoldState {
@@ -47,81 +50,98 @@ export function createDispatchHoldState(): DispatchHoldState {
 export function bufferDispatchHoldEvents(
   options: BufferDispatchHoldEventsOptions,
 ): number {
-  if (!options.state.dispatchHold) {
-    return 0;
-  }
-
   const queue = options.eventQueue.snapshot();
-  const held = queue.filter(isHoldableDispatchEvent);
-  if (held.length === 0) {
-    return 0;
-  }
+  const transition = stepConductorCore(
+    createConductorCoreState({
+      dispatchHold: options.state.dispatchHold,
+      heldEvents: options.state.heldEvents,
+      queue,
+    }),
+    { type: 'dispatchHold.buffer', queue },
+  );
+  const heldEventCount =
+    transition.state.heldEvents.length - options.state.heldEvents.length;
+  if (heldEventCount === 0) return 0;
 
-  const heldSet = new Set(held);
-  options.state.heldEvents.push(...held);
-  options.eventQueue.replaceQueue(queue.filter((event) => !heldSet.has(event)));
-  options.onChanged?.({
-    status: 'updated',
-    hold: true,
-    heldEventCount: options.state.heldEvents.length,
-  });
-  return held.length;
+  options.state.heldEvents.push(
+    ...transition.state.heldEvents.slice(options.state.heldEvents.length),
+  );
+  options.eventQueue.replaceQueue([...transition.state.queue]);
+  const changed = transition.effects.find(
+    (effect) =>
+      effect.kind === 'action' &&
+      effect.action.type === 'dispatchHoldChanged',
+  );
+  if (
+    changed?.kind === 'action' &&
+    changed.action.type === 'dispatchHoldChanged'
+  ) {
+    options.onChanged?.({
+      status: changed.action.status,
+      hold: changed.action.hold,
+      heldEventCount: changed.action.heldEventCount,
+      ...(changed.action.flushedEventCount !== undefined
+        ? { flushedEventCount: changed.action.flushedEventCount }
+        : {}),
+    });
+  }
+  return heldEventCount;
 }
 
 /**
  * cleanup 済みの permission.pending を dispatch 前に queue / held buffer から除去する。
  *
- * SessionEvent は enqueue 後に取り消せないため、PermissionPipeline.pending を
- * authoritative source として毎回確認する。live な permission はそのまま残す。
+ * PermissionPipeline.pending を owner として参照する処理は adapter に残し、
+ * reducer には生存している request ID の投影だけを渡す。
  */
 export function pruneStalePermissionEvents(
   options: PruneStalePermissionEventsOptions,
 ): number {
   const queue = options.eventQueue.snapshot();
-  const activeQueue = filterActivePermissionEvents(
-    queue,
-    options.isPermissionPending,
+  const candidateEvents = [...queue, ...options.state.heldEvents];
+  const pendingPermissionIds = [
+    ...new Set(
+      candidateEvents.flatMap((event) =>
+        event.type === 'permission.pending' &&
+        options.isPermissionPending(event.permission.id)
+          ? [event.permission.id]
+          : [],
+      ),
+    ),
+  ];
+  const transition = stepConductorCore(
+    createConductorCoreState({
+      dispatchHold: options.state.dispatchHold,
+      heldEvents: options.state.heldEvents,
+      queue,
+    }),
+    { type: 'permissions.prune', queue, pendingPermissionIds },
   );
-  const removedFromQueue = queue.length - activeQueue.length;
+  const removedFromQueue = queue.length - transition.state.queue.length;
+  const removedFromHeld =
+    options.state.heldEvents.length - transition.state.heldEvents.length;
   if (removedFromQueue > 0) {
-    options.eventQueue.replaceQueue(activeQueue);
+    options.eventQueue.replaceQueue([...transition.state.queue]);
   }
-
-  const held = options.state.heldEvents;
-  const activeHeld = filterActivePermissionEvents(
-    held,
-    options.isPermissionPending,
-  );
-  const removedFromHeld = held.length - activeHeld.length;
   if (removedFromHeld > 0) {
-    options.state.heldEvents = activeHeld;
-    options.onChanged?.({
-      status: 'updated',
-      hold: options.state.dispatchHold,
-      heldEventCount: activeHeld.length,
-    });
+    options.state.heldEvents = [...transition.state.heldEvents];
   }
-
+  if (removedFromHeld > 0) {
+    const changed = transition.effects.find(
+      (effect) =>
+        effect.kind === 'action' &&
+        effect.action.type === 'dispatchHoldChanged',
+    );
+    if (
+      changed?.kind === 'action' &&
+      changed.action.type === 'dispatchHoldChanged'
+    ) {
+      options.onChanged?.({
+        status: changed.action.status,
+        hold: changed.action.hold,
+        heldEventCount: changed.action.heldEventCount,
+      });
+    }
+  }
   return removedFromQueue + removedFromHeld;
-}
-
-function filterActivePermissionEvents(
-  events: readonly SessionEvent[],
-  isPermissionPending: (requestId: string) => boolean,
-): SessionEvent[] {
-  return events.filter(
-    (event) =>
-      event.type !== 'permission.pending' ||
-      isPermissionPending(event.permission.id),
-  );
-}
-
-function isHoldableDispatchEvent(event: SessionEvent): boolean {
-  return (
-    event.type === 'harness.connectivity.recovered' ||
-    (isTriggerSessionEvent(event) &&
-      event.type !== 'operator.message' &&
-      event.type !== 'operator.reconnect' &&
-      event.type !== 'permission.stall')
-  );
 }

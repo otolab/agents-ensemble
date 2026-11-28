@@ -1,5 +1,7 @@
+import { DEFAULT_DISPATCH_HOLD_REMINDER_MS } from '../conductor-transition-core.js';
+
 /** dispatch hold の operator 向けリマインド間隔（ms）。 */
-export const DEFAULT_DISPATCH_HOLD_REMINDER_MS = 1_800_000;
+export { DEFAULT_DISPATCH_HOLD_REMINDER_MS };
 
 /** dispatch hold reminder の poll 間隔（ms）。 */
 export const DEFAULT_DISPATCH_HOLD_REMINDER_POLL_MS = 5_000;

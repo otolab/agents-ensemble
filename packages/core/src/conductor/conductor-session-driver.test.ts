@@ -8,6 +8,7 @@ import type { CursorBootstrapState } from './cursor-bootstrap-state.js';
 import { ConductorDispatchLifecycle } from './conductor-dispatch-lifecycle.js';
 import { ConductorRecoveryInbox } from './conductor-recovery-inbox.js';
 import { runConductorSessionDriver } from './conductor-session-driver.js';
+import type { SessionEvent } from './session/session-event.js';
 import { createSetDispatchHoldTool } from '../dispatch/set-dispatch-hold-tool.js';
 import {
   bufferDispatchHoldEvents,
@@ -158,6 +159,98 @@ describe('runConductorSessionDriver', () => {
     expect(result.stopReason).toBe('completed');
   });
 
+  it('releases an inbox reservation when shutdown arrives after selection but before lease', async () => {
+    const shutdown = new AbortController();
+    const eventQueue = new SessionEventQueue();
+    const operatorMessage: SessionEvent = {
+      type: 'operator.message',
+      text: 'keep queued on shutdown',
+    };
+    eventQueue.enqueue(operatorMessage);
+    const recoveryInbox = new ConductorRecoveryInbox();
+    const reserve = recoveryInbox.reserve.bind(recoveryInbox);
+    const reserveSpy = vi
+      .spyOn(recoveryInbox, 'reserve')
+      .mockImplementation((inputTexts) => {
+        const result = reserve(inputTexts);
+        shutdown.abort();
+        return result;
+      });
+    const releaseSpy = vi.spyOn(recoveryInbox, 'release');
+    const send = vi.fn();
+    const conductor = {
+      agentId: 'agent-1',
+      send,
+      close: vi.fn(),
+    } as unknown as ConductorAgent;
+
+    try {
+      const result = await runConductorSessionDriver({
+        ...createDriverOptions({ eventQueue, conductor }),
+        skipInitialSend: true,
+        operatorCanInspectRecovery: true,
+        recoveryInbox,
+        shutdownSignal: shutdown.signal,
+      });
+
+      const reservationResult = reserveSpy.mock.results[0]?.value;
+      expect(reservationResult).toMatchObject({ ok: true });
+      expect(reservationResult.reservation).toBeDefined();
+      expect(releaseSpy).toHaveBeenCalledExactlyOnceWith(
+        reservationResult.reservation,
+      );
+      expect(releaseSpy.mock.results[0]?.value).toBe(true);
+      expect(eventQueue.snapshot()).toEqual([operatorMessage]);
+      expect(send).not.toHaveBeenCalled();
+      expect(result.stopReason).toBe('interrupted');
+    } finally {
+      recoveryInbox.dispose();
+    }
+  });
+
+  it('continues the leased send through synchronous shutdown reentry after queue removal', async () => {
+    const shutdown = new AbortController();
+    const eventQueue = new SessionEventQueue();
+    const operatorMessage: SessionEvent = {
+      type: 'operator.message',
+      text: 'send already leased',
+    };
+    eventQueue.enqueue(operatorMessage);
+    const trace: string[] = [];
+    const send = vi.fn().mockImplementation(() => {
+      trace.push('agent.send');
+      return Promise.resolve({
+        runId: 'run-operator',
+        status: 'finished',
+        result: 'sent',
+      });
+    });
+    const conductor = {
+      agentId: 'agent-1',
+      send,
+      close: vi.fn(),
+    } as unknown as ConductorAgent;
+
+    const result = await runConductorSessionDriver({
+      ...createDriverOptions({ eventQueue, conductor }),
+      skipInitialSend: true,
+      shutdownSignal: shutdown.signal,
+      onOperatorDispatched: (events) => {
+        expect(events).toEqual([operatorMessage]);
+        expect(eventQueue.snapshot()).toEqual([]);
+        trace.push('queue.removed');
+        shutdown.abort();
+      },
+      onSendStarted: () => {
+        trace.push('send.started');
+      },
+    });
+
+    expect(trace).toEqual(['queue.removed', 'send.started', 'agent.send']);
+    expect(send).toHaveBeenCalledOnce();
+    expect(result.stopReason).toBe('interrupted');
+  });
+
   it('summarizes the sources of a regular conductor inbound batch', async () => {
     const send = vi.fn().mockResolvedValue({
       runId: 'run-1',
@@ -276,6 +369,39 @@ describe('runConductorSessionDriver', () => {
     expect(String(send.mock.calls[1]![0])).toContain('worker.failed');
     expect(String(send.mock.calls[2]![0])).toContain('worker.completed');
     expect(inbox.drain).toHaveBeenCalledTimes(2);
+    expect(result.stopReason).toBe('completed');
+  });
+
+  it('keeps an idle input received during inbox drain queued when the loop stop was already decided', async () => {
+    const send = vi.fn().mockResolvedValue({
+      runId: 'run-1',
+      status: 'finished',
+      result: 'done',
+    });
+    const conductor = {
+      agentId: 'agent-1',
+      send,
+      close: vi.fn(),
+    } as unknown as ConductorAgent;
+    const eventQueue = new SessionEventQueue();
+    const idleMessage: SessionEvent = {
+      type: 'operator.message',
+      text: 'arrived while draining',
+      delivery: 'idle',
+    };
+    const inbox = {
+      drain: vi.fn(async () => {
+        eventQueue.enqueue(idleMessage);
+      }),
+    };
+    const options = createDriverOptions({ eventQueue, conductor });
+    options.workerSession.inbox = inbox;
+
+    const result = await runConductorSessionDriver(options);
+
+    expect(inbox.drain).toHaveBeenCalledOnce();
+    expect(send).toHaveBeenCalledOnce();
+    expect(eventQueue.snapshot()).toEqual([idleMessage]);
     expect(result.stopReason).toBe('completed');
   });
 

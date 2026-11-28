@@ -3,28 +3,16 @@ import type { SessionEvent } from './session/session-event.js';
 import type { OpenQuestionRegistry } from '../escalation/open-question.js';
 import type { PermissionPipeline } from '../permission/permission-pipeline.js';
 import type { WorkerSession } from '../runtime/worker-session.js';
+import {
+  createConductorCoreState,
+  isMaxTurnsLimitedCore,
+  stepConductorCore,
+  type ConductorCoreDispatchBatchState,
+  type IssueLoopStopInput,
+  type IssueLoopStopReason,
+} from './conductor-transition-core.js';
 
-export type IssueLoopStopReason =
-  | 'completed'
-  | 'error'
-  | 'cancelled'
-  | 'max_turns'
-  | 'interrupted';
-
-export interface IssueLoopStopInput {
-  /** 直近のオペレータ入力から消費した conductor 自律ターン数。 */
-  autonomousTurns: number;
-  maxTurns: number;
-  lastStatus: string;
-  dispatchesThisTurn: number;
-  runningWorkers?: number;
-  pendingPermissions?: number;
-  openQuestions?: number;
-  /** TTY 等でオペレータ入力があるとき、conductor error でもループを継続する。 */
-  continueOnConductorError?: boolean;
-  /** 初回入力だけで終了する経路では、追加の operator 入力を待たずに停止する。 */
-  stopOnUnansweredInput?: boolean;
-}
+export type { IssueLoopStopInput, IssueLoopStopReason };
 
 export const DEFAULT_MAX_ISSUE_TURNS = 5;
 
@@ -38,7 +26,7 @@ export function resolveMaxTurns(maxTurns?: number): number {
 
 /** 自律ターン上限が有効か（`maxTurns > 0`）。 */
 export function isMaxTurnsLimited(maxTurns: number): boolean {
-  return maxTurns > 0;
+  return isMaxTurnsLimitedCore(maxTurns);
 }
 
 /** View 向けの `maxTurns`（無制限時は `null`）。 */
@@ -48,40 +36,204 @@ export function operatorInputMaxTurns(maxTurns: number): number | null {
 
 /** Issue session の conductor 自律ループを終了すべきか判定する（プロセス終了ではない）。 */
 export function shouldStopIssueLoop(input: IssueLoopStopInput): boolean {
-  // `cancelled` is a terminal SDK run status, not a retryable conductor error.
-  // In particular, one-shot sessions must not fall through to event waiting.
-  if (
-    input.lastStatus === 'cancelled' ||
-    input.lastStatus === 'send_rejected'
-  ) {
-    return true;
-  }
-  if (input.lastStatus === 'error') {
-    return !input.continueOnConductorError;
-  }
-  if (
-    input.stopOnUnansweredInput &&
-    ((input.pendingPermissions ?? 0) > 0 || (input.openQuestions ?? 0) > 0)
-  ) {
-    return true;
-  }
-  if ((input.runningWorkers ?? 0) > 0) return false;
-  if ((input.pendingPermissions ?? 0) > 0) return false;
-  if ((input.openQuestions ?? 0) > 0) return false;
-  if (input.dispatchesThisTurn === 0 && input.lastStatus === 'finished') {
-    return true;
-  }
-  return false;
+  const transition = stepConductorCore(
+    createConductorCoreState({ issueLoop: input }),
+    { type: 'issueLoop.stopCheck' },
+  );
+  const decision = transition.effects.find(
+    (effect) =>
+      effect.kind === 'action' && effect.action.type === 'issueLoopStop',
+  );
+  return (
+    decision?.kind === 'action' &&
+    decision.action.type === 'issueLoopStop' &&
+    decision.action.shouldStop
+  );
 }
 
 export function resolveIssueLoopStopReason(
   input: IssueLoopStopInput,
 ): IssueLoopStopReason {
-  if (input.lastStatus === 'cancelled') return 'cancelled';
-  if (input.lastStatus === 'error' || input.lastStatus === 'send_rejected') {
-    return 'error';
+  const transition = stepConductorCore(
+    createConductorCoreState({ issueLoop: input }),
+    { type: 'issueLoop.stopCheck' },
+  );
+  const decision = transition.effects.find(
+    (effect) =>
+      effect.kind === 'action' && effect.action.type === 'issueLoopStop',
+  );
+  return decision?.kind === 'action' &&
+    decision.action.type === 'issueLoopStop'
+    ? decision.action.stopReason
+    : 'completed';
+}
+
+export interface IssueLoopDriverDecisionInput extends IssueLoopStopInput {
+  queue: readonly SessionEvent[];
+  dispatchHold: boolean;
+  heldEvents: readonly SessionEvent[];
+  dispatchBatchState: ConductorCoreDispatchBatchState;
+  recoveryConfirmationRequired: boolean;
+  operatorCanInspectRecovery: boolean;
+  continueAfterIssueLoopStop: boolean;
+  workerInboxDrained?: boolean;
+  postLoopWaiting: boolean;
+  idleOperatorMessageReady?: boolean;
+  idleStopCheckQueueEmpty?: boolean;
+  phase?: 'afterSend' | 'idle';
+}
+
+export interface IssueLoopDriverDecision {
+  decision: 'stop' | 'continue' | 'drainWorkerInbox';
+  stopReason: IssueLoopStopReason;
+  notifyIssueLoopStop: boolean;
+  postLoopWaiting: boolean;
+  idleOperatorMessageReady?: boolean;
+  idleStopCheckQueueEmpty?: boolean;
+}
+
+/** Driver の停止優先・待機・inbox drain 要否を core に委ねる。 */
+export function decideIssueLoopDriver(
+  input: IssueLoopDriverDecisionInput,
+): IssueLoopDriverDecision {
+  const transition = stepConductorCore(
+    createConductorCoreState({
+      issueLoop: input,
+      queue: [...input.queue],
+      dispatchHold: input.dispatchHold,
+      heldEvents: [...input.heldEvents],
+      dispatchBatchState: input.dispatchBatchState,
+      autonomousTurns: input.autonomousTurns,
+      recoveryConfirmationRequired: input.recoveryConfirmationRequired,
+      operatorCanInspectRecovery: input.operatorCanInspectRecovery,
+      continueAfterIssueLoopStop: input.continueAfterIssueLoopStop,
+      workerInboxDrained: input.workerInboxDrained ?? false,
+      postLoopWaiting: input.postLoopWaiting,
+      ...(input.idleOperatorMessageReady === undefined
+        ? {}
+        : { idleOperatorMessageReady: input.idleOperatorMessageReady }),
+      ...(input.idleStopCheckQueueEmpty === undefined
+        ? {}
+        : { idleStopCheckQueueEmpty: input.idleStopCheckQueueEmpty }),
+    }),
+    {
+      type: 'issueLoop.driverStopCheck',
+      ...(input.phase ? { phase: input.phase } : {}),
+    },
+  );
+  const decision = transition.effects.find(
+    (effect) =>
+      effect.kind === 'action' && effect.action.type === 'issueLoopDecision',
+  );
+  if (
+    decision?.kind !== 'action' ||
+    decision.action.type !== 'issueLoopDecision'
+  ) {
+    return {
+      decision: 'continue',
+      stopReason: 'completed',
+      notifyIssueLoopStop: false,
+      postLoopWaiting: transition.state.postLoopWaiting,
+      ...(transition.state.idleOperatorMessageReady === undefined
+        ? {}
+        : {
+            idleOperatorMessageReady:
+              transition.state.idleOperatorMessageReady,
+          }),
+      ...(transition.state.idleStopCheckQueueEmpty === undefined
+        ? {}
+        : {
+            idleStopCheckQueueEmpty:
+              transition.state.idleStopCheckQueueEmpty,
+          }),
+    };
   }
-  return 'completed';
+  return {
+    decision: decision.action.decision,
+    stopReason: decision.action.stopReason,
+    notifyIssueLoopStop: decision.action.notifyIssueLoopStop === true,
+    postLoopWaiting: transition.state.postLoopWaiting,
+    ...(transition.state.idleOperatorMessageReady === undefined
+      ? {}
+      : {
+          idleOperatorMessageReady:
+            transition.state.idleOperatorMessageReady,
+        }),
+    ...(transition.state.idleStopCheckQueueEmpty === undefined
+      ? {}
+      : {
+          idleStopCheckQueueEmpty:
+            transition.state.idleStopCheckQueueEmpty,
+        }),
+  };
+}
+
+export function recoveryConfirmationStopReason(input: {
+  lastStatus: string;
+  confirmationRequired: boolean;
+  operatorCanInspectRecovery: boolean;
+}): IssueLoopStopReason | undefined {
+  const transition = stepConductorCore(
+    createConductorCoreState({
+      issueLoop: {
+        autonomousTurns: 0,
+        maxTurns: 0,
+        lastStatus: input.lastStatus,
+        dispatchesThisTurn: 0,
+      },
+      recoveryConfirmationRequired: input.confirmationRequired,
+      operatorCanInspectRecovery: input.operatorCanInspectRecovery,
+    }),
+    { type: 'issueLoop.confirmationGate' },
+  );
+  const decision = transition.effects.find(
+    (effect) =>
+      effect.kind === 'action' &&
+      effect.action.type === 'issueLoopConfirmationGate',
+  );
+  return decision?.kind === 'action' &&
+    decision.action.type === 'issueLoopConfirmationGate' &&
+    decision.action.shouldStop
+    ? decision.action.stopReason
+    : undefined;
+}
+
+export function allowIdleOperatorMessages(input: {
+  queue: readonly SessionEvent[];
+  dispatchHold: boolean;
+  heldEvents: readonly SessionEvent[];
+  dispatchBatchState: ConductorCoreDispatchBatchState;
+  autonomousTurns: number;
+  maxTurns: number;
+  runningWorkers: number;
+}): boolean {
+  const transition = stepConductorCore(
+    createConductorCoreState({
+      issueLoop: {
+        autonomousTurns: input.autonomousTurns,
+        maxTurns: input.maxTurns,
+        lastStatus: 'finished',
+        dispatchesThisTurn: 0,
+        runningWorkers: input.runningWorkers,
+      },
+      queue: [...input.queue],
+      dispatchHold: input.dispatchHold,
+      heldEvents: [...input.heldEvents],
+      dispatchBatchState: input.dispatchBatchState,
+      autonomousTurns: input.autonomousTurns,
+    }),
+    { type: 'dispatch.idleOperatorMessageGate' },
+  );
+  const decision = transition.effects.find(
+    (effect) =>
+      effect.kind === 'action' &&
+      effect.action.type === 'idleOperatorMessageGate',
+  );
+  return (
+    decision?.kind === 'action' &&
+    decision.action.type === 'idleOperatorMessageGate' &&
+    decision.action.allowed
+  );
 }
 
 /** 自律ターン上限到達後も conductor へ送れるイベントか。 */
@@ -90,19 +242,23 @@ export function canDispatchConductorSend(
   autonomousTurns: number,
   maxTurns: number,
 ): boolean {
-  if (
-    event.type === 'operator.message' ||
-    event.type === 'operator.reconnect' ||
-    event.type === 'permission.pending' ||
-    event.type === 'permission.stall' ||
-    event.type === 'conductor.recovery.report'
-  ) {
-    return true;
-  }
-  if (!isMaxTurnsLimited(maxTurns)) {
-    return true;
-  }
-  return autonomousTurns < maxTurns;
+  const transition = stepConductorCore(
+    createConductorCoreState({ autonomousTurns }),
+    {
+      type: 'dispatch.canSend',
+      event,
+      maxTurns,
+    },
+  );
+  const decision = transition.effects.find(
+    (effect) =>
+      effect.kind === 'action' && effect.action.type === 'dispatchGate',
+  );
+  return (
+    decision?.kind === 'action' &&
+    decision.action.type === 'dispatchGate' &&
+    decision.action.allowed
+  );
 }
 
 /** conductor send 完了後の `autonomousTurns`（オペレータ入力でリセット）。 */
@@ -110,10 +266,11 @@ export function autonomousTurnsAfterConductorSend(
   event: SessionEvent,
   autonomousTurns: number,
 ): number {
-  if (event.type === 'operator.message') {
-    return 0;
-  }
-  return autonomousTurns + 1;
+  const transition = stepConductorCore(
+    createConductorCoreState({ autonomousTurns }),
+    { type: 'dispatch.turnsAfterSend', event },
+  );
+  return transition.state.autonomousTurns;
 }
 
 /** 束 dispatch 後の `autonomousTurns`（束に operator が含まれればリセット）。 */
@@ -121,19 +278,11 @@ export function autonomousTurnsAfterConductorBatch(
   events: SessionEvent[],
   autonomousTurns: number,
 ): number {
-  if (
-    events.every(
-      (event) =>
-        event.type === 'operator.reconnect' ||
-        event.type === 'conductor.recovery.report',
-    )
-  ) {
-    return autonomousTurns;
-  }
-  if (events.some((event) => event.type === 'operator.message')) {
-    return 0;
-  }
-  return autonomousTurns + 1;
+  const transition = stepConductorCore(
+    createConductorCoreState({ autonomousTurns }),
+    { type: 'dispatch.turnsAfterBatch', events },
+  );
+  return transition.state.autonomousTurns;
 }
 
 export function buildIssueLoopStopInput(input: {

@@ -10,6 +10,14 @@ import {
   ConductorRecoveryInbox,
   CONDUCTOR_RECOVERY_INPUT_BYTE_LIMIT,
 } from './conductor-recovery-inbox.js';
+import {
+  canDispatchConductorCore,
+  createConductorCoreState,
+  dispatchStateFromCore,
+  isConductorDispatchCompletedCore,
+  stepConductorCore,
+  type ConductorCoreState,
+} from './conductor-transition-core.js';
 
 export type ConductorDispatchState =
   | 'ready'
@@ -31,12 +39,6 @@ export interface ConductorReconnectLease {
   readonly attemptId: string;
   readonly kind: 'reconnect';
   readonly token: symbol;
-}
-
-interface ActiveLease {
-  token: symbol;
-  kind: 'send' | 'reconnect';
-  id: number;
 }
 
 export interface SettleConductorDispatchInput<T> {
@@ -75,14 +77,10 @@ export interface SettleConductorDispatchResult {
 export function settleConductorDispatch<T>(
   input: SettleConductorDispatchInput<T>,
 ): SettleConductorDispatchResult {
-  const completed =
-    input.result.status === 'finished' ||
-    input.result.status === 'completed' ||
-    // The Issue workflow has historically treated `running` as a normal
-    // nonterminal result and continues consuming later events. The
-    // operator-agent workflow keeps its narrower acknowledgement contract so
-    // watched reports can retry while user input waits for confirmation.
-    (input.workflow === 'issue' && input.result.status === 'running');
+  const completed = isConductorDispatchCompletedCore(
+    input.result.status,
+    input.workflow,
+  );
   if (completed) {
     if (input.reservation) input.inbox?.release(input.reservation);
     input.lifecycle.settleSend(input.lease, { completed: true });
@@ -157,42 +155,32 @@ export function settleConductorDispatch<T>(
  */
 export class ConductorDispatchLifecycle<T> {
   private sequence = 0;
-  private activeLease: ActiveLease | undefined;
-  private agentAvailable = true;
-  private attentionAttemptId: string | undefined;
-  private lastFailureClass: ConductorRecoveryFailureClass | undefined;
+  private coreState: ConductorCoreState = createConductorCoreState();
+  private activeToken: symbol | undefined;
   private readonly listeners = new Set<() => void>();
 
   get state(): ConductorDispatchState {
-    if (this.activeLease?.kind === 'send') return 'in_flight';
-    if (this.activeLease?.kind === 'reconnect') return 'reconnecting';
-    if (!this.agentAvailable) return 'unavailable';
-    if (this.attentionAttemptId !== undefined) return 'attention';
-    return 'ready';
+    return dispatchStateFromCore(this.coreState);
   }
 
   get available(): boolean {
-    return this.agentAvailable;
+    return this.coreState.agentAvailable;
   }
 
   get confirmationRequired(): boolean {
-    return this.attentionAttemptId !== undefined;
+    return this.coreState.attentionAttemptId !== undefined;
   }
 
   get pendingAttemptId(): string | undefined {
-    return this.attentionAttemptId;
+    return this.coreState.attentionAttemptId;
   }
 
   get lastFailure(): ConductorRecoveryFailureClass | undefined {
-    return this.lastFailureClass;
+    return this.coreState.lastFailureClass;
   }
 
   get canDispatch(): boolean {
-    return (
-      this.activeLease === undefined &&
-      this.agentAvailable &&
-      this.attentionAttemptId === undefined
-    );
+    return canDispatchConductorCore(this.coreState);
   }
 
   subscribe(listener: () => void): () => void {
@@ -202,13 +190,32 @@ export class ConductorDispatchLifecycle<T> {
 
   beginSend(payload: T): ConductorDispatchLease<T> | undefined {
     if (!this.canDispatch) return undefined;
-    const id = ++this.sequence;
+    const id = this.sequence + 1;
+    const attemptId = String(id);
     const token = Symbol(`conductor-send-${id}`);
-    this.activeLease = { token, kind: 'send', id };
+    const transition = stepConductorCore(this.coreState, {
+      type: 'send.requested',
+      attemptId,
+      id,
+      payload,
+    });
+    if (
+      !transition.effects.some(
+        (effect) =>
+          effect.kind === 'action' &&
+          effect.action.type === 'startSend' &&
+          effect.action.attemptId === attemptId,
+      )
+    ) {
+      return undefined;
+    }
+    this.sequence = id;
+    this.coreState = transition.state;
+    this.activeToken = token;
     this.notify();
     return {
       id,
-      attemptId: String(id),
+      attemptId,
       kind: 'send',
       payload,
       token,
@@ -216,12 +223,30 @@ export class ConductorDispatchLifecycle<T> {
   }
 
   beginReconnect(): ConductorReconnectLease | undefined {
-    if (this.activeLease !== undefined) return undefined;
-    const id = ++this.sequence;
+    if (this.coreState.lease !== undefined) return undefined;
+    const id = this.sequence + 1;
+    const attemptId = String(id);
     const token = Symbol(`conductor-reconnect-${id}`);
-    this.activeLease = { token, kind: 'reconnect', id };
+    const transition = stepConductorCore(this.coreState, {
+      type: 'reconnect.requested',
+      attemptId,
+      id,
+    });
+    if (
+      !transition.effects.some(
+        (effect) =>
+          effect.kind === 'action' &&
+          effect.action.type === 'startReconnect' &&
+          effect.action.attemptId === attemptId,
+      )
+    ) {
+      return undefined;
+    }
+    this.sequence = id;
+    this.coreState = transition.state;
+    this.activeToken = token;
     this.notify();
-    return { id, attemptId: String(id), kind: 'reconnect', token };
+    return { id, attemptId, kind: 'reconnect', token };
   }
 
   settleSend(
@@ -236,19 +261,21 @@ export class ConductorDispatchLifecycle<T> {
     },
   ): void {
     this.assertActiveLease(lease, 'send');
-    this.activeLease = undefined;
-    if (outcome.agentAvailable !== undefined) {
-      this.agentAvailable = outcome.agentAvailable;
-    }
-    if (outcome.completed) {
-      this.attentionAttemptId = undefined;
-      this.lastFailureClass = undefined;
-    } else if (outcome.requiresConfirmation !== false) {
-      this.attentionAttemptId = lease.attemptId;
-      this.lastFailureClass = outcome.failureClass;
-    } else {
-      this.lastFailureClass = outcome.failureClass;
-    }
+    this.applyCoreEvent({
+      type: 'send.result',
+      attemptId: lease.attemptId,
+      completed: outcome.completed,
+      ...(outcome.failureClass
+        ? { failureClass: outcome.failureClass }
+        : {}),
+      ...(outcome.agentAvailable !== undefined
+        ? { agentAvailable: outcome.agentAvailable }
+        : {}),
+      ...(outcome.requiresConfirmation !== undefined
+        ? { requiresConfirmation: outcome.requiresConfirmation }
+        : {}),
+    });
+    this.activeToken = undefined;
     this.notify();
   }
 
@@ -257,27 +284,30 @@ export class ConductorDispatchLifecycle<T> {
     succeeded: boolean,
   ): void {
     this.assertActiveLease(lease, 'reconnect');
-    this.activeLease = undefined;
-    this.agentAvailable = succeeded;
+    this.applyCoreEvent({
+      type: 'reconnect.result',
+      attemptId: lease.attemptId,
+      succeeded,
+    });
+    this.activeToken = undefined;
     this.notify();
   }
 
   setAgentAvailable(available: boolean): void {
-    if (this.agentAvailable === available) return;
-    this.agentAvailable = available;
+    const previousState = this.coreState;
+    this.applyCoreEvent({ type: 'agent.availability', available });
+    if (this.coreState === previousState) return;
     this.notify();
   }
 
   /** Explicit operator confirmation releases the later-dispatch gate. */
   confirmRecovery(expectedAttemptId?: string): boolean {
-    if (
-      this.activeLease !== undefined ||
-      this.attentionAttemptId === undefined ||
-      (expectedAttemptId !== undefined && expectedAttemptId !== this.attentionAttemptId)
-    ) {
-      return false;
-    }
-    this.attentionAttemptId = undefined;
+    const previousState = this.coreState;
+    this.applyCoreEvent({
+      type: 'recovery.confirm',
+      ...(expectedAttemptId !== undefined ? { expectedAttemptId } : {}),
+    });
+    if (this.coreState === previousState) return false;
     this.notify();
     return true;
   }
@@ -287,17 +317,31 @@ export class ConductorDispatchLifecycle<T> {
   }
 
   private assertActiveLease(
-    lease: { token: symbol; id: number; kind: 'send' | 'reconnect' },
+    lease: {
+      token: symbol;
+      id: number;
+      attemptId: string;
+      kind: 'send' | 'reconnect';
+    },
     kind: 'send' | 'reconnect',
   ): void {
+    const activeLease = this.coreState.lease;
     if (
-      this.activeLease?.token !== lease.token ||
-      this.activeLease.id !== lease.id ||
-      this.activeLease.kind !== kind ||
+      this.activeToken !== lease.token ||
+      activeLease === undefined ||
+      activeLease.id !== lease.id ||
+      activeLease.attemptId !== lease.attemptId ||
+      activeLease.kind !== kind ||
       lease.kind !== kind
     ) {
       throw new Error(`Cannot settle inactive conductor ${kind} lease.`);
     }
+  }
+
+  private applyCoreEvent(
+    event: Parameters<typeof stepConductorCore>[1],
+  ): void {
+    this.coreState = stepConductorCore(this.coreState, event).state;
   }
 
   private notify(): void {
