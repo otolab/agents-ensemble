@@ -90,7 +90,11 @@ theorem acceptedEventRetained_concrete {σ : Type} (model : Model σ) (initial :
     (reachable_projects model initial hstart hpast)
     ⟨s, t, rfl, rfl, hstep⟩ haccepted (run_projects model hrun) hdispatch hdiscard
 
-/-- input 非再送は、受理からの具体履歴を保った実行に抽象命題から引き継がれる。 -/
+/--
+通常の failed result 後の非再送、結果不明の restart recovery、明示 resend 失敗後の operator
+再選択という例外は、受理からの具体履歴を保った実行に抽象命題から引き継がれる。
+この補題は具体モデルがその抽象性質を満たすこと自体は示さない。
+-/
 theorem noAutomaticInputReplay_concrete {σ : Type} (model : Model σ) (initial : σ → Prop)
     (property : NoAutomaticInputReplay (projectedInitial model initial) (projectedStep model))
     {start s t u : σ} {before after : List (Event × List Observation)}
@@ -99,7 +103,12 @@ theorem noAutomaticInputReplay_concrete {σ : Type} (model : Model σ) (initial 
     (haccepted : Observed before (.accepted id .operatorInput))
     (hdispatched : Observed before (.dispatched id attempt)) (hincomplete : result ≠ .completed)
     (hstep : model.step s (.sendResult attempt result) obs t) (hafter : Run model t after u) :
-    (∀ next, .dispatched id next ∉ obs) ∧ ¬ Dispatched after id := by
+    (∀ next, .dispatched id next ∉ obs) ∧
+    (result = .failed →
+      (OperatorResendDispatchRecorded before id attempt →
+        ExplicitOperatorResendDispatchOnly after id) ∧
+      (¬ OperatorResendDispatchRecorded before id attempt → ¬ Dispatched after id)) ∧
+    (result = .unknown → ExplicitUnknownReplayDispatchOnly after id) := by
   exact property (model.observe start) before (model.observe s) (model.observe t) (model.observe u)
     attempt result id obs after ⟨start, hstart, rfl⟩ (run_projects model hbefore)
     haccepted hdispatched hincomplete ⟨s, t, rfl, rfl, hstep⟩ (run_projects model hafter)
