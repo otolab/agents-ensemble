@@ -669,6 +669,11 @@ describe('runConductorSession resume / shutdown', () => {
 
   it('persists the first lazy worker session ID and exposes strict restart_worker', async () => {
     stubUnusedControlServer();
+    vi.spyOn(acpBinModule, 'resolveBundledAcpBin')
+      .mockReturnValue(process.execPath);
+    vi.spyOn(acpBinModule, 'resolveAcpBin').mockReturnValue(process.execPath);
+    vi.spyOn(acpBinModule, 'resolveAcpBinFromPath')
+      .mockReturnValue(process.execPath);
     const firstBridge = {
       newSession: vi.fn().mockResolvedValue('lazy-worker-session'),
       loadSession: vi.fn().mockResolvedValue(undefined),
