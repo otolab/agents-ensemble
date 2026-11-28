@@ -3,6 +3,7 @@ import {
   mkdtemp,
   mkdir,
   readFile,
+  realpath,
   rename,
   rm,
   stat,
@@ -300,7 +301,7 @@ describe.skipIf(process.platform === 'win32')(
         tempRoot = await mkdtemp(
           join(tmpdir(), 'ensemble-pi-acp-model-reasoning-'),
         );
-        const repoRoot = join(tempRoot, 'repo');
+        const repoRootPath = join(tempRoot, 'repo');
         const userRoot = join(tempRoot, 'ensemble-user');
         const userHome = join(tempRoot, 'operator-home');
         const customAgentDir = join(tempRoot, 'custom-pi-agent');
@@ -314,7 +315,7 @@ describe.skipIf(process.platform === 'win32')(
         vi.stubEnv('HOME', userHome);
         vi.stubEnv('USERPROFILE', userHome);
         await Promise.all([
-          mkdir(repoRoot, { recursive: true }),
+          mkdir(repoRootPath, { recursive: true }),
           mkdir(join(userHome, '.ssh'), { recursive: true, mode: 0o700 }),
           mkdir(join(userHome, '.config', 'gh'), {
             recursive: true,
@@ -324,6 +325,7 @@ describe.skipIf(process.platform === 'win32')(
           mkdir(customAgentDir, { recursive: true }),
           mkdir(configuredSessionDir, { recursive: true }),
         ]);
+        const repoRoot = await realpath(repoRootPath);
         await writeFile(
           join(customAgentDir, 'settings.json'),
           JSON.stringify({
@@ -362,7 +364,7 @@ describe.skipIf(process.platform === 'win32')(
               version: 3,
               id: listedSessionId,
               timestamp: new Date().toISOString(),
-              cwd: join(tempRoot, 'repo'),
+              cwd: repoRoot,
             }),
             JSON.stringify({
               type: 'message',
@@ -495,19 +497,21 @@ describe.skipIf(process.platform === 'win32')(
             agentDir: customAgentDir,
           },
         );
-        const paths = resolveEnsemblePaths({ repoRoot });
-        const workerStorageParent = join(paths.piUserDir, 'worker');
+        const paths = resolveEnsemblePaths({
+          repoRoot,
+          piAgentDir: customAgentDir,
+        });
+        const legacyPaths = resolveEnsemblePaths({ repoRoot });
+        const workerStorageParent = join(customAgentDir, 'worker');
         await mkdir(workerStorageParent, {
           recursive: true,
           mode: 0o755,
         });
         await chmod(workerStorageParent, 0o755);
         const workerHome = paths.piWorkerDir('integration', 1);
-        const legacyWorkerHome = paths.legacyPiWorkerDir('integration');
-        const sessionMapPaths = resolvePiAcpSessionMapPaths(
-          workerHome,
-          legacyWorkerHome,
-        );
+        const legacyWorkerHome =
+          legacyPaths.legacyPiWorkerDir('integration');
+        const sessionMapPaths = resolvePiAcpSessionMapPaths(workerHome);
         const issueTwoResolved = configurePiWorkerRuntime(
           resolveSpawn('pi', model, 'builtin'),
           {
@@ -518,10 +522,8 @@ describe.skipIf(process.platform === 'win32')(
           },
         );
         const issueTwoWorkerHome = paths.piWorkerDir('integration', 2);
-        const issueTwoSessionMapPaths = resolvePiAcpSessionMapPaths(
-          issueTwoWorkerHome,
-          legacyWorkerHome,
-        );
+        const issueTwoSessionMapPaths =
+          resolvePiAcpSessionMapPaths(issueTwoWorkerHome);
         const sessionFile = join(
           resolved.env!.PI_CODING_AGENT_SESSION_DIR!,
           'test-session.jsonl',
@@ -530,7 +532,7 @@ describe.skipIf(process.platform === 'win32')(
           issueTwoResolved.env!.PI_CODING_AGENT_SESSION_DIR!,
           'test-session.jsonl',
         );
-        const issueTwoCwd = join(tempRoot, 'issue-two-worktree');
+        const issueTwoCwdPath = join(tempRoot, 'issue-two-worktree');
         await Promise.all([
           mkdir(resolved.env!.PI_CODING_AGENT_SESSION_DIR!, {
             recursive: true,
@@ -538,13 +540,22 @@ describe.skipIf(process.platform === 'win32')(
           mkdir(issueTwoResolved.env!.PI_CODING_AGENT_SESSION_DIR!, {
             recursive: true,
           }),
-          mkdir(issueTwoCwd, { recursive: true }),
+          mkdir(issueTwoCwdPath, { recursive: true }),
         ]);
+        const issueTwoCwd = await realpath(issueTwoCwdPath);
         const spawnOptions = resolvedAcpSpawnToOptions(
           finalizeResolvedAcpSpawn(resolved),
         );
         const issueTwoSpawnOptions = resolvedAcpSpawnToOptions(
           finalizeResolvedAcpSpawn(issueTwoResolved),
+        );
+        const legacyWorkerHomeForResume = legacyPaths.piWorkerDir(
+          'integration',
+          1,
+        );
+        const legacySessionMapPaths = resolvePiAcpSessionMapPaths(
+          legacyWorkerHomeForResume,
+          legacyWorkerHome,
         );
         const searchPath = [binDir, process.env.PATH]
           .filter((entry): entry is string => Boolean(entry))
@@ -593,6 +604,56 @@ describe.skipIf(process.platform === 'win32')(
             'pi-acp-integration-session-issue-2',
         };
 
+        const createResumeClientConfig = (input: {
+          issueNumber: number;
+          sessionId: string;
+          cwd: string;
+          sessionFile: string;
+          workerHome?: string;
+        }) => {
+          const resumeResolved = configurePiWorkerRuntime(
+            resolveSpawn('pi', model, 'builtin'),
+            {
+              repoRoot,
+              issueNumber: input.issueNumber,
+              workerName: 'integration',
+              agentDir: customAgentDir,
+              ...(input.workerHome
+                ? { workerHome: input.workerHome }
+                : {}),
+              resumeSessionId: input.sessionId,
+              resumeCwd: input.cwd,
+            },
+          );
+          const resumeSpawnOptions = resolvedAcpSpawnToOptions(
+            finalizeResolvedAcpSpawn(resumeResolved),
+          );
+          return {
+            spawnOptions: resumeSpawnOptions,
+            env: {
+              ...isolatedEnv,
+              HOME: resumeSpawnOptions.env?.HOME,
+              USERPROFILE: resumeSpawnOptions.env?.USERPROFILE,
+              PI_CODING_AGENT_DIR:
+                resumeSpawnOptions.env?.PI_CODING_AGENT_DIR,
+              PI_CODING_AGENT_SESSION_DIR:
+                resumeSpawnOptions.env?.PI_CODING_AGENT_SESSION_DIR,
+              ENSEMBLE_PI_WORKER_STORAGE_ROOT:
+                resumeSpawnOptions.env?.ENSEMBLE_PI_WORKER_STORAGE_ROOT,
+              ENSEMBLE_PI_WORKER_STORAGE_PARENT:
+                resumeSpawnOptions.env?.ENSEMBLE_PI_WORKER_STORAGE_PARENT,
+              ENSEMBLE_PI_LEGACY_WORKER_HOME:
+                resumeSpawnOptions.env?.ENSEMBLE_PI_LEGACY_WORKER_HOME,
+              ENSEMBLE_PI_RESUME_SESSION_ID:
+                resumeSpawnOptions.env?.ENSEMBLE_PI_RESUME_SESSION_ID,
+              ENSEMBLE_PI_RESUME_CWD:
+                resumeSpawnOptions.env?.ENSEMBLE_PI_RESUME_CWD,
+              PI_ACP_ADAPTER_TEST_SESSION_FILE: input.sessionFile,
+              PI_ACP_ADAPTER_TEST_SESSION_ID: input.sessionId,
+            } satisfies NodeJS.ProcessEnv,
+          };
+        };
+
         const startClient = async (
           clientSpawnOptions = spawnOptions,
           clientEnv = isolatedEnv,
@@ -618,6 +679,25 @@ describe.skipIf(process.platform === 'win32')(
           createdClient.newSession(repoRoot),
           issueTwoClient.newSession(issueTwoCwd),
         ]);
+        const issueOneResume = createResumeClientConfig({
+          issueNumber: 1,
+          sessionId,
+          cwd: repoRoot,
+          sessionFile,
+        });
+        const issueTwoResume = createResumeClientConfig({
+          issueNumber: 2,
+          sessionId: issueTwoSessionId,
+          cwd: issueTwoCwd,
+          sessionFile: issueTwoSessionFile,
+        });
+        const legacyResume = createResumeClientConfig({
+          issueNumber: 1,
+          sessionId,
+          cwd: repoRoot,
+          sessionFile,
+          workerHome: legacyWorkerHomeForResume,
+        });
         let sessionList: {
           sessions: Array<{ sessionId: string; title?: string | null }>;
         };
@@ -704,7 +784,10 @@ describe.skipIf(process.platform === 'win32')(
           sessionMapPaths.legacyPath,
           'utf8',
         );
-        const loadedClient = await startClient();
+        const loadedClient = await startClient(
+          issueOneResume.spawnOptions,
+          issueOneResume.env,
+        );
         await loadedClient.loadSession(sessionId, repoRoot);
         await loadedClient.close();
         clients.delete(loadedClient);
@@ -760,7 +843,12 @@ describe.skipIf(process.platform === 'win32')(
         await rm(sessionMapPaths.upstreamPath, { force: true });
         await rm(sessionMapPaths.legacyPath, { force: true });
 
-        const preIssueLoadedClient = await startClient();
+        await rm(legacySessionMapPaths.upstreamPath, { force: true });
+        await rm(legacySessionMapPaths.legacyPath, { force: true });
+        const preIssueLoadedClient = await startClient(
+          legacyResume.spawnOptions,
+          legacyResume.env,
+        );
         await preIssueLoadedClient.loadSession(sessionId, repoRoot);
         await preIssueLoadedClient.close();
         clients.delete(preIssueLoadedClient);
@@ -768,7 +856,7 @@ describe.skipIf(process.platform === 'win32')(
           readFile(legacySharedMapPaths.upstreamPath, 'utf8'),
         ).resolves.toBe(legacySharedMapContents);
         const preIssueMigratedMap = JSON.parse(
-          await readFile(sessionMapPaths.upstreamPath, 'utf8'),
+          await readFile(legacySessionMapPaths.upstreamPath, 'utf8'),
         ) as {
           sessions: Record<
             string,
@@ -782,8 +870,8 @@ describe.skipIf(process.platform === 'win32')(
         });
 
         const issueTwoLoadedClient = await startClient(
-          issueTwoSpawnOptions,
-          issueTwoIsolatedEnv,
+          issueTwoResume.spawnOptions,
+          issueTwoResume.env,
         );
         await issueTwoLoadedClient.loadSession(issueTwoSessionId, issueTwoCwd);
         await issueTwoLoadedClient.close();
