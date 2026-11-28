@@ -1,4 +1,4 @@
-# ADR 0089: operator-agent config identity と state / resume の境界
+# ADR 0090: operator-agent config identity と state / resume の境界
 
 - Status: accepted
 - Date: 2026-11-28

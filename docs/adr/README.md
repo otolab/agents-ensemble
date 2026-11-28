@@ -132,7 +132,7 @@ ADR は**合意された設計判断の履歴**を残すもの。一度 `accepte
 | [0058](0058-pi-send-recovery-replay-boundary.md) | Pi send recovery の再送境界 | superseded → [0059](0059-pi-recovery-report-after-manual-reconnect.md) |
 | [0059](0059-pi-recovery-report-after-manual-reconnect.md) | Pi 手動再接続後の recovery report | superseded → [0072](0072-conductor-dispatch-lifecycle-and-recovery-boundary.md) |
 | [0060](0060-pi-recovery-operator-inbox.md) | Pi 失敗 dispatch の operator 専用 inbox | superseded → [0072](0072-conductor-dispatch-lifecycle-and-recovery-boundary.md) |
-| [0061](0061-github-slug-session-persistence.md) | Issue session の slug 正本と operator-agent の user profile | superseded in part → [0089](0089-operator-agent-config-identity-and-state.md)（operator-agent config / profile / state / CLI / resume） / [0076](0076-retire-legacy-issue-session-read-fallbacks.md)（Phase 5 gate） |
+| [0061](0061-github-slug-session-persistence.md) | Issue session の slug 正本と operator-agent の user profile | superseded in part → [0090](0090-operator-agent-config-identity-and-state.md)（operator-agent config / profile / state / CLI / resume） / [0076](0076-retire-legacy-issue-session-read-fallbacks.md)（Phase 5 gate） |
 | [0062](0062-worker-acp-model-tags.md) | worker ACP modelTag の語彙と未登録時の解決 | superseded in part → [0063](0063-explicit-default-model-tag-warning.md)（明示 `default` と省略時の warning 区別） / [0064](0064-worker-model-tags-allow-empty-strings.md)（空文字・空白のみを含む任意文字列） |
 | [0063](0063-explicit-default-model-tag-warning.md) | 明示された default modelTag の未登録 warning | accepted |
 | [0064](0064-worker-model-tags-allow-empty-strings.md) | worker modelTag に空文字・空白のみの tag を許可 | accepted |
@@ -160,7 +160,8 @@ ADR は**合意された設計判断の履歴**を残すもの。一度 `accepte
 | [0086](0086-lean-formal-model-for-dispatch-flow.md) | 形式モデル（Lean 4）を dispatch フローの中間言語として導入する | proposed |
 | [0087](0087-conductor-dispatch-transition-core.md) | conductor dispatch transition core と実行層の分離 | accepted |
 | [0088](0088-conductor-durable-inbox-recovery-contract.md) | Issue workflow の durable inbox と recovery 契約 | accepted（将来契約。runtime 未実装） |
-| [0089](0089-operator-agent-config-identity-and-state.md) | operator-agent config identity と state / resume の境界 | accepted |
+| [0089](0089-builtin-pi-worker-storage-root-per-session.md) | Builtin Pi worker の保存 root を session ごとに固定する | accepted |
+| [0090](0090-operator-agent-config-identity-and-state.md) | operator-agent config identity と state / resume の境界 | accepted |
 
 ## 追加するとき
 

@@ -1756,13 +1756,13 @@ test('operator-agent config docs point to the accepted identity and state ADR', 
     readFile(join(repositoryRoot, 'docs/architecture.md'), 'utf8'),
     readFile(join(repositoryRoot, 'docs/config.md'), 'utf8'),
     readFile(join(repositoryRoot, 'docs/adr/0061-github-slug-session-persistence.md'), 'utf8'),
-    readFile(join(repositoryRoot, 'docs/adr/0089-operator-agent-config-identity-and-state.md'), 'utf8'),
+    readFile(join(repositoryRoot, 'docs/adr/0090-operator-agent-config-identity-and-state.md'), 'utf8'),
     readFile(join(repositoryRoot, 'docs/adr/README.md'), 'utf8'),
   ]);
 
   assert.match(
     architecture,
-    /operator-agent の設定・会話・状態[\s\S]*?\[ADR 0089\]\(adr\/0089-operator-agent-config-identity-and-state\.md\)/u,
+    /operator-agent の設定・会話・状態[\s\S]*?\[ADR 0090\]\(adr\/0090-operator-agent-config-identity-and-state\.md\)/u,
   );
   assert.doesNotMatch(
     architecture,
@@ -1770,11 +1770,11 @@ test('operator-agent config docs point to the accepted identity and state ADR', 
   );
   assert.match(
     config,
-    /reasoning の優先順位は \[ADR 0050\].*operator-agent config の identity と state namespace は \[ADR 0089\]/u,
+    /reasoning の優先順位は \[ADR 0050\].*operator-agent config の identity と state namespace は \[ADR 0090\]/u,
   );
   assert.match(
     adr0061,
-    /^- Status: superseded in part by \[ADR 0089\].*operator-agent config .*and \[ADR 0076\]/mu,
+    /^- Status: superseded in part by \[ADR 0090\].*operator-agent config .*and \[ADR 0076\]/mu,
   );
   assert.match(
     adr0061,
@@ -1793,7 +1793,7 @@ test('operator-agent config docs point to the accepted identity and state ADR', 
   );
   assert.match(
     adrIndex,
-    /^\| \[0089\]\(0089-operator-agent-config-identity-and-state\.md\) \|.*\| accepted \|$/mu,
+    /^\| \[0090\]\(0090-operator-agent-config-identity-and-state\.md\) \|.*\| accepted \|$/mu,
   );
 });
 
