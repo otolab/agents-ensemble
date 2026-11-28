@@ -1,4 +1,14 @@
 import type { ConductorRecoveryFailureClass } from './conductor-recovery-inbox.js';
+import {
+  createConductorInboxCoreState,
+  stepConductorInboxCore,
+} from './conductor-inbox-transition-core.js';
+import type {
+  ConductorInboxCoreAction,
+  ConductorInboxCoreEvent,
+  ConductorInboxCoreObservation,
+  ConductorInboxCoreState,
+} from './conductor-inbox-transition-core.js';
 import { CONDUCTOR_RECOVERY_INPUT_BYTE_LIMIT } from './conductor-recovery-constants.js';
 import type { SessionEvent } from './session/session-event.js';
 
@@ -6,7 +16,9 @@ export type ConductorCoreLease =
   | {
       readonly kind: 'send';
       readonly attemptId: string;
-      readonly id: number;
+      readonly id?: number;
+      /** Durable inbox sends share the same single-send lease. */
+      readonly purpose?: 'durableInbox';
       /** Payload remains owned by this lease until the matching result. */
       readonly payload: unknown;
     }
@@ -36,6 +48,8 @@ export interface ConductorCoreState {
   readonly autonomousTurns: number;
   readonly recoveryConfirmationRequired: boolean;
   readonly operatorCanInspectRecovery: boolean;
+  /** ADR 0088 To-Be projection; the current process-local queue remains separate. */
+  readonly durableInbox: ConductorInboxCoreState;
   readonly continueAfterIssueLoopStop: boolean;
   readonly workerInboxDrained: boolean;
   readonly postLoopWaiting: boolean;
@@ -55,6 +69,7 @@ export interface CursorBootstrapProjection {
 }
 
 export type ConductorCoreObservation =
+  | ConductorInboxCoreObservation
   | { type: 'accepted'; event: SessionEvent; stored: boolean }
   | {
       type: 'scheduled';
@@ -76,6 +91,7 @@ export type ConductorCoreObservation =
   | { type: 'reconnect.result'; attemptId: string; succeeded: boolean };
 
 export type ConductorCoreAction =
+  | ConductorInboxCoreAction
   | { type: 'startSend'; attemptId: string; payload: unknown }
   | { type: 'startReconnect'; attemptId: string }
   | { type: 'dispatchSelection'; result?: SelectDispatchBatchResult }
@@ -130,6 +146,8 @@ export interface DispatchBatch {
 export interface SelectDispatchBatchResult {
   batch: DispatchBatch;
   remainingQueue: SessionEvent[];
+  /** The selected events are owned by the dispatch hold buffer. */
+  fromHeldEvents?: boolean;
 }
 
 export interface SelectDispatchBatchInput {
@@ -227,7 +245,8 @@ export type ConductorCoreEvent =
   | {
       type: 'issueLoop.driverStopCheck';
       phase?: 'afterSend' | 'idle';
-    };
+    }
+  | ConductorInboxCoreEvent;
 
 const EMPTY_EFFECTS: readonly ConductorCoreEffect[] = [];
 
@@ -255,6 +274,7 @@ export function createConductorCoreState(
     autonomousTurns: 0,
     recoveryConfirmationRequired: false,
     operatorCanInspectRecovery: false,
+    durableInbox: createConductorInboxCoreState(),
     continueAfterIssueLoopStop: false,
     workerInboxDrained: false,
     postLoopWaiting: false,
@@ -311,18 +331,16 @@ export function stepConductorCore(
       };
     }
     case 'dispatch.schedule': {
-      if (state.shutdownMode !== undefined) {
+      if (
+        state.shutdownMode !== undefined ||
+        state.durableInbox.stopGates.length > 0
+      ) {
         return {
           state,
           effects: [action({ type: 'dispatchSelection' })],
         };
       }
-      const result = selectDispatchBatchCore({
-        queue: state.queue,
-        state: state.dispatchBatchState,
-        autonomousTurns: state.autonomousTurns,
-        ...event.input,
-      });
+      const result = selectConductorDispatchBatchCore(state, event.input);
       const effects: ConductorCoreEffect[] = [
         action({ type: 'dispatchSelection', ...(result ? { result } : {}) }),
       ];
@@ -363,6 +381,7 @@ export function stepConductorCore(
     case 'send.started': {
       if (
         state.lease?.kind !== 'send' ||
+        state.lease.purpose === 'durableInbox' ||
         state.lease.attemptId !== event.attemptId
       ) {
         return { state, effects: EMPTY_EFFECTS };
@@ -382,6 +401,7 @@ export function stepConductorCore(
     case 'send.result': {
       if (
         state.lease?.kind !== 'send' ||
+        state.lease.purpose === 'durableInbox' ||
         state.lease.attemptId !== event.attemptId
       ) {
         return { state, effects: EMPTY_EFFECTS };
@@ -909,12 +929,175 @@ export function stepConductorCore(
         ],
       };
     }
+    case 'inbox.restore': {
+      const transition = stepConductorInboxCore(
+        state.durableInbox,
+        event,
+        state.dispatchHold,
+      );
+      return {
+        state: {
+          ...state,
+          durableInbox: transition.state,
+          dispatchHold: event.dispatchHold,
+        },
+        effects: transition.effects,
+      };
+    }
+    case 'inbox.batch.select': {
+      if (!canDispatchConductorCore(state)) {
+        return { state, effects: EMPTY_EFFECTS };
+      }
+      const transition = stepConductorInboxCore(
+        state.durableInbox,
+        event,
+        state.dispatchHold,
+      );
+      return {
+        state: { ...state, durableInbox: transition.state },
+        effects: transition.effects,
+      };
+    }
+    case 'inbox.batch.start': {
+      const canStart =
+        event.reason === 'operatorResend'
+          ? state.shutdownMode === undefined &&
+            state.lease === undefined &&
+            state.agentAvailable &&
+            state.attentionAttemptId === undefined
+          : canDispatchConductorCore(state);
+      if (!canStart) return { state, effects: EMPTY_EFFECTS };
+      const transition = stepConductorInboxCore(
+        state.durableInbox,
+        event,
+        state.dispatchHold,
+      );
+      const startEffect = transition.effects.find(
+        (effect) =>
+          effect.kind === 'action' &&
+          effect.action.type === 'startInboxBatchSend',
+      );
+      if (
+        !startEffect ||
+        startEffect.kind !== 'action' ||
+        startEffect.action.type !== 'startInboxBatchSend'
+      ) {
+        return { state, effects: transition.effects };
+      }
+      return {
+        state: {
+          ...state,
+          durableInbox: transition.state,
+          lease: {
+            kind: 'send',
+            purpose: 'durableInbox',
+            attemptId: event.attemptId,
+            payload: startEffect.action,
+          },
+        },
+        effects: transition.effects,
+      };
+    }
+    case 'inbox.send.invoked': {
+      if (
+        state.lease?.kind !== 'send' ||
+        state.lease.purpose !== 'durableInbox' ||
+        state.lease.attemptId !== event.attemptId
+      ) {
+        return { state, effects: EMPTY_EFFECTS };
+      }
+      const transition = stepConductorInboxCore(
+        state.durableInbox,
+        event,
+        state.dispatchHold,
+      );
+      if (transition.state === state.durableInbox) {
+        return { state, effects: EMPTY_EFFECTS };
+      }
+      return {
+        state: {
+          ...state,
+          durableInbox: transition.state,
+          sendStartedAttemptId: event.attemptId,
+        },
+        effects: transition.effects,
+      };
+    }
+    case 'inbox.send.preInvocationTransientFailure': {
+      if (
+        state.lease?.kind !== 'send' ||
+        state.lease.purpose !== 'durableInbox' ||
+        state.lease.attemptId !== event.attemptId
+      ) {
+        return { state, effects: EMPTY_EFFECTS };
+      }
+      const transition = stepConductorInboxCore(
+        state.durableInbox,
+        event,
+        state.dispatchHold,
+      );
+      if (transition.state === state.durableInbox) {
+        return { state, effects: EMPTY_EFFECTS };
+      }
+      return {
+        state: {
+          ...state,
+          durableInbox: transition.state,
+          lease: undefined,
+          sendStartedAttemptId: undefined,
+        },
+        effects: transition.effects,
+      };
+    }
+    case 'inbox.send.result': {
+      if (
+        state.lease?.kind !== 'send' ||
+        state.lease.purpose !== 'durableInbox' ||
+        state.lease.attemptId !== event.attemptId
+      ) {
+        return { state, effects: EMPTY_EFFECTS };
+      }
+      const transition = stepConductorInboxCore(
+        state.durableInbox,
+        event,
+        state.dispatchHold,
+      );
+      if (transition.state === state.durableInbox) {
+        return { state, effects: EMPTY_EFFECTS };
+      }
+      return {
+        state: {
+          ...state,
+          durableInbox: transition.state,
+          lease: undefined,
+          sendStartedAttemptId: undefined,
+        },
+        effects: transition.effects,
+      };
+    }
+    case 'inbox.accept':
+    case 'inbox.accept.result':
+    case 'inbox.sizePreflight.result':
+    case 'inbox.deliveryAck.result':
+    case 'inbox.batch.discard':
+    case 'inbox.batch.discard.result': {
+      const transition = stepConductorInboxCore(
+        state.durableInbox,
+        event,
+        state.dispatchHold,
+      );
+      return {
+        state: { ...state, durableInbox: transition.state },
+        effects: transition.effects,
+      };
+    }
   }
 }
 
 export function canDispatchConductorCore(state: ConductorCoreState): boolean {
   return (
     state.shutdownMode === undefined &&
+    state.durableInbox.stopGates.length === 0 &&
     state.lease === undefined &&
     state.agentAvailable &&
     state.attentionAttemptId === undefined
@@ -1160,6 +1343,74 @@ export function selectDispatchBatchCore(
     batch: { events: batchEvents, sourceKey: chosenKey },
     remainingQueue: queue.filter((event) => !batchSet.has(event)),
   };
+}
+
+/**
+ * Selects between the ordinary queue and a released dispatch hold.
+ *
+ * This preserves the Driver's established order: immediate queue sources win;
+ * otherwise a dispatchable released held batch wins over the ordinary queue.
+ * A held batch that is currently ineligible does not block the queue.
+ */
+export function selectConductorDispatchBatchCore(
+  state: ConductorCoreState,
+  options: DispatchScheduleOptions,
+): SelectDispatchBatchResult | undefined {
+  const selectedQueue = selectDispatchBatchCore({
+    queue: state.queue,
+    state: state.dispatchBatchState,
+    autonomousTurns: state.autonomousTurns,
+    ...options,
+  });
+  if (
+    selectedQueue &&
+    isImmediateDispatchSourceCore(selectedQueue.batch.sourceKey)
+  ) {
+    return selectedQueue;
+  }
+
+  if (!state.dispatchHold && state.heldEvents.length > 0) {
+    const allHeldEventsDispatchable = state.heldEvents.every((event) =>
+      canDispatchConductorSendCore(
+        event,
+        state.autonomousTurns,
+        options.maxTurns,
+      ),
+    );
+    const selectedHeld = allHeldEventsDispatchable
+      ? undefined
+      : selectDispatchBatchCore({
+          queue: state.heldEvents,
+          state: state.dispatchBatchState,
+          autonomousTurns: state.autonomousTurns,
+          maxTurns: options.maxTurns,
+        });
+    const heldBatch =
+      selectedHeld?.batch ??
+      (allHeldEventsDispatchable
+        ? { events: [...state.heldEvents], sourceKey: 'dispatch-hold' }
+        : undefined);
+    if (heldBatch && heldBatch.events.length > 0) {
+      return {
+        batch: heldBatch,
+        remainingQueue:
+          selectedHeld?.remainingQueue ?? [...state.heldEvents].filter(
+            (event) => !heldBatch.events.includes(event),
+          ),
+        fromHeldEvents: true,
+      };
+    }
+  }
+
+  return selectedQueue;
+}
+
+export function isImmediateDispatchSourceCore(sourceKey: string): boolean {
+  return (
+    sourceKey === 'operator' ||
+    sourceKey === 'operator.reconnect' ||
+    sourceKey === 'permission'
+  );
 }
 
 export function markContinuationConsumedCore(

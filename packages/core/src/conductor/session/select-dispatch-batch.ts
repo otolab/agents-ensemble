@@ -40,7 +40,47 @@ export function selectDispatchBatch(
     }),
     { type: 'dispatch.schedule', input: scheduleOptions },
   );
-  const selected = transition.effects.find(
+  return selectedDispatchBatch(transition.effects);
+}
+
+export interface SelectConductorDispatchBatchInput
+  extends SelectDispatchBatchInput {
+  dispatchHold: boolean;
+  heldEvents: readonly SessionEvent[];
+}
+
+/**
+ * Driver scheduling entry point. Queue/held arbitration is reducer-owned;
+ * reservation and waiting remain execution-layer concerns.
+ */
+export function selectConductorDispatchBatch(
+  input: SelectConductorDispatchBatchInput,
+): SelectDispatchBatchResult | undefined {
+  const {
+    queue,
+    state,
+    autonomousTurns,
+    dispatchHold,
+    heldEvents,
+    ...scheduleOptions
+  } = input;
+  const transition = stepConductorCore(
+    createConductorCoreState({
+      queue,
+      dispatchBatchState: state,
+      autonomousTurns,
+      dispatchHold,
+      heldEvents,
+    }),
+    { type: 'dispatch.schedule', input: scheduleOptions },
+  );
+  return selectedDispatchBatch(transition.effects);
+}
+
+function selectedDispatchBatch(
+  effects: ReturnType<typeof stepConductorCore>['effects'],
+): SelectDispatchBatchResult | undefined {
+  const selected = effects.find(
     (effect) =>
       effect.kind === 'action' &&
       effect.action.type === 'dispatchSelection',

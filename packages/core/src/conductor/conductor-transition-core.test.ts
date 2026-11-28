@@ -182,6 +182,144 @@ describe('stepConductorCore', () => {
     expect(heldRequestAfterShutdown.state.heldEvents).toEqual([heldEvent]);
   });
 
+  it('arbitrates a released hold in the existing immediate/held/queue order', () => {
+    const operatorMessage: SessionEvent = {
+      type: 'operator.message',
+      text: 'immediate queue source',
+    };
+    const heldWorker: SessionEvent = {
+      type: 'worker.completed',
+      result: {
+        name: 'implementer',
+        kind: 'implementer',
+        acpSessionId: 'worker-session',
+        status: 'finished',
+        result: 'held outcome',
+      },
+    };
+    const githubUpdate: SessionEvent = {
+      type: 'github.update',
+      items: [],
+    };
+    const releasedHoldState = (
+      heldEvents: SessionEvent[],
+      queuedEvents: SessionEvent[] = [],
+      autonomousTurns = 0,
+    ) => {
+      let state = createConductorCoreState({
+        dispatchHold: true,
+        queue: heldEvents,
+        autonomousTurns,
+      });
+      state = stepConductorCore(state, {
+        type: 'dispatchHold.buffer',
+        queue: heldEvents,
+      }).state;
+      state = stepConductorCore(state, {
+        type: 'dispatchHold.set',
+        enabled: false,
+      }).state;
+      for (const event of queuedEvents) {
+        state = stepConductorCore(state, {
+          type: 'queue.arrival',
+          event,
+          waiterMatched: false,
+        }).state;
+      }
+      return state;
+    };
+    const schedule = (
+      initial: ReturnType<typeof createConductorCoreState>,
+      maxTurns = 5,
+    ) => {
+      const transition = stepConductorCore(initial, {
+        type: 'dispatch.schedule',
+        input: { maxTurns },
+      });
+      const selected = actionEffects(transition.effects).find(
+        (effect) => effect.type === 'dispatchSelection',
+      );
+      expect(selected?.type).toBe('dispatchSelection');
+      return selected?.type === 'dispatchSelection'
+        ? selected.result
+        : undefined;
+    };
+
+    for (const immediateEvent of [
+      operatorMessage,
+      { type: 'operator.reconnect' } satisfies SessionEvent,
+      permission('permission-1'),
+    ]) {
+      const immediateQueueSelection = schedule(
+        releasedHoldState([heldWorker], [immediateEvent]),
+      );
+      expect(immediateQueueSelection).toMatchObject({
+        batch: {
+          sourceKey:
+            immediateEvent.type === 'operator.message'
+              ? 'operator'
+              : immediateEvent.type === 'operator.reconnect'
+                ? 'operator.reconnect'
+                : 'permission',
+          events: [immediateEvent],
+        },
+      });
+      expect(immediateQueueSelection?.fromHeldEvents).toBeUndefined();
+    }
+
+    const heldWorker2: SessionEvent = {
+      ...heldWorker,
+      result: { ...heldWorker.result, name: 'reviewer' },
+    };
+    expect(
+      schedule(
+        releasedHoldState([heldWorker, heldWorker2], [githubUpdate]),
+      ),
+    ).toMatchObject({
+      batch: {
+        sourceKey: 'dispatch-hold',
+        events: [heldWorker, heldWorker2],
+      },
+      remainingQueue: [],
+      fromHeldEvents: true,
+    });
+
+    const permissionStall: SessionEvent = {
+      type: 'permission.stall',
+      message: 'still waiting',
+      pendingPermissionIds: ['permission-1'],
+      pendingPermissionCount: 1,
+      oldestPermissionCreatedAt: 1,
+      stallAgeMs: 10,
+      stallThresholdMs: 10,
+    };
+    expect(
+      schedule(
+        releasedHoldState([heldWorker], [permissionStall], 5),
+        5,
+      ),
+    ).toMatchObject({
+      batch: { sourceKey: 'permission.stall', events: [permissionStall] },
+    });
+
+    const activeHold = stepConductorCore(
+      createConductorCoreState({ dispatchHold: true, queue: [heldWorker] }),
+      { type: 'dispatchHold.buffer', queue: [heldWorker] },
+    ).state;
+    const activeHoldSelection = schedule(
+      stepConductorCore(activeHold, {
+        type: 'queue.arrival',
+        event: operatorMessage,
+        waiterMatched: false,
+      }).state,
+    );
+    expect(activeHoldSelection).toMatchObject({
+      batch: { sourceKey: 'operator', events: [operatorMessage] },
+    });
+    expect(activeHoldSelection?.fromHeldEvents).toBeUndefined();
+    expect(activeHold.heldEvents).toEqual([heldWorker]);
+  });
+
   it('keeps queue payload ownership and accepts started/result after reentrant shutdown', () => {
     const operatorMessage: SessionEvent = {
       type: 'operator.message',

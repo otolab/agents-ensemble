@@ -57,6 +57,7 @@ import {
   dispatchBatchStateAfterSend,
   eventSourceKey,
   markContinuationConsumed,
+  selectConductorDispatchBatch,
   selectDispatchBatch,
   type DispatchBatchState,
 } from './session/select-dispatch-batch.js';
@@ -64,7 +65,6 @@ import {
   autonomousTurnsAfterConductorBatch,
   allowIdleOperatorMessages,
   buildIssueLoopStopInput,
-  canDispatchConductorSend,
   decideIssueLoopDriver,
   isMaxTurnsLimited,
   recoveryConfirmationStopReason,
@@ -1027,12 +1027,14 @@ async function waitForDispatchBatch(input: {
       });
     }
 
-    const selected = selectDispatchBatch({
+    const selected = selectConductorDispatchBatch({
       queue: input.eventQueue.snapshot(),
       state: input.dispatchBatchState,
       autonomousTurns: input.autonomousTurns,
       maxTurns: input.maxTurns,
       allowIdleOperatorMessages: input.canDispatchIdleOperatorMessage(),
+      dispatchHold: input.dispatchHoldState.dispatchHold,
+      heldEvents: input.dispatchHoldState.heldEvents,
     });
 
     const prepareDispatch = (dispatch: {
@@ -1071,59 +1073,12 @@ async function waitForDispatchBatch(input: {
       };
     };
 
-    // Operator input, reconnect, and permission decisions retain their
-    // immediate priority. Lower-priority events must wait while a released hold
-    // contains an eligible permission or worker event.
-    if (selected && isImmediateDispatchSource(selected.batch.sourceKey)) {
-      const dispatch = prepareDispatch({
-        events: selected.batch.events,
-        sourceKey: selected.batch.sourceKey,
-        selected,
-      });
-      if (dispatch) return dispatch;
-      await waitForDispatchChange(input);
-      continue;
-    }
-
-    if (
-      !input.dispatchHoldState.dispatchHold &&
-      input.dispatchHoldState.heldEvents.length > 0
-    ) {
-      const heldEvents = input.dispatchHoldState.heldEvents;
-      const allHeldEventsDispatchable = heldEvents.every((event) =>
-        canDispatchConductorSend(event, input.autonomousTurns, input.maxTurns),
-      );
-      const selectedHeld = allHeldEventsDispatchable
-        ? undefined
-        : selectDispatchBatch({
-            queue: heldEvents,
-            state: input.dispatchBatchState,
-            autonomousTurns: input.autonomousTurns,
-            maxTurns: input.maxTurns,
-          });
-      const selectedHeldBatch =
-        selectedHeld?.batch ??
-        (allHeldEventsDispatchable
-          ? { events: [...heldEvents], sourceKey: 'dispatch-hold' }
-          : undefined);
-      if (selectedHeldBatch && selectedHeldBatch.events.length > 0) {
-        const dispatch = prepareDispatch({
-          events: selectedHeldBatch.events,
-          sourceKey: selectedHeldBatch.sourceKey,
-          ...(selectedHeld ? { selected: selectedHeld } : {}),
-          fromHeldEvents: true,
-        });
-        if (dispatch) return dispatch;
-        await waitForDispatchChange(input);
-        continue;
-      }
-    }
-
     if (selected && selected.batch.events.length > 0) {
       const dispatch = prepareDispatch({
         events: selected.batch.events,
         sourceKey: selected.batch.sourceKey,
         selected,
+        ...(selected.fromHeldEvents ? { fromHeldEvents: true } : {}),
       });
       if (dispatch) return dispatch;
       await waitForDispatchChange(input);
@@ -1132,14 +1087,6 @@ async function waitForDispatchBatch(input: {
 
     await waitForDispatchChange(input);
   }
-}
-
-function isImmediateDispatchSource(sourceKey: string): boolean {
-  return (
-    sourceKey === 'operator' ||
-    sourceKey === 'operator.reconnect' ||
-    sourceKey === 'permission'
-  );
 }
 
 function waitForDispatchChange(input: {
