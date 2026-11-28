@@ -1724,11 +1724,12 @@ test('persistence docs use canonical slug paths and identify legacy migration so
     );
   }
 
-  // #697 moves new operator state to profile and canonical-slug paths. The
-  // settings reference must describe that runtime destination.
+  // Operator state remains user-scoped, while a non-default config gets its
+  // own workspace / watch / scheduling namespace. Keep the compatibility
+  // contract visible in the settings reference.
   assert.match(
     documents[0],
-    /operator-agent の新規 state は user 層に保存します。conversation record \/ Pi transcript は `operatorAgentId` ごと、watch state は profile と canonical repository slug ごとに分けます/u,
+    /operator-agent の新規 state は user 層に保存します。既定 config は従来の `operator-agents\/<profile>\/` を使い、別 config は canonical file path の SHA-256 ごとに workspace \/ watch \/ scheduling state と lock を分けます。conversation record \/ Pi transcript は `operatorAgentId` ごとの global 保存です/u,
   );
 
   assert.match(
