@@ -14,7 +14,9 @@ import { ConductorInbox } from './conductor-inbox.js';
 import { startInboxProcessor } from './inbox-processor.js';
 import type {
   WorkerFailureRecord,
+  WorkerSessionAttachedNotification,
   WorkerSessionRecoveredNotification,
+  WorkerSessionRestartedNotification,
 } from './types.js';
 import { WorkerRuntime } from './worker-runtime.js';
 import type {
@@ -61,6 +63,12 @@ export interface WorkerSessionOptions {
   onWorkerCompleted?: (result: WorkerDispatchResult) => void;
   onWorkerSessionRecovered?: (
     notification: WorkerSessionRecoveredNotification,
+  ) => void | Promise<void>;
+  onWorkerSessionAttached?: (
+    notification: WorkerSessionAttachedNotification,
+  ) => void | Promise<void>;
+  onWorkerSessionRestarted?: (
+    notification: WorkerSessionRestartedNotification,
   ) => void | Promise<void>;
   onWorkerHandoffConfirmed?: (name: string, sessionId: string) => Promise<void>;
   onPermissionCleanup?: (event: {
@@ -114,6 +122,8 @@ export class WorkerSession {
         ? { ownsWorkerAcpConnections: options.ownsWorkerAcpConnections }
         : {}),
       onWorkerSessionRecovered: options.onWorkerSessionRecovered,
+      onWorkerSessionAttached: options.onWorkerSessionAttached,
+      onWorkerSessionRestarted: options.onWorkerSessionRestarted,
       onWorkerHandoffConfirmed: options.onWorkerHandoffConfirmed,
       ...(options.onPromptTelemetry
         ? { onPromptTelemetry: options.onPromptTelemetry }

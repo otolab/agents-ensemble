@@ -29,6 +29,8 @@ import type {
   WorkerPromptTelemetry,
   WorkerAcpUpdateTelemetry,
   WorkerSessionRecoveredNotification,
+  WorkerSessionAttachedNotification,
+  WorkerSessionRestartedNotification,
   WorkerStateTelemetry,
   WorkerStartedInfo,
   WorkerStartParams,
@@ -52,6 +54,12 @@ export interface WorkerRuntimeOptions {
   onPromptTelemetry?: (event: WorkerPromptTelemetry) => void;
   onWorkerSessionRecovered?: (
     notification: WorkerSessionRecoveredNotification,
+  ) => void | Promise<void>;
+  onWorkerSessionAttached?: (
+    notification: WorkerSessionAttachedNotification,
+  ) => void | Promise<void>;
+  onWorkerSessionRestarted?: (
+    notification: WorkerSessionRestartedNotification,
   ) => void | Promise<void>;
   onWorkerHandoffConfirmed?: (name: string, sessionId: string) => Promise<void>;
   onAcpUpdate?: (event: WorkerAcpUpdateTelemetry) => void;
@@ -94,6 +102,10 @@ interface FailedWorker {
   kind: string;
   failureStage: 'attach' | 'init';
   error: string;
+  /** Session eligible for strict restart, when known. */
+  sessionId?: string;
+  /** A process whose shutdown failed; retry its close before spawning another. */
+  cleanupSession?: WorkerAcpSession;
 }
 
 class InterruptedInstructionAfterHandoffError extends Error {
@@ -110,12 +122,16 @@ export class WorkerRuntime {
   private readonly sleeping = new Map<string, WorkerStartedInfo>();
   private readonly failedWorkers = new Map<string, FailedWorker>();
   private readonly recreating = new Map<string, AttachedWorker | undefined>();
+  private readonly restarting = new Map<string, AttachedWorker | undefined>();
   private readonly handoffPending = new Set<string>();
   private readonly recreationRequired = new Set<string>();
   private readonly handoffReports = new Map<string, { sessionId: string; report: string }>();
   private readonly handoffTokens = new Map<string, { sessionId: string; token: string }>();
   private readonly confirmingHandoffs = new Set<string>();
   private readonly idleResolvers = new Set<() => void>();
+  private readonly closingSessions = new WeakMap<WorkerAcpSession, Promise<void>>();
+  private readonly closedSessions = new WeakSet<WorkerAcpSession>();
+  private readonly unconfirmedSessionCloses = new Set<WorkerAcpSession>();
   private attachInFlight = 0;
   private acpTransitionsInFlight = 0;
   private acpCleanupUnconfirmed = false;
@@ -275,6 +291,9 @@ export class WorkerRuntime {
     if (this.recreating.has(name)) {
       return { status: 'error', worker: name, message: `Worker "${name}" is being recreated; retry after it finishes.` };
     }
+    if (this.restarting.has(name)) {
+      return { status: 'error', worker: name, message: `Worker "${name}" is being restarted; retry after it finishes.` };
+    }
     if (this.handoffPending.has(name)) {
       return { status: 'error', worker: name, message: `Worker "${name}" is waiting for handoff confirmation. Inspect the interrupted work before confirming.` };
     }
@@ -381,7 +400,7 @@ export class WorkerRuntime {
     const entry = this.handoffReports.get(name);
     const currentId = this.residents.get(name)?.attached.session.sessionId;
     if (this.forceShutdownRequested || this.confirmingHandoffs.has(name) || !this.handoffPending.has(name) ||
-        !entry || entry.sessionId !== currentId || this.recreating.has(name)) {
+        !entry || entry.sessionId !== currentId || this.recreating.has(name) || this.restarting.has(name)) {
       throw new Error(`Worker "${name}" has not completed its handoff report. Wait for the report before inspecting.`);
     }
     const token = randomUUID();
@@ -395,7 +414,7 @@ export class WorkerRuntime {
     }
     const entry = this.handoffReports.get(name);
     const currentId = this.residents.get(name)?.attached.session.sessionId;
-    if (this.forceShutdownRequested || this.confirmingHandoffs.has(name) || this.recreating.has(name) ||
+    if (this.forceShutdownRequested || this.confirmingHandoffs.has(name) || this.recreating.has(name) || this.restarting.has(name) ||
         !entry || entry.sessionId !== currentId) {
       throw new Error(`Worker "${name}" has not completed its handoff report. Wait for the report before confirming.`);
     }
@@ -429,6 +448,9 @@ export class WorkerRuntime {
     for (const candidate of this.recreating.values()) {
       if (candidate) cancelWorkerAcpPrompt(candidate.session);
     }
+    for (const candidate of this.restarting.values()) {
+      if (candidate) cancelWorkerAcpPrompt(candidate.session);
+    }
     for (const resident of this.residents.values()) {
       if (resident.state === 'processing' && !resident.cancelInFlight) {
         resident.cancelInFlight = true;
@@ -448,13 +470,19 @@ export class WorkerRuntime {
         resident.preemptInstruction = undefined;
       }
       this.cancelAllActivePrompts();
-      const pendingAcpTransition = this.acpTransitionsInFlight > 0 || this.recreating.size > 0;
+      const pendingAcpTransition = this.acpTransitionsInFlight > 0 || this.recreating.size > 0 || this.restarting.size > 0;
       const residents = [...this.residents.values()];
       const closes = Promise.allSettled(
         [
           ...residents.map((resident) => this.closeTrackedAcpSession(resident.attached.session)),
           ...[...this.recreating.values()].filter((candidate): candidate is AttachedWorker => candidate !== undefined)
             .map((candidate) => this.closeTrackedAcpSession(candidate.session)),
+          ...[...this.restarting.values()].filter((candidate): candidate is AttachedWorker => candidate !== undefined)
+            .map((candidate) => this.closeTrackedAcpSession(candidate.session)),
+          ...[...this.failedWorkers.values()]
+            .map((failed) => failed.cleanupSession)
+            .filter((session): session is WorkerAcpSession => session !== undefined)
+            .map((session) => this.closeTrackedAcpSession(session)),
         ],
       );
       let timeout: number | NodeJS.Timeout | undefined;
@@ -464,7 +492,7 @@ export class WorkerRuntime {
       ]);
       if (timeout) cancelTimeout(timeout);
       const failures = (results ?? []).filter((result) => result.status === 'rejected').map((failure) => failure.reason);
-      if (pendingAcpTransition || !results || this.acpCleanupUnconfirmed) {
+      if (pendingAcpTransition || !results || this.acpCleanupUnconfirmed || this.unconfirmedSessionCloses.size > 0) {
         failures.push(new Error('Worker ACP shutdown could not be confirmed; restart the owning process before resuming.'));
       }
       if (failures.length) throw new AggregateError(failures, 'Worker ACP shutdown failed');
@@ -474,25 +502,183 @@ export class WorkerRuntime {
     }
 
     await this.waitForIdle();
-    const results = await Promise.allSettled(
-      [...this.residents.values()].map((resident) => this.closeTrackedAcpSession(resident.attached.session)),
-    );
+    const results = await Promise.allSettled([
+      ...[...this.residents.values()].map((resident) => this.closeTrackedAcpSession(resident.attached.session)),
+      ...[...this.failedWorkers.values()]
+        .map((failed) => failed.cleanupSession)
+        .filter((session): session is WorkerAcpSession => session !== undefined)
+        .map((session) => this.closeTrackedAcpSession(session)),
+    ]);
     const failures = results.filter((result) => result.status === 'rejected');
-    if (failures.length || this.acpCleanupUnconfirmed) {
+    if (failures.length || this.acpCleanupUnconfirmed || this.unconfirmedSessionCloses.size > 0) {
       throw new AggregateError(failures.map((failure) => failure.reason), 'Worker ACP shutdown could not be confirmed; restart the owning process before resuming.');
     }
     this.residents.clear();
   }
 
   private async closeTrackedAcpSession(session: WorkerAcpSession): Promise<void> {
+    if (this.closedSessions.has(session)) return;
+    const existing = this.closingSessions.get(session);
+    if (existing) return existing;
     this.acpTransitionsInFlight++;
+    const close = closeWorkerAcpSession(session)
+      .then(() => {
+        this.closedSessions.add(session);
+        this.unconfirmedSessionCloses.delete(session);
+      })
+      .catch((error) => {
+        this.unconfirmedSessionCloses.add(session);
+        throw error;
+      })
+      .finally(() => {
+        this.acpTransitionsInFlight--;
+        this.closingSessions.delete(session);
+        this.resolveIdleIfReady();
+      });
+    this.closingSessions.set(session, close);
+    return close;
+  }
+
+  /** Restart an idle or failed worker by loading its existing ACP session ID. */
+  async restartWorker(name: string): Promise<string> {
+    const started = this.configuredWorkers.get(name);
+    if (!started) throw new Error(`Worker "${name}" is not registered.`);
+    if (
+      this.forceShutdownRequested ||
+      this.restarting.has(name) ||
+      this.recreating.has(name) ||
+      this.confirmingHandoffs.has(name) ||
+      this.attaching.has(name) ||
+      this.sleeping.has(name)
+    ) {
+      throw new Error(`Worker "${name}" is busy, not attached, or shutting down.`);
+    }
+    if (this.options.ownsWorkerAcpConnections === false) {
+      throw new Error(`Worker "${name}" does not own its ACP connection, so its process cannot be restarted safely.`);
+    }
+    if (this.acpCleanupUnconfirmed) {
+      throw new Error(`Worker "${name}" cannot be restarted because an earlier ACP process cleanup could not be confirmed.`);
+    }
+
+    const previous = this.residents.get(name);
+    const failed = this.failedWorkers.get(name);
+    if (this.processing.has(previous?.workerId ?? '') || (previous && !failed && (
+      previous.state !== 'idle' ||
+      previous.queue.length > 0 ||
+      previous.preemptInstruction !== undefined ||
+      previous.lazyInitInFlight
+    ))) {
+      throw new Error(`Worker "${name}" is processing or has queued work; restart is only available while idle or failed.`);
+    }
+    if (!previous && !failed) {
+      throw new Error(`Worker "${name}" is not idle or failed and cannot be restarted.`);
+    }
+
+    const sessionId =
+      failed?.sessionId ??
+      previous?.attached.session.sessionId ??
+      started.resumeAcpSessionId;
+    if (!sessionId?.trim()) {
+      throw new Error(
+        `Worker "${name}" has no confirmed ACP session ID. restart_worker cannot guess one, and recreate_worker also requires a saved prior ID to record the history boundary. Inspect the saved state before choosing another recovery path.`,
+      );
+    }
+
+    this.restarting.set(name, undefined);
+    this.attachInFlight++;
+    this.handoffTokens.delete(name);
+    this.emitWorkerState(started.workerId, name, started.kind, 'attaching');
+    let candidate: AttachedWorker | undefined;
+    let previousClosed = false;
     try {
-      await closeWorkerAcpSession(session);
+      // Drain completed rounds before the same ID is reinstalled. This prevents
+      // a queued completion from the old bridge from racing the durable update.
+      await this.options.inbox.drain();
+      if (this.forceShutdownRequested) throw new Error('Shutdown interrupted worker restart.');
+
+      const cleanupSession = previous?.attached.session ?? failed?.cleanupSession;
+      if (cleanupSession) {
+        await this.closeTrackedAcpSession(cleanupSession);
+        previousClosed = true;
+        this.residents.delete(name);
+      }
+      if (failed) failed.cleanupSession = undefined;
+      if (this.forceShutdownRequested) throw new Error('Shutdown interrupted worker restart.');
+
+      candidate = await this.attachStartedWorker(started, false, sessionId);
+      this.restarting.set(name, candidate);
+      if (candidate.session.sessionId !== sessionId) {
+        throw new Error(`Worker "${name}" returned an unexpected ACP session ID during strict restart.`);
+      }
+      if (this.forceShutdownRequested) throw new Error('Shutdown interrupted worker restart.');
+
+      await this.options.onWorkerSessionRestarted?.({
+        workerId: started.workerId,
+        name,
+        kind: started.kind,
+        acpSessionId: sessionId,
+        acpCwd: candidate.session.acpCwd,
+      });
+      if (this.forceShutdownRequested) {
+        throw new Error('Worker restart was saved during shutdown; resume from the saved session.');
+      }
+
+      const resident: ResidentWorker = {
+        workerId: started.workerId,
+        started,
+        attached: candidate,
+        state: 'idle',
+        queue: [],
+        lazyInitInFlight: false,
+        cancelInFlight: false,
+        sessionRecoveryAttempted: true,
+        sessionRecoveryInProgress: false,
+      };
+      this.residents.set(name, resident);
+      this.failedWorkers.delete(name);
+      this.sleeping.delete(name);
+      this.emitWorkerState(started.workerId, name, started.kind, 'idle');
+      return sessionId;
     } catch (error) {
-      this.acpCleanupUnconfirmed = true;
-      throw error;
+      const detail = error instanceof Error ? error.message : String(error);
+      this.failedWorkers.set(name, {
+        workerId: started.workerId,
+        name,
+        kind: started.kind,
+        failureStage: 'attach',
+        error: detail,
+        sessionId,
+        ...(!previousClosed && (previous?.attached.session ?? failed?.cleanupSession)
+          ? { cleanupSession: previous?.attached.session ?? failed?.cleanupSession }
+          : {}),
+      });
+      this.emitWorkerState(started.workerId, name, started.kind, 'failed');
+      if (candidate) {
+        try {
+          await this.closeTrackedAcpSession(candidate.session);
+        } catch (cleanupError) {
+          this.failedWorkers.get(name)!.cleanupSession = candidate.session;
+          throw new AggregateError(
+            [error, cleanupError],
+            `Worker "${name}" restart failed and the new ACP process could not be confirmed stopped. Restart the owning process before retrying.`,
+          );
+        }
+      }
+      if (previous && !previousClosed) this.residents.set(name, previous);
+      if (this.acpCleanupUnconfirmed) {
+        throw new Error(
+          `Worker "${name}" restart failed and ACP process cleanup could not be confirmed. The saved session ID was retained; restart the owning process before resuming.`,
+          { cause: error },
+        );
+      }
+      throw new Error(
+        `Worker "${name}" could not be restarted with saved session "${sessionId}". The saved ID and worker connection settings were kept; retry restart_worker. If history may be discarded, use recreate_worker to start a new session. Cause: ${detail}`,
+        { cause: error },
+      );
     } finally {
-      this.acpTransitionsInFlight--;
+      this.restarting.delete(name);
+      this.attachInFlight--;
+      this.resolveIdleIfReady();
     }
   }
 
@@ -500,8 +686,10 @@ export class WorkerRuntime {
   async recreateWorker(name: string, previousSessionId: string): Promise<string> {
     const started = this.configuredWorkers.get(name);
     const previous = this.residents.get(name);
+    const failed = this.failedWorkers.get(name);
     if (!started || !previousSessionId.trim()) throw new Error(`No saved worker session for "${name}".`);
-    if (this.forceShutdownRequested || this.recreating.has(name) || this.confirmingHandoffs.has(name) || this.attaching.has(name) ||
+    if (this.forceShutdownRequested || this.recreating.has(name) || this.restarting.has(name) || this.confirmingHandoffs.has(name) || this.attaching.has(name) ||
+        failed?.cleanupSession ||
         (previous && (previous.state !== 'idle' || previous.queue.length > 0 || previous.preemptInstruction))) {
       throw new Error(`Worker "${name}" is busy or shutting down.`);
     }
@@ -576,6 +764,20 @@ export class WorkerRuntime {
   }
 
   private summarizeWorkerStatus(name: string): WorkerStatusSummary {
+    if (this.restarting.has(name)) {
+      const started = this.configuredWorkers.get(name)!;
+      return {
+        name: started.name,
+        kind: started.kind,
+        state: 'attaching',
+        queueDepth: 0,
+        worktreePath: started.worktree.path,
+        ...(started.resolvedWorkspacePath
+          ? { workspacePath: this.summarizeAcpCwd(started.resolvedWorkspacePath) }
+          : {}),
+      };
+    }
+
     const failed = this.failedWorkers.get(name);
     if (failed) {
       return {
@@ -671,6 +873,7 @@ export class WorkerRuntime {
   private workerAttachOptions(
     started: WorkerStartedInfo,
     resumeSavedSession = true,
+    strictResumeSessionId?: string,
   ): AttachWorkerOptions {
     return {
       name: started.name,
@@ -685,8 +888,14 @@ export class WorkerRuntime {
       expectedResumeAcpSpawn: started.expectedResumeAcpSpawn,
       currentAcpSpawn: started.acpFingerprint,
       handoffPending: this.handoffPending.has(started.name),
+      ...(strictResumeSessionId
+        ? {
+            resumeAcpSessionId: strictResumeSessionId,
+            requireResume: true,
+          }
+        : {}),
       migrateWorkspacePrompt: resumeSavedSession && started.migrateWorkspacePrompt,
-      ...(resumeSavedSession && started.resumeAcpSessionId
+      ...(!strictResumeSessionId && resumeSavedSession && started.resumeAcpSessionId
         ? { resumeAcpSessionId: started.resumeAcpSessionId }
         : {}),
       connectAcp: this.options.connectAcp,
@@ -704,10 +913,15 @@ export class WorkerRuntime {
   private async attachStartedWorker(
     started: WorkerStartedInfo,
     resumeSavedSession = true,
+    strictResumeSessionId?: string,
   ): Promise<AttachedWorker> {
     this.acpTransitionsInFlight++;
     try {
-      return await attachWorker(this.workerAttachOptions(started, resumeSavedSession));
+      return await attachWorker(this.workerAttachOptions(
+        started,
+        resumeSavedSession,
+        strictResumeSessionId,
+      ));
     } catch (error) {
       if (error instanceof WorkerAcpCleanupError) this.acpCleanupUnconfirmed = true;
       throw error;
@@ -924,9 +1138,26 @@ export class WorkerRuntime {
       name: started.name,
       kind: started.kind,
     });
+    let attached: AttachedWorker | undefined;
     try {
-      const attached = await this.attachStartedWorker(started);
+      attached = await this.attachStartedWorker(started);
 
+      if (this.forceShutdownRequested) {
+        attaching.queue.length = 0;
+        attaching.preemptInstruction = undefined;
+        await this.closeTrackedAcpSession(attached.session);
+        return;
+      }
+
+      if (!attached.session.recovery) {
+        await this.options.onWorkerSessionAttached?.({
+          workerId: started.workerId,
+          name: started.name,
+          kind: started.kind,
+          acpSessionId: attached.session.sessionId,
+          acpCwd: attached.session.acpCwd,
+        });
+      }
       if (this.forceShutdownRequested) {
         attaching.queue.length = 0;
         attaching.preemptInstruction = undefined;
@@ -973,7 +1204,29 @@ export class WorkerRuntime {
         kind: started.kind,
         failureStage: 'attach',
         error: message,
+        ...(attached
+          ? {
+              sessionId:
+                attached.session.recovery?.previousSessionId ??
+                attached.session.sessionId,
+              cleanupSession: attached.session,
+            }
+          : started.resumeAcpSessionId
+            ? { sessionId: started.resumeAcpSessionId }
+            : {}),
       });
+      if (attached) {
+        try {
+          await this.closeTrackedAcpSession(attached.session);
+          this.failedWorkers.get(started.name)!.cleanupSession = undefined;
+        } catch (cleanupError) {
+          const cleanupDetail = cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
+          const failure = this.failedWorkers.get(started.name)!;
+          failure.cleanupSession = attached.session;
+          failure.error +=
+            ` ACP process cleanup could not be confirmed: ${cleanupDetail}`;
+        }
+      }
       this.emitWorkerState(
         started.workerId,
         started.name,
@@ -1087,6 +1340,10 @@ export class WorkerRuntime {
           kind: resident.started.kind,
           failureStage: 'init',
           error: failureMessage,
+          sessionId:
+            resident.pendingSessionRecovery?.previousSessionId ??
+            resident.attached.session.recovery?.previousSessionId ??
+            resident.attached.session.sessionId,
         });
         this.residents.delete(resident.started.name);
         this.emitPromptTelemetry({
@@ -1120,6 +1377,10 @@ export class WorkerRuntime {
           kind: resident.started.kind,
           failureStage: 'init',
           error: failureMessage,
+          sessionId:
+            resident.pendingSessionRecovery?.previousSessionId ??
+            resident.attached.session.recovery?.previousSessionId ??
+            resident.attached.session.sessionId,
         });
         this.residents.delete(resident.started.name);
         this.emitPromptTelemetry({
@@ -1170,8 +1431,11 @@ export class WorkerRuntime {
         return;
       }
       if (lazyInitFailed || sessionRecoveryFailed) {
+        const failed = this.failedWorkers.get(resident.started.name);
+        if (failed) failed.cleanupSession = resident.attached.session;
         try {
           await this.closeTrackedAcpSession(resident.attached.session);
+          if (failed) failed.cleanupSession = undefined;
         } catch {
           // Retain the session so a later non-forced shutdown can retry cleanup.
           this.residents.set(resident.started.name, resident);

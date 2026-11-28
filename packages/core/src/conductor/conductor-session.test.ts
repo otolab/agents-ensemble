@@ -667,6 +667,124 @@ describe('runConductorSession resume / shutdown', () => {
     closeGate.resolve();
   });
 
+  it('persists the first lazy worker session ID and exposes strict restart_worker', async () => {
+    stubUnusedControlServer();
+    const firstBridge = {
+      newSession: vi.fn().mockResolvedValue('lazy-worker-session'),
+      loadSession: vi.fn().mockResolvedValue(undefined),
+      promptSession: vi.fn().mockResolvedValue({
+        stopReason: 'end_turn',
+        responseText: 'ready',
+      }),
+      close: vi.fn().mockResolvedValue(undefined),
+      cancelSession: vi.fn(),
+    } as unknown as AcpBridge;
+    const failedRestartBridge = {
+      newSession: vi.fn(),
+      loadSession: vi.fn().mockRejectedValue(new Error('session map temporarily unavailable')),
+      promptSession: vi.fn(),
+      close: vi.fn().mockResolvedValue(undefined),
+      cancelSession: vi.fn(),
+    } as unknown as AcpBridge;
+    const restartedBridge = {
+      newSession: vi.fn(),
+      loadSession: vi.fn().mockResolvedValue(undefined),
+      promptSession: vi.fn(),
+      close: vi.fn().mockResolvedValue(undefined),
+      cancelSession: vi.fn(),
+    } as unknown as AcpBridge;
+    const connectAcp = vi.fn()
+      .mockResolvedValueOnce(firstBridge)
+      .mockResolvedValueOnce(failedRestartBridge)
+      .mockResolvedValueOnce(restartedBridge);
+    let tools: Parameters<typeof mockCreate>[0]['customTools'];
+    mockCreate.mockImplementationOnce(async (options) => {
+      tools = options.customTools;
+      return {
+        agentId: 'agent-test',
+        send: mockSend,
+        close: mockClose,
+        getUsage: createMockConductorGetUsage(),
+      };
+    });
+    mockSend.mockResolvedValue({ runId: 'run', status: 'finished', result: 'ready' });
+    let api: OperatorInputBindingApi | undefined;
+    const onPostLoopWait = vi.fn();
+    const config = {
+      ...DEFAULT_ENSEMBLE_CONFIG,
+      session: { ...DEFAULT_ENSEMBLE_CONFIG.session, lazyWorkers: true },
+    };
+    const session = runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { workers: [{ name: 'implementer', kind: 'implementer' }] },
+      ensembleConfig: config,
+      defaultAcp: { config, env: {} },
+      connectAcp,
+      workerWorktree: {
+        path: repoRoot,
+        branch: 'ensemble/issue-1',
+        issue: TEST_ISSUE,
+        inRepo: true,
+      },
+      permissionPipeline: new PermissionPipeline({}),
+      disableGitHubMonitor: true,
+      maxTurns: 5,
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: true,
+      onPostLoopWait,
+      bindOperatorInput: (binding) => { api = binding; },
+    });
+    try {
+      await vi.waitFor(() => expect(onPostLoopWait).toHaveBeenCalledOnce());
+      expect(tools?.restart_worker).toBeDefined();
+      await tools!.prompt_worker!.execute({
+        worker: 'implementer',
+        instruction: 'start the lazy worker',
+      });
+      await vi.waitFor(() => expect(firstBridge.promptSession).toHaveBeenCalledTimes(2));
+
+      const storePath = sessionResumeStorePath({
+        repoRoot,
+        conductorAgentId: 'agent-test',
+      });
+      await vi.waitFor(async () => {
+        expect((await loadSessionResumeStore(storePath))?.workers.implementer?.acpSessionId)
+          .toBe('lazy-worker-session');
+      });
+
+      await expect(tools!.restart_worker!.execute({
+        worker: 'implementer',
+      })).rejects.toThrow(/retry restart_worker/u);
+      expect(failedRestartBridge.newSession).not.toHaveBeenCalled();
+      expect(failedRestartBridge.close).toHaveBeenCalledOnce();
+      expect((await loadSessionResumeStore(storePath))?.workers.implementer?.acpSessionId)
+        .toBe('lazy-worker-session');
+
+      const restartResult = await tools!.restart_worker!.execute({
+        worker: 'implementer',
+      });
+      expect(restartResult.content[0]).toMatchObject({
+        type: 'text',
+        text: expect.stringContaining('会話履歴を引き継いでいます'),
+      });
+      expect(firstBridge.close).toHaveBeenCalledOnce();
+      expect(restartedBridge.loadSession).toHaveBeenCalledWith(
+        'lazy-worker-session',
+        repoRoot,
+        expect.any(Function),
+      );
+      expect(restartedBridge.newSession).not.toHaveBeenCalled();
+      expect((await loadSessionResumeStore(storePath))?.workers.implementer).toMatchObject({
+        acpSessionId: 'lazy-worker-session',
+        acpCwd: repoRoot,
+      });
+    } finally {
+      api?.submit('/exit');
+      await session;
+    }
+  });
+
   it('retains ownership while a delayed worker recreation finishes after /close', async () => {
     stubUnusedControlServer();
     const candidateGate = createDeferred<AcpBridge>();

@@ -49,6 +49,17 @@ export interface WorkerSessionRecoveredNotification {
   acpCwd: string;
 }
 
+export interface WorkerSessionAttachedNotification {
+  workerId: string;
+  name: string;
+  kind: string;
+  acpSessionId: string;
+  acpCwd: string;
+}
+
+export type WorkerSessionRestartedNotification =
+  WorkerSessionAttachedNotification;
+
 export type InboxMessage =
   | {
       type: 'permission.request';

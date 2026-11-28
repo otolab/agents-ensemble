@@ -1047,6 +1047,9 @@ async function runConductorSessionWithStartupGuard(
   let commitWorkerSessionRecovery: (
     notification: import('../runtime/types.js').WorkerSessionRecoveredNotification,
   ) => Promise<void> = async () => { throw new Error('Resume store is not ready'); };
+  let commitWorkerSessionId: (
+    notification: import('../runtime/types.js').WorkerSessionAttachedNotification,
+  ) => Promise<void> = async () => { throw new Error('Resume store is not ready'); };
   let commitWorkerHandoffConfirmed: (name: string, sessionId: string) => Promise<void> =
     async () => { throw new Error('Resume store is not ready'); };
   let scheduleToolCallHistoryFlush = () => {};
@@ -1337,6 +1340,8 @@ async function runConductorSessionWithStartupGuard(
         reason: notification.reason,
       });
     },
+    onWorkerSessionAttached: (notification) => commitWorkerSessionId(notification),
+    onWorkerSessionRestarted: (notification) => commitWorkerSessionId(notification),
     onWorkerHandoffConfirmed: (name, sessionId) => commitWorkerHandoffConfirmed(name, sessionId),
     onWorkerFailed: (failure) => {
       // Notifications are serialized by the inbox, preserving each worker's
@@ -1514,9 +1519,31 @@ async function runConductorSessionWithStartupGuard(
     getWorkerFailures: () => sessionLogger.workerFailures,
   });
   const recreateWorkerTools: import('./conductor-tool.js').ConductorToolSet = {
+    restart_worker: {
+      name: 'restart_worker',
+      description: 'Restart an idle or failed worker ACP process and strictly load its existing session, preserving conversation history. Processing, attaching, queued, sleeping, or workers without a confirmed session ID cannot be restarted. If strict load fails, retry restart_worker or choose recreate_worker only when losing the old conversation is acceptable.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          worker: { type: 'string', enum: activeProfile.workers.map((worker) => worker.name) },
+        },
+        required: ['worker'],
+      },
+      async execute(args) {
+        if (teardownStarted) throw new Error('Worker restart is unavailable during shutdown.');
+        const name = String(args.worker ?? '').trim();
+        const sessionId = await workerSession.runtime.restartWorker(name);
+        return {
+          content: [{
+            type: 'text',
+            text: `worker「${name}」を再起動し、既存 ACP session「${sessionId}」を読み込みました。会話履歴を引き継いでいます。`,
+          }],
+        };
+      },
+    },
     recreate_worker: {
       name: 'recreate_worker',
-      description: 'Explicitly create a new worker session. The worker must be idle or failed. The prior conversation is not restored; inspect interrupted operations before issuing new work.',
+      description: 'Explicitly create a new worker session when its prior conversation cannot or should not be restored. The worker must be idle or failed. History is not preserved; inspect interrupted operations before issuing new work.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -1531,7 +1558,7 @@ async function runConductorSessionWithStartupGuard(
         if (!previous) throw new Error(`No saved worker session for "${name}".`);
         const handoff = await workerSession.runtime.recreateWorker(name, previous.acpSessionId);
         return {
-          content: [{ type: 'text', text: `Worker "${name}" was recreated. Its old conversation is unavailable; inspect interrupted work before sending instructions.\nWorker handoff:\n${handoff || '(no response)'}` }],
+          content: [{ type: 'text', text: `worker「${name}」を新しい session として再作成しました。旧会話は引き継がれていません。指示を送る前に、中断した作業と副作用を確認してください。\n引き継ぎ報告:\n${handoff || '(報告なし)'}` }],
         };
       },
     },
@@ -2003,6 +2030,56 @@ async function runConductorSessionWithStartupGuard(
       lease,
     );
   };
+  commitWorkerSessionId = (notification) =>
+    enqueueSessionResumeStoreWrite(async (lease) => {
+      if (terminalResumeStoreFinalFlushQueued || teardownStarted || recoverySaveUncertain) {
+        throw new Error('Cannot save a worker session ID during shutdown or an uncertain save.');
+      }
+      const previous = workerSessions.get(notification.name);
+      if (previous && previous.acpSessionId !== notification.acpSessionId) {
+        throw new Error(
+          `Worker "${notification.name}" session changed before its ID could be saved; inspect the saved state before retrying.`,
+        );
+      }
+      const origin = workerSessionOrigins.get(notification.name) ?? {
+        repoRoot: options.repoRoot,
+        issueUrl: options.issueUrl,
+      };
+      const fingerprint = workerAcpFingerprints.get(notification.name);
+      const replacement: WorkerSessionResumeStore = {
+        ...previous,
+        acpSessionId: notification.acpSessionId,
+        acpCwd: notification.acpCwd,
+        ...(!previous?.originAcpCwd
+          ? { originAcpCwd: notification.acpCwd }
+          : {}),
+        ...(!previous?.originAcpSpawn && fingerprint
+          ? { originAcpSpawn: historySpawnFingerprint(fingerprint) }
+          : {}),
+        ...(fingerprint ? { acpSpawn: fingerprint } : {}),
+        ...origin,
+      };
+      const snapshot = createSessionResumeStore(openQuestions.snapshot());
+      snapshot.workers[notification.name] = replacement;
+      try {
+        await saveSessionResumeStore(activeResumeStorePath!, snapshot, ownershipLifecycle.get(), lease);
+      } catch (error) {
+        // A first lazy attach has no previously durable ID to fall back to.
+        // Keep later flushes from overwriting a possibly renamed snapshot.
+        if (!previous) {
+          recoverySaveUncertain = true;
+          shutdownIntentController.abort();
+          operatorTerminationController.abort();
+          workerSession.runtime.cancelAllActivePrompts();
+        }
+        throw new Error(
+          `Worker "${notification.name}" ACP session ID could not be saved; the previous saved session ID was retained.`,
+          { cause: error },
+        );
+      }
+      workerSessions.set(notification.name, replacement);
+      workerSessionOrigins.set(notification.name, origin);
+    });
   commitWorkerSessionRecovery = (notification) =>
     enqueueSessionResumeStoreWrite(async (lease) => {
       if (terminalResumeStoreFinalFlushQueued || teardownStarted) {
