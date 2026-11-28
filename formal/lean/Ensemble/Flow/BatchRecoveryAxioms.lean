@@ -1,0 +1,40 @@
+import Ensemble.Flow.BatchRecovery
+
+/-! # batch recovery 定理の axiom audit
+
+各定理の kernel 依存を表示する。許容するのは propext / Classical.choice / Quot.sound。
+-/
+
+open Ensemble.Flow
+
+#print axioms batch_recovery_observation_consistent
+#print axioms setBatchMemberAttempts_of_mem
+#print axioms batch_send_started_records_exact_batch
+#print axioms mixed_input_projection_preserves_send_start
+#print axioms mixed_input_projection_preserves_unknown_result
+#print axioms mixed_input_projection_uses_restart_exception
+#print axioms mixed_worker_has_no_input_replay_projection
+#print axioms mixedUnknownHistory
+#print axioms mixedAttempt2Fresh
+#print axioms mixedMembersValid
+#print axioms mixedFailedHistory
+#print axioms mixedCompletedHistory
+#print axioms mixed_batch_send_started
+#print axioms mixed_batch_result_unknown
+#print axioms mixed_batch_recovery_started
+#print axioms mixed_input_recovery_is_valid_existing_exception
+#print axioms mixed_batch_recovery_reachable
+#print axioms mixed_batch_is_nonempty_and_mixed
+#print axioms mixed_batch_keeps_attempt_and_result_history
+#print axioms batch_recovery_input_projection_preserves_existing_exception
+#print axioms batch_result_projection_preserves_attempt_and_result
+#print axioms mixed_input_result_is_existing_send_result
+#print axioms recovery_rejects_missing_member
+#print axioms recovery_rejects_extra_member
+#print axioms recovery_accepts_reordered_members
+#print axioms recovery_rejects_replaced_or_mismatched_attempt
+#print axioms failed_attempt_cannot_start_recovery
+#print axioms completed_attempt_cannot_start_recovery
+#print axioms recovery_rejects_wrong_source_attempt
+#print axioms recovery_rejects_wrong_member_kind
+#print axioms prefix_before_recovery_is_incomplete
