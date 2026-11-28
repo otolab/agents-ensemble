@@ -114,6 +114,7 @@ export function createWatchIdentityOperations(context: WatchIdentityContext) {
         root,
         profile,
         located.resumeStore.issueUrl,
+        context.options.configScope,
       );
     } catch {
       const sources = [...(stateSourcesById.get(id) ?? [])];

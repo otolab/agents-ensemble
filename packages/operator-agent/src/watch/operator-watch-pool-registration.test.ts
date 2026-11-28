@@ -963,6 +963,70 @@ setupWatchPoolSuite((context) => {
     }
   });
 
+  it('registers and maintains watches in the selected config namespace', async () => {
+    context.repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-watch-config-scope-'));
+    const userRoot = join(context.homeRoot, '.ensemble');
+    const configScope = 'b'.repeat(64);
+    const issueUrl = DEFAULT_ISSUE_URL;
+    const sessionId = 'alternate-config-session';
+    await writeResumeStore(sessionId, 1, undefined, issueUrl);
+    const scopedPath = operatorWatchStatePath(
+      userRoot,
+      'default',
+      issueUrl,
+      configScope,
+    );
+    const legacyPath = operatorWatchStatePath(userRoot, 'default', issueUrl);
+    const dispatchQueue = createOperatorDispatchQueue();
+    const pool = await createOperatorWatchPool({
+      userEnsembleRoot: userRoot,
+      profile: 'default',
+      configScope,
+      repoRoot: context.repoRoot,
+      dispatchQueue,
+    });
+    try {
+      await expect(
+        pool.register(sessionId, { pollIntervalMs: 60_000, debounceMs: 0 }),
+      ).resolves.toMatchObject({ conductorAgentId: sessionId });
+
+      await writeOfflineSnapshots(sessionId, {
+        issueUrl,
+        sequence: 1,
+        questions: [{
+          id: 'alternate-open-question',
+          question: 'Should the alternate config retain this watch?',
+          responseType: 'yes_no',
+          source: 'conductor',
+          status: 'open',
+          askedAt: 1,
+        }],
+        statusLine: 'waiting',
+        reportedAt: 2,
+      });
+      expect(await pool.pollOnce(sessionId)).toBe(1);
+
+      const scopedState = JSON.parse(await readFile(scopedPath, 'utf8')) as {
+        watches: Record<string, unknown>;
+        cursors: Record<string, unknown>;
+        pendingReports: Array<{ conductorAgentId: string }>;
+      };
+      expect(scopedState.watches[sessionId]).toMatchObject({
+        conductorAgentId: sessionId,
+        pollIntervalMs: 60_000,
+      });
+      expect(scopedState.cursors[sessionId]).toBeDefined();
+      expect(scopedState.pendingReports).toEqual([
+        expect.objectContaining({ conductorAgentId: sessionId }),
+      ]);
+      await expect(readFile(legacyPath, 'utf8')).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
+    } finally {
+      pool.close();
+    }
+  });
+
   it('quarantines a previously verified bundle if its Store becomes ambiguous or moves Issues', async () => {
     context.repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-watch-changed-issue-'));
     const oldIssueUrl = DEFAULT_ISSUE_URL;

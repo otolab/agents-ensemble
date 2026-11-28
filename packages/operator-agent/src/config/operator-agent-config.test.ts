@@ -1,4 +1,4 @@
-import { link, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
+import { link, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -96,7 +96,7 @@ describe('operator-agent config', () => {
     ).resolves.toBeUndefined();
     await expect(
       loadOperatorAgentConfigurationWithSource(userRoot, aliasPath),
-    ).resolves.toMatchObject({ configPath: defaultPath });
+    ).resolves.toMatchObject({ configPath: await realpath(defaultPath) });
     expect(operatorAgentProfileDirectory(userRoot, 'work')).toBe(
       join(userRoot, 'operator-agents', 'work'),
     );
@@ -150,7 +150,10 @@ describe('operator-agent config', () => {
       process.chdir(userRoot);
       await expect(
         loadOperatorAgentConfigurationWithSource(userRoot, 'first.yaml'),
-      ).resolves.toMatchObject({ configPath: firstPath, configScope: firstScope });
+      ).resolves.toMatchObject({
+        configPath: await realpath(firstPath),
+        configScope: firstScope,
+      });
       process.env.HOME = userRoot;
       await expect(
         resolveOperatorAgentConfigScope(userRoot, '~/first.yaml'),
