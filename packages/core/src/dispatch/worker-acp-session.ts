@@ -43,6 +43,8 @@ export interface OpenWorkerAcpSessionOptions {
   /** 現在の profile / CLI から解決した ACP spawn。 */
   currentAcpSpawn?: AcpSpawnFingerprint;
   resumeAcpSessionId?: string;
+  /** Refuse to create a replacement session if the requested session cannot load. */
+  requireResume?: boolean;
   migrateWorkspacePrompt?: boolean;
   bridge?: AcpBridge;
   connectAcp?: ConnectWorkerAcpFn;
@@ -129,7 +131,13 @@ export async function openWorkerAcpSession(
   let recoveryReason: WorkerSessionRecoveryReason | undefined;
   const previousSessionId = sessionId;
   try {
+    if (options.requireResume && !sessionId?.trim()) {
+      throw new Error('A strict worker session restart requires a known ACP session ID.');
+    }
     if (sessionId && options.migrateWorkspacePrompt) {
+      if (options.requireResume) {
+        throw new Error('A strict worker session restart cannot migrate to a new session.');
+      }
       recoveryReason = 'workspace_prompt_migration';
       sessionId = undefined;
     }
@@ -143,6 +151,16 @@ export async function openWorkerAcpSession(
         resumed = true;
       } catch (error) {
         if (error instanceof AcpSessionConfigOptionError) throw error;
+        if (options.requireResume) {
+          const label = options.workerName
+            ? `Worker "${options.workerName}"`
+            : 'Worker';
+          const detail = error instanceof Error ? error.message : String(error);
+          throw new Error(
+            `${label} could not restart ACP session "${sessionId}". Refusing to start a new session without its saved history. Cause: ${detail}`,
+            { cause: error },
+          );
+        }
         if (isBuiltinPiResume(options)) {
           const label = options.workerName
             ? `Worker "${options.workerName}"`

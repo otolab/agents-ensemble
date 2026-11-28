@@ -38,6 +38,7 @@ export interface AttachWorkerOptions {
   expectedResumeAcpSpawn?: AcpSpawnFingerprint;
   currentAcpSpawn?: AcpSpawnFingerprint;
   resumeAcpSessionId?: string;
+  requireResume?: boolean;
   migrateWorkspacePrompt?: boolean;
   handoffPending?: boolean;
   spawn?: SpawnAcpProcessOptions;
@@ -65,6 +66,7 @@ export async function attachWorker(
     expectedResumeAcpSpawn: options.expectedResumeAcpSpawn,
     currentAcpSpawn: options.currentAcpSpawn,
     resumeAcpSessionId: options.resumeAcpSessionId,
+    requireResume: options.requireResume,
     migrateWorkspacePrompt: options.migrateWorkspacePrompt,
     connectAcp: options.connectAcp,
     spawn: mergeWorkerSpawn(options.spawn, options.name),
