@@ -121,7 +121,8 @@ secret
 program
   .command('operator-agent')
   .description('Chat with an operator agent using a user-scoped operator profile')
-  .option('--profile <name>', 'Select a profile from ~/.ensemble/operator-agents.config.yaml')
+  .option('--config <path>', 'Select an operator-agent config file')
+  .option('--profile <name>', 'Select a profile from the chosen operator-agent config')
   .option(
     '--repo-filter <owner/repo|owner/*>',
     'Limit Issue sessions to matching repositories (repeatable)',
@@ -137,6 +138,7 @@ program
       .conflicts('resume'),
   )
   .action(async (options: {
+    config?: string;
     profile?: string;
     repoFilter: string[];
     resume?: string;
@@ -145,6 +147,7 @@ program
     try {
       const { runOperatorAgent } = await import('@agents-ensemble/operator-agent');
       await runOperatorAgent({
+        configPath: options.config,
         profile: options.profile,
         repoFilters: options.repoFilter,
         resumeId: options.resume,
@@ -160,7 +163,8 @@ program
   .command('operator-workspace-maintain')
   .description('Hold the workspace lock while inspecting an interrupted move')
   .requiredOption('--profile <name>', 'Operator profile name')
-  .action(async (options: { profile: string }) => {
+  .option('--config <path>', 'Select the operator-agent config namespace')
+  .action(async (options: { profile: string; config?: string }) => {
     if (!process.stdin.isTTY || !process.stdout.isTTY) throw new Error('Workspace maintenance requires an interactive TTY.');
     const { maintainOperatorWorkspace } = await import('@agents-ensemble/operator-agent');
     const { createInterface } = await import('node:readline/promises');
@@ -173,7 +177,7 @@ program
         const answer = await prompt.question('When preservation is complete, type COMPLETE to remove the journal; anything else leaves it in place: ');
         return answer === 'COMPLETE';
       } finally { prompt.close(); }
-    });
+    }, { configPath: options.config });
   });
 
 const session = program
@@ -186,12 +190,16 @@ session
   .command('scheduling-stats')
   .description('Summarize saved operator-agent scheduling events')
   .option('--profile <name>', 'Filter by operator profile')
+  .option('--config <path>', 'Select the operator-agent config namespace')
   .option('--since <date>', 'Inclusive start time')
   .option('--until <date>', 'Exclusive end time')
   .option('--json', 'Output JSON')
-  .action(async (options: { profile?: string; since?: string; until?: string; json?: boolean }) => {
+  .action(async (options: { profile?: string; config?: string; since?: string; until?: string; json?: boolean }) => {
     try {
-      const result = await readSchedulingStats(options);
+      const result = await readSchedulingStats({
+        ...options,
+        configPath: options.config,
+      });
       console.log(options.json ? JSON.stringify(result, null, 2) : Object.entries(result).map(([key, value]) => `${key}: ${typeof value === 'object' ? JSON.stringify(value) : String(value)}`).join('\n'));
     } catch (error) {
       console.error(error instanceof Error ? error.message : error);

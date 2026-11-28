@@ -98,8 +98,14 @@ export async function createOperatorWatchPool(
 ): Promise<OperatorWatchPool> {
   const root = options.userEnsembleRoot ?? resolveUserEnsembleRoot();
   const profile = options.profile ?? 'default';
-  await listOperatorWatchStatePaths(root, profile);
-  const eventWriter = createSchedulingEventWriter(root, profile, options.onError);
+  const configScope = options.configScope;
+  await listOperatorWatchStatePaths(root, profile, configScope);
+  const eventWriter = createSchedulingEventWriter(
+    root,
+    profile,
+    options.onError,
+    configScope,
+  );
   const schedulingInstanceId = randomUUID();
   const recordQueued = (report: {
     reportId: string;
@@ -133,7 +139,12 @@ export async function createOperatorWatchPool(
     if (matches.length !== 1) continue;
     const issueUrl = matches[0]!.resumeStore.issueUrl;
     try {
-      const targetPath = operatorWatchStatePath(root, profile, issueUrl);
+      const targetPath = operatorWatchStatePath(
+        root,
+        profile,
+        issueUrl,
+        configScope,
+      );
       issueUrlById.set(id, issueUrl);
       pathById.set(id, targetPath);
     } catch {
@@ -168,7 +179,11 @@ export async function createOperatorWatchPool(
     );
   };
   let state = emptyWatchState();
-  const repositoryStatePath = operatorRepositoryWatchStatePath(root, profile);
+  const repositoryStatePath = operatorRepositoryWatchStatePath(
+    root,
+    profile,
+    configScope,
+  );
   let repositoryState = emptyOperatorRepositoryWatchState();
   const fallbackQueuedReportIds = new Set<string>();
   const syncPendingReportsToQueue = () => {
@@ -205,7 +220,7 @@ export async function createOperatorWatchPool(
     );
     const paths = new Set([
       ...statePaths,
-      ...(await listOperatorWatchStatePaths(root, profile)),
+      ...(await listOperatorWatchStatePaths(root, profile, configScope)),
     ]);
     loadedStatesByPath.clear();
     statePaths.clear();
@@ -269,7 +284,12 @@ export async function createOperatorWatchPool(
     }
     if (syncQueue) syncPendingReportsToQueue();
   };
-  await withWatchStateLock(root, profile, () => refreshStateFromDisk());
+  await withWatchStateLock(
+    root,
+    profile,
+    () => refreshStateFromDisk(),
+    configScope,
+  );
   const timers = new Map<string, NodeJS.Timeout>();
   const autoWatches = new Map<string, WatchConfig>();
   let autoScanTimer: NodeJS.Timeout | undefined;
@@ -386,7 +406,7 @@ export async function createOperatorWatchPool(
         const result = await operation(allocateArrivalOrder);
         if (syncQueue) syncPendingReportsToQueue();
         return result;
-      }),
+      }, configScope),
     );
     stateOperationQueue = next.then(
       () => undefined,

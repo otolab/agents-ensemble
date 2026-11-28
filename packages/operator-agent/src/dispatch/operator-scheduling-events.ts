@@ -5,7 +5,12 @@ const MAX_PENDING = 1000;
 const SHUTDOWN_WAIT_MS = 500;
 
 /** The writer owns all event filesystem operations in a separate process. */
-export function createSchedulingEventWriter(root: string, profile: string, onError?: (message: string) => void) {
+export function createSchedulingEventWriter(
+  root: string,
+  profile: string,
+  onError?: (message: string) => void,
+  configScope?: string,
+) {
   let child: ChildProcess | undefined;
   let pending = 0;
   let closed = false;
@@ -19,7 +24,11 @@ export function createSchedulingEventWriter(root: string, profile: string, onErr
     const writerUrl = import.meta.url.endsWith('.ts')
       ? new URL('../../dist/dispatch/operator-scheduling-writer.js', import.meta.url)
       : new URL('./operator-scheduling-writer.js', import.meta.url);
-    child = fork(fileURLToPath(writerUrl), [root, profile], { stdio: ['ignore', 'ignore', 'ignore', 'ipc'], execArgv: [] });
+    child = fork(
+      fileURLToPath(writerUrl),
+      [root, profile, configScope ?? ''],
+      { stdio: ['ignore', 'ignore', 'ignore', 'ipc'], execArgv: [] },
+    );
     child.unref();
     child.channel?.unref();
     child.on('message', (message: { type?: string; id?: number; message?: string }) => {

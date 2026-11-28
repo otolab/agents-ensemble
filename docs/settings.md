@@ -23,7 +23,7 @@ Issue session の SessionResumeStore、Open Question / session-state YAML、tool
 
 ResumeStore の探索は全ローカル canonical slug を `repoRoot` の一致条件なしで調べます。関連する YAML・tool-call・Pi transcript も canonical slug だけを読みます。未移行の path-hash / project-local data は通常の session 操作では見えず、必要に応じて [一括 inventory / copy 手順](session-logging.md#legacy-data-の一括-inventory-copy)で明示移行します。
 
-operator-agent の新規 state は user 層に保存します。conversation record / Pi transcript は `operatorAgentId` ごと、watch state は profile と canonical repository slug ごとに分けます。Issue session list は user root の全 canonical slug を対象にし、profile `include` と `--repo-filter` を適用します。project `.ensemble/` は team profile と repo 固有 config / Pi resources を置く層です。isolated worktree は Git の repo 登録に加え、現行の解決・再利用処理が project-local path を前提とするため `<repoRoot>/.ensemble/worktrees/issue-N` に残します。[ADR 0044](adr/0044-user-scoped-runtime-storage.md) は以前の path-hash 配置を記録しています。
+operator-agent の新規 state は user 層に保存します。既定 config は従来の `operator-agents/<profile>/` を使い、別 config は canonical file path の SHA-256 ごとに workspace / watch / scheduling state と lock を分けます。conversation record / Pi transcript は `operatorAgentId` ごとの global 保存です。暗黙の会話選択は選択中 config の record に限り、`--resume <id>` は config をまたいで明示的に選べます。Issue session list は user root の全 canonical slug を対象にし、profile `include` と `--repo-filter` を適用します。project `.ensemble/` は team profile と repo 固有 config / Pi resources を置く層です。isolated worktree は Git の repo 登録に加え、現行の解決・再利用処理が project-local path を前提とするため `<repoRoot>/.ensemble/worktrees/issue-N` に残します。[ADR 0044](adr/0044-user-scoped-runtime-storage.md) は以前の path-hash 配置を記録しています。
 
 `ensemble issue --resume` / `--continue` は canonical slug の data だけを読みます。path-hash / project-local legacy data は runtime で lazy promotion せず、[migration tool](session-logging.md#legacy-data-の一括-inventory-copy) を使って明示的に inventory / copy します。migration は source を削除せず、異なる destination を上書きしません。
 
@@ -45,7 +45,7 @@ CLI > 環境変数 > project config（読み込み有効時） > 選択された
 
 conductor model は `ensemble issue --model` / `RunConductorSessionOptions.modelId` > `CONDUCTOR_MODEL_ID` > merged config の `conductor.model` > backend default の順で解決します。`runConductorSession` の直接呼び出しでも同じ選択値を conductor factory の create / resume に渡します。コード既定の `conductor.model: default` は Pi では選択値を上書きせず、Pi resource の `settings.json` にある `defaultProvider` / `defaultModel`（互換 alias の `model` / `modelId` を含む）からモデルを選びます。したがって config がない初回利用では `ensemble setup` で保存した Pi settings が推奨経路です。Pi settings と明示 model のどちらにも選択できるモデルがない場合は、Pi が起動前に設定方法を示すエラーを返します。Cursor では `default` は Auto を表します。custom factory では config またはコード上の既定値だけで `default` になった場合、従来どおり `modelId: undefined` を渡して factory 自身の既定値を使います。API の明示値または環境変数が `default` / `auto` を選んだ場合は `'default'` を渡し、その優先順位を保てるようにします。
 
-`ensemble issue` は `--config <path>` を受け付けます。指定したファイルが user config 層を置き換え、標準 user config は読み込みません。project config の読み込みは独立して `config.loadProjectConfig` で制御し、同一キーでは project config が優先されます。明示ファイルに toggle がなければ default の `true` が使われます。operator-agent は専用 config を使うため `--config` を受け付けません。
+`ensemble issue` は `--config <path>` を受け付けます。指定したファイルが user config 層を置き換え、標準 user config は読み込みません。project config の読み込みは独立して `config.loadProjectConfig` で制御し、同一キーでは project config が優先されます。明示ファイルに toggle がなければ default の `true` が使われます。operator-agent にも専用の `--config <path>` があり、環境変数では config を選択しません。path は cwd 基準（`~` は home）で解決され、明示した不存在ファイルはエラーです。既定 config と同じ実ファイルを指す場合は従来の state directory を再利用します。詳細は [operator-agent 専用設定](config.md#operator-agent-専用設定)を参照してください。
 
 ```sh
 ensemble issue 42 --config ~/.ensemble/litellm.config.yaml
@@ -159,11 +159,12 @@ Pi の `!command` は conductor process の shell / OS 権限で実行され、w
 
 ## 一覧 — operator-agent 専用設定
 
-operator-agent は `~/.ensemble/operator-agents.config.yaml` の profile を読み、workspace を `~/.ensemble/operator-agents/<profile>/` に固定します。設定の schema と例は [config.md](config.md#operator-agent-専用設定) を参照してください。
+operator-agent は既定で `~/.ensemble/operator-agents.config.yaml` の profile を読みます。別 config の workspace は config path ごとの namespace に置きます。設定・path identity・会話選択の詳細は [config.md](config.md#operator-agent-専用設定) を参照してください。
 
 | 設定 | 環境変数 | CLI | 解決 |
 |------|----------|-----|------|
-| operator profile | `ENSEMBLE_OPERATOR_AGENT_PROFILE` | `--profile` | CLI > env > 保存会話 profile > `defaultProfile` > 唯一の profile > TTY 選択 |
+| operator config | — | `--config` | 明示 path > `~/.ensemble/operator-agents.config.yaml`。relative path は cwd 基準、`~` は home |
+| operator profile | `ENSEMBLE_OPERATOR_AGENT_PROFILE` | `--profile` | CLI > env > 現 config の保存会話 profile > `defaultProfile` > 唯一の profile > TTY 選択 |
 | backend | `ENSEMBLE_OPERATOR_AGENT_BACKEND` | — | env > profile > `common.conductor` > `pi` |
 | model | `ENSEMBLE_OPERATOR_AGENT_MODEL` | — | env > profile > `common.conductor` > `default` |
 | reasoning | `ENSEMBLE_OPERATOR_AGENT_REASONING` | — | env > profile > `common.conductor` > backend default |
@@ -171,7 +172,7 @@ operator-agent は `~/.ensemble/operator-agents.config.yaml` の profile を読�
 | Pi 共通 resource root | `PI_CODING_AGENT_DIR` | — | `common.pi.agentDir` > env > `~/.ensemble/pi` |
 | Pi profile resource root | — | — | `profiles.<name>.pi.projectDir` > `<profile workspace>/pi` |
 | session scope | — | `--repo-filter`（repeatable） | profile `include` との積集合。filter 同士は OR |
-| conversation | — | `--resume <id>` / `--new` | global conversation record を指定・新規作成 |
+| conversation | — | `--resume <id>` / `--new` | global record を明示再開・新規作成。暗黙選択は現 config のみ |
 
 ## 一覧 — TUI / オペレータ UI
 
@@ -208,7 +209,7 @@ TUI 設定は `loadEnsembleConfig` 結果を `createIssueSessionTuiHost` へ渡�
 | 設定 | ファイル | 解決順 |
 |------|----------|--------|
 | Issue conductor MCP | ensemble config の `conductor.mcp.servers` + `.agents/mcp.json` / `~/.ensemble/mcp.json` | 選択は project config > 選択された user config で配列を置換。未指定・`[]` は MCP なし。定義は project > user で名前単位 merge |
-| operator-agent MCP | `~/.ensemble/operator-agents.config.yaml` + `~/.ensemble/mcp.json` | profile の明示選択 > common。起動 repository の MCP 設定は読まない |
+| operator-agent MCP | 選択 operator config + `~/.ensemble/mcp.json` | profile の明示選択 > common。起動 repository の MCP 設定は読まない |
 | user instructions | `~/.ensemble/AGENTS.md` | user 固定。conductor と worker 全員に適用。project 層なし |
 | team profile | `.ensemble/profiles/…` / `--profile` パス | [ADR 0018](https://github.com/otolab/agents-ensemble/blob/main/docs/adr/0018-team-profile-four-layer-resolution.md) |
 

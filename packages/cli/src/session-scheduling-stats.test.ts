@@ -1,6 +1,8 @@
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { realpath } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
@@ -8,6 +10,60 @@ import { describe, expect, it } from 'vitest';
 import { readSchedulingStats } from './session-scheduling-stats.js';
 
 describe('scheduling statistics', () => {
+  it('reads the selected config namespace and preserves the legacy default namespace', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'scheduling-config-scope-'));
+    try {
+      const defaultConfig = join(root, 'operator-agents.config.yaml');
+      const alternateConfig = join(root, 'alternate.yaml');
+      await writeFile(defaultConfig, 'version: 1\nprofiles:\n  work: {}\n');
+      await writeFile(alternateConfig, 'version: 1\nprofiles:\n  work: {}\n');
+      const scope = createHash('sha256')
+        .update(await realpath(alternateConfig))
+        .digest('hex');
+      const legacyDirectory = join(root, 'operator-agents', 'work');
+      const alternateDirectory = join(
+        root,
+        'operator-agents',
+        '.config-scopes',
+        scope,
+        'work',
+      );
+      await mkdir(legacyDirectory, { recursive: true });
+      await mkdir(alternateDirectory, { recursive: true });
+      await writeFile(
+        join(legacyDirectory, 'scheduling-events.jsonl'),
+        `${JSON.stringify({ type: 'report.queued', ts: 1, reportId: 'legacy' })}\n`,
+      );
+      await writeFile(
+        join(alternateDirectory, 'scheduling-events.jsonl'),
+        `${JSON.stringify({ type: 'report.queued', ts: 2, reportId: 'alternate' })}\n`,
+      );
+
+      const implicitDefault = await readSchedulingStats({ root });
+      const explicitDefault = await readSchedulingStats({
+        root,
+        configPath: defaultConfig,
+      });
+      const alternate = await readSchedulingStats({
+        root,
+        configPath: alternateConfig,
+      });
+      expect(implicitDefault.profiles).toEqual(['work']);
+      expect(implicitDefault.queued).toBe(1);
+      expect(explicitDefault.queued).toBe(1);
+      expect(alternate.profiles).toEqual(['work']);
+      expect(alternate.queued).toBe(1);
+      await expect(
+        readSchedulingStats({
+          root,
+          configPath: join(root, 'missing-config.yaml'),
+        }),
+      ).rejects.toThrow(/Operator-agent config not found/u);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('correlates outside the window, counts retries and reports missing records', async () => {
     const root = await mkdtemp(join(tmpdir(), 'scheduling-stats-'));
     try {

@@ -5,6 +5,7 @@ import { chmod, mkdir, readFile, realpath, rename, writeFile } from 'node:fs/pro
 import { dirname, join } from 'node:path';
 import { isEnoent, isRecord } from '../internal/operator-utils.js';
 import { OperatorLockTimeoutError, withOperatorWorkspaceLock } from '../workspace/operator-workspace-lock.js';
+import { operatorAgentProfileDirectory } from '../config/operator-agent-config.js';
 import { WATCH_STATE_VERSION, type OperatorWatchState } from './operator-watch-state.js';
 import type { ConductorMessageListenConfig, SessionCursor, WatchConfig } from './types.js';
 import {
@@ -437,12 +438,13 @@ export async function withWatchStateLock<T>(
   root: string,
   profile: string,
   operation: (nextArrivalOrder: (minimumExisting?: number) => number) => Promise<T>,
+  configScope?: string,
 ): Promise<T> {
-  const workspace = join(root, 'operator-agents', profile);
+  const workspace = operatorAgentProfileDirectory(root, profile, configScope);
   await mkdir(workspace, { recursive: true, mode: 0o700 });
   const canonicalWorkspace = await realpath(workspace);
   return withOperatorWorkspaceLock(canonicalWorkspace, () =>
-    withWatchStateLockInsideWorkspace(root, profile, operation),
+    withWatchStateLockInsideWorkspace(root, profile, operation, configScope),
   );
 }
 
@@ -450,8 +452,12 @@ async function withWatchStateLockInsideWorkspace<T>(
   root: string,
   profile: string,
   operation: (nextArrivalOrder: (minimumExisting?: number) => number) => Promise<T>,
+  configScope?: string,
 ): Promise<T> {
-  const directory = join(root, 'operator-agents', profile, 'watch');
+  const directory = join(
+    operatorAgentProfileDirectory(root, profile, configScope),
+    'watch',
+  );
   await mkdir(directory, { recursive: true, mode: 0o700 });
   await chmod(directory, 0o700);
   const canonicalDirectory = await realpath(directory);

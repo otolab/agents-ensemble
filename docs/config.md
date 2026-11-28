@@ -58,11 +58,15 @@ token などの秘密情報はこのファイルへ平文で書かず、provider
 
 `conductor.backend` はこの共通順序の例外です。CLI / 環境変数による上書きはなく、選択した profile の `profile.conductor.backend` > merged config（project > 選択された user config）> `pi` の順で解決します。Cursor SDK を使う場合は config または profile に `backend: cursor` を指定してください。
 
-`ensemble issue` は GitHub monitor / Issue コンテキスト取得より前に config を読み込みます。`ensemble operator-agent` は独立した operator 設定ファイルだけを読み、`--config` は受け付けません。`--profile` は operator profile の選択に使います。
+`ensemble issue` は GitHub monitor / Issue コンテキスト取得より前に config を読み込みます。`ensemble operator-agent` は専用 config を読み、`--config <path>` で選択できます。この指定に対応する環境変数は設けていません。`--profile` は選択した config 内の profile を選びます。
 
 ## operator-agent 専用設定
 
-operator-agent は `~/.ensemble/operator-agents.config.yaml` を読み、選択 profile の workspace を `~/.ensemble/operator-agents/<profile>/` に固定します。相対 Pi path は共通設定なら `~/.ensemble/`、profile の `pi.projectDir` なら profile workspace を基準にします。profile 名は安全な単一 path segment でなければなりません。
+operator-agent は既定で `~/.ensemble/operator-agents.config.yaml` を読みます。`--config <path>` を指定すると、そのファイルだけを読み込みます。path は起動時の current working directory を基準に解決し、`~` / `~/...` はユーザ home に展開します。明示したファイルが存在しない場合は起動エラーです。
+
+既定 config の state は従来どおり `~/.ensemble/operator-agents/<profile>/` に保存します。明示指定した config が既定 config と同じ実ファイル（相対・絶対 path や symlink の別名を含む）なら、この legacy directory を共有します。それ以外の config は、`realpath` で得た config file path の SHA-256 を識別子にして `~/.ensemble/operator-agents/.config-scopes/<hash>/<profile>/` を使います。識別はファイル内容ではなく canonical path に基づきます。同じ内容の別ファイルは別 namespace になり、hard link も別 path なら別 namespace です。namespace directory は profile 名として使えない隠し名にしており、既存の有効な profile 名と衝突しません。workspace、watch state、scheduling events、およびそれらの lock はこの namespace に属します。profile 名は安全な単一 path segment でなければなりません。
+
+相対 Pi path は共通設定なら `~/.ensemble/`、profile の `pi.projectDir` なら選択 workspace を基準にします。既定 config の path と namespace は従来のままなので、既存 workspace の内容も同じ場所から引き続き利用されます。
 
 ```yaml
 version: 1
@@ -184,9 +188,11 @@ lock-wait の比較は選択から commit まで100 ms、OQ 到着から commit 
 
 これらの run-loop 比較も再現可能な合成試験です。50ms は固定した fake refresh delay、1秒は policy timer を使う上限です。実 provider の latency、複数 conductor の同時負荷、OS scheduling、TTY 操作時間は測定していません。fresh candidate read は UDS 待ちの間 profile state lock を保持しないため、#741 の `commitBatch` / append cutoff は変更しません。ただし他の profile lock owner、ready batch の commit、hold、retry、agent.send、停止が OQ を遅らせる可能性は残り、gate-clear cap は OQ の global delivery deadline ではありません。状態が unknown、refresh が失敗、または fresh evidence が候補条件を満たさない場合は候補を作らず、古い observation のまま待ち続けません。aging 境界での継続する通常 report に対する非飢餓、同順位の FIFO、gate refresh / append / retry / restart をまたぐ `eligibleAt` と到着順の保持は selector / watch-pool integration tests で確認します。上位 priority、hold、停止、provider の長い処理が続けば通知は遅れ得ます。5分 aging は通常 FIFO 帯へ昇格させますが、有限時間内の送信を保証しません。
 
-profile は `--profile` > `ENSEMBLE_OPERATOR_AGENT_PROFILE` > 再開対象 conversation に記録された profile > `defaultProfile` > 唯一の profile の順に選びます。まだ複数候補が残る場合は TTY で選択します。保存 conversation の profile が config から消えていて選び直す場合は、その差を表示します。
+profile は `--profile` > `ENSEMBLE_OPERATOR_AGENT_PROFILE` > 再開対象 conversation に記録された profile > `defaultProfile` > 唯一の profile の順に選びます。暗黙の保存 conversation 選択では現在の config namespace に属する record だけを候補にし、旧 record（config scope の記録がないもの）は既定 config のものとして扱います。`--resume <operatorAgentId>` は明示選択なので config をまたいで global record を指定でき、その起動では現在選択した config / profile で復元を試します。record の再保存後は選択中 namespace に属します。まだ複数 profile 候補が残る場合は TTY で選択します。保存 conversation の profile が config から消えていて選び直す場合は、その差を表示します。
 
-`backend` / `model` / `reasoning` は `ENSEMBLE_OPERATOR_AGENT_BACKEND` / `ENSEMBLE_OPERATOR_AGENT_MODEL` / `ENSEMBLE_OPERATOR_AGENT_REASONING` > 選択 profile > `common.conductor` > 既定値の順です。operator-agent は `CONDUCTOR_*`、generic config、project config、team profile から値を継承しません。Pi 共通 root は `common.pi.agentDir` > `PI_CODING_AGENT_DIR` > `~/.ensemble/pi`、profile root は `profiles.<name>.pi.projectDir` > `<profile workspace>/pi` の順です。Pi はこの user 共通 root と選択 profile root のみを読み、launch cwd や profile workspace から `.ensemble/pi` を自動探索しません。
+`backend` / `model` / `reasoning` は `ENSEMBLE_OPERATOR_AGENT_BACKEND` / `ENSEMBLE_OPERATOR_AGENT_MODEL` / `ENSEMBLE_OPERATOR_AGENT_REASONING` > 選択 profile > `common.conductor` > 既定値の順です。operator-agent は `CONDUCTOR_*`、generic config、project config、team profile から値を継承しません。Pi 共通 root は `common.pi.agentDir` > `PI_CODING_AGENT_DIR` > `~/.ensemble/pi`、profile root は `profiles.<name>.pi.projectDir` > `<profile workspace>/pi` の順です。config 既定の profile root は config ごとに分かれますが、明示した absolute root や同じ relative `common.pi.agentDir`、`PI_CODING_AGENT_DIR` は config 間で共有されます。Pi がその root 内の設定・認証・resource file を更新する場合、異なる config の実行同士は同じ Pi root を共有し競合し得ます。Pi は指定した user root と選択 profile root のみを読み、launch cwd や profile workspace から `.ensemble/pi` を自動探索しません。
+
+会話 record と Pi transcript は引き続き `operatorAgentId` ごとの global 保存です。別 config から同じ ID を同時に `--resume` すると transcript や provider session の共有資源を並行利用し得ます。config namespace の watch / workspace lock は会話 ID や明示共有した Pi root を直列化しないため、同じ会話 ID の同時 resume は避けてください。
 
 #### operator-agent の MCP 選択
 
@@ -209,7 +215,7 @@ profiles:
 
 この例では `personal` profile は GitHub server だけを使い、それ以外の profile は common の `coeiro-operator` を使います。`~/.ensemble/mcp.json` に定義しただけでは MCP server は起動しません。選択された定義だけが operator conductor の起動・resume・reconnect 時に backend へ渡されます。選択名が定義されていない場合は、server 名と設定ファイルの場所を含むエラーで起動を止めます。
 
-Cursor SDK backend は SDK が受け付ける stdio / HTTP / SSE を使います。Cursor には `local.settingSources: []` を渡すため、SDK は明示した inline MCP server のみを読み込みます（[Cursor SDK の設定 source](https://cursor.com/docs/sdk/typescript#what-gets-loaded)）。Pi backend は stdio と Streamable HTTP を使い、Pi 公式 MCP extension が未対応の SSE は server 名を含むエラーにします。`${env:NAME}` は operator process の環境変数、`${workspaceFolder}` と `${workspaceFolderBasename}` は選択 profile の workspace（`~/.ensemble/operator-agents/<profile>/`）へ展開します。未定義の環境変数は、値をそのまま渡さず server 名・項目名とともにエラーにします。トークンなどの値は config に直接書かず、権限を絞った環境変数で渡してください。
+Cursor SDK backend は SDK が受け付ける stdio / HTTP / SSE を使います。Cursor には `local.settingSources: []` を渡すため、SDK は明示した inline MCP server のみを読み込みます（[Cursor SDK の設定 source](https://cursor.com/docs/sdk/typescript#what-gets-loaded)）。Pi backend は stdio と Streamable HTTP を使い、Pi 公式 MCP extension が未対応の SSE は server 名を含むエラーにします。`${env:NAME}` は operator process の環境変数、`${workspaceFolder}` と `${workspaceFolderBasename}` は選択 profile の workspace（既定 config では `~/.ensemble/operator-agents/<profile>/`）へ展開します。未定義の環境変数は、値をそのまま渡さず server 名・項目名とともにエラーにします。トークンなどの値は config に直接書かず、権限を絞った環境変数で渡してください。
 
 Pi backend の operator-agent は、選択した各 server の MCP tool を [Pi 1.6.1 の MCP extension](https://github.com/earendil-works/pi/blob/v1.6.1/packages/coding-agent/docs/mcp.md) の `direct` exposure で公開します。server が提示する tool は `mcp__<server>__<tool>` 名（名前の変換後に衝突または長さ制限がある場合は hash suffix 付き）でモデル向け tool declaration に載り、Pi の通常の tool call 経路で実行されます。server が提示する全 tool が対象なので、read-only が必要なら server 側の read-only mode と認証権限を設定してください。operator-agent の Pi 経路では Codemode extension を登録しないため、JavaScript 実行 tool と `models.*` API は利用できません。Pi の MCP `resources` は server が提供していれば `list_mcp_resources`、`list_mcp_resource_templates`、`read_mcp_resource` で公開されます。Pi 1.6.1 の MCP extension は MCP `prompts` を公開しません。Pi 1.6.0 では resume / reload 後に MCP extension の tool が失われる問題も修正されています。
 

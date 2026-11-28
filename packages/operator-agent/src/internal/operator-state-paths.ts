@@ -3,22 +3,20 @@ import type { Dirent } from 'node:fs';
 import { readdir } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import { resolveEnsemblePaths } from '@agents-ensemble/core/operator-runtime';
-import { validateProfileName } from '../config/operator-agent-config.js';
+import { operatorAgentProfileDirectory } from '../config/operator-agent-config.js';
 
 export function operatorWatchStatePath(
   userEnsembleRoot: string,
   profile: string,
   issueUrl: string,
+  configScope?: string,
 ): string {
-  validateProfileName(profile);
   const paths = resolveEnsemblePaths({
     repoRoot: userEnsembleRoot,
     userEnsembleRoot,
   });
   return join(
-    userEnsembleRoot,
-    'operator-agents',
-    profile,
+    operatorAgentProfileDirectory(userEnsembleRoot, profile, configScope),
     'watch',
     relative(
       paths.sessionsRoot,
@@ -31,9 +29,12 @@ export function operatorWatchStatePath(
 export async function listOperatorWatchStatePaths(
   userEnsembleRoot: string,
   profile: string,
+  configScope?: string,
 ): Promise<string[]> {
-  validateProfileName(profile);
-  const root = join(userEnsembleRoot, 'operator-agents', profile, 'watch');
+  const root = join(
+    operatorAgentProfileDirectory(userEnsembleRoot, profile, configScope),
+    'watch',
+  );
   const paths: string[] = [];
   const visit = async (directory: string): Promise<void> => {
     let entries: Dirent[];

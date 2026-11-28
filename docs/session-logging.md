@@ -96,7 +96,7 @@ open question の回答観測は回答全文を残し、`yes_no` には `assent=
 
 稼働中 UDS control server は JSON-RPC request / response body をアクセスログへ書きません。ただし回答・operator message は既存の operator 入力経路を通るため、CLI observation は従来どおり質問本文・回答本文・メッセージ本文を stderr または TUI 活動ログに表示します。配信モード（`idle` / `next` / `interrupt`）は `operator.input` と TTY の未 dispatch キューに表示します。TTY 活動ログには dispatch 時に本文のみを表示します。質問・context・回答は SessionResumeStore と YAML にも保存され、UDS list response では保存値のまま返します。任意文面の secret や repository 外情報を確実に検出する redaction はありません。機密値を質問・context・回答・メッセージに含めない運用としてください。
 
-operator-agent の watch polling 警告には例外本文を含めず、Open Question の質問・context・回答本文をログへ出しません。watch report は新規 open、回答、または一覧からの消失を operator-agent への入力として渡し、観測できた質問・context・回答情報を含む場合があります。未 dispatch report の永続化先は owner-only (`0700` directory / `0600` file) です。新しい watch state は `~/.ensemble/operator-agents/<profile>/watch/github.com/<owner>/<repo>/watch-state.json` に保存します。旧 user path-hash / slug-keyed watch source と project-local watch source は明示的な migration tool の source であり、runtime は読みません。通常のログとは別ですが、一般的な secret redaction は行いません。
+operator-agent の watch polling 警告には例外本文を含めず、Open Question の質問・context・回答本文をログへ出しません。watch report は新規 open、回答、または一覧からの消失を operator-agent への入力として渡し、観測できた質問・context・回答情報を含む場合があります。未 dispatch report の永続化先は owner-only (`0700` directory / `0600` file) です。既定 config の watch state は `~/.ensemble/operator-agents/<profile>/watch/github.com/<owner>/<repo>/watch-state.json`、別 config は canonical config path の hash を含む namespace に保存します。旧 user path-hash / slug-keyed watch source と project-local watch source は明示的な migration tool の source であり、runtime は読みません。通常のログとは別ですが、一般的な secret redaction は行いません。
 
 `~/.ensemble/sessions/github.com/<owner>/<repo>/` と session ごとの data directory は owner-only (`0700`)、SessionResumeStore の JSON / YAML / socket file は owner read/write (`0600`) にします。Issue-session の保存・通常読み取りは canonical slug 側だけです。user path-hash (`~/.ensemble/sessions/<repoKey>/`) と project-local legacy (`<repoRoot>/.ensemble/sessions/`、`<repoRoot>/.ensemble/pi/sessions/`) は runtime fallback ではなく、必要な場合に利用者が明示的な migration tool で調べる source です。未移行データは通常の一覧・resume・history read には現れませんが、自動削除もされません。operator-agent state は別の保存 path を使います。UDS socket は短い owner-only runtime directory (`0700`) に置き、同じ OS user のプロセスからのみ利用できます。token 認証は行わないため、同じ OS user の別プロセスも接続可能です。path の記録だけでは listener の稼働を保証せず、停止後の接続はエラーになります。
 
@@ -316,8 +316,11 @@ Issue session の保存・通常読み取りは `packages/core` の `resolveEnse
   conversation.json
   pi-sessions/  # Pi backend の provider transcript
 
-~/.ensemble/operator-agents/<profile>/watch/github.com/<owner>/<repo>/
+~/.ensemble/operator-agents/<profile>/watch/github.com/<owner>/<repo>/  # 既定 config
   watch-state.json
+
+~/.ensemble/operator-agents/.config-scopes/<config-hash>/<profile>/watch/github.com/<owner>/<repo>/
+  watch-state.json  # --config で選択した別 config
 
 ~/.ensemble/operator-agent/<repoKey>/watch-state.json  # legacy migration source; runtime does not read it
 ~/.ensemble/operator-agent/github.com/<owner>/<repo>/watch-state.json  # legacy migration source
@@ -327,9 +330,9 @@ Issue session の保存・通常読み取りは `packages/core` の `resolveEnse
 <repoRoot>/.ensemble/pi/sessions/  # project-local Issue transcript migration source
 ```
 
-Pi の Issue conductor transcript は slug 配下の `pi/` に保存します。Pi の Issue project settings や skills などの project resources は引き続き現在 clone の `<repoRoot>/.ensemble/pi/` から読みます。operator-agent の conversation record と Pi transcript は `operatorAgentId` で global に保存し、watch state は選択 profile と Issue URL 由来の canonical repository slug で分けます。operator-agent は launch cwd や project `.ensemble/` を Issue session discovery に使いません。
+Pi の Issue conductor transcript は slug 配下の `pi/` に保存します。Pi の Issue project settings や skills などの project resources は引き続き現在 clone の `<repoRoot>/.ensemble/pi/` から読みます。operator-agent の conversation record と Pi transcript は `operatorAgentId` で global に保存し、watch state は config namespace、選択 profile、Issue URL 由来の canonical repository slug で分けます。operator-agent は launch cwd や project `.ensemble/` を Issue session discovery に使いません。
 
-conversation record は全 profile / repository 共通の一覧から選び、`--resume <operatorAgentId>` で明示できます。保存会話が一件なら自動で再開し、複数なら TTY で選びます。`--new` は別 record を追加し、既存会話を消しません。旧 profile-less conversation log はこの record へ移行せず、再開対象にも含めません。`/exit` が削除するのは選択中 record だけで、Pi transcript は残ります。
+conversation record は `operatorAgentId` ごとの global 保存です。暗黙選択では現在の config namespace の会話だけを候補にし、一件なら自動で再開、複数なら TTY で選びます。`--resume <operatorAgentId>` は別 config の ID も明示でき、選択中 config で復元を試します。別 config から同じ ID を並行 resume した場合、record / Pi transcript / provider session を共有し、config namespace ごとの lock はその競合を防ぎません。`--new` は別 record を追加し、既存会話を消しません。旧 profile-less conversation log はこの record へ移行せず、再開対象にも含めません。`/exit` が削除するのは選択中 record だけで、Pi transcript は残ります。
 
 ResumeStore は user root の canonical slug だけを探索します。保存時 clone の `repoRoot` は作成時の実行 context として記録し、slug discovery の除外条件にはしません。path-hash と project-local ResumeStore は migration source に限られ、通常の list / read / resume では探索しません。
 

@@ -47,4 +47,39 @@ describe('watch state store', () => {
     const afterFailure = await withWatchStateLock(root, 'default', async (next) => next());
     expect(afterFailure).toBe(first + 1);
   });
+
+  it('keeps locks for two config namespaces independent', async () => {
+    root = await mkdtemp(join(tmpdir(), 'watch-store-config-lock-'));
+    const configScope = 'a'.repeat(64);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let signalBoth!: () => void;
+    const bothEntered = new Promise<void>((resolve) => { signalBoth = resolve; });
+    let entered = 0;
+    const hold = (scope?: string) =>
+      withWatchStateLock(root!, 'work', async () => {
+        entered++;
+        if (entered === 2) signalBoth();
+        await gate;
+      }, scope);
+    const defaultLock = hold();
+    const alternateLock = hold(configScope);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        bothEntered,
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(
+            () => reject(new Error('config scopes shared a watch lock')),
+            800,
+          );
+        }),
+      ]);
+      expect(entered).toBe(2);
+    } finally {
+      if (timer) clearTimeout(timer);
+      release();
+      await Promise.allSettled([defaultLock, alternateLock]);
+    }
+  });
 });

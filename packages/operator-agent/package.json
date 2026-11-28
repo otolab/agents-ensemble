@@ -9,6 +9,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./config": {
+      "types": "./dist/config/operator-agent-config.d.ts",
+      "import": "./dist/config/operator-agent-config.js"
     }
   },
   "scripts": {

@@ -2,9 +2,11 @@ import { appendFileSync, mkdirSync, renameSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
-const [root, profile] = process.argv.slice(2);
+const [root, profile, configScope] = process.argv.slice(2);
 if (!root || !profile) throw new Error('Missing scheduling writer arguments');
-const directory = join(root, 'operator-agents', profile);
+const directory = configScope
+  ? join(root, 'operator-agents', '.config-scopes', configScope, profile)
+  : join(root, 'operator-agents', profile);
 const path = join(directory, 'scheduling-events.jsonl');
 const MAX_BYTES = 5 * 1024 * 1024;
 let queue = Promise.resolve();

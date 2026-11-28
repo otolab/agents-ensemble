@@ -9,9 +9,61 @@ import { createOperatorWatchPool } from '../watch/operator-watch-pool.js';
 import { resolveEnsemblePaths } from '@agents-ensemble/core';
 import { retryOperatorWatchAcknowledgement } from '../watch/operator-watch-ack.js';
 import { withWatchStateLock } from '../watch/watch-state-store.js';
+import { createSchedulingEventWriter } from './operator-scheduling-events.js';
 import { DatabaseSync } from 'node:sqlite';
 
 describe('scheduling event persistence', () => {
+  it('writes the same profile to separate config event and lock files', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'scheduling-config-scope-'));
+    const configScope = 'b'.repeat(64);
+    const defaultWriter = createSchedulingEventWriter(root, 'work');
+    const alternateWriter = createSchedulingEventWriter(
+      root,
+      'work',
+      undefined,
+      configScope,
+    );
+    try {
+      defaultWriter.record({
+        type: 'report.queued',
+        ts: 1,
+        reportId: 'default',
+      });
+      alternateWriter.record({
+        type: 'report.queued',
+        ts: 2,
+        reportId: 'alternate',
+      });
+      await Promise.all([defaultWriter.flush(), alternateWriter.flush()]);
+
+      const defaultDirectory = join(root, 'operator-agents', 'work');
+      const alternateDirectory = join(
+        root,
+        'operator-agents',
+        '.config-scopes',
+        configScope,
+        'work',
+      );
+      await expect(
+        readFile(join(defaultDirectory, 'scheduling-events.jsonl'), 'utf8'),
+      ).resolves.toContain('"reportId":"default"');
+      await expect(
+        readFile(join(alternateDirectory, 'scheduling-events.jsonl'), 'utf8'),
+      ).resolves.toContain('"reportId":"alternate"');
+      await expect(
+        readFile(join(defaultDirectory, 'scheduling-events-lock.sqlite')),
+      ).resolves.toBeInstanceOf(Buffer);
+      await expect(
+        readFile(join(alternateDirectory, 'scheduling-events-lock.sqlite')),
+      ).resolves.toBeInstanceOf(Buffer);
+    } finally {
+      defaultWriter.close();
+      alternateWriter.close();
+      await Promise.all([defaultWriter.flush(), alternateWriter.flush()]);
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('persists events independently of a held profile lock', async () => {
     const root = await mkdtemp(join(tmpdir(), 'scheduling-lock-delay-'));
     let pool: Awaited<ReturnType<typeof createOperatorWatchPool>> | undefined;

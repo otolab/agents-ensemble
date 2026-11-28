@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path';
 import { parseIssueUrl } from '@agents-ensemble/core/operator-runtime';
 import {
   normalizeRepositoryPattern,
-  validateProfileName,
+  operatorAgentProfileDirectory,
 } from '../config/operator-agent-config.js';
 
 export const OPERATOR_REPOSITORY_WATCH_STATE_VERSION = 1;
@@ -44,12 +44,10 @@ export interface OperatorRepositoryWatchState {
 export function operatorRepositoryWatchStatePath(
   userEnsembleRoot: string,
   profile: string,
+  configScope?: string,
 ): string {
-  validateProfileName(profile);
   return join(
-    userEnsembleRoot,
-    'operator-agents',
-    profile,
+    operatorAgentProfileDirectory(userEnsembleRoot, profile, configScope),
     'watch',
     'repository-watch-state.json',
   );
