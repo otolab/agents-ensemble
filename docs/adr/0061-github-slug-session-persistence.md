@@ -1,6 +1,6 @@
 # ADR 0061: Issue session の slug 正本と operator-agent の user profile
 
-- Status: proposed
+- Status: superseded in part by [ADR 0089](0089-operator-agent-config-identity-and-state.md) (operator-agent config / profile / state / CLI / conversation-resume proposal) and [ADR 0076](0076-retire-legacy-issue-session-read-fallbacks.md) (Phase 5 gate)
 - Date: 2026-11-13
 - Replaces: [ADR 0046](0046-migrated-session-canonical-slug-mirrors.md)（本 ADR の accepted 後、Status のみ superseded に更新する）
 - Related: [Issue #694](https://github.com/otolab/agents-ensemble/issues/694), [Issue #695](https://github.com/otolab/agents-ensemble/issues/695), [Issue #693](https://github.com/otolab/agents-ensemble/issues/693), [Issue #696](https://github.com/otolab/agents-ensemble/issues/696), [Issue #697](https://github.com/otolab/agents-ensemble/issues/697), [Issue #698](https://github.com/otolab/agents-ensemble/issues/698), [Issue #699](https://github.com/otolab/agents-ensemble/issues/699)
