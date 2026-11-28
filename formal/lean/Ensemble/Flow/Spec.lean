@@ -39,6 +39,36 @@ structure Item where
   kind : ItemKind
   status : ItemStatus
   deriving DecidableEq
+/-- send の終了結果。失敗と結果不明を分ける。 -/
+inductive SendResult where
+  | completed | failed | unknown
+  deriving DecidableEq
+/-- 一つの論理 batch を識別する抽象 ID。runtime の永続 ID との同一性は主張しない。 -/
+abbrev BatchId := Nat
+/-- batch を構成する項目の ID と種類。member の列挙順は初回 request の記録に使う。 -/
+structure BatchMember where
+  id : EventId
+  kind : ItemKind
+  deriving DecidableEq
+/-- batch 内の一回の send-start と、その後に確定した結果。`none` は結果待ち。 -/
+structure BatchAttempt where
+  attempt : AttemptId
+  result : Option SendResult
+  deriving DecidableEq
+/-- batch ID、初回に固定した ordered membership、上書きしない attempt / result 履歴。 -/
+structure BatchRecord where
+  id : BatchId
+  members : List BatchMember
+  attempts : List BatchAttempt
+  deriving DecidableEq
+/-- recovery request の envelope。再開通知は member ではなく request の前置情報。 -/
+inductive BatchRecoveryEnvelope where
+  | none
+  | processRestartNotice
+  deriving DecidableEq
+/-- member の ID が重複せず、空でもない batch membership。 -/
+def ValidBatchMembers (members : List BatchMember) : Prop :=
+  members ≠ [] ∧ (members.map (·.id)).Nodup
 /-- 停止要因と項目の抽象的な観測。held と frozen は項目 ID の集合。 -/
 structure State where
   lease : Option Lease
@@ -55,16 +85,14 @@ structure State where
   lastAttempt : EventId → Option AttemptId
   completed : AttemptId → Prop
   now : Time
+  /-- 初回 send-start 時に記録し、結果と復旧試行を追記する抽象 batch 履歴。 -/
+  batchHistory : BatchId → Option BatchRecord := fun _ => none
 /-- 解除操作と通常入力。別の意図で再入力する場合は新しい ID を使う。 -/
 inductive Operation where
   | input (id : EventId)
   | reconnect | recoveryContinue | resumeWatch
   | setDispatchHold (enabled : Bool)
   | setReportHold (enabled : Bool)
-  deriving DecidableEq
-/-- send の終了結果。失敗と結果不明を分ける。 -/
-inductive SendResult where
-  | completed | failed | unknown
   deriving DecidableEq
 /--
 外部操作、処理結果、到着、時刻をモデルに与える入力。
@@ -84,6 +112,10 @@ inductive Event where
   | schedule (id : EventId)
   | restartRecoveryDispatch (id : EventId) (attempt : AttemptId)
   | operatorResend (id : EventId) (attempt : AttemptId)
+  | batchSendStarted (batch : BatchId) (members : List BatchMember) (attempt : AttemptId)
+  | batchSendResult (batch : BatchId) (attempt : AttemptId) (result : SendResult)
+  | batchRecoverySendStarted (batch : BatchId) (source : AttemptId) (attempt : AttemptId)
+      (envelope : BatchRecoveryEnvelope)
   deriving DecidableEq
 /-- 観測される受理、send 開始時の dispatch、明示破棄。 -/
 inductive Observation where
@@ -92,6 +124,41 @@ inductive Observation where
   | discarded (id : EventId)
   | requeued (id : EventId)
   deriving DecidableEq
+/-- member の並びを保った dispatch 観測列。coverage の比較では順不同として扱う。 -/
+def BatchMemberObservations (members : List BatchMember) (attempt : AttemptId) :
+    List Observation :=
+  members.map fun member => .dispatched member.id attempt
+/-- 指定した試行が直近で、結果不明として記録されている。 -/
+def LastUnknownBatchAttempt (record : BatchRecord) (attempt : AttemptId) : Prop :=
+  ∃ priorAttempts, record.attempts = priorAttempts ++
+    [{ attempt := attempt, result := some .unknown }]
+/--
+operator input member に限った trace 射影。batch result を既存の `.sendResult` に、
+batch recovery dispatch を `NoAutomaticInputReplay` が認める
+`.restartRecoveryDispatch` に写す。初回 event は send-start のまま保ち、観測だけを
+対象 input member に絞る。worker member は射影しない。
+-/
+def BatchInputReplayProjection (record : BatchRecord) (member : BatchMember)
+    (event : Event) (obs : List Observation) : Option (Event × List Observation) :=
+  if member.kind = .operatorInput ∧ member ∈ record.members then
+    match event with
+    | .batchSendStarted batch members _ =>
+        if batch = record.id ∧ members = record.members then
+          some (event, obs.filter fun observation =>
+            match observation with
+            | .dispatched id _ => id = member.id
+            | _ => False)
+        else none
+    | .batchSendResult batch attempt result =>
+        if batch = record.id then some (.sendResult attempt result, [])
+        else none
+    | .batchRecoverySendStarted batch _ attempt _ =>
+        if batch = record.id then
+          some (.restartRecoveryDispatch member.id attempt,
+            [.dispatched member.id attempt])
+        else none
+    | _ => none
+  else none
 /-- 具体的モデルが与える遷移関係。1 遷移で複数の観測が生じてよい。 -/
 abbrev Transition := State → Event → List Observation → State → Prop
 /-- 有限の実行。初期状態と具体的遷移は呼び出し側が与える。 -/
@@ -115,7 +182,7 @@ def Pending (s : State) (id : EventId) (kind : ItemKind) : Prop :=
 def RecoveryEvent : Event → Prop
   | .operation .reconnect | .operation .recoveryContinue | .operation .resumeWatch
   | .operation (.setDispatchHold false) | .operation (.setReportHold false)
-  | .sendResult _ _ | .reconnectResult _ | .tick _ => True
+  | .sendResult _ _ | .batchSendResult _ _ _ | .reconnectResult _ | .tick _ => True
   | _ => False
 /-- lifecycle が新しい send を受け付けられる状態。個別項目の hold は含まない。 -/
 def LifecycleReady (s : State) : Prop :=
@@ -137,7 +204,9 @@ operator が選ぶ `.operatorResend` event として、同じ ID の dispatch ob
 明示 resend の失敗確定後も operator が再送を選んだ場合は `.operatorResend` を使う。
 NoAutomaticInputReplay は通常の failed result 後の再 dispatch を禁じ、明示 resend の失敗後は
 後続の同一 ID dispatch を operator resend に限る。成功済み attempt では ack のみを retry し、
-再投入しない。各観測は同じ遷移の状態変化に対応する。ID の永続性、電源断後の保持、
+再投入しない。batch recovery では dispatch 済みの非 operator item も同じ kind のまま
+再 dispatch できるが、全 member の一対一 coverage は `BatchRecoveryObservationConsistent`
+で別に検査する。各観測は同じ遷移の状態変化に対応する。ID の永続性、電源断後の保持、
 配信成功は保証しない。
 -/
 def ObservationConsistent (step : Transition) : Prop :=
@@ -150,13 +219,23 @@ def ObservationConsistent (step : Transition) : Prop :=
         s.items id = some ⟨.operatorInput, .dispatched⟩ ∧
         t.items id = some ⟨.operatorInput, .dispatched⟩ ∧
         (∃ previous, s.lastAttempt id = some previous ∧ ¬ s.completed previous) ∧
+        t.lastAttempt id = some attempt ∧ ¬ s.completed attempt) ∨
+      (∃ kind batch source envelope record,
+        e = .batchRecoverySendStarted batch source attempt envelope ∧
+        s.batchHistory batch = some record ∧ record.id = batch ∧
+        LastUnknownBatchAttempt record source ∧
+        ⟨id, kind⟩ ∈ record.members ∧
+        s.items id = some ⟨kind, .dispatched⟩ ∧
+        t.items id = some ⟨kind, .dispatched⟩ ∧
         t.lastAttempt id = some attempt ∧ ¬ s.completed attempt)) ∧
     (∀ id, .discarded id ∈ obs ↔ ∃ kind, Pending s id kind ∧ t.items id = some ⟨kind, .discarded⟩) ∧
     (∀ id, .requeued id ∈ obs ↔ s.items id = some ⟨.watchReport, .dispatched⟩ ∧
       t.items id = some ⟨.watchReport, .pending⟩) ∧
     (∀ id, .requeued id ∈ obs → ∃ attempt result, e = .sendResult attempt result ∧
       result ≠ .completed ∧ s.lastAttempt id = some attempt ∧ ¬ s.completed attempt) ∧
-    (∀ attempt, t.completed attempt ↔ s.completed attempt ∨ e = .sendResult attempt .completed) ∧
+    (∀ attempt, t.completed attempt ↔
+      s.completed attempt ∨ e = .sendResult attempt .completed ∨
+        ∃ batch, e = .batchSendResult batch attempt .completed) ∧
     (∀ id, s.lastAttempt id = t.lastAttempt id ∨
       (∃ attempt, .dispatched id attempt ∈ obs ∧ t.lastAttempt id = some attempt)) ∧
     (∀ id, (s.items id = none ∧ t.items id = none) ∨
@@ -167,6 +246,22 @@ def ObservationConsistent (step : Transition) : Prop :=
       (∃ kind, Pending s id kind ∧ t.items id = some ⟨kind, .discarded⟩ ∧ .discarded id ∈ obs) ∨
       (s.items id = some ⟨.watchReport, .dispatched⟩ ∧
         t.items id = some ⟨.watchReport, .pending⟩ ∧ .requeued id ∈ obs))
+/--
+batch recovery event の観測と状態変更が、初回に記録した全 member に一対一で対応する。
+observation list の順序は問わないが、`List.Perm` により欠落・追加・重複・ID 差し替えを許さない。
+request envelope の process restart notice は member coverage の外に置く。有限 prefix は
+この一段の recovery 遷移ではなく、完了扱いにしない。
+-/
+def BatchRecoveryObservationConsistent (step : Transition) : Prop :=
+  ∀ s t batch source attempt envelope obs,
+    step s (.batchRecoverySendStarted batch source attempt envelope) obs t →
+      ∃ record, s.batchHistory batch = some record ∧ record.id = batch ∧
+        LastUnknownBatchAttempt record source ∧
+        obs.Perm (BatchMemberObservations record.members attempt) ∧
+        (∀ member, member ∈ record.members →
+          s.items member.id = some ⟨member.kind, .dispatched⟩ ∧
+          t.items member.id = some ⟨member.kind, .dispatched⟩ ∧
+          t.lastAttempt member.id = some attempt)
 /--
 到達可能な状態の保留項目ごとに、解除操作と環境結果・時刻からなる有限列を経て
 その項目が dispatch 可能になる経路が存在する。hold、held、retry、frozen も判定する。
