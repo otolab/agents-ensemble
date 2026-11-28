@@ -1533,6 +1533,51 @@ describe('ensemble session commands', () => {
     });
   });
 
+  it('reads builtin Pi ACP worker messages from the saved custom root', async () => {
+    const agentDir = join(tempRoot, 'custom-pi-agent');
+    const workerPaths = resolveEnsemblePaths({
+      repoRoot,
+      userEnsembleRoot: userRoot,
+      piAgentDir: agentDir,
+    });
+    await writeResumeStore({
+      preset: 'pi',
+      acpCwd: WORKER_PI_CWD,
+      acpSessionId: WORKER_PI_SESSION_ID,
+      piRuntime: 'builtin',
+      piWorkerHome: workerPaths.piWorkerDir('implementer', ISSUE_NUMBER),
+    });
+    await writePiAcpWorkerHistory({ runtime: 'builtin', agentDir });
+
+    const result = runCli(
+      [
+        'session',
+        'workers',
+        'messages',
+        conductorAgentId,
+        '--worker',
+        'implementer',
+        '--repo-root',
+        repoRoot,
+        '--json',
+      ],
+      { PI_CODING_AGENT_DIR: join(tempRoot, 'changed-pi-agent') },
+    );
+
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      worker: 'implementer',
+      preset: 'pi',
+      reader: 'pi-acp-jsonl',
+      status: 'supported',
+      messages: expect.arrayContaining([
+        expect.objectContaining({
+          text: 'Pi ACP fixture assistant reply.',
+        }),
+      ]),
+    });
+  });
+
   it('reads Codex ACP worker messages and reports support in session show', async () => {
     await writeResumeStore({
       preset: 'codex',
@@ -1952,6 +1997,7 @@ describe('ensemble session commands', () => {
       acpCwd?: string;
       acpSessionId?: string;
       piRuntime?: 'builtin';
+      piWorkerHome?: string;
       issueUrl?: string;
       harnessPhase?: 'running' | 'exit';
       conductorBackend?: 'pi' | 'cursor';
@@ -1985,6 +2031,9 @@ describe('ensemble session commands', () => {
             implementer: {
               acpSessionId: options.acpSessionId ?? 'ACP_SESSION_SECRET',
               ...(options.acpCwd ? { acpCwd: options.acpCwd } : {}),
+              ...(options.piWorkerHome
+                ? { piWorkerHome: options.piWorkerHome }
+                : {}),
               acpSpawn: {
                 preset,
                 command:
@@ -2026,10 +2075,12 @@ describe('ensemble session commands', () => {
 
   async function writePiAcpWorkerHistory(options?: {
     runtime?: 'builtin';
+    agentDir?: string;
   }): Promise<void> {
     const paths = resolveEnsemblePaths({
       repoRoot,
       userEnsembleRoot: userRoot,
+      ...(options?.agentDir ? { piAgentDir: options.agentDir } : {}),
     });
     const transcriptPath =
       options?.runtime === 'builtin'

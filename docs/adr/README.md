@@ -160,6 +160,7 @@ ADR は**合意された設計判断の履歴**を残すもの。一度 `accepte
 | [0086](0086-lean-formal-model-for-dispatch-flow.md) | 形式モデル（Lean 4）を dispatch フローの中間言語として導入する | proposed |
 | [0087](0087-conductor-dispatch-transition-core.md) | conductor dispatch transition core と実行層の分離 | accepted |
 | [0088](0088-conductor-durable-inbox-recovery-contract.md) | Issue workflow の durable inbox と recovery 契約 | accepted（将来契約。runtime 未実装） |
+| [0089](0089-builtin-pi-worker-storage-root-per-session.md) | Builtin Pi worker の保存 root を session ごとに固定する | accepted |
 
 ## 追加するとき
 

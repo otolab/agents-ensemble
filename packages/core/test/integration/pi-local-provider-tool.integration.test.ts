@@ -3,10 +3,11 @@ import { createServer } from 'node:http';
 import { existsSync } from 'node:fs';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { spawnAcpProcess } from '../../src/acp/acp-process.js';
 import { configurePiWorkerRuntime } from '../../src/acp/pi-runtime.js';
+import { resolveEnsemblePaths } from '../../src/ensemble-paths.js';
 import {
   resolveWorkerAcpSpawn,
   resolvedAcpSpawnToOptions,
@@ -193,7 +194,6 @@ describe('Pi runtime with a loopback OpenAI-compatible provider', () => {
     root = await mkdtemp(join(tmpdir(), 'pi-worker-local-provider-'));
     const repoRoot = join(root, 'repo');
     const agentDir = join(root, 'pi-user');
-    const sessionDir = join(root, 'worker-sessions');
     const markerPath = join(root, 'worker-tool-marker');
     await Promise.all([
       mkdir(join(repoRoot, '.ensemble'), { recursive: true }),
@@ -347,5 +347,26 @@ describe('Pi runtime with a loopback OpenAI-compatible provider', () => {
       `127.0.0.1:${address.port}`,
       `127.0.0.1:${address.port}`,
     ]);
+    const workerHome = resolveEnsemblePaths({
+      repoRoot,
+      piAgentDir: agentDir,
+    }).piWorkerDir('implementer', 888);
+    const sessionMapPath = join(
+      workerHome,
+      '.pi',
+      'pi-acp',
+      'session-map.json',
+    );
+    expect(resolved.env?.HOME).toBe(workerHome);
+    expect(existsSync(sessionMapPath)).toBe(true);
+    const sessionMap = JSON.parse(await readFile(sessionMapPath, 'utf8')) as {
+      sessions: Record<string, { sessionFile: string }>;
+    };
+    const transcriptPath = sessionMap.sessions[sessionId]?.sessionFile;
+    expect(transcriptPath).toBeTruthy();
+    expect(transcriptPath && existsSync(transcriptPath)).toBe(true);
+    expect(transcriptPath && dirname(transcriptPath)).toBe(
+      join(workerHome, 'sessions'),
+    );
   });
 });
