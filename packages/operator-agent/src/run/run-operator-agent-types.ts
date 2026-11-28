@@ -4,6 +4,7 @@ import type { OperatorAgentConfiguration, OperatorAgentProfile, OperatorAgentSch
 import type { OperatorAgentTuiLogOptions } from '../tui/operator-agent-tui.js';
 
 export interface RunOperatorAgentOptions {
+  configPath?: string;
   profile?: string;
   repoFilters?: string[];
   resumeId?: string;
@@ -36,6 +37,7 @@ export interface RunOperatorAgentDependencies {
 
 export interface OperatorRuntime {
   userEnsembleRoot: string;
+  configScope?: string;
   workspace: string;
   profileName: string;
   profile: OperatorAgentProfile;

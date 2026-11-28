@@ -1,4 +1,5 @@
 import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -46,6 +47,49 @@ describe('workspace maintenance', () => {
       await rm(parent, { recursive: true, force: true });
     }
   });
+
+  it('maintains the workspace selected by an explicit config path', async () => {
+    const parent = await mkdtemp(join(tmpdir(), 'workspace-maintenance-config-'));
+    const previous = process.env.ENSEMBLE_USER_ROOT;
+    process.env.ENSEMBLE_USER_ROOT = parent;
+    const configPath = join(parent, 'alternate.yaml');
+    await writeFile(configPath, 'version: 1\n');
+    const scope = createHash('sha256')
+      .update(await realpath(configPath))
+      .digest('hex');
+    const alternate = join(
+      parent,
+      'operator-agents',
+      '.config-scopes',
+      scope,
+      'test',
+    );
+    const legacy = join(parent, 'operator-agents', 'test');
+    await mkdir(alternate, { recursive: true });
+    await mkdir(legacy, { recursive: true });
+    const alternateJournal = workspaceMoveJournalPath(await realpath(alternate));
+    const legacyJournal = workspaceMoveJournalPath(await realpath(legacy));
+    await writeFile(alternateJournal, 'alternate journal');
+    await writeFile(legacyJournal, 'legacy journal');
+    try {
+      await maintainOperatorWorkspace(
+        'test',
+        async (status) => status.status === 'journal_unreadable',
+        { configPath },
+      );
+      await expect(readFile(alternateJournal)).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
+      await expect(readFile(legacyJournal, 'utf8')).resolves.toBe(
+        'legacy journal',
+      );
+    } finally {
+      if (previous === undefined) delete process.env.ENSEMBLE_USER_ROOT;
+      else process.env.ENSEMBLE_USER_ROOT = previous;
+      await rm(parent, { recursive: true, force: true });
+    }
+  });
+
   it('retains the journal if the maintenance process is killed', async () => {
     const parent = await mkdtemp(join(tmpdir(), 'workspace-maintenance-kill-'));
     const path = join(parent, 'operator-agents', 'test');

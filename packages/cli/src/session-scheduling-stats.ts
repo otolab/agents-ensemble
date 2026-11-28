@@ -1,11 +1,20 @@
 import { readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { resolveUserEnsembleRoot } from '@agents-ensemble/core/operator-runtime';
+import {
+  operatorAgentProfileDirectory,
+  resolveOperatorAgentConfigScope,
+} from '@agents-ensemble/operator-agent/config';
 
 type Event = Record<string, unknown> & { type: string; ts: number };
 
-export async function readSchedulingStats(options: { profile?: string; since?: string; until?: string; root?: string }) {
-  const root = join(options.root ?? resolveUserEnsembleRoot(), 'operator-agents');
+export async function readSchedulingStats(options: { profile?: string; since?: string; until?: string; root?: string; configPath?: string }) {
+  const userRoot = options.root ?? resolveUserEnsembleRoot();
+  const configScope = await resolveOperatorAgentConfigScope(
+    userRoot,
+    options.configPath,
+  );
+  const operatorAgentsRoot = join(userRoot, 'operator-agents');
   const parseDate = (value: string | undefined, fallback: number) => {
     if (value === undefined) return fallback;
     const parsed = Date.parse(value);
@@ -17,14 +26,38 @@ export async function readSchedulingStats(options: { profile?: string; since?: s
   if (since >= until) throw new Error('--since must precede --until');
   if (options.profile && (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(options.profile) || options.profile === '.' || options.profile === '..')) throw new Error('Invalid profile name');
   let profiles: string[];
-  try { profiles = options.profile ? [options.profile] : (await readdir(root, { withFileTypes: true })).filter((entry) => entry.isDirectory()).map((entry) => entry.name); }
-  catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; profiles = []; }
+  try {
+    profiles = options.profile
+      ? [options.profile]
+      : (
+          await readdir(
+            configScope
+              ? join(operatorAgentsRoot, '.config-scopes', configScope)
+              : operatorAgentsRoot,
+            { withFileTypes: true },
+          )
+        )
+          .filter(
+            (entry) =>
+              entry.isDirectory() &&
+              (configScope !== undefined || entry.name !== '.config-scopes'),
+          )
+          .map((entry) => entry.name);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    profiles = [];
+  }
   const all: Array<Event & { profile: string }> = [];
   let malformed = 0;
   for (const profile of profiles) {
+    const profileDirectory = operatorAgentProfileDirectory(
+      userRoot,
+      profile,
+      configScope,
+    );
     for (const suffix of ['.1', '']) {
       let text: string;
-      try { text = await readFile(join(root, profile, `scheduling-events.jsonl${suffix}`), 'utf8'); }
+      try { text = await readFile(join(profileDirectory, `scheduling-events.jsonl${suffix}`), 'utf8'); }
       catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue; throw error; }
       for (const line of text.split('\n')) {
         if (!line.trim()) continue;

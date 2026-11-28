@@ -1724,11 +1724,12 @@ test('persistence docs use canonical slug paths and identify legacy migration so
     );
   }
 
-  // #697 moves new operator state to profile and canonical-slug paths. The
-  // settings reference must describe that runtime destination.
+  // Operator state remains user-scoped, while a non-default config gets its
+  // own workspace / watch / scheduling namespace. Keep the compatibility
+  // contract visible in the settings reference.
   assert.match(
     documents[0],
-    /operator-agent の新規 state は user 層に保存します。conversation record \/ Pi transcript は `operatorAgentId` ごと、watch state は profile と canonical repository slug ごとに分けます/u,
+    /operator-agent の新規 state は user 層に保存します。既定 config は従来の `operator-agents\/<profile>\/` を使い、別 config は canonical file path の SHA-256 ごとに workspace \/ watch \/ scheduling state と lock を分けます。conversation record \/ Pi transcript は `operatorAgentId` ごとの global 保存です/u,
   );
 
   assert.match(
@@ -1746,6 +1747,59 @@ test('persistence docs use canonical slug paths and identify legacy migration so
   assert.match(
     documents[1],
     /path-hash \/ project-local legacy は通常読まず、自動 promotion もしません/u,
+  );
+});
+
+test('operator-agent config docs point to the accepted identity and state ADR', async () => {
+  const repositoryRoot = resolve(dirname(scriptPath), '..');
+  const [architecture, config, adr0061, adr0089, adr0090, adrIndex] = await Promise.all([
+    readFile(join(repositoryRoot, 'docs/architecture.md'), 'utf8'),
+    readFile(join(repositoryRoot, 'docs/config.md'), 'utf8'),
+    readFile(join(repositoryRoot, 'docs/adr/0061-github-slug-session-persistence.md'), 'utf8'),
+    readFile(join(repositoryRoot, 'docs/adr/0089-builtin-pi-worker-storage-root-per-session.md'), 'utf8'),
+    readFile(join(repositoryRoot, 'docs/adr/0090-operator-agent-config-identity-and-state.md'), 'utf8'),
+    readFile(join(repositoryRoot, 'docs/adr/README.md'), 'utf8'),
+  ]);
+
+  assert.match(
+    architecture,
+    /operator-agent の設定・会話・状態[\s\S]*?\[ADR 0090\]\(adr\/0090-operator-agent-config-identity-and-state\.md\)/u,
+  );
+  assert.doesNotMatch(
+    architecture,
+    /\[ADR 0061\]\(adr\/0061-github-slug-session-persistence\.md\)/u,
+  );
+  assert.match(
+    config,
+    /reasoning の優先順位は \[ADR 0050\].*operator-agent config の identity と state namespace は \[ADR 0090\]/u,
+  );
+  assert.match(
+    adr0061,
+    /^- Status: superseded in part by \[ADR 0090\].*operator-agent config .*and \[ADR 0076\]/mu,
+  );
+  assert.match(
+    adr0061,
+    /operator-agent の `--repo-root` と任意の `--config` path は提供せず/u,
+  );
+  assert.match(adr0089, /^# ADR 0089: Builtin Pi worker/mu);
+  assert.match(adr0090, /^- Status: accepted$/mu);
+  assert.match(adr0090, /\[ADR 0046\]\(0046-migrated-session-canonical-slug-mirrors\.md\)/u);
+  assert.match(adr0090, /本 ADR はその profile 配下に config namespace を加える/u);
+  assert.match(adr0090, /slug 規則を置き換えない/u);
+  assert.match(adr0090, /canonical config path の UTF-8 表現の SHA-256/u);
+  assert.match(adr0090, /`--resume <operatorAgentId>` は scope によらず global record/u);
+  assert.match(adr0090, /Pi の共有 root.*直列化しない/u);
+  assert.match(
+    adrIndex,
+    /^\| \[0061\].*\| superseded in part → \[0090\].*\[0076\].*Phase 5 gate.*\|$/mu,
+  );
+  assert.match(
+    adrIndex,
+    /^\| \[0089\]\(0089-builtin-pi-worker-storage-root-per-session\.md\) \|.*\| accepted \|$/mu,
+  );
+  assert.match(
+    adrIndex,
+    /^\| \[0090\]\(0090-operator-agent-config-identity-and-state\.md\) \|.*\| accepted \|$/mu,
   );
 });
 

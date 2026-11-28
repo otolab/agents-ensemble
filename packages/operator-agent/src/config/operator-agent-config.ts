@@ -1,5 +1,6 @@
 import { isEnoentError as isEnoent } from '../internal/operator-utils.js';
-import { readFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { readFile, realpath } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
 import { parse as parseYaml } from 'yaml';
@@ -98,6 +99,13 @@ export interface OperatorAgentConfiguration {
   profiles: Record<string, OperatorAgentProfile>;
 }
 
+export interface LoadedOperatorAgentConfiguration {
+  configuration: OperatorAgentConfiguration;
+  configPath: string;
+  /** Omitted for the legacy default-config storage namespace. */
+  configScope?: string;
+}
+
 export function operatorAgentConfigPath(userEnsembleRoot: string): string {
   return join(userEnsembleRoot, OPERATOR_AGENT_CONFIG_FILE);
 }
@@ -105,7 +113,19 @@ export function operatorAgentConfigPath(userEnsembleRoot: string): string {
 export async function loadOperatorAgentConfiguration(
   userEnsembleRoot: string,
 ): Promise<OperatorAgentConfiguration> {
-  const path = operatorAgentConfigPath(userEnsembleRoot);
+  return (await loadOperatorAgentConfigurationWithSource(userEnsembleRoot))
+    .configuration;
+}
+
+export async function loadOperatorAgentConfigurationWithSource(
+  userEnsembleRoot: string,
+  configPath?: string,
+): Promise<LoadedOperatorAgentConfiguration> {
+  const identity = await resolveOperatorAgentConfigIdentity(
+    userEnsembleRoot,
+    configPath,
+  );
+  const path = identity.configPath;
   let source: string;
   try {
     source = await readFile(path, 'utf8');
@@ -126,7 +146,97 @@ export async function loadOperatorAgentConfiguration(
       `Invalid operator-agent config YAML at ${path}: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
-  return parseOperatorAgentConfiguration(value, path);
+  return {
+    configuration: parseOperatorAgentConfiguration(value, path),
+    configPath: path,
+    ...(identity.configScope ? { configScope: identity.configScope } : {}),
+  };
+}
+
+/** Resolve an explicit config to the same state namespace used by operator-agent. */
+export async function resolveOperatorAgentConfigScope(
+  userEnsembleRoot: string,
+  configPath?: string,
+): Promise<string | undefined> {
+  if (configPath === undefined) return undefined;
+  return (await resolveOperatorAgentConfigIdentity(userEnsembleRoot, configPath))
+    .configScope;
+}
+
+export function operatorAgentProfileDirectory(
+  userEnsembleRoot: string,
+  profile: string,
+  configScope?: string,
+): string {
+  validateProfileName(profile);
+  if (configScope !== undefined && !/^[0-9a-f]{64}$/u.test(configScope)) {
+    throw new Error('Invalid operator-agent config scope.');
+  }
+  return configScope
+    ? join(
+        userEnsembleRoot,
+        'operator-agents',
+        '.config-scopes',
+        configScope,
+        profile,
+      )
+    : join(userEnsembleRoot, 'operator-agents', profile);
+}
+
+async function resolveOperatorAgentConfigIdentity(
+  userEnsembleRoot: string,
+  configPath?: string,
+): Promise<{ configPath: string; configScope?: string }> {
+  const selectedPath = resolveOperatorAgentConfigPath(
+    configPath ?? operatorAgentConfigPath(userEnsembleRoot),
+  );
+  let canonicalPath: string;
+  try {
+    canonicalPath = await realpath(selectedPath);
+  } catch (error) {
+    if (isMissingPathError(error)) {
+      throw new Error(
+        `Operator-agent config not found: ${selectedPath}. Create this file with at least one profile.`,
+      );
+    }
+    throw error;
+  }
+
+  let canonicalDefaultPath: string | undefined;
+  try {
+    canonicalDefaultPath = await realpath(
+      operatorAgentConfigPath(userEnsembleRoot),
+    );
+  } catch (error) {
+    if (!isMissingPathError(error)) throw error;
+  }
+  if (canonicalPath === canonicalDefaultPath) {
+    return { configPath: canonicalPath };
+  }
+  return {
+    configPath: canonicalPath,
+    configScope: createHash('sha256').update(canonicalPath).digest('hex'),
+  };
+}
+
+function resolveOperatorAgentConfigPath(value: string): string {
+  const expanded =
+    value === '~'
+      ? homedir()
+      : value.startsWith('~/')
+        ? join(homedir(), value.slice(2))
+        : value;
+  return isAbsolute(expanded) ? resolve(expanded) : resolve(process.cwd(), expanded);
+}
+
+function isMissingPathError(error: unknown): boolean {
+  return (
+    isEnoent(error) ||
+    (typeof error === 'object' &&
+      error !== null &&
+      'code' in error &&
+      (error as NodeJS.ErrnoException).code === 'ENOTDIR')
+  );
 }
 
 export function parseOperatorAgentConfiguration(

@@ -94,7 +94,7 @@ import {
   type OperatorAgentState,
 } from './run/operator-agent-state.js';
 import {
-  loadOperatorAgentConfiguration,
+  loadOperatorAgentConfigurationWithSource,
   OPERATOR_AGENT_BACKEND_ENV,
   OPERATOR_AGENT_MODEL_ENV,
   OPERATOR_AGENT_PROFILE_ENV,
@@ -165,7 +165,15 @@ export async function runOperatorAgent(
   if ((options.resumeId ?? options.resume) && options.newSession) {
     throw new Error('--resume and --new cannot be used together.');
   }
-  const savedStates = await listOperatorAgentStates(userEnsembleRoot);
+  const loadedConfiguration =
+    await loadOperatorAgentConfigurationWithSource(
+      userEnsembleRoot,
+      options.configPath,
+    );
+  const configScope = loadedConfiguration.configScope;
+  const savedStates = (await listOperatorAgentStates(userEnsembleRoot)).filter(
+    (state) => state.configScope === configScope,
+  );
   const requestedResumeId = options.resumeId ?? options.resume;
   let existingState: OperatorAgentState | undefined;
   if (requestedResumeId) {
@@ -195,6 +203,7 @@ export async function runOperatorAgent(
       stdout,
       log: (detail) => ttyLogRouter.append('observation', detail),
     },
+    loadedConfiguration,
   );
   const workspaceFileTools = createOperatorWorkspaceFileTools(
     await resolveOperatorWorkspaceRoot(runtime.workspace),
@@ -263,6 +272,7 @@ export async function runOperatorAgent(
     autoDiscoverSessions: dependencies.autoDiscoverSessions ?? true,
     userEnsembleRoot: runtime.userEnsembleRoot,
     profile: runtime.profileName,
+    configScope: runtime.configScope,
     profileIncludes: runtime.profile.include,
     repoFilters: runtime.repoFilters,
     dispatchQueue,
@@ -431,6 +441,7 @@ export async function runOperatorAgent(
       providerSessionId: agent.agentId,
       backend: runtime.backend,
       profile: runtime.profileName,
+      ...(runtime.configScope ? { configScope: runtime.configScope } : {}),
       workspace: runtime.workspace,
       ...(runtime.backend === 'pi'
         ? { piResourceRoots: runtime.piResourceRoots }

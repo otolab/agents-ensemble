@@ -89,13 +89,15 @@ import {
   type OperatorAgentState,
 } from './operator-agent-state.js';
 import {
-  loadOperatorAgentConfiguration,
+  loadOperatorAgentConfigurationWithSource,
   OPERATOR_AGENT_BACKEND_ENV,
   OPERATOR_AGENT_MODEL_ENV,
   OPERATOR_AGENT_PROFILE_ENV,
   OPERATOR_AGENT_REASONING_ENV,
   normalizeRepositoryPattern,
   resolveOperatorPath,
+  operatorAgentProfileDirectory,
+  type LoadedOperatorAgentConfiguration,
   validateProfileName,
   type OperatorAgentConfiguration,
   type OperatorAgentProfile,
@@ -120,6 +122,7 @@ export async function resolveOperatorRuntime(
     stdout: OperatorAgentOutput;
     log?: (detail: string) => void;
   },
+  loadedConfiguration?: LoadedOperatorAgentConfiguration,
 ): Promise<OperatorRuntime> {
   const userEnsembleRoot = resolve(
     resolveUserEnsembleRoot({
@@ -128,7 +131,12 @@ export async function resolveOperatorRuntime(
         : {}),
     }),
   );
-  const config = await loadOperatorAgentConfiguration(userEnsembleRoot);
+  const source = loadedConfiguration ??
+    await loadOperatorAgentConfigurationWithSource(
+      userEnsembleRoot,
+      options.configPath,
+    );
+  const config = source.configuration;
   const repoFilters = (options.repoFilters ?? []).map((pattern) =>
     normalizeRepositoryPattern(pattern, '--repo-filter'),
   );
@@ -148,10 +156,10 @@ export async function resolveOperatorRuntime(
     profile,
     config.common,
   );
-  const workspace = join(
+  const workspace = operatorAgentProfileDirectory(
     userEnsembleRoot,
-    'operator-agents',
     selectedProfileName,
+    source.configScope,
   );
   await mkdir(workspace, { recursive: true, mode: 0o700 });
   const backend = resolveOperatorSetting(
@@ -215,6 +223,7 @@ export async function resolveOperatorRuntime(
 
   return {
     userEnsembleRoot,
+    ...(source.configScope ? { configScope: source.configScope } : {}),
     workspace,
     profileName: selectedProfileName,
     config,

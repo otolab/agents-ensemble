@@ -4,7 +4,7 @@ import { createFakeAgent, createOutput, writeOperatorSettings } from '../../test
 import { waitForNotification } from '../../test/support/wait.js';
 import { mkdtemp, mkdir, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { DatabaseSync } from 'node:sqlite';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { createInteractiveInput } from '../../test/support/interactive-input.js';
 import xterm from '@xterm/headless';
 import { PiConductorAgent } from '../../../core/src/conductor/pi-conductor-agent.js';
@@ -47,6 +47,10 @@ import {
   saveOperatorAgentState,
   type OperatorAgentState,
 } from './operator-agent-state.js';
+import {
+  operatorAgentProfileDirectory,
+  resolveOperatorAgentConfigScope,
+} from '../config/operator-agent-config.js';
 
 const watchPollHarness = vi.hoisted(() => ({
   pending: new Set<Promise<unknown>>(),
@@ -123,7 +127,7 @@ describe('runOperatorAgent', () => {
     expect(output.capturedText()).not.toContain('\u001b[');
   });
 
-  it('uses the dedicated operator config and ignores generic project config', async () => {
+  it('uses an explicit default config in the legacy workspace and ignores generic project config', async () => {
     await writeFile(
       join(fixture.repoRoot, '.ensemble', 'config.yaml'),
       'conductor:\n  backend: cursor\n  model: project-only-model\n',
@@ -148,7 +152,14 @@ describe('runOperatorAgent', () => {
     };
 
     await runOperatorAgent(
-      { newSession: true },
+      {
+        configPath: join(
+          fixture.repoRoot,
+          '.ensemble',
+          'operator-agents.config.yaml',
+        ),
+        newSession: true,
+      },
       {
         stdin: createInput('/exit\n'),
         stdout: createOutput(),
@@ -170,6 +181,179 @@ describe('runOperatorAgent', () => {
         'pi-project',
       ),
     });
+  });
+
+  it('uses the selected config workspace and Pi project root while retaining the shared Pi user root', async () => {
+    await writeOperatorSettings(fixture.repoRoot, 'pi');
+    const userRoot = join(fixture.repoRoot, '.ensemble');
+    const configPath = join(fixture.repoRoot, 'alternate-operator-agents.yaml');
+    await writeFile(
+      configPath,
+      [
+        'version: 1',
+        'defaultProfile: smoke',
+        'common:',
+        '  conductor:',
+        '    backend: pi',
+        '    model: alternate-model',
+        '  pi:',
+        '    agentDir: pi-user',
+        'profiles:',
+        '  smoke:',
+        '    pi:',
+        '      projectDir: pi-project',
+        '',
+      ].join('\n'),
+    );
+    const configScope = await resolveOperatorAgentConfigScope(
+      userRoot,
+      configPath,
+    );
+    const workspace = operatorAgentProfileDirectory(
+      userRoot,
+      'smoke',
+      configScope,
+    );
+    let agentOptions: ConductorAgentCreateOptions | undefined;
+    const fakeAgent = createFakeAgent({
+      send: async () => ({
+        runId: 'unused',
+        status: 'completed',
+        result: '',
+      }),
+    });
+    const input = createInteractiveInput();
+    const output = createOutput();
+    const running = runOperatorAgent(
+      { configPath, newSession: true },
+      {
+        userEnsembleRoot: userRoot,
+        autoDiscoverSessions: false,
+        stdin: input,
+        stdout: output,
+        agentFactory: {
+          create: async (options) => {
+            agentOptions = options;
+            return fakeAgent;
+          },
+          resume: async () => {
+            throw new Error('not used');
+          },
+        },
+      },
+    );
+    await vi.waitFor(() =>
+      expect(output.capturedText()).toContain('operatorAgentId='),
+    );
+    const [state] = await listOperatorAgentStates(userRoot);
+
+    expect(agentOptions?.cwd).toBe(workspace);
+    expect(agentOptions?.pi).toEqual({
+      agentDir: join(userRoot, 'pi-user'),
+      projectDir: join(workspace, 'pi-project'),
+    });
+    expect(state).toMatchObject({
+      configScope,
+      workspace,
+      piResourceRoots: {
+        agentDir: join(userRoot, 'pi-user'),
+        projectDir: join(workspace, 'pi-project'),
+      },
+    });
+    expect(agentOptions?.sessionDir).toContain(
+      join(userRoot, 'operator-agents', 'conversations'),
+    );
+    expect(agentOptions?.sessionDir).not.toContain('.config-scopes');
+    expect(
+      basename(dirname(agentOptions!.sessionDir!)),
+    ).toMatch(/^operator-/u);
+    input.write('/exit\n');
+    input.endWhenReady();
+    await running;
+  });
+
+  it('limits implicit conversation selection to the config and keeps explicit IDs global', async () => {
+    await writeOperatorSettings(fixture.repoRoot, 'cursor');
+    const userRoot = join(fixture.repoRoot, '.ensemble');
+    const configPath = join(fixture.repoRoot, 'alternate-operator-agents.yaml');
+    await writeFile(
+      configPath,
+      'version: 1\ndefaultProfile: smoke\ncommon:\n  conductor:\n    backend: cursor\nprofiles:\n  smoke: {}\n',
+    );
+    const configScope = await resolveOperatorAgentConfigScope(
+      userRoot,
+      configPath,
+    );
+    const defaultWorkspace = operatorAgentProfileDirectory(userRoot, 'smoke');
+    const alternateWorkspace = operatorAgentProfileDirectory(
+      userRoot,
+      'smoke',
+      configScope,
+    );
+    for (const [operatorAgentId, providerSessionId, workspace, scope] of [
+      ['default-conversation', 'provider-default', defaultWorkspace, undefined],
+      ['alternate-conversation', 'provider-alternate', alternateWorkspace, configScope],
+    ] as const) {
+      await saveOperatorAgentState(userRoot, {
+        version: 2,
+        operatorAgentId,
+        providerSessionId,
+        backend: 'cursor',
+        profile: 'smoke',
+        workspace,
+        ...(scope ? { configScope: scope } : {}),
+        createdAt: 1,
+        updatedAt: 1,
+      });
+    }
+    const resumed: string[] = [];
+    const factory: ConductorAgentFactory = {
+      create: async () => {
+        throw new Error('saved conversation should resume');
+      },
+      resume: async (providerSessionId) => {
+        resumed.push(providerSessionId);
+        return {
+          ...createFakeAgent({
+            send: async () => ({
+              runId: 'unused',
+              status: 'completed',
+              result: '',
+            }),
+          }),
+          agentId: providerSessionId,
+        };
+      },
+    };
+    const run = (options: Parameters<typeof runOperatorAgent>[0]) =>
+      runOperatorAgent(options, {
+        userEnsembleRoot: userRoot,
+        autoDiscoverSessions: false,
+        stdin: createInput('/exit\n'),
+        stdout: createOutput(),
+        agentFactory: factory,
+      });
+
+    await run({});
+    await run({ configPath });
+    await saveOperatorAgentState(userRoot, {
+      version: 2,
+      operatorAgentId: 'default-conversation',
+      providerSessionId: 'provider-default',
+      backend: 'cursor',
+      profile: 'smoke',
+      workspace: defaultWorkspace,
+      createdAt: 1,
+      updatedAt: 1,
+    });
+    await run({ configPath, resumeId: 'default-conversation' });
+
+    expect(resumed).toEqual([
+      'provider-default',
+      'provider-alternate',
+      'provider-default',
+    ]);
+    expect(resumed).toHaveLength(3);
   });
 
   it('honors CLI profile and dedicated environment precedence independently of launch cwd', async () => {

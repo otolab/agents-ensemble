@@ -155,6 +155,8 @@ export interface CreateOperatorWatchPoolOptions {
   userEnsembleRoot?: string;
   /** Profile whose watch state is active. */
   profile?: string;
+  /** Hash identifying a non-default operator-agent config file. */
+  configScope?: string;
   /** Repository patterns allowed by the selected profile and CLI. */
   profileIncludes?: readonly string[];
   repoFilters?: readonly string[];

@@ -131,7 +131,7 @@ CLI メッセージと `ENSEMBLE_OPERATOR_MESSAGE` は同時に指定できま�
 
 ## operator-agent の会話中の監視 hold
 
-operator-agent は Issue TUI と別の会話 runtime です。`~/.ensemble/operator-agents.config.yaml` の profile と user workspace を使い、global `operatorAgentId` を選択して再開します。CLI option、profile、会話の選び方は [CLI README の operator-agent 節](cli/README.md#operator-agent)を参照してください。
+operator-agent は Issue TUI と別の会話 runtime です。既定では `~/.ensemble/operator-agents.config.yaml` を使い、`--config <path>` で別 config を選べます。workspace / watch state は config namespace と profile に属し、会話は global `operatorAgentId` を選択して再開します。CLI option、profile、会話の選び方は [CLI README の operator-agent 節](cli/README.md#operator-agent)を参照してください。
 
 TTY では各 `agent.send` の開始時に `[harness] operator: 処理中` を表示し、backend から tool 開始 callback が届いた場合は `[harness] operator: calling <tool>` を追加します。thinking / reasoning 本文や tool 引数は表示しません。`NO_COLOR` が有効な場合も活動表示は残し、色だけを抑制します。operator-agent は stdin と stdout の TTY を必要とするため、非 TTY では起動せず、活動表示も行いません。
 
@@ -434,7 +434,7 @@ SessionResumeStore は、conductor send / worker prompt の in-flight がある�
 
 `list_operator_sessions` は保存済み run を1 run 1行で返し、`statusLine` / `reportedAt`、保存 phase、live connectivity と最終観測時刻をそれぞれ分けて示します。watch 観測は採用時に10秒以内か確認します。採用した質問・報告はその観測時刻とともに保持し、接続の `freshness` / `ageMs` は GitHub 情報の取得後、応答直前の `dataAsOf` で再評価します。その時点で10秒を超えた観測は `freshness: stale`、`connectivity: unknown` とし、`lastKnownConnectivity` に結果を残します。`liveConnectivity` filter も同じ判定を使います。観測自体がなければ `not_observed` です。保存済み phase は live probe に失敗しても別項目として残ります。
 
-既存 SessionResumeStore の `updatedAt` は作成時刻ではなく flush 時刻です。その値から新着 run を推測しません。新着順は repository watch が保存する `firstObservedAt`（初めて一覧で確認した時刻）を使い、記録がまだない legacy run は時刻不明として既知時刻の後に並べます。repository watch は operator-agent の `register_repository_watch` で有効化します。登録時に存在する run はその時点で baseline 化し、それ以降を scan interval（既定30秒、5〜300秒）で検出します。登録・初回観測時刻・停止抑制状態は `~/.ensemble/operator-agents/<profile>/watch/repository-watch-state.json` に保存され、再起動後の初回 scan で停止中に追加された run も補います。重複登録は設定を更新し、既存の観測時刻を上書きしません。`unregister_repository_watch` は repository scan とその管理下の自動 session watch を止めます。明示登録した個別 session watch と別経路の live 自動発見は維持します。履歴は再登録に備えて残します。
+既存 SessionResumeStore の `updatedAt` は作成時刻ではなく flush 時刻です。その値から新着 run を推測しません。新着順は repository watch が保存する `firstObservedAt`（初めて一覧で確認した時刻）を使い、記録がまだない legacy run は時刻不明として既知時刻の後に並べます。repository watch は operator-agent の `register_repository_watch` で有効化します。登録時に存在する run はその時点で baseline 化し、それ以降を scan interval（既定30秒、5〜300秒）で検出します。登録・初回観測時刻・停止抑制状態は選択 config namespace 内の `<profile>/watch/repository-watch-state.json`（既定 config は `~/.ensemble/operator-agents/<profile>/watch/repository-watch-state.json`）に保存され、再起動後の初回 scan で停止中に追加された run も補います。重複登録は設定を更新し、既存の観測時刻を上書きしません。`unregister_repository_watch` は repository scan とその管理下の自動 session watch を止めます。明示登録した個別 session watch と別経路の live 自動発見は維持します。履歴は再登録に備えて残します。
 
 repository watch の登録数は選択中 profile あたり最大20 repository です。登録対象は `owner/repo` 形式の個別 repository で、profile の include 設定と起動時の `--repo-filter` の両方が許可範囲を決めます。21件目以降の新規登録は「At most 20 repositories can be watched in one profile.」というエラーで拒否され、登録済み watch はそのままです。同じ repository の再登録は枠を追加消費せず、上限到達後も scan / poll 設定を更新できます。`unregister_repository_watch` で登録を解除すると枠が空きます。登録と解除は profile の保存状態に反映され、再起動時も登録済み repository 数として上限に数えます。解除後も発見履歴は再登録時の新着判定用に保持します。
 

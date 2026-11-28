@@ -17,7 +17,7 @@ describe('ensemble operator-agent command', () => {
     );
   });
 
-  it('shows operator profile, repository filters, and conversation selection options', () => {
+  it('shows operator config, profile, repository filters, and conversation selection options', () => {
     const cliEntry = fileURLToPath(new URL('../dist/index.js', import.meta.url));
     const result = spawnSync(
       process.execPath,
@@ -26,12 +26,12 @@ describe('ensemble operator-agent command', () => {
     );
 
     expect(result.status).toBe(0);
+    expect(result.stdout).toContain('--config <path>');
     expect(result.stdout).toContain('--profile <name>');
     expect(result.stdout).toContain('--repo-filter <owner/repo|owner/*>');
     expect(result.stdout).toContain('--resume <operatorAgentId>');
     expect(result.stdout).toContain('--new');
     expect(result.stdout).not.toContain('--repo-root');
-    expect(result.stdout).not.toContain('--config');
   });
 
   it('keeps --repo-root on the ensemble issue command', () => {

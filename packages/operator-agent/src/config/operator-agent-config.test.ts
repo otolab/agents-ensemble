@@ -1,13 +1,16 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { link, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   loadOperatorAgentConfiguration,
+  loadOperatorAgentConfigurationWithSource,
   normalizeRepositoryPattern,
   operatorAgentConfigPath,
+  operatorAgentProfileDirectory,
   parseOperatorAgentConfiguration,
   repositoryMatchesPatterns,
+  resolveOperatorAgentConfigScope,
   resolveOperatorAgentScheduling,
   resolveOperatorPath,
   validateProfileName,
@@ -76,6 +79,90 @@ describe('operator-agent config', () => {
         },
       },
     });
+  });
+
+  it('keeps the default namespace for explicit default paths and symlink aliases', async () => {
+    userRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-config-identity-'));
+    const defaultPath = operatorAgentConfigPath(userRoot);
+    await writeFile(defaultPath, 'version: 1\nprofiles:\n  work: {}\n');
+    const aliasPath = join(userRoot, 'default-alias.yaml');
+    await symlink(defaultPath, aliasPath);
+
+    await expect(
+      resolveOperatorAgentConfigScope(userRoot, defaultPath),
+    ).resolves.toBeUndefined();
+    await expect(
+      resolveOperatorAgentConfigScope(userRoot, aliasPath),
+    ).resolves.toBeUndefined();
+    await expect(
+      loadOperatorAgentConfigurationWithSource(userRoot, aliasPath),
+    ).resolves.toMatchObject({ configPath: await realpath(defaultPath) });
+    expect(operatorAgentProfileDirectory(userRoot, 'work')).toBe(
+      join(userRoot, 'operator-agents', 'work'),
+    );
+    expect(operatorAgentProfileDirectory(userRoot, 'configs')).toBe(
+      join(userRoot, 'operator-agents', 'configs'),
+    );
+  });
+
+  it('separates other canonical config paths and rejects an explicit missing file', async () => {
+    userRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-config-scope-'));
+    const firstPath = join(userRoot, 'first.yaml');
+    const secondPath = join(userRoot, 'second.yaml');
+    const source = 'version: 1\nprofiles:\n  work: {}\n';
+    await writeFile(firstPath, source);
+    await writeFile(secondPath, source);
+    const aliasPath = join(userRoot, 'first-alias.yaml');
+    const hardLinkPath = join(userRoot, 'first-hardlink.yaml');
+    await symlink(firstPath, aliasPath);
+    await link(firstPath, hardLinkPath);
+
+    const firstScope = await resolveOperatorAgentConfigScope(userRoot, firstPath);
+    const secondScope = await resolveOperatorAgentConfigScope(userRoot, secondPath);
+    const aliasScope = await resolveOperatorAgentConfigScope(userRoot, aliasPath);
+    const hardLinkScope = await resolveOperatorAgentConfigScope(
+      userRoot,
+      hardLinkPath,
+    );
+    expect(firstScope).toMatch(/^[0-9a-f]{64}$/u);
+    expect(secondScope).toMatch(/^[0-9a-f]{64}$/u);
+    expect(firstScope).not.toBe(secondScope);
+    expect(aliasScope).toBe(firstScope);
+    expect(hardLinkScope).not.toBe(firstScope);
+    expect(operatorAgentProfileDirectory(userRoot, 'work', firstScope)).toBe(
+      join(
+        userRoot,
+        'operator-agents',
+        '.config-scopes',
+        firstScope!,
+        'work',
+      ),
+    );
+    await expect(
+      loadOperatorAgentConfigurationWithSource(
+        userRoot,
+        join(userRoot, 'missing.yaml'),
+      ),
+    ).rejects.toThrow(/Operator-agent config not found/u);
+    const previousCwd = process.cwd();
+    const previousHome = process.env.HOME;
+    try {
+      process.chdir(userRoot);
+      await expect(
+        loadOperatorAgentConfigurationWithSource(userRoot, 'first.yaml'),
+      ).resolves.toMatchObject({
+        configPath: await realpath(firstPath),
+        configScope: firstScope,
+      });
+      process.env.HOME = userRoot;
+      await expect(
+        resolveOperatorAgentConfigScope(userRoot, '~/first.yaml'),
+      ).resolves.toBe(firstScope);
+    } finally {
+      process.chdir(previousCwd);
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+    }
   });
 
   it('validates selected MCP server names', () => {

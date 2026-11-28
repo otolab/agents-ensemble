@@ -383,7 +383,7 @@ TUI 表示語彙 `WorkerDisplayStatus`（`sleep` / `idle` / `running` / `failed`
 
 ## 9. operator-agent の scheduling
 
-`ensemble session scheduling-stats --profile default --since 2026-01-01 --until 2026-02-01 --json` は user root の `operator-agents/<profile>/scheduling-events.jsonl` と、その一世代前の `.1` を読みます。profile を省略すると全 profile が対象です。期間はイベント時刻の `--since` 以上、`--until` 未満です。期間外の report / batch も期間内の send との照合には使います。ファイルや不正行の修復は行いません。
+`ensemble session scheduling-stats [--config <path>] --profile default --since 2026-01-01 --until 2026-02-01 --json` は選択 config namespace の `operator-agents/<profile>/scheduling-events.jsonl` と、その一世代前の `.1` を読みます。`--config` を省略すると従来の default namespace を読み、relative path は cwd 基準、`~` は home 基準です。profile を省略すると選択 namespace 内の全 profile が対象です。期間はイベント時刻の `--since` 以上、`--until` 未満です。期間外の report / batch も期間内の send との照合には使います。ファイルや不正行の修復は行いません。
 
 記録は report の queue / ack、batch の commit / send、focus の設定・解除・保留を扱い、本文を含みません。ファイルは 5 MiB を超える前に一世代だけローテーションします。記録失敗や buffer の上限、プロセス停止、ローテーションにより欠落し得るため、集計は完全な監査ログではありません。イベントは最大 1000 件の送信待ちを持つ別プロセスへ渡し、専用の SQLite lock で複数 process の追記とローテーションを直列化します。profile の状態 lock は使用しないため、記録先の遅延や障害が scheduler の状態 lock や commit から send までの処理を待たせることはありません。通常終了時は最大 500 ms 待ってから writer を終了するため、遅延中のイベントも失われ得ます。writer の異常終了、強制終了、buffer の上限、専用 lock の取得失敗でも欠落します。
 

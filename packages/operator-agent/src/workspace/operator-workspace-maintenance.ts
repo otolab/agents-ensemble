@@ -1,7 +1,10 @@
 import { lstat, unlink } from 'node:fs/promises';
-import { join } from 'node:path';
 import { resolveUserEnsembleRoot } from '@agents-ensemble/core/operator-runtime';
-import { validateProfileName } from '../config/operator-agent-config.js';
+import {
+  operatorAgentProfileDirectory,
+  resolveOperatorAgentConfigScope,
+  validateProfileName,
+} from '../config/operator-agent-config.js';
 import { withOperatorWorkspaceLock } from './operator-workspace-lock.js';
 import { readMoveStatus, resolveOperatorWorkspaceRoot, workspaceMoveJournalPath } from './operator-workspace-tools.js';
 
@@ -9,9 +12,17 @@ import { readMoveStatus, resolveOperatorWorkspaceRoot, workspaceMoveJournalPath 
 export async function maintainOperatorWorkspace(
   profile: string,
   inspect: (status: Record<string, unknown>, journal: string) => Promise<boolean>,
+  options: { configPath?: string } = {},
 ): Promise<void> {
   validateProfileName(profile);
-  const root = await resolveOperatorWorkspaceRoot(join(resolveUserEnsembleRoot(), 'operator-agents', profile));
+  const userRoot = resolveUserEnsembleRoot();
+  const configScope = await resolveOperatorAgentConfigScope(
+    userRoot,
+    options.configPath,
+  );
+  const root = await resolveOperatorWorkspaceRoot(
+    operatorAgentProfileDirectory(userRoot, profile, configScope),
+  );
   await withOperatorWorkspaceLock(root, async () => {
     const journal = workspaceMoveJournalPath(root);
     const before = await lstat(journal);

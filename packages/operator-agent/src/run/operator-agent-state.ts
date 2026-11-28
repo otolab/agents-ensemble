@@ -16,6 +16,8 @@ export interface OperatorAgentState {
   backend: ConductorBackend;
   /** Profile that created this global conversation record. */
   profile: string;
+  /** Omitted for records created with the legacy default config. */
+  configScope?: string;
   workspace: string;
   piResourceRoots?: {
     agentDir: string;
@@ -176,6 +178,13 @@ function parseOperatorAgentState(
   const profile = requireString(record.profile, 'profile', source);
   validateProfileName(profile);
   const workspace = requireString(record.workspace, 'workspace', source);
+  const configScope = record.configScope;
+  if (
+    configScope !== undefined &&
+    (typeof configScope !== 'string' || !/^[0-9a-f]{64}$/u.test(configScope))
+  ) {
+    throw new Error(`Invalid operator-agent config scope at ${source}.`);
+  }
   if (record.backend !== 'cursor' && record.backend !== 'pi') {
     throw new Error(`Invalid operator-agent backend at ${source}.`);
   }
@@ -197,6 +206,7 @@ function parseOperatorAgentState(
       providerSessionId,
       backend: record.backend,
       profile,
+      ...(configScope ? { configScope } : {}),
       workspace,
       piResourceRoots: {
         agentDir: requireString(roots.agentDir, 'piResourceRoots.agentDir', source),
@@ -216,6 +226,7 @@ function parseOperatorAgentState(
     providerSessionId,
     backend: record.backend,
     profile,
+    ...(configScope ? { configScope } : {}),
     workspace,
     createdAt,
     updatedAt,
