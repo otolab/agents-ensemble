@@ -1752,10 +1752,11 @@ test('persistence docs use canonical slug paths and identify legacy migration so
 
 test('operator-agent config docs point to the accepted identity and state ADR', async () => {
   const repositoryRoot = resolve(dirname(scriptPath), '..');
-  const [architecture, config, adr0061, adr0089, adrIndex] = await Promise.all([
+  const [architecture, config, adr0061, adr0089, adr0090, adrIndex] = await Promise.all([
     readFile(join(repositoryRoot, 'docs/architecture.md'), 'utf8'),
     readFile(join(repositoryRoot, 'docs/config.md'), 'utf8'),
     readFile(join(repositoryRoot, 'docs/adr/0061-github-slug-session-persistence.md'), 'utf8'),
+    readFile(join(repositoryRoot, 'docs/adr/0089-builtin-pi-worker-storage-root-per-session.md'), 'utf8'),
     readFile(join(repositoryRoot, 'docs/adr/0090-operator-agent-config-identity-and-state.md'), 'utf8'),
     readFile(join(repositoryRoot, 'docs/adr/README.md'), 'utf8'),
   ]);
@@ -1780,16 +1781,21 @@ test('operator-agent config docs point to the accepted identity and state ADR', 
     adr0061,
     /operator-agent の `--repo-root` と任意の `--config` path は提供せず/u,
   );
-  assert.match(adr0089, /^- Status: accepted$/mu);
-  assert.match(adr0089, /\[ADR 0046\]\(0046-migrated-session-canonical-slug-mirrors\.md\)/u);
-  assert.match(adr0089, /本 ADR はその profile 配下に config namespace を加える/u);
-  assert.match(adr0089, /slug 規則を置き換えない/u);
-  assert.match(adr0089, /canonical config path の UTF-8 表現の SHA-256/u);
-  assert.match(adr0089, /`--resume <operatorAgentId>` は scope によらず global record/u);
-  assert.match(adr0089, /Pi の共有 root.*直列化しない/u);
+  assert.match(adr0089, /^# ADR 0089: Builtin Pi worker/mu);
+  assert.match(adr0090, /^- Status: accepted$/mu);
+  assert.match(adr0090, /\[ADR 0046\]\(0046-migrated-session-canonical-slug-mirrors\.md\)/u);
+  assert.match(adr0090, /本 ADR はその profile 配下に config namespace を加える/u);
+  assert.match(adr0090, /slug 規則を置き換えない/u);
+  assert.match(adr0090, /canonical config path の UTF-8 表現の SHA-256/u);
+  assert.match(adr0090, /`--resume <operatorAgentId>` は scope によらず global record/u);
+  assert.match(adr0090, /Pi の共有 root.*直列化しない/u);
   assert.match(
     adrIndex,
-    /^\| \[0061\].*\| superseded in part → \[0089\].*\[0076\].*Phase 5 gate.*\|$/mu,
+    /^\| \[0061\].*\| superseded in part → \[0090\].*\[0076\].*Phase 5 gate.*\|$/mu,
+  );
+  assert.match(
+    adrIndex,
+    /^\| \[0089\]\(0089-builtin-pi-worker-storage-root-per-session\.md\) \|.*\| accepted \|$/mu,
   );
   assert.match(
     adrIndex,

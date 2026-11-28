@@ -2,6 +2,7 @@ import { WORKSPACE_WORKER_PROMPT_VERSION } from '../workspace-run/worker-prompt-
 import { conductorFailureLogPath, createConductorFailureLog } from '../session/conductor-failure-log.js';
 import { SessionOwnership, type SessionWriteLease } from '../session/session-ownership.js';
 import { resolveUserEnsembleRoot } from '../resolve-user-ensemble-root.js';
+import { resolveEnsemblePaths } from '../ensemble-paths.js';
 import { acquireSessionMigrationReadLock, acquireSessionOwnerLock } from '../session/session-owner-lock.js';
 import { readWorkspaceAnchor } from '../workspace-run/slug-key.js';
 import { stat } from 'node:fs/promises';
@@ -899,8 +900,20 @@ async function runConductorSessionWithStartupGuard(
     }
     githubMonitorCursor = resumeStore.githubMonitor;
     for (const [name, worker] of Object.entries(resumeStore.workers)) {
+      const isSavedBuiltinPi =
+        worker.acpSpawn?.preset === 'pi' &&
+        worker.acpSpawn.piRuntime === 'builtin';
+      const piWorkerHome = isSavedBuiltinPi
+        ? worker.piWorkerHome ??
+          resolveLegacyBuiltinPiWorkerHome({
+            repoRoot: worker.repoRoot ?? resumeStore.repoRoot,
+            issueUrl: worker.issueUrl ?? resumeStore.issueUrl,
+            workerName: name,
+          })
+        : undefined;
       workerSessions.set(name, {
         ...worker,
+        ...(piWorkerHome ? { piWorkerHome } : {}),
         ...(worker.originAcpCwd || worker.acpCwd
           ? { originAcpCwd: worker.originAcpCwd ?? worker.acpCwd }
           : {}),
@@ -1047,6 +1060,9 @@ async function runConductorSessionWithStartupGuard(
   let commitWorkerSessionRecovery: (
     notification: import('../runtime/types.js').WorkerSessionRecoveredNotification,
   ) => Promise<void> = async () => { throw new Error('Resume store is not ready'); };
+  let commitWorkerSessionId: (
+    notification: import('../runtime/types.js').WorkerSessionAttachedNotification,
+  ) => Promise<void> = async () => { throw new Error('Resume store is not ready'); };
   let commitWorkerHandoffConfirmed: (name: string, sessionId: string) => Promise<void> =
     async () => { throw new Error('Resume store is not ready'); };
   let scheduleToolCallHistoryFlush = () => {};
@@ -1100,10 +1116,26 @@ async function runConductorSessionWithStartupGuard(
       options.defaultAcp,
       piAgentDir,
       workspaceSession?.slugKey,
+      workerSessions,
+      activeLocatedResumeStore?.resumeStore.repoRoot,
     );
   }
   const workerAcpFingerprints = new Map(
     workers.map((worker) => [worker.name, worker.acpFingerprint] as const),
+  );
+  const workerStorageHomes = new Map(
+    workers.flatMap((worker) => {
+      if (
+        worker.acpFingerprint?.preset !== 'pi' ||
+        worker.acpFingerprint.piRuntime !== 'builtin'
+      ) {
+        return [];
+      }
+      const home = worker.spawn?.env?.HOME;
+      return typeof home === 'string' && home
+        ? [[worker.name, home] as const]
+        : [];
+    }),
   );
   let teardownStarted = false;
   const workerWorktree =
@@ -1293,7 +1325,7 @@ async function runConductorSessionWithStartupGuard(
         });
         return;
       }
-      workerSessions.set(result.name, {
+      const updatedWorker: WorkerSessionResumeStore = {
         ...workerSessions.get(result.name),
         acpSessionId: result.acpSessionId,
         ...(workspaceSession && result.source === 'harness' && result.promptResult.stopReason === 'end_turn' && !attached?.session.resumed ? { workspacePromptVersion: WORKSPACE_WORKER_PROMPT_VERSION } : {}),
@@ -1307,7 +1339,11 @@ async function runConductorSessionWithStartupGuard(
         ...(workerAcpFingerprints.get(result.name)
           ? { acpSpawn: workerAcpFingerprints.get(result.name) }
           : {}),
-      });
+      };
+      const currentWorkerHome = workerStorageHomes.get(result.name);
+      if (currentWorkerHome) updatedWorker.piWorkerHome = currentWorkerHome;
+      else delete updatedWorker.piWorkerHome;
+      workerSessions.set(result.name, updatedWorker);
       eventQueue.enqueue({ type: 'worker.completed', result });
       scheduleSessionResumeStoreFlush();
     },
@@ -1337,6 +1373,8 @@ async function runConductorSessionWithStartupGuard(
         reason: notification.reason,
       });
     },
+    onWorkerSessionAttached: (notification) => commitWorkerSessionId(notification),
+    onWorkerSessionRestarted: (notification) => commitWorkerSessionId(notification),
     onWorkerHandoffConfirmed: (name, sessionId) => commitWorkerHandoffConfirmed(name, sessionId),
     onWorkerFailed: (failure) => {
       // Notifications are serialized by the inbox, preserving each worker's
@@ -1514,9 +1552,31 @@ async function runConductorSessionWithStartupGuard(
     getWorkerFailures: () => sessionLogger.workerFailures,
   });
   const recreateWorkerTools: import('./conductor-tool.js').ConductorToolSet = {
+    restart_worker: {
+      name: 'restart_worker',
+      description: 'Restart an idle or failed worker ACP process and strictly load its existing session, preserving conversation history. Processing, attaching, queued, sleeping, or workers without a confirmed session ID cannot be restarted. If strict load fails, retry restart_worker or choose recreate_worker only when losing the old conversation is acceptable.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          worker: { type: 'string', enum: activeProfile.workers.map((worker) => worker.name) },
+        },
+        required: ['worker'],
+      },
+      async execute(args) {
+        if (teardownStarted) throw new Error('Worker restart is unavailable during shutdown.');
+        const name = String(args.worker ?? '').trim();
+        const sessionId = await workerSession.runtime.restartWorker(name);
+        return {
+          content: [{
+            type: 'text',
+            text: `worker「${name}」を再起動し、既存 ACP session「${sessionId}」を読み込みました。会話履歴を引き継いでいます。`,
+          }],
+        };
+      },
+    },
     recreate_worker: {
       name: 'recreate_worker',
-      description: 'Explicitly create a new worker session. The worker must be idle or failed. The prior conversation is not restored; inspect interrupted operations before issuing new work.',
+      description: 'Explicitly create a new worker session when its prior conversation cannot or should not be restored. The worker must be idle or failed. History is not preserved; inspect interrupted operations before issuing new work.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -1531,7 +1591,7 @@ async function runConductorSessionWithStartupGuard(
         if (!previous) throw new Error(`No saved worker session for "${name}".`);
         const handoff = await workerSession.runtime.recreateWorker(name, previous.acpSessionId);
         return {
-          content: [{ type: 'text', text: `Worker "${name}" was recreated. Its old conversation is unavailable; inspect interrupted work before sending instructions.\nWorker handoff:\n${handoff || '(no response)'}` }],
+          content: [{ type: 'text', text: `worker「${name}」を新しい session として再作成しました。旧会話は引き継がれていません。指示を送る前に、中断した作業と副作用を確認してください。\n引き継ぎ報告:\n${handoff || '(報告なし)'}` }],
         };
       },
     },
@@ -2003,6 +2063,56 @@ async function runConductorSessionWithStartupGuard(
       lease,
     );
   };
+  commitWorkerSessionId = (notification) =>
+    enqueueSessionResumeStoreWrite(async (lease) => {
+      if (terminalResumeStoreFinalFlushQueued || teardownStarted || recoverySaveUncertain) {
+        throw new Error('Cannot save a worker session ID during shutdown or an uncertain save.');
+      }
+      const previous = workerSessions.get(notification.name);
+      if (previous && previous.acpSessionId !== notification.acpSessionId) {
+        throw new Error(
+          `Worker "${notification.name}" session changed before its ID could be saved; inspect the saved state before retrying.`,
+        );
+      }
+      const origin = workerSessionOrigins.get(notification.name) ?? {
+        repoRoot: options.repoRoot,
+        issueUrl: options.issueUrl,
+      };
+      const fingerprint = workerAcpFingerprints.get(notification.name);
+      const replacement: WorkerSessionResumeStore = {
+        ...previous,
+        acpSessionId: notification.acpSessionId,
+        acpCwd: notification.acpCwd,
+        ...(!previous?.originAcpCwd
+          ? { originAcpCwd: notification.acpCwd }
+          : {}),
+        ...(!previous?.originAcpSpawn && fingerprint
+          ? { originAcpSpawn: historySpawnFingerprint(fingerprint) }
+          : {}),
+        ...(fingerprint ? { acpSpawn: fingerprint } : {}),
+        ...origin,
+      };
+      const snapshot = createSessionResumeStore(openQuestions.snapshot());
+      snapshot.workers[notification.name] = replacement;
+      try {
+        await saveSessionResumeStore(activeResumeStorePath!, snapshot, ownershipLifecycle.get(), lease);
+      } catch (error) {
+        // A first lazy attach has no previously durable ID to fall back to.
+        // Keep later flushes from overwriting a possibly renamed snapshot.
+        if (!previous) {
+          recoverySaveUncertain = true;
+          shutdownIntentController.abort();
+          operatorTerminationController.abort();
+          workerSession.runtime.cancelAllActivePrompts();
+        }
+        throw new Error(
+          `Worker "${notification.name}" ACP session ID could not be saved; the previous saved session ID was retained.`,
+          { cause: error },
+        );
+      }
+      workerSessions.set(notification.name, replacement);
+      workerSessionOrigins.set(notification.name, origin);
+    });
   commitWorkerSessionRecovery = (notification) =>
     enqueueSessionResumeStoreWrite(async (lease) => {
       if (terminalResumeStoreFinalFlushQueued || teardownStarted) {
@@ -2019,6 +2129,9 @@ async function runConductorSessionWithStartupGuard(
       const replacement: WorkerSessionResumeStore = {
         acpSessionId: notification.acpSessionId,
         acpCwd: notification.acpCwd,
+        ...(workerStorageHomes.get(notification.name)
+          ? { piWorkerHome: workerStorageHomes.get(notification.name) }
+          : {}),
         handoffPending: true,
         ...(workspaceSession ? { workspacePromptVersion: WORKSPACE_WORKER_PROMPT_VERSION } : {}),
         originAcpCwd: notification.acpCwd,
@@ -2036,6 +2149,9 @@ async function runConductorSessionWithStartupGuard(
             acpSessionId: previous.acpSessionId,
             ...(previous.originAcpCwd ?? previous.acpCwd
               ? { acpCwd: previous.originAcpCwd ?? previous.acpCwd }
+              : {}),
+            ...(previous.piWorkerHome
+              ? { piWorkerHome: previous.piWorkerHome }
               : {}),
             ...(previous.originAcpSpawn ?? previous.acpSpawn
               ? { acpSpawn: historySpawnFingerprint((previous.originAcpSpawn ?? previous.acpSpawn)!) }
@@ -3315,7 +3431,7 @@ async function runConductorSessionWithStartupGuard(
         for (const attached of workerSession.runtime.listAttachedForResume()) {
           const savedWorker = workerSessions.get(attached.name);
           if (savedWorker && savedWorker.acpSessionId !== attached.session.sessionId) continue;
-          workerSessions.set(attached.name, {
+          const updatedWorker: WorkerSessionResumeStore = {
             ...workerSessions.get(attached.name),
             acpSessionId: attached.session.sessionId,
             acpCwd: attached.session.acpCwd,
@@ -3326,7 +3442,11 @@ async function runConductorSessionWithStartupGuard(
             ...(workerAcpFingerprints.get(attached.name)
               ? { acpSpawn: workerAcpFingerprints.get(attached.name) }
               : {}),
-          });
+          };
+          const currentWorkerHome = workerStorageHomes.get(attached.name);
+          if (currentWorkerHome) updatedWorker.piWorkerHome = currentWorkerHome;
+          else delete updatedWorker.piWorkerHome;
+          workerSessions.set(attached.name, updatedWorker);
         }
       }
       const rejectedPendingPermissions = rejectAllPendingPermissions(
@@ -3583,6 +3703,8 @@ function finalizeSessionWorkerSpecs(
   defaultAcp?: DefaultAcpResolutionOptions,
   piAgentDir?: string,
   workspaceSlugKey?: string,
+  savedWorkers?: ReadonlyMap<string, WorkerSessionResumeStore>,
+  savedRepoRoot?: string,
 ): void {
   const resolvedPiAgentDir =
     piAgentDir ??
@@ -3597,10 +3719,34 @@ function finalizeSessionWorkerSpecs(
       defaultOptions: defaultAcp,
       modelTag: worker.modelTag,
     });
+    const savedWorker = savedWorkers?.get(worker.name);
+    const resumeBuiltinPi =
+      resolved.preset === 'pi' &&
+      resolved.piRuntime === 'builtin' &&
+      savedWorker?.acpSpawn?.preset === 'pi' &&
+      savedWorker.acpSpawn.piRuntime === 'builtin';
+    if (resumeBuiltinPi && !savedWorker.acpCwd) {
+      throw new Error(
+        `Cannot safely resume builtin Pi worker "${worker.name}" because its saved ACP cwd is missing.`,
+      );
+    }
     const sessionSpawn =
       resolved.piRuntime === 'builtin'
         ? configurePiWorkerRuntime(resolved, {
             repoRoot,
+            ...(resumeBuiltinPi
+              ? {
+                  storageRepoRoot:
+                    savedWorker.repoRoot ?? savedRepoRoot ?? repoRoot,
+                  ...(savedWorker.piWorkerHome
+                    ? { workerHome: savedWorker.piWorkerHome }
+                    : {}),
+                  resumeSessionId: savedWorker.acpSessionId,
+                  ...(savedWorker.acpCwd
+                    ? { resumeCwd: savedWorker.acpCwd }
+                    : {}),
+                }
+              : {}),
             workerName: worker.name,
             ...(workspaceSlugKey
               ? { workspaceSlugKey }
@@ -3614,6 +3760,22 @@ function finalizeSessionWorkerSpecs(
     worker.spawn = resolvedAcpSpawnToOptions(finalized, worker.spawn);
     worker.acpFingerprint = acpSpawnFingerprint(finalized);
   }
+}
+
+function resolveLegacyBuiltinPiWorkerHome(input: {
+  repoRoot: string;
+  issueUrl: string;
+  workerName: string;
+}): string {
+  const paths = resolveEnsemblePaths({ repoRoot: input.repoRoot });
+  const workspace = parseWorkspaceSessionUrl(input.issueUrl);
+  if (workspace) {
+    return paths.piWorkspaceWorkerDir(input.workerName, workspace.slugKey);
+  }
+  return paths.piWorkerDir(
+    input.workerName,
+    parseIssueUrl(input.issueUrl).number,
+  );
 }
 
 function configureOneTimeSecretWorkerEnvironment(input: {

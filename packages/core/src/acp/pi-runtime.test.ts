@@ -210,6 +210,76 @@ describe('configurePiWorkerRuntime', () => {
     );
   });
 
+  it('roots new Issue and workspace storage under the effective Pi agentDir', async () => {
+    const { repoRoot } = await setupHome();
+    const agentDir = join(tempRoot, 'custom-pi-agent');
+    const issue = configurePiWorkerRuntime(builtinSpawn(), {
+      repoRoot,
+      issueNumber: 915,
+      workerName: 'implementer',
+      agentDir,
+    });
+    const workspace = configurePiWorkerRuntime(builtinSpawn(), {
+      repoRoot,
+      workspaceSlugKey: 'named-workspace',
+      workerName: 'reviewer',
+      agentDir,
+    });
+    const customPaths = resolveEnsemblePaths({ repoRoot, piAgentDir: agentDir });
+    const issueHome = customPaths.piWorkerDir('implementer', 915);
+    const workspaceHome = customPaths.piWorkspaceWorkerDir(
+      'reviewer',
+      'named-workspace',
+    );
+
+    expect(issue.env).toMatchObject({
+      HOME: issueHome,
+      USERPROFILE: issueHome,
+      PI_CODING_AGENT_DIR: agentDir,
+      PI_CODING_AGENT_SESSION_DIR: join(issueHome, 'sessions'),
+      ENSEMBLE_PI_WORKER_STORAGE_ROOT: customPaths.piWorkerRoot,
+      ENSEMBLE_PI_WORKER_STORAGE_PARENT: dirname(customPaths.piWorkerRoot),
+    });
+    expect(issue.env).not.toHaveProperty('ENSEMBLE_PI_LEGACY_WORKER_HOME');
+    expect(workspace.env).toMatchObject({
+      HOME: workspaceHome,
+      USERPROFILE: workspaceHome,
+      PI_CODING_AGENT_DIR: agentDir,
+      PI_CODING_AGENT_SESSION_DIR: join(workspaceHome, 'sessions'),
+      ENSEMBLE_PI_WORKER_STORAGE_ROOT: customPaths.piWorkerRoot,
+      ENSEMBLE_PI_WORKER_STORAGE_PARENT: dirname(customPaths.piWorkerRoot),
+    });
+  });
+
+  it('keeps a resumed session on its saved home after the config root changes', async () => {
+    const { repoRoot } = await setupHome();
+    const savedHome = resolveEnsemblePaths({ repoRoot }).piWorkerDir(
+      'implementer',
+      915,
+    );
+    const configured = configurePiWorkerRuntime(builtinSpawn(), {
+      repoRoot,
+      storageRepoRoot: repoRoot,
+      issueNumber: 915,
+      workerName: 'implementer',
+      agentDir: join(tempRoot, 'new-agent-dir'),
+      workerHome: savedHome,
+      resumeSessionId: 'saved-session',
+      resumeCwd: '/tmp/saved-worker-cwd',
+    });
+
+    expect(configured.env).toMatchObject({
+      HOME: savedHome,
+      USERPROFILE: savedHome,
+      PI_CODING_AGENT_SESSION_DIR: join(savedHome, 'sessions'),
+      PI_CODING_AGENT_DIR: join(tempRoot, 'new-agent-dir'),
+      ENSEMBLE_PI_RESUME_SESSION_ID: 'saved-session',
+      ENSEMBLE_PI_RESUME_CWD: '/tmp/saved-worker-cwd',
+      ENSEMBLE_PI_WORKER_STORAGE_ROOT:
+        resolveEnsemblePaths({ repoRoot }).piWorkerRoot,
+    });
+  });
+
   it('uses explicit acp.env home values for the Pi CLI process only', async () => {
     const { repoRoot } = await setupHome();
     const configured = configurePiWorkerRuntime(

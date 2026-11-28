@@ -24,23 +24,45 @@ async function main(): Promise<void> {
     process.env.ENSEMBLE_PI_LEGACY_WORKER_HOME || undefined;
   const sessionDir =
     process.env.PI_CODING_AGENT_SESSION_DIR ?? join(workerHome, 'sessions');
-  const workerStorageRoot = dirname(dirname(workerHome));
-  preparePiAcpSessionStorage({
-    workerStorageParent: dirname(workerStorageRoot),
+  const workerStorageRoot =
+    process.env.ENSEMBLE_PI_WORKER_STORAGE_ROOT ??
+    dirname(dirname(workerHome));
+  const workerStorageParent =
+    process.env.ENSEMBLE_PI_WORKER_STORAGE_PARENT ??
+    dirname(workerStorageRoot);
+  const resumeSessionId =
+    process.env.ENSEMBLE_PI_RESUME_SESSION_ID || undefined;
+  const resumeCwd = process.env.ENSEMBLE_PI_RESUME_CWD || undefined;
+  if (resumeSessionId && !resumeCwd) {
+    throw new Error('saved builtin Pi session has no cwd for map validation');
+  }
+  if (!resumeSessionId && resumeCwd) {
+    throw new Error('saved builtin Pi cwd has no session ID for map validation');
+  }
+
+  const releaseStorage = await preparePiAcpSessionStorage({
+    workerStorageParent,
     workerStorageRoot,
     workerHome,
     sessionsDir: sessionDir,
     ...(legacyWorkerHome ? { legacyWorkerHome } : {}),
     mapPaths: resolvePiAcpSessionMapPaths(workerHome, legacyWorkerHome),
-  });
-
-  ensureBuiltinPiConfig({
-    ...(process.env.PI_CODING_AGENT_DIR
-      ? { agentDir: process.env.PI_CODING_AGENT_DIR }
+    ...(resumeSessionId && resumeCwd
+      ? { resumeSession: { sessionId: resumeSessionId, cwd: resumeCwd } }
       : {}),
   });
 
-  await import(pathToFileURL(resolveBuiltinPiAcpEntrypointPath()).href);
+  try {
+    ensureBuiltinPiConfig({
+      ...(process.env.PI_CODING_AGENT_DIR
+        ? { agentDir: process.env.PI_CODING_AGENT_DIR }
+        : {}),
+    });
+
+    await import(pathToFileURL(resolveBuiltinPiAcpEntrypointPath()).href);
+  } finally {
+    await releaseStorage();
+  }
 }
 
 try {

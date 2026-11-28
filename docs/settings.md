@@ -140,7 +140,7 @@ Pi の `!command` は conductor process の shell / OS 権限で実行され、w
 | conductor reasoning | `conductor.reasoning` | `CONDUCTOR_REASONING` | `ensemble issue --reasoning` | backend 既定（明示値なし） | A |
 | conductor 詳細 telemetry | `conductor.verbose` | `CONDUCTOR_VERBOSE` | `--verbose` | `false` | A |
 | conductor backend | `conductor.backend` | — | — | `pi` | profile > config > default |
-| Pi user resource root | `conductor.pi.agentDir` | `PI_CODING_AGENT_DIR` | — | `~/.ensemble/pi` | config > environment > default |
+| Pi user resource root | `conductor.pi.agentDir` | `PI_CODING_AGENT_DIR` | — | `~/.ensemble/pi` | config > environment > default。builtin worker の新規 storage root もこの root。resume は SessionResumeStore の保存 root を使う |
 | Pi project resource root | `conductor.pi.projectDir` | — | — | `<repoRoot>/.ensemble/pi` | config |
 | worker ACP preset（全 worker 共通） | `acp.defaultPreset` | `ENSEMBLE_DEFAULT_ACP_CLI` | `--default-acp-cli` 等 | `cursor` | C |
 | worker ACP spawn env | `acp.env` | — | — | — | 選択された user config → project deep merge |
@@ -169,10 +169,12 @@ operator-agent は既定で `~/.ensemble/operator-agents.config.yaml` の profil
 | model | `ENSEMBLE_OPERATOR_AGENT_MODEL` | — | env > profile > `common.conductor` > `default` |
 | reasoning | `ENSEMBLE_OPERATOR_AGENT_REASONING` | — | env > profile > `common.conductor` > backend default |
 | MCP server 選択 | — | — | `profiles.<name>.mcp.servers` > `common.mcp.servers`。空配列は無効化 |
-| Pi 共通 resource root | `PI_CODING_AGENT_DIR` | — | `common.pi.agentDir` > env > `~/.ensemble/pi` |
+| Pi 共通 resource root | `PI_CODING_AGENT_DIR` | — | `common.pi.agentDir` > env > `~/.ensemble/pi`。operator 自身の Pi resources 用 |
 | Pi profile resource root | — | — | `profiles.<name>.pi.projectDir` > `<profile workspace>/pi` |
 | session scope | — | `--repo-filter`（repeatable） | profile `include` との積集合。filter 同士は OR |
 | conversation | — | `--resume <id>` / `--new` | global record を明示再開・新規作成。暗黙選択は現 config のみ |
+
+operator-agent の `common.pi.agentDir` は operator の Pi resources を解決します。builtin worker の HOME・session map・transcript と `list_worker_messages` の探索先は、Issue session の SessionResumeStore に保存した `piWorkerHome` を使うため、この operator 設定からは独立しています。builtin worker の保存先・旧 session の扱いは [config.md § Pi worker runtime](config.md#pi-worker-runtime) を参照してください。
 
 ## 一覧 — TUI / オペレータ UI
 

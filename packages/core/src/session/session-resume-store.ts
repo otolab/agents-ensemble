@@ -1,7 +1,13 @@
 import type { Dirent } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { chmod, mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import {
+  dirname,
+  isAbsolute,
+  join,
+  normalize,
+  resolve,
+} from 'node:path';
 import type { OpenQuestion } from '../escalation/open-question.js';
 import type { GitHubMonitorCursor } from '../github/github-monitor-cursor.js';
 import {
@@ -94,6 +100,8 @@ export interface WorkerSessionResumeStore {
   acpSessionId: string;
   /** ACP `session/new` / `session/load` に渡した cwd（resume 検証用）。 */
   acpCwd?: string;
+  /** Builtin Pi の当該 session が使う worker HOME。履歴 root と resume root を固定する。 */
+  piWorkerHome?: string;
   /** resume 時の ACP spawn fingerprint（env は canonical digest のみ保存）。 */
   acpSpawn?: AcpSpawnFingerprint;
   originAcpCwd?: string;
@@ -110,6 +118,8 @@ export interface WorkerSessionResumeStore {
 export interface WorkerSessionGeneration {
   acpSessionId: string;
   acpCwd?: string;
+  /** 旧世代の builtin Pi worker HOME。未記録の旧 Store は既定 root を使う。 */
+  piWorkerHome?: string;
   acpSpawn?: AcpSpawnFingerprint;
   repoRoot: string;
   issueUrl: string;
@@ -133,6 +143,10 @@ function parseWorkerSessionGenerations(value: unknown, name: string): WorkerSess
       !['session_load_failed', 'prompt_history_unreadable', 'explicit', 'workspace_prompt_migration'].includes(String(generation.reason))
     ) throw new Error(`Invalid worker session generation: ${name}`);
     const acpSpawn = parseAcpSpawnFingerprint(generation.acpSpawn, name);
+    const piWorkerHome = parseOptionalAbsolutePath(
+      generation.piWorkerHome,
+      `workers.${name}.generations.piWorkerHome`,
+    );
     return {
       acpSessionId: generation.acpSessionId,
       nextSessionId: generation.nextSessionId,
@@ -141,6 +155,7 @@ function parseWorkerSessionGenerations(value: unknown, name: string): WorkerSess
       replacedAt: generation.replacedAt,
       reason: generation.reason as WorkerSessionGeneration['reason'],
       ...(typeof generation.acpCwd === 'string' ? { acpCwd: generation.acpCwd } : {}),
+      ...(piWorkerHome ? { piWorkerHome } : {}),
       ...(acpSpawn ? { acpSpawn } : {}),
     };
   });
@@ -1381,10 +1396,15 @@ export function parseSessionResumeStore(value: unknown): SessionResumeStore {
         (record.version !== WORKSPACE_RENAME_SESSION_RESUME_STORE_VERSION || typeof worker.recreateRequired !== 'boolean')) {
       throw new Error(`Invalid session resume store worker recreateRequired: ${name}`);
     }
+    const piWorkerHome = parseOptionalAbsolutePath(
+      worker.piWorkerHome,
+      `workers.${name}.piWorkerHome`,
+    );
     workers[name] = {
       ...(typeof worker.workspacePromptVersion === 'number' ? { workspacePromptVersion: worker.workspacePromptVersion } : {}),
       acpSessionId: worker.acpSessionId,
       ...(typeof worker.acpCwd === 'string' ? { acpCwd: worker.acpCwd } : {}),
+      ...(piWorkerHome ? { piWorkerHome } : {}),
       ...(typeof worker.repoRoot === 'string' ? { repoRoot: worker.repoRoot } : {}),
       ...(typeof worker.issueUrl === 'string' ? { issueUrl: worker.issueUrl } : {}),
       ...(worker.handoffPending === true ? { handoffPending: true } : {}),
@@ -1457,6 +1477,22 @@ export function parseSessionResumeStore(value: unknown): SessionResumeStore {
       : {}),
     updatedAt,
   };
+}
+
+function parseOptionalAbsolutePath(
+  value: unknown,
+  field: string,
+): string | undefined {
+  if (value === undefined) return undefined;
+  if (
+    typeof value !== 'string' ||
+    value.trim() === '' ||
+    !isAbsolute(value) ||
+    normalize(resolve(value)) !== value
+  ) {
+    throw new Error(`Invalid session resume store path: ${field}`);
+  }
+  return value;
 }
 
 function parseEnsembleConfigDigestScheme(

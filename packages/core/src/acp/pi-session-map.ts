@@ -1,15 +1,25 @@
+import { randomUUID } from 'node:crypto';
 import {
-  constants,
   chmodSync,
-  copyFileSync,
+  closeSync,
   existsSync,
+  fsyncSync,
+  linkSync,
   lstatSync,
   mkdirSync,
+  openSync,
+  readFileSync,
+  readSync,
   readdirSync,
+  realpathSync,
+  unlinkSync,
+  writeFileSync,
 } from 'node:fs';
 import { execFileSync } from 'node:child_process';
+import { lock } from 'proper-lockfile';
 import {
   dirname,
+  extname,
   isAbsolute,
   join,
   relative,
@@ -121,6 +131,10 @@ export interface PiAcpSessionMapPaths {
   legacyPath: string;
   /** Previous shared worker map locations, retained for migration and reading. */
   compatibilityPaths: string[];
+  compatibilitySources: Array<{
+    path: string;
+    workerHome: string;
+  }>;
 }
 
 export function resolvePiAcpSessionMapPaths(
@@ -129,14 +143,25 @@ export function resolvePiAcpSessionMapPaths(
 ): PiAcpSessionMapPaths {
   const upstreamPath = join(homeDir, '.pi', 'pi-acp', 'session-map.json');
   const legacyPath = join(homeDir, 'session-map.json');
-  const compatibilityPaths = [legacyPath];
+  const compatibilitySources = [{ path: legacyPath, workerHome: homeDir }];
   if (previousWorkerHome) {
-    compatibilityPaths.push(
-      join(previousWorkerHome, '.pi', 'pi-acp', 'session-map.json'),
-      join(previousWorkerHome, 'session-map.json'),
+    compatibilitySources.push(
+      {
+        path: join(previousWorkerHome, '.pi', 'pi-acp', 'session-map.json'),
+        workerHome: previousWorkerHome,
+      },
+      {
+        path: join(previousWorkerHome, 'session-map.json'),
+        workerHome: previousWorkerHome,
+      },
     );
   }
-  return { upstreamPath, legacyPath, compatibilityPaths };
+  return {
+    upstreamPath,
+    legacyPath,
+    compatibilityPaths: compatibilitySources.map(({ path }) => path),
+    compatibilitySources,
+  };
 }
 
 /** New files created by upstream Pi inherit this process umask on POSIX. */
@@ -150,7 +175,7 @@ export function setPrivatePiSessionStorageUmask(
  * Prepare builtin Pi's issue-scoped storage, migrate an older shared map, and
  * restrict existing map/transcript files before upstream code opens them.
  */
-export function preparePiAcpSessionStorage(input: {
+export async function preparePiAcpSessionStorage(input: {
   /** Shared parent that contains repository-keyed worker storage roots. */
   workerStorageParent: string;
   /** Repository-scoped root beneath workerStorageParent. */
@@ -159,7 +184,11 @@ export function preparePiAcpSessionStorage(input: {
   sessionsDir: string;
   legacyWorkerHome?: string;
   mapPaths: PiAcpSessionMapPaths;
-}, security: PiAcpStorageSecurityOptions = {}): void {
+  resumeSession?: {
+    sessionId: string;
+    cwd: string;
+  };
+}, security: PiAcpStorageSecurityOptions = {}): Promise<() => Promise<void>> {
   const platform = security.platform ?? process.platform;
   const applyWindowsOwnerOnlyAcl =
     security.applyWindowsOwnerOnlyAcl ?? setWindowsOwnerOnlyAcl;
@@ -174,39 +203,79 @@ export function preparePiAcpSessionStorage(input: {
   ensureDirectory(input.sessionsDir, platform);
   ensureDirectory(dirname(input.mapPaths.upstreamPath), platform);
 
-  if (platform !== 'win32') {
-    secureExistingTree(input.workerStorageRoot, platform);
-    if (
-      input.legacyWorkerHome &&
-      !isWithin(input.workerStorageRoot, input.legacyWorkerHome)
-    ) {
-      secureExistingTree(input.legacyWorkerHome, platform);
+  // One adapter process owns a worker map at a time. Different Issue and
+  // workspace homes remain independent; a second run for the same home fails
+  // closed instead of racing upstream's whole-map read-modify-write.
+  const releaseLock = await lock(input.workerHome, {
+    retries: 0,
+    stale: 60_000,
+    update: 20_000,
+  });
+  try {
+    if (platform !== 'win32') {
+      secureExistingTree(input.workerStorageRoot, platform);
+      if (
+        input.legacyWorkerHome &&
+        !isWithin(input.workerStorageRoot, input.legacyWorkerHome)
+      ) {
+        secureExistingTree(input.legacyWorkerHome, platform);
+      }
+    } else {
+      secureExistingTree(
+        input.workerStorageRoot,
+        platform,
+        applyWindowsOwnerOnlyAcl,
+      );
+      if (
+        input.legacyWorkerHome &&
+        !isWithin(input.workerStorageRoot, input.legacyWorkerHome)
+      ) {
+        secureExistingTree(
+          input.legacyWorkerHome,
+          platform,
+          applyWindowsOwnerOnlyAcl,
+        );
+      }
     }
-  } else {
+
+    migrateLegacyPiAcpSessionMap(input.mapPaths, input.resumeSession);
+    if (input.resumeSession) {
+      const allowedHomes = [
+        input.workerHome,
+        ...input.mapPaths.compatibilitySources.map(
+          ({ workerHome }) => workerHome,
+        ),
+      ];
+      if (
+        !validatePiAcpSessionMap(
+          input.mapPaths.upstreamPath,
+          input.resumeSession,
+          allowedHomes,
+        )
+      ) {
+        throw new Error(
+          '[acp] saved builtin Pi session is not present with a matching identity in its session map.',
+        );
+      }
+    }
+
     secureExistingTree(
       input.workerStorageRoot,
       platform,
       applyWindowsOwnerOnlyAcl,
     );
-    if (
-      input.legacyWorkerHome &&
-      !isWithin(input.workerStorageRoot, input.legacyWorkerHome)
-    ) {
-      secureExistingTree(
-        input.legacyWorkerHome,
-        platform,
-        applyWindowsOwnerOnlyAcl,
+    return releaseLock;
+  } catch (error) {
+    try {
+      await releaseLock();
+    } catch (releaseError) {
+      throw new AggregateError(
+        [error, releaseError],
+        '[acp] builtin Pi storage preparation failed and its lock could not be released.',
       );
     }
+    throw error;
   }
-
-  migrateLegacyPiAcpSessionMap(input.mapPaths);
-
-  secureExistingTree(
-    input.workerStorageRoot,
-    platform,
-    applyWindowsOwnerOnlyAcl,
-  );
 }
 
 /**
@@ -215,25 +284,54 @@ export function preparePiAcpSessionStorage(input: {
  */
 export function migrateLegacyPiAcpSessionMap(
   paths: PiAcpSessionMapPaths,
+  expectedSession?: { sessionId: string; cwd: string },
 ): boolean {
   if (existsSync(paths.upstreamPath)) return false;
 
-  const sourcePath = paths.compatibilityPaths.find(existsSync);
-  if (!sourcePath) return false;
+  if (!expectedSession) return false;
+  const source = paths.compatibilitySources.find(({ path }) => existsSync(path));
+  if (!source) return false;
+
+  const sourceStats = lstatSync(source.path);
+  if (sourceStats.isSymbolicLink() || !sourceStats.isFile()) {
+    throw new Error(
+      '[acp] legacy builtin Pi session map must be a regular file.',
+    );
+  }
+  const sessionEntry = readValidatedMapEntry(
+    source.path,
+    expectedSession,
+    [source.workerHome],
+  );
+  if (!sessionEntry) return false;
 
   mkdirSync(dirname(paths.upstreamPath), {
     recursive: true,
     mode: OWNER_ONLY_DIRECTORY_MODE,
   });
+  const temporaryPath = `${paths.upstreamPath}.${randomUUID()}.tmp`;
   try {
-    copyFileSync(
-      sourcePath,
-      paths.upstreamPath,
-      constants.COPYFILE_EXCL,
-    );
-    if (process.platform !== 'win32') {
-      chmodSync(paths.upstreamPath, OWNER_ONLY_FILE_MODE);
+    const descriptor = openSync(temporaryPath, 'wx', OWNER_ONLY_FILE_MODE);
+    try {
+      writeFileSync(
+        descriptor,
+        `${JSON.stringify({
+          version: 1,
+          sessions: { [expectedSession.sessionId]: sessionEntry },
+        })}\n`,
+        'utf8',
+      );
+      fsyncSync(descriptor);
+    } finally {
+      closeSync(descriptor);
     }
+    if (process.platform !== 'win32') {
+      chmodSync(temporaryPath, OWNER_ONLY_FILE_MODE);
+    }
+    // `link` publishes the completed file atomically and refuses to replace a
+    // map another process already created. The source and old transcript stay
+    // untouched, and an interrupted temp write is never authoritative.
+    linkSync(temporaryPath, paths.upstreamPath);
     return true;
   } catch (error) {
     if (
@@ -245,7 +343,128 @@ export function migrateLegacyPiAcpSessionMap(
       return false;
     }
     throw error;
+  } finally {
+    try {
+      unlinkSync(temporaryPath);
+    } catch (error) {
+      if (!isEnoent(error)) throw error;
+    }
   }
+}
+
+/** Validate exact session identity and ensure the transcript remains in a known worker home. */
+export function validatePiAcpSessionMap(
+  mapPath: string,
+  expectedSession: { sessionId: string; cwd: string },
+  allowedWorkerHomes: readonly string[],
+): boolean {
+  return Boolean(
+    readValidatedMapEntry(mapPath, expectedSession, allowedWorkerHomes),
+  );
+}
+
+function readValidatedMapEntry(
+  mapPath: string,
+  expectedSession: { sessionId: string; cwd: string },
+  allowedWorkerHomes: readonly string[],
+): Record<string, unknown> | undefined {
+  let stats;
+  try {
+    stats = lstatSync(mapPath);
+  } catch {
+    return undefined;
+  }
+  if (stats.isSymbolicLink() || !stats.isFile()) return undefined;
+
+  let value: unknown;
+  try {
+    value = JSON.parse(readFileSync(mapPath, 'utf8'));
+  } catch {
+    return undefined;
+  }
+  if (
+    !isRecord(value) ||
+    value.version !== 1 ||
+    !isRecord(value.sessions)
+  ) {
+    return undefined;
+  }
+  const entry = value.sessions[expectedSession.sessionId];
+  if (
+    !isRecord(entry) ||
+    entry.sessionId !== expectedSession.sessionId ||
+    typeof entry.cwd !== 'string' ||
+    !isAbsolute(entry.cwd) ||
+    resolve(entry.cwd) !== resolve(expectedSession.cwd) ||
+    typeof entry.sessionFile !== 'string' ||
+    !isAbsolute(entry.sessionFile) ||
+    extname(entry.sessionFile).toLowerCase() !== '.jsonl'
+  ) {
+    return undefined;
+  }
+
+  let transcriptStats;
+  let transcriptRealPath: string;
+  try {
+    transcriptStats = lstatSync(entry.sessionFile);
+    transcriptRealPath = realpathSync(entry.sessionFile);
+  } catch {
+    return undefined;
+  }
+  if (transcriptStats.isSymbolicLink() || !transcriptStats.isFile()) {
+    return undefined;
+  }
+  const allowedRealHomes = allowedWorkerHomes.flatMap((home) => {
+    try {
+      return [realpathSync(home)];
+    } catch {
+      return [];
+    }
+  });
+  if (!allowedRealHomes.some((home) => isWithin(home, transcriptRealPath))) {
+    return undefined;
+  }
+
+  const header = readPiTranscriptHeader(entry.sessionFile);
+  if (
+    !header ||
+    header.id !== expectedSession.sessionId ||
+    !isAbsolute(header.cwd) ||
+    resolve(header.cwd) !== resolve(expectedSession.cwd)
+  ) {
+    return undefined;
+  }
+  return entry;
+}
+
+function readPiTranscriptHeader(
+  transcriptPath: string,
+): { id: string; cwd: string } | undefined {
+  const descriptor = openSync(transcriptPath, 'r');
+  try {
+    const buffer = Buffer.alloc(16 * 1024);
+    const bytesRead = readSync(descriptor, buffer, 0, buffer.length, 0);
+    const lineEnd = buffer.subarray(0, bytesRead).indexOf(0x0a);
+    if (lineEnd < 0) return undefined;
+    const value = JSON.parse(buffer.toString('utf8', 0, lineEnd)) as unknown;
+    if (
+      !isRecord(value) ||
+      value.type !== 'session' ||
+      typeof value.id !== 'string' ||
+      typeof value.cwd !== 'string'
+    ) {
+      return undefined;
+    }
+    return { id: value.id, cwd: value.cwd };
+  } catch {
+    return undefined;
+  } finally {
+    closeSync(descriptor);
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value));
 }
 
 function ensureDirectory(path: string, platform: NodeJS.Platform): void {

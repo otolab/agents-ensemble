@@ -676,9 +676,44 @@ describe('worker session history', () => {
     );
   });
 
+  it('reads custom-root Issue history from the root saved with the session', async () => {
+    const agentDir = join(tempRoot, 'configured-pi-root');
+    const transcriptPath = await writePiAcpSessionMap({
+      runtime: 'builtin',
+      agentDir,
+    });
+    vi.stubEnv('PI_CODING_AGENT_DIR', join(tempRoot, 'changed-current-root'));
+
+    const result = await readHistory({ includeSourceFiles: true });
+
+    expect(result).toMatchObject({
+      status: 'supported',
+      messages: expect.arrayContaining([
+        expect.objectContaining({ text: 'Pi ACP fixture user message.' }),
+      ]),
+      sourceFiles: [transcriptPath],
+    });
+    expect(transcriptPath).toBe(
+      join(
+        resolveEnsemblePaths({ repoRoot, piAgentDir: agentDir })
+          .piWorkerSessionsDir(WORKER_NAME, ISSUE_NUMBER),
+        'pi-acp-worker-session.jsonl',
+      ),
+    );
+  });
+
   it('reads builtin Pi transcripts from workspace scoped storage', async () => {
     const issueUrl = 'workspace://test-workspace';
-    const paths = resolveEnsemblePaths({ repoRoot, userEnsembleRoot: userRoot });
+    const agentDir = join(tempRoot, 'workspace-pi-root');
+    const paths = resolveEnsemblePaths({
+      repoRoot,
+      userEnsembleRoot: userRoot,
+      piAgentDir: agentDir,
+    });
+    const workerHome = paths.piWorkspaceWorkerDir(
+      WORKER_NAME,
+      'test-workspace',
+    );
     const transcriptPath = join(
       paths.piWorkspaceWorkerSessionsDir(WORKER_NAME, 'test-workspace'),
       'session.jsonl',
@@ -713,6 +748,7 @@ describe('worker session history', () => {
         [WORKER_NAME]: {
           acpSessionId: ACP_SESSION_ID,
           acpCwd: ACP_CWD,
+          piWorkerHome: workerHome,
           acpSpawn: { preset: 'pi', command: 'pi-acp', args: [], piRuntime: 'builtin' },
         },
       },
@@ -736,6 +772,7 @@ describe('worker session history', () => {
       generations: [{
         acpSessionId: current.acpSessionId,
         acpCwd: current.acpCwd,
+        piWorkerHome: current.piWorkerHome,
         acpSpawn: current.acpSpawn,
         repoRoot, issueUrl, replacedAt: Date.now(),
         reason: 'explicit', nextSessionId: 'workspace-new',
@@ -936,6 +973,71 @@ describe('worker session history', () => {
         'pi-acp-worker-session.jsonl',
       ),
     );
+  });
+
+  it('does not fall back to an older map when the selected map lacks the session', async () => {
+    await writePiAcpSessionMap({ runtime: 'builtin' });
+    const paths = resolveEnsemblePaths({ repoRoot });
+    const mapPath = paths.piWorkerSessionMapPath(WORKER_NAME, ISSUE_NUMBER);
+    const legacyMapPath = join(
+      paths.piWorkerDir(WORKER_NAME, ISSUE_NUMBER),
+      'session-map.json',
+    );
+    await writeFile(mapPath, JSON.stringify({ version: 1, sessions: {} }));
+    await mkdir(dirname(legacyMapPath), { recursive: true });
+    await writeFile(
+      legacyMapPath,
+      JSON.stringify({
+        version: 1,
+        sessions: {
+          [ACP_SESSION_ID]: {
+            sessionId: ACP_SESSION_ID,
+            cwd: ACP_CWD,
+            sessionFile: join(
+              paths.piWorkerSessionsDir(WORKER_NAME, ISSUE_NUMBER),
+              'pi-acp-worker-session.jsonl',
+            ),
+          },
+        },
+      }),
+    );
+
+    const result = await readHistory();
+
+    expect(result).toMatchObject({
+      status: 'unavailable',
+      reason: expect.stringContaining('選択された session map'),
+      messages: [],
+    });
+  });
+
+  it('rejects a builtin Pi map that points outside its worker homes', async () => {
+    await writePiAcpSessionMap({ runtime: 'builtin' });
+    const paths = resolveEnsemblePaths({ repoRoot });
+    const mapPath = paths.piWorkerSessionMapPath(WORKER_NAME, ISSUE_NUMBER);
+    const outsideTranscript = join(tempRoot, 'outside-session.jsonl');
+    await writeFile(outsideTranscript, await readFile(FIXTURE_PATH));
+    await writeFile(
+      mapPath,
+      JSON.stringify({
+        version: 1,
+        sessions: {
+          [ACP_SESSION_ID]: {
+            sessionId: ACP_SESSION_ID,
+            cwd: ACP_CWD,
+            sessionFile: outsideTranscript,
+          },
+        },
+      }),
+    );
+
+    const result = await readHistory();
+
+    expect(result).toMatchObject({
+      status: 'unavailable',
+      reason: expect.stringContaining('worker storage 外'),
+      messages: [],
+    });
   });
 
   it('reads a pre-Issue builtin map and transcript before wrapper migration', async () => {
@@ -1183,6 +1285,7 @@ describe('worker session history', () => {
       conductorAgentId?: string;
       issueNumber?: number;
       piRuntime?: 'builtin';
+      piWorkerHome?: string;
       repoRoot?: string;
       workerName?: string;
     } = {},
@@ -1205,6 +1308,9 @@ describe('worker session history', () => {
         [workerName]: {
           acpSessionId: workerSession.acpSessionId ?? ACP_SESSION_ID,
           acpCwd: workerSession.acpCwd ?? ACP_CWD,
+          ...(workerSession.piWorkerHome
+            ? { piWorkerHome: workerSession.piWorkerHome }
+            : {}),
           ...(preset
             ? {
                 acpSpawn: {
@@ -1302,6 +1408,7 @@ describe('worker session history', () => {
       runtime?: 'builtin';
       legacyMap?: boolean;
       repoRoot?: string;
+      agentDir?: string;
     } = {},
   ): Promise<string> {
     const issueNumber = options.issueNumber ?? ISSUE_NUMBER;
@@ -1310,6 +1417,11 @@ describe('worker session history', () => {
     const sessionId = options.sessionId ?? ACP_SESSION_ID;
     const acpCwd = options.acpCwd ?? ACP_CWD;
     if (options.runtime === 'builtin') {
+      const paths = resolveEnsemblePaths({
+        repoRoot: options.repoRoot ?? repoRoot,
+        userEnsembleRoot: userRoot,
+        ...(options.agentDir ? { piAgentDir: options.agentDir } : {}),
+      });
       await writeResumeStore('pi', {
         conductorAgentId,
         issueNumber,
@@ -1317,10 +1429,16 @@ describe('worker session history', () => {
         acpCwd,
         piRuntime: 'builtin',
         ...(options.repoRoot ? { repoRoot: options.repoRoot } : {}),
+        ...(options.agentDir
+          ? {
+              piWorkerHome: paths.piWorkerDir(WORKER_NAME, issueNumber),
+            }
+          : {}),
       });
     }
     const paths = resolveEnsemblePaths({
       repoRoot: options.repoRoot ?? repoRoot,
+      ...(options.agentDir ? { piAgentDir: options.agentDir } : {}),
     });
     const transcriptPath =
       options.runtime === 'builtin'

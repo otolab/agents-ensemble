@@ -1,3 +1,4 @@
+import { dirname } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   ENSEMBLE_DEFAULT_ACP_CLI_ENV,
@@ -900,6 +901,8 @@ describe('profileWorkersToSessionSpecs', () => {
       ENSEMBLE_PI_BUILTIN_RUNTIME: '1',
       HOME: paths.piWorkerDir('implementer', 1),
       USERPROFILE: paths.piWorkerDir('implementer', 1),
+      ENSEMBLE_PI_WORKER_STORAGE_ROOT: paths.piWorkerRoot,
+      ENSEMBLE_PI_WORKER_STORAGE_PARENT: dirname(paths.piWorkerRoot),
       ENSEMBLE_PI_LEGACY_WORKER_HOME:
         paths.legacyPiWorkerDir('implementer'),
       PI_CODING_AGENT_DIR: paths.piUserDir,
@@ -931,6 +934,8 @@ describe('profileWorkersToSessionSpecs', () => {
         ENSEMBLE_PI_CLI_EXECUTABLE: resolveBundledPiCliPath(),
         HOME: paths.piWorkerDir('implementer', 1),
         USERPROFILE: paths.piWorkerDir('implementer', 1),
+        ENSEMBLE_PI_WORKER_STORAGE_ROOT: paths.piWorkerRoot,
+        ENSEMBLE_PI_WORKER_STORAGE_PARENT: dirname(paths.piWorkerRoot),
         ENSEMBLE_PI_LEGACY_WORKER_HOME:
           paths.legacyPiWorkerDir('implementer'),
         PI_CODING_AGENT_DIR: paths.piUserDir,
@@ -961,7 +966,7 @@ describe('profileWorkersToSessionSpecs', () => {
       repoRoot,
       issueNumber: 1,
     });
-    const paths = resolveEnsemblePaths({ repoRoot });
+    const paths = resolveEnsemblePaths({ repoRoot, piAgentDir: agentDir });
     const implementer = specs[0]?.spawn?.env;
     const reviewer = specs[1]?.spawn?.env;
     const fingerprintEnv = { ...config.acp.env };
@@ -970,12 +975,15 @@ describe('profileWorkersToSessionSpecs', () => {
     expect(implementer).toMatchObject({
       HOME: paths.piWorkerDir('implementer', 1),
       USERPROFILE: paths.piWorkerDir('implementer', 1),
-      ENSEMBLE_PI_LEGACY_WORKER_HOME:
-        paths.legacyPiWorkerDir('implementer'),
+      ENSEMBLE_PI_WORKER_STORAGE_ROOT: paths.piWorkerRoot,
+      ENSEMBLE_PI_WORKER_STORAGE_PARENT: dirname(paths.piWorkerRoot),
       PI_CODING_AGENT_DIR: agentDir,
       PI_CODING_AGENT_SESSION_DIR:
         paths.piWorkerSessionsDir('implementer', 1),
     });
+    expect(implementer).not.toHaveProperty(
+      'ENSEMBLE_PI_LEGACY_WORKER_HOME',
+    );
     expect(reviewer?.PI_CODING_AGENT_DIR).toBe(agentDir);
     expect(reviewer?.PI_CODING_AGENT_SESSION_DIR).toBe(
       paths.piWorkerSessionsDir('reviewer', 1),
@@ -993,8 +1001,8 @@ describe('profileWorkersToSessionSpecs', () => {
         ENSEMBLE_PI_CLI_EXECUTABLE: resolveBundledPiCliPath(),
         HOME: paths.piWorkerDir('implementer', 1),
         USERPROFILE: paths.piWorkerDir('implementer', 1),
-        ENSEMBLE_PI_LEGACY_WORKER_HOME:
-          paths.legacyPiWorkerDir('implementer'),
+        ENSEMBLE_PI_WORKER_STORAGE_ROOT: paths.piWorkerRoot,
+        ENSEMBLE_PI_WORKER_STORAGE_PARENT: dirname(paths.piWorkerRoot),
         PI_CODING_AGENT_DIR: agentDir,
         PI_CODING_AGENT_SESSION_DIR:
           paths.piWorkerSessionsDir('implementer', 1),

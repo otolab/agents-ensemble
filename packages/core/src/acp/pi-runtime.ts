@@ -1,7 +1,16 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { homedir } from 'node:os';
-import { dirname, join, relative, resolve, sep } from 'node:path';
+import {
+  basename,
+  dirname,
+  isAbsolute,
+  join,
+  normalize,
+  relative,
+  resolve,
+  sep,
+} from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveEnsemblePaths } from '../ensemble-paths.js';
 import type { ResolvedAcpSpawn } from './resolve-acp-spawn.js';
@@ -229,20 +238,39 @@ export function configurePiWorkerRuntime(
   spawn: ResolvedAcpSpawn,
   input: {
     repoRoot: string;
+    /** Repository identity that owns an existing saved worker home. */
+    storageRepoRoot?: string;
     issueNumber?: number;
     workspaceSlugKey?: string;
     workerName: string;
     agentDir?: string;
+    /** Existing builtin worker home to use when resuming a saved session. */
+    workerHome?: string;
+    resumeSessionId?: string;
+    resumeCwd?: string;
   },
 ): ResolvedAcpSpawn {
   if (spawn.preset !== 'pi' || spawn.piRuntime !== 'builtin') return spawn;
 
   assertBuiltinPiNodeVersionSupported();
-  const paths = resolveEnsemblePaths({ repoRoot: input.repoRoot });
-  const workerHome = input.workspaceSlugKey
+  const storageRepoRoot = input.storageRepoRoot ?? input.repoRoot;
+  const paths = resolveEnsemblePaths({
+    repoRoot: storageRepoRoot,
+    ...(input.agentDir ? { piAgentDir: input.agentDir } : {}),
+  });
+  const generatedWorkerHome = input.workspaceSlugKey
     ? paths.piWorkspaceWorkerDir(input.workerName, input.workspaceSlugKey)
     : paths.piWorkerDir(input.workerName, input.issueNumber!);
-  const legacyWorkerHome = paths.legacyPiWorkerDir(input.workerName);
+  const workerHome = input.workerHome ?? generatedWorkerHome;
+  assertBuiltinPiWorkerHome(input, workerHome, generatedWorkerHome);
+  const legacyPaths = resolveEnsemblePaths({ repoRoot: storageRepoRoot });
+  const legacyWorkerHome =
+    workerHomeStorageRoot({
+      workerHome,
+      workspaceSlugKey: input.workspaceSlugKey,
+    }) === legacyPaths.piWorkerRoot
+      ? legacyPaths.legacyPiWorkerDir(input.workerName)
+      : undefined;
   const piCliHome = resolvePiCliHome(spawn);
   const env = { ...(spawn.env ?? {}) };
   // Upstream pi-acp has no map path override; HOME determines its map location.
@@ -258,15 +286,65 @@ export function configurePiWorkerRuntime(
       ENSEMBLE_PI_CLI_EXECUTABLE: resolveBundledPiCliPath(),
       HOME: workerHome,
       USERPROFILE: workerHome,
-      ENSEMBLE_PI_LEGACY_WORKER_HOME: legacyWorkerHome,
+      ENSEMBLE_PI_WORKER_STORAGE_ROOT: workerHomeStorageRoot({
+        workerHome,
+        workspaceSlugKey: input.workspaceSlugKey,
+      }),
+      ENSEMBLE_PI_WORKER_STORAGE_PARENT: dirname(
+        workerHomeStorageRoot({
+          workerHome,
+          workspaceSlugKey: input.workspaceSlugKey,
+        }),
+      ),
+      ...(legacyWorkerHome
+        ? { ENSEMBLE_PI_LEGACY_WORKER_HOME: legacyWorkerHome }
+        : {}),
+      ...(input.resumeSessionId
+        ? { ENSEMBLE_PI_RESUME_SESSION_ID: input.resumeSessionId }
+        : {}),
+      ...(input.resumeCwd
+        ? { ENSEMBLE_PI_RESUME_CWD: input.resumeCwd }
+        : {}),
       PI_CODING_AGENT_DIR: input.agentDir ?? paths.piUserDir,
-      PI_CODING_AGENT_SESSION_DIR: input.workspaceSlugKey
-        ? paths.piWorkspaceWorkerSessionsDir(
-            input.workerName,
-            input.workspaceSlugKey,
-          )
-        : paths.piWorkerSessionsDir(input.workerName, input.issueNumber!),
+      PI_CODING_AGENT_SESSION_DIR: join(workerHome, 'sessions'),
       PI_ACP_PI_COMMAND: resolveBuiltinPiCliEnvWrapperPath(),
     },
   };
+}
+
+function workerHomeStorageRoot(input: {
+  workerHome: string;
+  workspaceSlugKey?: string;
+}): string {
+  return input.workspaceSlugKey
+    ? dirname(dirname(dirname(input.workerHome)))
+    : dirname(dirname(input.workerHome));
+}
+
+function assertBuiltinPiWorkerHome(
+  input: {
+    workerName: string;
+    issueNumber?: number;
+    workspaceSlugKey?: string;
+  },
+  workerHome: string,
+  generatedWorkerHome: string,
+): void {
+  const normalizedHome = normalize(resolve(workerHome));
+  const expectedSuffix = input.workspaceSlugKey
+    ? join(
+        'workspace',
+        input.workspaceSlugKey,
+        basename(generatedWorkerHome),
+      )
+    : join(`issue-${input.issueNumber}`, basename(generatedWorkerHome));
+  if (
+    !isAbsolute(workerHome) ||
+    normalizedHome !== workerHome ||
+    !normalizedHome.endsWith(`${sep}${expectedSuffix}`)
+  ) {
+    throw new Error(
+      `[acp] saved builtin Pi worker home does not match worker identity "${input.workerName}".`,
+    );
+  }
 }

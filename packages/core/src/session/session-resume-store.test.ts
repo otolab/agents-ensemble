@@ -142,7 +142,23 @@ describe('SessionResumeStore', () => {
       },
       sequence: 2,
       workers: {
-        implementer: { acpSessionId: 'sess-1', acpCwd: '/repo/docs' },
+        implementer: {
+          acpSessionId: 'sess-1',
+          acpCwd: '/repo/docs',
+          piWorkerHome: join(tempDir, 'pi-worker-home'),
+          generations: [
+            {
+              acpSessionId: 'sess-0',
+              acpCwd: '/repo/docs',
+              piWorkerHome: join(tempDir, 'old-pi-worker-home'),
+              repoRoot: tempDir,
+              issueUrl: TEST_ISSUE_URL,
+              replacedAt: 1,
+              reason: 'session_load_failed',
+              nextSessionId: 'sess-1',
+            },
+          ],
+        },
       },
       conductorCwd: '/repo/.ensemble/worktrees/issue-1',
       createdHarnessCliVersion: '0.19.0',
@@ -176,6 +192,17 @@ describe('SessionResumeStore', () => {
       ...resumeStore,
       lazyWorkers: true,
       updatedAt: expect.any(Number),
+      workers: {
+        implementer: {
+          piWorkerHome: join(tempDir, 'pi-worker-home'),
+          generations: [
+            {
+              acpSessionId: 'sess-0',
+              piWorkerHome: join(tempDir, 'old-pi-worker-home'),
+            },
+          ],
+        },
+      },
     });
     expect(loaded?.githubMonitor?.explicitPullRequests).toEqual({
       '354': {
@@ -208,6 +235,30 @@ describe('SessionResumeStore', () => {
           .legacySessionResumeStorePath('agent-1'),
       ),
     ).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('rejects non-absolute builtin Pi worker home paths', async () => {
+    tempDir = await createHome('ensemble-session-resume-store-');
+    const path = join(tempDir, 'session.json');
+    await writeFile(
+      path,
+      JSON.stringify(
+        baseResumeStore({
+          conductorAgentId: 'agent-invalid-pi-home',
+          workers: {
+            implementer: {
+              acpSessionId: 'sess-1',
+              piWorkerHome: 'relative/pi-worker-home',
+            },
+          },
+        }),
+      ),
+      'utf8',
+    );
+
+    await expect(loadSessionResumeStore(path)).rejects.toThrow(
+      /workers\.implementer\.piWorkerHome/,
+    );
   });
 
   it('loads and saves a legacy fixture without backfilling its CLI version', async () => {

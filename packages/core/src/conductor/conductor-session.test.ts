@@ -667,6 +667,129 @@ describe('runConductorSession resume / shutdown', () => {
     closeGate.resolve();
   });
 
+  it('persists the first lazy worker session ID and exposes strict restart_worker', async () => {
+    stubUnusedControlServer();
+    vi.spyOn(acpBinModule, 'resolveBundledAcpBin')
+      .mockReturnValue(process.execPath);
+    vi.spyOn(acpBinModule, 'resolveAcpBin').mockReturnValue(process.execPath);
+    vi.spyOn(acpBinModule, 'resolveAcpBinFromPath')
+      .mockReturnValue(process.execPath);
+    const firstBridge = {
+      newSession: vi.fn().mockResolvedValue('lazy-worker-session'),
+      loadSession: vi.fn().mockResolvedValue(undefined),
+      promptSession: vi.fn().mockResolvedValue({
+        stopReason: 'end_turn',
+        responseText: 'ready',
+      }),
+      close: vi.fn().mockResolvedValue(undefined),
+      cancelSession: vi.fn(),
+    } as unknown as AcpBridge;
+    const failedRestartBridge = {
+      newSession: vi.fn(),
+      loadSession: vi.fn().mockRejectedValue(new Error('session map temporarily unavailable')),
+      promptSession: vi.fn(),
+      close: vi.fn().mockResolvedValue(undefined),
+      cancelSession: vi.fn(),
+    } as unknown as AcpBridge;
+    const restartedBridge = {
+      newSession: vi.fn(),
+      loadSession: vi.fn().mockResolvedValue(undefined),
+      promptSession: vi.fn(),
+      close: vi.fn().mockResolvedValue(undefined),
+      cancelSession: vi.fn(),
+    } as unknown as AcpBridge;
+    const connectAcp = vi.fn()
+      .mockResolvedValueOnce(firstBridge)
+      .mockResolvedValueOnce(failedRestartBridge)
+      .mockResolvedValueOnce(restartedBridge);
+    let tools: Parameters<typeof mockCreate>[0]['customTools'];
+    mockCreate.mockImplementationOnce(async (options) => {
+      tools = options.customTools;
+      return {
+        agentId: 'agent-test',
+        send: mockSend,
+        close: mockClose,
+        getUsage: createMockConductorGetUsage(),
+      };
+    });
+    mockSend.mockResolvedValue({ runId: 'run', status: 'finished', result: 'ready' });
+    let api: OperatorInputBindingApi | undefined;
+    const onPostLoopWait = vi.fn();
+    const config = {
+      ...DEFAULT_ENSEMBLE_CONFIG,
+      session: { ...DEFAULT_ENSEMBLE_CONFIG.session, lazyWorkers: true },
+    };
+    const session = runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { workers: [{ name: 'implementer', kind: 'implementer' }] },
+      ensembleConfig: config,
+      defaultAcp: { config, env: {} },
+      connectAcp,
+      workerWorktree: {
+        path: repoRoot,
+        branch: 'ensemble/issue-1',
+        issue: TEST_ISSUE,
+        inRepo: true,
+      },
+      permissionPipeline: new PermissionPipeline({}),
+      disableGitHubMonitor: true,
+      maxTurns: 5,
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: true,
+      onPostLoopWait,
+      bindOperatorInput: (binding) => { api = binding; },
+    });
+    try {
+      await vi.waitFor(() => expect(onPostLoopWait).toHaveBeenCalledOnce());
+      expect(tools?.restart_worker).toBeDefined();
+      await tools!.prompt_worker!.execute({
+        worker: 'implementer',
+        instruction: 'start the lazy worker',
+      });
+      await vi.waitFor(() => expect(firstBridge.promptSession).toHaveBeenCalledTimes(2));
+
+      const storePath = sessionResumeStorePath({
+        repoRoot,
+        conductorAgentId: 'agent-test',
+      });
+      await vi.waitFor(async () => {
+        expect((await loadSessionResumeStore(storePath))?.workers.implementer?.acpSessionId)
+          .toBe('lazy-worker-session');
+      });
+
+      await expect(tools!.restart_worker!.execute({
+        worker: 'implementer',
+      })).rejects.toThrow(/retry restart_worker/u);
+      expect(failedRestartBridge.newSession).not.toHaveBeenCalled();
+      expect(failedRestartBridge.close).toHaveBeenCalledOnce();
+      expect((await loadSessionResumeStore(storePath))?.workers.implementer?.acpSessionId)
+        .toBe('lazy-worker-session');
+
+      const restartResult = await tools!.restart_worker!.execute({
+        worker: 'implementer',
+      });
+      expect(restartResult.content[0]).toMatchObject({
+        type: 'text',
+        text: expect.stringContaining('会話履歴を引き継いでいます'),
+      });
+      expect(firstBridge.close).toHaveBeenCalledOnce();
+      expect(restartedBridge.loadSession).toHaveBeenCalledWith(
+        'lazy-worker-session',
+        repoRoot,
+        expect.any(Function),
+      );
+      expect(restartedBridge.newSession).not.toHaveBeenCalled();
+      expect((await loadSessionResumeStore(storePath))?.workers.implementer).toMatchObject({
+        acpSessionId: 'lazy-worker-session',
+        acpCwd: repoRoot,
+      });
+    } finally {
+      api?.submit('/exit');
+      await session;
+    }
+  });
+
   it('retains ownership while a delayed worker recreation finishes after /close', async () => {
     stubUnusedControlServer();
     const candidateGate = createDeferred<AcpBridge>();
@@ -3147,12 +3270,13 @@ process.stdin.on('data', chunk => {
     });
 
     const workerSpawn = connectAcp.mock.calls[0]?.[0].spawn;
-    const paths = resolveEnsemblePaths({ repoRoot });
+    const paths = resolveEnsemblePaths({
+      repoRoot,
+      piAgentDir: join(repoRoot, 'custom-pi-user'),
+    });
     expect(workerSpawn?.env).toMatchObject({
       HOME: paths.piWorkerDir('implementer', TEST_ISSUE.number),
       USERPROFILE: paths.piWorkerDir('implementer', TEST_ISSUE.number),
-      ENSEMBLE_PI_LEGACY_WORKER_HOME:
-        paths.legacyPiWorkerDir('implementer'),
       PI_CODING_AGENT_DIR: join(repoRoot, 'custom-pi-user'),
       PI_CODING_AGENT_SESSION_DIR:
         paths.piWorkerSessionsDir('implementer', TEST_ISSUE.number),
@@ -3163,6 +3287,134 @@ process.stdin.on('data', chunk => {
     );
     expect(workerSpawn?.env?.ENSEMBLE_PI_CLI_EXECUTABLE).toBe(
       resolveBundledPiCliPath(),
+    );
+    const resumeStore = await loadSessionResumeStore(
+      sessionResumeStorePath({
+        repoRoot,
+        conductorAgentId: 'agent-builtin-pi-root',
+      }),
+    );
+    expect(resumeStore?.workers.implementer?.piWorkerHome).toBe(
+      paths.piWorkerDir('implementer', TEST_ISSUE.number),
+    );
+  });
+
+  it('resumes builtin Pi from the saved worker home after agentDir changes', async () => {
+    const agentId = 'resume-builtin-pi-saved-home';
+    const oldAgentDir = join(repoRoot, 'old-pi-agent');
+    const currentAgentDir = join(repoRoot, 'current-pi-agent');
+    const ensembleConfig = {
+      ...DEFAULT_ENSEMBLE_CONFIG,
+      conductor: {
+        ...DEFAULT_ENSEMBLE_CONFIG.conductor,
+        pi: { agentDir: currentAgentDir },
+      },
+      acp: {
+        ...DEFAULT_ENSEMBLE_CONFIG.acp,
+        defaultPreset: 'pi' as const,
+        pi: { runtime: 'builtin' as const },
+      },
+    };
+    const savedWorkerHome = resolveEnsemblePaths({
+      repoRoot,
+      piAgentDir: oldAgentDir,
+    }).piWorkerDir('implementer', TEST_ISSUE.number);
+    const savedSpawn = acpSpawnFingerprint(
+      resolveWorkerAcpSpawn({
+        defaultOptions: { config: ensembleConfig, env: {} },
+      }),
+    );
+    await saveSessionResumeStore(
+      sessionResumeStorePath({ repoRoot, conductorAgentId: agentId }),
+      {
+        version: SESSION_RESUME_STORE_VERSION,
+        conductorAgentId: agentId,
+        issueUrl: TEST_ISSUE.url,
+        repoRoot,
+        profile: {
+          workers: [{ name: 'implementer', kind: 'implementer' }],
+        },
+        openQuestions: [],
+        sequence: 0,
+        workers: {
+          implementer: {
+            acpSessionId: 'saved-builtin-pi-session',
+            acpCwd: repoRoot,
+            piWorkerHome: savedWorkerHome,
+            acpSpawn: savedSpawn,
+          },
+        },
+        updatedAt: 0,
+      },
+    );
+
+    const bridge = {
+      loadSession: vi.fn().mockResolvedValue(undefined),
+      newSession: vi.fn().mockResolvedValue('unexpected-new-session'),
+      promptSession: vi.fn().mockResolvedValue({
+        stopReason: 'end_turn',
+        responseText: 'ready',
+      }),
+      cancelSession: vi.fn().mockResolvedValue(undefined),
+      close: vi.fn().mockResolvedValue(undefined),
+    } as unknown as AcpBridge;
+    const connectAcp = vi.fn().mockResolvedValue(bridge);
+    mockResume.mockImplementationOnce(async () => ({
+      agentId,
+      send: mockSend,
+      close: mockClose,
+      getUsage: createMockConductorGetUsage(),
+    }));
+    mockSend.mockResolvedValue({
+      runId: 'run-resume-builtin-pi-saved-home',
+      status: 'finished',
+      result: 'resumed',
+    });
+
+    stubUnusedControlServer();
+    await runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: {
+        workers: [{ name: 'implementer', kind: 'implementer' }],
+      },
+      ensembleConfig,
+      defaultAcp: { config: ensembleConfig, env: {} },
+      workerWorktree: {
+        path: repoRoot,
+        branch: 'ensemble/issue-1',
+        issue: TEST_ISSUE,
+        inRepo: true,
+      },
+      resumeAgentId: agentId,
+      connectAcp,
+      maxTurns: 5,
+      disableGitHubMonitor: true,
+      disablePermissionDeadlockMonitor: true,
+      permissionPipeline: new PermissionPipeline({}),
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: false,
+    });
+
+    expect(connectAcp.mock.calls[0]?.[0].spawn.env).toMatchObject({
+      HOME: savedWorkerHome,
+      USERPROFILE: savedWorkerHome,
+      PI_CODING_AGENT_DIR: currentAgentDir,
+      PI_CODING_AGENT_SESSION_DIR: join(savedWorkerHome, 'sessions'),
+      ENSEMBLE_PI_RESUME_SESSION_ID: 'saved-builtin-pi-session',
+      ENSEMBLE_PI_RESUME_CWD: repoRoot,
+    });
+    expect(bridge.loadSession).toHaveBeenCalledWith(
+      'saved-builtin-pi-session',
+      repoRoot,
+      expect.any(Function),
+    );
+    expect(bridge.newSession).not.toHaveBeenCalled();
+    const resumedStore = await loadSessionResumeStore(
+      sessionResumeStorePath({ repoRoot, conductorAgentId: agentId }),
+    );
+    expect(resumedStore?.workers.implementer?.piWorkerHome).toBe(
+      savedWorkerHome,
     );
   });
 
