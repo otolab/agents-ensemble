@@ -12,6 +12,8 @@ import type {
 import { CONDUCTOR_RECOVERY_INPUT_BYTE_LIMIT } from './conductor-recovery-constants.js';
 import type { SessionEvent } from './session/session-event.js';
 
+export const DEFAULT_DISPATCH_HOLD_REMINDER_MS = 1_800_000;
+
 type ConductorCoreInboxSendResult = Extract<
   ConductorInboxCoreEvent,
   { readonly type: 'inbox.send.result' }
@@ -57,6 +59,11 @@ export interface ConductorCoreState {
   readonly shutdownMode?: 'close' | 'exit' | 'signal';
   readonly sendStartedAttemptId?: string;
   readonly dispatchHold: boolean;
+  /** Latest clock sample supplied through `tick`; the reducer never reads a clock. */
+  readonly currentTime?: number;
+  /** Configured reminder interval, supplied as reducer state. */
+  readonly dispatchHoldReminderIntervalMs: number;
+  readonly nextDispatchHoldReminderAt?: number;
   readonly heldEvents: readonly SessionEvent[];
   readonly dispatchBatchState: ConductorCoreDispatchBatchState;
   readonly autonomousTurns: number;
@@ -141,6 +148,11 @@ export type ConductorCoreAction =
       heldEventCount: number;
       flushedEventCount?: number;
     }
+  | {
+      type: 'dispatchHoldReminder';
+      heldEventCount: number;
+      reminderIntervalMs: number;
+    }
   | { type: 'turnsUpdated'; autonomousTurns: number };
 
 export type ConductorCoreEffect =
@@ -200,6 +212,7 @@ export type IssueLoopStopReason =
 export type ConductorCoreEvent =
   | { type: 'queue.arrival'; event: SessionEvent; waiterMatched: boolean }
   | { type: 'queue.remove'; events: readonly SessionEvent[] }
+  | { type: 'tick'; time: number }
   | { type: 'session.shutdown'; mode: 'close' | 'exit' | 'signal' }
   | { type: 'dispatch.schedule'; input: DispatchScheduleOptions }
   | {
@@ -283,6 +296,7 @@ export function createConductorCoreState(
     agentAvailable: true,
     queue: [],
     dispatchHold: false,
+    dispatchHoldReminderIntervalMs: DEFAULT_DISPATCH_HOLD_REMINDER_MS,
     heldEvents: [],
     dispatchBatchState: {},
     autonomousTurns: 0,
@@ -312,6 +326,54 @@ export function stepConductorCore(
   event: ConductorCoreEvent,
 ): ConductorCoreTransition {
   switch (event.type) {
+    case 'tick': {
+      const currentTime = event.time;
+      if (!state.dispatchHold) {
+        return {
+          state: {
+            ...state,
+            currentTime,
+            nextDispatchHoldReminderAt: undefined,
+          },
+          effects: EMPTY_EFFECTS,
+        };
+      }
+
+      const reminderAt = state.nextDispatchHoldReminderAt;
+      if (reminderAt === undefined) {
+        return {
+          state: {
+            ...state,
+            currentTime,
+            nextDispatchHoldReminderAt:
+              currentTime + state.dispatchHoldReminderIntervalMs,
+          },
+          effects: EMPTY_EFFECTS,
+        };
+      }
+      if (currentTime < reminderAt) {
+        return {
+          state: { ...state, currentTime },
+          effects: EMPTY_EFFECTS,
+        };
+      }
+
+      return {
+        state: {
+          ...state,
+          currentTime,
+          nextDispatchHoldReminderAt:
+            currentTime + state.dispatchHoldReminderIntervalMs,
+        },
+        effects: [
+          action({
+            type: 'dispatchHoldReminder',
+            heldEventCount: state.heldEvents.length,
+            reminderIntervalMs: state.dispatchHoldReminderIntervalMs,
+          }),
+        ],
+      };
+    }
     case 'queue.arrival': {
       const queue = event.waiterMatched
         ? state.queue
@@ -505,9 +567,18 @@ export function stepConductorCore(
           ? 'updated'
           : 'enabled'
         : 'released';
+      let nextDispatchHoldReminderAt: number | undefined;
+      if (event.enabled) {
+        if (state.dispatchHold) {
+          nextDispatchHoldReminderAt = state.nextDispatchHoldReminderAt;
+        } else if (state.currentTime !== undefined) {
+          nextDispatchHoldReminderAt =
+            state.currentTime + state.dispatchHoldReminderIntervalMs;
+        }
+      }
       const nextState = { ...state, dispatchHold: event.enabled };
       return {
-        state: nextState,
+        state: { ...nextState, nextDispatchHoldReminderAt },
         effects: [
           action({
             type: 'dispatchHoldChanged',

@@ -320,6 +320,124 @@ describe('stepConductorCore', () => {
     expect(activeHold.heldEvents).toEqual([heldWorker]);
   });
 
+  it('emits hold reminders from explicit ticks and schedules the next interval from that tick', () => {
+    const heldWorker: SessionEvent = {
+      type: 'worker.completed',
+      result: {
+        name: 'implementer',
+        kind: 'implementer',
+        acpSessionId: 'worker-session',
+        status: 'finished',
+        result: 'first held result',
+      },
+    };
+    const laterHeldWorker: SessionEvent = {
+      ...heldWorker,
+      result: { ...heldWorker.result, name: 'reviewer', result: 'later result' },
+    };
+    let state = createConductorCoreState({
+      dispatchHoldReminderIntervalMs: 5_000,
+    });
+
+    state = stepConductorCore(state, { type: 'tick', time: 10_000 }).state;
+    state = stepConductorCore(state, {
+      type: 'dispatchHold.set',
+      enabled: true,
+    }).state;
+    expect(state.nextDispatchHoldReminderAt).toBe(15_000);
+
+    const beforeDeadline = stepConductorCore(state, {
+      type: 'tick',
+      time: 14_999,
+    });
+    expect(actionEffects(beforeDeadline.effects)).toEqual([]);
+    expect(beforeDeadline.state.currentTime).toBe(14_999);
+
+    state = stepConductorCore(beforeDeadline.state, {
+      type: 'dispatchHold.buffer',
+      queue: [heldWorker, laterHeldWorker],
+    }).state;
+    const due = stepConductorCore(state, { type: 'tick', time: 15_000 });
+    expect(actionEffects(due.effects)).toEqual([
+      {
+        type: 'dispatchHoldReminder',
+        heldEventCount: 2,
+        reminderIntervalMs: 5_000,
+      },
+    ]);
+    expect(due.state.nextDispatchHoldReminderAt).toBe(20_000);
+
+    const delayedTick = stepConductorCore(due.state, {
+      type: 'tick',
+      time: 27_000,
+    });
+    expect(actionEffects(delayedTick.effects)).toEqual([
+      {
+        type: 'dispatchHoldReminder',
+        heldEventCount: 2,
+        reminderIntervalMs: 5_000,
+      },
+    ]);
+    expect(delayedTick.state.nextDispatchHoldReminderAt).toBe(32_000);
+  });
+
+  it('resets the hold reminder deadline on release and starts a fresh episode on re-hold', () => {
+    let state = createConductorCoreState({
+      dispatchHoldReminderIntervalMs: 5_000,
+    });
+    state = stepConductorCore(state, { type: 'tick', time: 1_000 }).state;
+    state = stepConductorCore(state, {
+      type: 'dispatchHold.set',
+      enabled: true,
+    }).state;
+
+    state = stepConductorCore(state, { type: 'tick', time: 2_000 }).state;
+    const repeatedEnable = stepConductorCore(state, {
+      type: 'dispatchHold.set',
+      enabled: true,
+    });
+    expect(repeatedEnable.state.nextDispatchHoldReminderAt).toBe(6_000);
+
+    const released = stepConductorCore(repeatedEnable.state, {
+      type: 'dispatchHold.set',
+      enabled: false,
+    });
+    expect(released.state.nextDispatchHoldReminderAt).toBeUndefined();
+    state = stepConductorCore(released.state, {
+      type: 'tick',
+      time: 10_000,
+    }).state;
+    state = stepConductorCore(state, {
+      type: 'dispatchHold.set',
+      enabled: true,
+    }).state;
+    expect(state.nextDispatchHoldReminderAt).toBe(15_000);
+
+    const notDue = stepConductorCore(state, { type: 'tick', time: 14_999 });
+    expect(actionEffects(notDue.effects)).toEqual([]);
+    const due = stepConductorCore(notDue.state, { type: 'tick', time: 15_000 });
+    expect(actionEffects(due.effects)).toEqual([
+      {
+        type: 'dispatchHoldReminder',
+        heldEventCount: 0,
+        reminderIntervalMs: 5_000,
+      },
+    ]);
+  });
+
+  it('starts the reminder interval on the first tick when hold was already active', () => {
+    const initial = createConductorCoreState({
+      dispatchHold: true,
+      dispatchHoldReminderIntervalMs: 5_000,
+    });
+    const firstTick = stepConductorCore(initial, {
+      type: 'tick',
+      time: 20_000,
+    });
+    expect(actionEffects(firstTick.effects)).toEqual([]);
+    expect(firstTick.state.nextDispatchHoldReminderAt).toBe(25_000);
+  });
+
   it('keeps queue payload ownership and accepts started/result after reentrant shutdown', () => {
     const operatorMessage: SessionEvent = {
       type: 'operator.message',
