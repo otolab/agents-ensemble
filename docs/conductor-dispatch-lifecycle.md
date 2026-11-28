@@ -4,6 +4,10 @@
 
 この文書は現行実装の静的な対応を記録し、To-Be の transition core と実行層を分ける境界を定める。現行 TypeScript と Lean As-Is の遷移同値性や、外部 provider まで届く性質の証明を主張しない。現行 As-Is の分析は [Composition.md](../formal/lean/Ensemble/AsIs/Composition.md)、共通の抽象的な性質は [Flow/Spec.lean](../formal/lean/Ensemble/Flow/Spec.lean) を参照する。
 
+## 将来契約の参照
+
+[ADR 0088](adr/0088-conductor-durable-inbox-recovery-contract.md) は、Issue workflow の永続 inbox と process 再開後の recovery に関する承認済み将来契約を記録する。これは現行 runtime には未実装である。本文書の以下の状態・遷移・保証は現行挙動の記述であり、ADR 0072 のうち Issue workflow の durable inbox・restart recovery・batch delivery 境界は ADR 0088 により部分的に supersede された。ADR 0072 の本文は当時の判断記録として維持し、operator-agent の watch report 契約など対象外の範囲も維持する。
+
 ## 状態の正本
 
 `ConductorDispatchLifecycle.state` は複数の状態を一つにまとめた表示である。send lease、接続可能性、confirmation gate の正本をひとつの `state` 値が持つわけではない。selector、dispatch hold、permission、recovery inbox もそれぞれ別の所有者を持つ。
@@ -129,9 +133,9 @@ dispatch hold は自動解除しない。`permission.pending` と通常 trigger 
 | dispatch hold / 待機 | hold と各 gate は独立している。permission stall は hold 中も回復判断の契機になりうる | hold の自動解除、即時 dispatch、固定時間内の解除は保証しない |
 | #855 の回復可能性 | `RecoveryPossible` は回復操作に加えて send / reconnect の環境結果や時刻を含む有限経路の**存在**を述べる | 環境が成功すること、その経路を実行すること、配信または有限時間内の回復を保証しない |
 | #855 の進行性 | `SchedulerFair` は対象が以後ずっと eligible な無限実行を前提に、scheduler がいつか選ぶ条件付き性質。`ReconnectResumes` / `HoldExemptDelivered` にも他の停止要因が介入しない条件がある | 実時間期限、無条件の公平性、有限実行での進行、send 完了や tool effect 成功は保証しない。有限実行だけでは無限実行の性質が空虚になりうる |
-| #855 の重複・保持性 | `NoAutomaticInputReplay` は同一 abstract ID の失敗 / 結果不明 input の再 dispatch を対象とする。`NoEventLoss` 等は具体 Transition の観測関係に依存する | abstract `EventId` はモデル内の受理項目を追う名前で、現行 `SessionEvent` の永続 ID でも本文 equality でもない。現行 TypeScript 全体への証明・実行可能性を示さない |
+| #855 の重複・保持性 | `NoAutomaticInputReplay` は失敗確定後の同一 abstract ID の再 dispatch を禁じる。結果不明後は、process 再開時の `restartRecoveryDispatch` と、3回上限後に TTY operator が選ぶ `operatorResend` を別 event として同じ ID の例外に表す。両方とも Issue #909 で承認された To-Be であり、現行 runtime はどちらも実装していない | abstract `EventId` はモデル内の受理項目を追う名前で、現行 `SessionEvent` の永続 ID でも本文 equality でもない。event tag は呼び出し元が与える前提であり、実際の process 再開・3回到達・TTY 操作を検証しない。形式性質は batch identity・永続化・send 回数上限・operator 操作の実装・外部副作用重複防止を証明せず、現行 TypeScript 全体への実行可能性も示さない |
 
-Issue #855 の完了コメントは性質文面への operator 合意を記録する一方、現行 `Flow/Spec.lean` 冒頭には「オペレータの合意ではない」とある。この記録差は #896 で報告済みで、未解決のまま残す。どちらの記録も黙って書き換えず、合意済みと断定しない。
+Issue #855 は元の `NoAutomaticInputReplay` を含む性質文面への operator 合意を記録した。Issue #909 は、process 再開時の delivery-unknown recovery と、3回上限後に operator が選ぶ明示 resend をそれぞれ承認した。`Flow/Spec.lean` はこの property-specific な合意範囲を明記する。これは他の性質が合意済みであることや、現行 runtime が再送を実装していることを意味しない。
 
 ## Transition core と実行層
 
@@ -185,5 +189,6 @@ Core 間の abstract event identity は trace 上で受理項目を結び付け�
 
 - [ADR 0056](adr/0056-permission-stall-dispatch-hold.md): dispatch hold 中の permission stall。
 - [ADR 0072](adr/0072-conductor-dispatch-lifecycle-and-recovery-boundary.md): single lease、no replay、recovery inbox、confirmation gate。
+- [ADR 0088](adr/0088-conductor-durable-inbox-recovery-contract.md): Issue workflow の durable inbox と restart recovery の承認済み将来契約。現行未実装。
 - [ADR 0086](adr/0086-lean-formal-model-for-dispatch-flow.md): Lean を中間言語とする Phase 0 / Phase 1 の位置づけ。
 - [ADR 0087](adr/0087-conductor-dispatch-transition-core.md): transition core と execution layer の分離、trace 接続。

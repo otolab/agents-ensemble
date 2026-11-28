@@ -143,7 +143,7 @@ ADR は**合意された設計判断の履歴**を残すもの。一度 `accepte
 | [0069](0069-pi-acp-version-split-for-byo-compatibility.md) | BYO / builtin の Pi ACP dependency version を分ける | accepted |
 | [0070](0070-issue-scoped-builtin-pi-storage.md) | Issue ごとの builtin Pi worker 保存先と権限 | superseded in part → [0071](0071-builtin-pi-storage-windows-acl.md)（Windows の owner-only ACL のみ） |
 | [0071](0071-builtin-pi-storage-windows-acl.md) | Windows builtin Pi worker 保存先の owner-only ACL | accepted |
-| [0072](0072-conductor-dispatch-lifecycle-and-recovery-boundary.md) | conductor dispatch lifecycle と recovery 境界 | accepted |
+| [0072](0072-conductor-dispatch-lifecycle-and-recovery-boundary.md) | conductor dispatch lifecycle と recovery 境界 | superseded in part → [0088](0088-conductor-durable-inbox-recovery-contract.md)（Issue workflow の durable inbox・restart recovery・batch delivery 境界のみ） |
 | [0073](0073-legacy-cursor-bootstrap-unknown.md) | 旧 Cursor bootstrap 状態を unknown として再開する | accepted |
 | [0074](0074-manual-resume-after-close-failure.md) | close failure 後の明示 reconnect | accepted |
 | [0075](0075-pi-conductor-default-and-model-selection.md) | Pi conductor の既定化と model 選択 | accepted |
@@ -159,6 +159,7 @@ ADR は**合意された設計判断の履歴**を残すもの。一度 `accepte
 | [0085](0085-ensemble-run-workspaces-and-notes.md) | `ensemble run`、workspaces 永続化、Notes | accepted |
 | [0086](0086-lean-formal-model-for-dispatch-flow.md) | 形式モデル（Lean 4）を dispatch フローの中間言語として導入する | proposed |
 | [0087](0087-conductor-dispatch-transition-core.md) | conductor dispatch transition core と実行層の分離 | accepted |
+| [0088](0088-conductor-durable-inbox-recovery-contract.md) | Issue workflow の durable inbox と recovery 契約 | accepted（将来契約。runtime 未実装） |
 
 ## 追加するとき
 

@@ -1,6 +1,6 @@
 # ADR 0072: conductor dispatch lifecycle と recovery 境界
 
-- Status: accepted
+- Status: superseded in part by [0088](0088-conductor-durable-inbox-recovery-contract.md) (Issue workflow の durable inbox・restart recovery・batch delivery 境界のみ)
 - Date: 2026-11-12
 - Related: [Issue #668](https://github.com/otolab/agents-ensemble/issues/668), supersedes [ADR 0059](0059-pi-recovery-report-after-manual-reconnect.md) and [ADR 0060](0060-pi-recovery-operator-inbox.md)
 

@@ -1,6 +1,10 @@
 /-! # dispatch フローの抽象仕様
 
-性質はレビュー用の候補であり、証明やオペレータの合意ではない。
+性質ごとの operator 合意範囲は対応する Issue に従う。ここにある全性質が合意済みとは限らない。
+NoAutomaticInputReplay の restart recovery と operator 明示再送の例外は Issue #909 で承認された。
+size preflight は通常の batch 編成時のサイズ計測・text 分割で回避し、選択後の超過は異常停止として
+operator に通知し batch 全体の discard を可能にする契約だが、この抽象状態・遷移ではモデル化しない。
+その停止 gate、明示 discard、再取込防止、解除条件は証明しない。
 識別子は同一の受理を追跡する抽象的な名前で、本文の一致を意味しない。
 -/
 namespace Ensemble.Flow
@@ -62,7 +66,15 @@ inductive Operation where
 inductive SendResult where
   | completed | failed | unknown
   deriving DecidableEq
-/-- 外部操作、処理結果、到着、時刻をモデルに与える入力。 -/
+/--
+外部操作、処理結果、到着、時刻をモデルに与える入力。
+`restartRecoveryDispatch` は結果不明の既存 item を、同じ ID のまま process 再開後に送信する
+例外経路の抽象 event。`operatorResend` は3回上限到達後、TTY operator が明示選択した
+一操作一送信を表す。明示 resend が失敗確定した後にも、環境を整えた operator が再送を
+選んだ場合は同じ event を使う。これらの event tag は呼び出し元が与える前提であり、
+property は実際の process 再開、3回上限到達、TTY operator の選択、環境準備を検証しない。
+回数の実装や、実際に再送が起きること、他の dispatch gate を満たすことも保証しない。
+-/
 inductive Event where
   | operation (op : Operation)
   | sendResult (attempt : AttemptId) (result : SendResult)
@@ -70,6 +82,8 @@ inductive Event where
   | arrival (kind : ItemKind) (id : EventId)
   | tick (time : Time)
   | schedule (id : EventId)
+  | restartRecoveryDispatch (id : EventId) (attempt : AttemptId)
+  | operatorResend (id : EventId) (attempt : AttemptId)
   deriving DecidableEq
 /-- 観測される受理、send 開始時の dispatch、明示破棄。 -/
 inductive Observation where
@@ -117,17 +131,26 @@ def Eligible (s : State) (id : EventId) : Prop :=
 /--
 状態と観測を両方向に対応させる。新しい ID の出現は受理観測を要し、保留からの
 状態変更は dispatch または破棄を要する。dispatch 済み watch report の再投入だけを
-明示的な requeue 観測で許し、operator input の再投入は許さない。再投入はその report
-を含む未完了 attempt の結果に限る。成功済み attempt では ack のみを retry し、
-再投入しない。同一 process の履歴を対象とし、再起動後の replay は対象外。各観測は同じ遷移の
-状態変化に対応する。ID の再利用、永続化、配信成功は保証しない。
+明示的な requeue 観測で許す。operator input の再 dispatch は、通常は pending item から
+行う。結果不明後の例外は process 再開時の `.restartRecoveryDispatch`、または3回上限後に
+operator が選ぶ `.operatorResend` event として、同じ ID の dispatch observation を出す。
+明示 resend の失敗確定後も operator が再送を選んだ場合は `.operatorResend` を使う。
+NoAutomaticInputReplay は通常の failed result 後の再 dispatch を禁じ、明示 resend の失敗後は
+後続の同一 ID dispatch を operator resend に限る。成功済み attempt では ack のみを retry し、
+再投入しない。各観測は同じ遷移の状態変化に対応する。ID の永続性、電源断後の保持、
+配信成功は保証しない。
 -/
 def ObservationConsistent (step : Transition) : Prop :=
   ∀ s e obs t, step s e obs t →
     (∀ id kind, .accepted id kind ∈ obs ↔ s.items id = none ∧ t.items id = some ⟨kind, .pending⟩) ∧
     (∀ id attempt, .dispatched id attempt ∈ obs →
-      ∃ kind, Pending s id kind ∧ t.items id = some ⟨kind, .dispatched⟩ ∧
-        t.lastAttempt id = some attempt ∧ ¬ s.completed attempt) ∧
+      (∃ kind, Pending s id kind ∧ t.items id = some ⟨kind, .dispatched⟩ ∧
+        t.lastAttempt id = some attempt ∧ ¬ s.completed attempt) ∨
+      ((e = .restartRecoveryDispatch id attempt ∨ e = .operatorResend id attempt) ∧
+        s.items id = some ⟨.operatorInput, .dispatched⟩ ∧
+        t.items id = some ⟨.operatorInput, .dispatched⟩ ∧
+        (∃ previous, s.lastAttempt id = some previous ∧ ¬ s.completed previous) ∧
+        t.lastAttempt id = some attempt ∧ ¬ s.completed attempt)) ∧
     (∀ id, .discarded id ∈ obs ↔ ∃ kind, Pending s id kind ∧ t.items id = some ⟨kind, .discarded⟩) ∧
     (∀ id, .requeued id ∈ obs ↔ s.items id = some ⟨.watchReport, .dispatched⟩ ∧
       t.items id = some ⟨.watchReport, .pending⟩) ∧
@@ -216,18 +239,43 @@ def AcceptedEventRetained (initial : State → Prop) (step : Transition) : Prop 
   ∀ s t u e obs trace id kind, Reachable initial step s → step s e obs t →
     .accepted id kind ∈ obs → Run step t trace u → ¬ Dispatched trace id →
     ¬ Observed trace (.discarded id) → Pending u id kind
+/-- 指定 ID の dispatch は restart recovery または operator の明示 resend として記録される。 -/
+def ExplicitUnknownReplayDispatchOnly (trace : List (Event × List Observation)) (id : EventId) : Prop :=
+  ∀ entry, entry ∈ trace →
+    ∀ attempt, .dispatched id attempt ∈ entry.2 →
+      entry.1 = .restartRecoveryDispatch id attempt ∨ entry.1 = .operatorResend id attempt
+/-- 明示 resend の失敗確定後、同じ ID の再 dispatch は operator resend event に限る。 -/
+def ExplicitOperatorResendDispatchOnly (trace : List (Event × List Observation)) (id : EventId) : Prop :=
+  ∀ entry, entry ∈ trace →
+    ∀ attempt, .dispatched id attempt ∈ entry.2 →
+      entry.1 = .operatorResend id attempt
+/-- 該当 attempt が operator の明示 resend として開始されたことを履歴で確認する。 -/
+def OperatorResendDispatchRecorded
+    (trace : List (Event × List Observation)) (id : EventId) (attempt : AttemptId) : Prop :=
+  ∃ entry, entry ∈ trace ∧ entry.1 = .operatorResend id attempt ∧
+    .dispatched id attempt ∈ entry.2
 /--
-失敗または結果不明の attempt に dispatch された operator input の同一 ID は、結果と
-同じ遷移にも、その後にも再 dispatch されない。履歴上の受理・dispatch で判別し、
-失敗直前の状態に依存しない。別 ID の再入力、watch report の再送、受信側の副作用の
-重複は対象外。観測の完全性は別の `ObservationConsistent` が担う。
+通常の send の失敗確定後は同じ ID で再 dispatch しない。結果不明なら process 再開後の
+`.restartRecoveryDispatch` event、または3回上限後に operator が選ぶ `.operatorResend`
+event で同じ ID の復旧再送を許す。明示 resend 自体が失敗確定した場合は batch を保持し、
+再送は自動化せず、環境を整えた operator が再び明示選択する `.operatorResend` に限る。
+failure と unknown の分類・環境準備や operator 操作の実装、再送自体は保証しない。
+event tag が表す restart / operator 操作の前提も検証せず、batch identity・send 回数上限・
+永続化はモデル化しない。
+別 ID の再入力、watch report の retry、受信側の副作用重複は対象外。
+観測の完全性と復旧 dispatch の状態対応は `ObservationConsistent` が担う。
 -/
 def NoAutomaticInputReplay (initial : State → Prop) (step : Transition) : Prop :=
   ∀ start before s t u attempt result id obs after,
     initial start → Run step start before s →
     Observed before (.accepted id .operatorInput) → Observed before (.dispatched id attempt) →
     result ≠ .completed → step s (.sendResult attempt result) obs t → Run step t after u →
-    (∀ next, .dispatched id next ∉ obs) ∧ ¬ Dispatched after id
+    (∀ next, .dispatched id next ∉ obs) ∧
+    (result = .failed →
+      (OperatorResendDispatchRecorded before id attempt →
+        ExplicitOperatorResendDispatchOnly after id) ∧
+      (¬ OperatorResendDispatchRecorded before id attempt → ¬ Dispatched after id)) ∧
+    (result = .unknown → ExplicitUnknownReplayDispatchOnly after id)
 /--
 reconnect 成功後、対象が dispatch まで可能であり続け、scheduler が弱公平な無限実行
 ではいつか dispatch される。成功自体、他の停止要因の解消、send の完了、時間や遷移
